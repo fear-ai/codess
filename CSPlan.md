@@ -665,3 +665,5 @@ Projects under `~/Work` with session data from Claude Code, Codex, or Cursor (as
 | ~/Work/ZK/zerowalletmac/src |
 
 **Sources:** Claude Code from `~/.claude/projects/<slug>/`; Codex from `~/.codex/sessions/**/*.jsonl` session_meta.cwd; Cursor from `workspaceStorage/*/workspace.json` folder. Cursor global storage (v44.9+) not included (project_path NULL).
+
+**Workflow:** Run `python3 scripts/test_candidate_workflow.py` to review candidates with metrics: weeks since mtime/commit, git remote status, session count/size. Aggregators (WP, ZK, Claw, Claude, Cursor, Github, CODE) are parent dirs; leaf projects are listed. Add `--fetch-check` to verify remote reachability (slow). Full criteria and analysis: [CSCandidates.md](CSCandidates.md).

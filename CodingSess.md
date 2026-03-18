@@ -11,10 +11,11 @@
 | **README.md** | Run the tool. Quick start, status, minimal commands/config. | Status → Quick start → Commands (summary) → Store → Config | No methodology, design, or schema. Link to CodingSess §3 for providers; CSPlan §5 for full CLI. |
 | **CSPlan.md** | Build and extend. Requirements, design, implementation, validation. | Status → Requirements → Design → Implementation → Validation → CLI Reference → Expansion | No vision or rationale. Link to CodingSess for provider comparison, platform choices. |
 | **CodingSess.md** | Understand and evaluate. Vision, methodology, provider comparison. | Map → Vision → Developer needs → Providers → Architecture → Choices → Concerns → References → Glossary | No implementation details or CLI specs. Link to CSPlan for schema, algorithms. |
+| **CSCandidates.md** | Ingestion candidates. Inclusion/exclusion criteria, analysis, comparison tables. | Goals → Narrative → Criteria → Taxonomy → Analysis → Tables → Glossary → References | No implementation. Link to scripts/test_candidate_workflow.py. |
 
 **Single source:** Only CodingSess lists documents. Other docs do not repeat the map or document explanations.
 
-**When to add:** New material goes to the doc whose purpose it serves. CLI/commands → CSPlan §5. Provider/source details → CodingSess §3. Schema/algorithm → CSPlan §2. Vision/concern → CodingSess.
+**When to add:** New material goes to the doc whose purpose it serves. CLI/commands → CSPlan §5. Provider/source details → CodingSess §3. Schema/algorithm → CSPlan §2. Vision/concern → CodingSess. Ingestion candidates → CSCandidates.
 
 ---
 
