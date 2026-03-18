@@ -7,6 +7,9 @@ import pytest
 from ingest.project import (
     find_slug_for_project,
     get_cc_session_dir,
+    get_codex_session_files,
+    get_cursor_global_db,
+    get_cursor_workspace_dbs,
     path_to_slug,
     slug_to_path,
 )
@@ -84,3 +87,66 @@ class TestGetCcSessionDir:
         proj = tmp_path / "orphan"
         proj.mkdir()
         assert proj_mod.get_cc_session_dir(proj) is None
+
+
+class TestGetCodexSessionFiles:
+    """get_codex_session_files filters by cwd."""
+
+    def test_empty_when_no_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("ingest.project.CODEX_SESSIONS_DIR", tmp_path / "nonexistent")
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        assert get_codex_session_files(proj) == []
+
+    def test_matches_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("ingest.project.CODEX_SESSIONS_DIR", tmp_path / "codex")
+        (tmp_path / "codex").mkdir()
+        proj = tmp_path / "myproj"
+        proj.mkdir()
+        sess_dir = tmp_path / "codex" / "2024" / "01"
+        sess_dir.mkdir(parents=True)
+        f = sess_dir / "rollout-abc.jsonl"
+        f.write_text(f'{{"type":"session_meta","payload":{{"cwd":"{proj}"}}}}\n')
+        files = get_codex_session_files(proj)
+        assert len(files) == 1
+        assert files[0].name == "rollout-abc.jsonl"
+
+
+class TestGetCursorPaths:
+    """get_cursor_workspace_dbs and get_cursor_global_db."""
+
+    def test_global_db_none_when_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("ingest.project.CURSOR_USER_DATA", tmp_path / "cursor")
+        assert get_cursor_global_db() is None
+
+    def test_global_db_returns_path_when_exists(self, tmp_path, monkeypatch):
+        base = tmp_path / "cursor" / "User"
+        base.mkdir(parents=True)
+        global_dir = base / "globalStorage"
+        global_dir.mkdir()
+        db = global_dir / "state.vscdb"
+        db.touch()
+        monkeypatch.setattr("ingest.project.CURSOR_USER_DATA", base)
+        assert get_cursor_global_db() == db
+
+    def test_workspace_dbs_empty_when_no_match(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("ingest.project.CURSOR_USER_DATA", tmp_path / "cursor")
+        (tmp_path / "cursor" / "workspaceStorage").mkdir(parents=True)
+        proj = tmp_path / "other"
+        proj.mkdir()
+        assert get_cursor_workspace_dbs(proj) == []
+
+    def test_workspace_dbs_matches_folder(self, tmp_path, monkeypatch):
+        proj = tmp_path / "myproj"
+        proj.mkdir()
+        base = tmp_path / "cursor" / "User"
+        ws = base / "workspaceStorage" / "abc123"
+        ws.mkdir(parents=True)
+        (ws / "workspace.json").write_text(
+            f'{{"folder":{{"path":"{proj}"}}}}'
+        )
+        (ws / "state.vscdb").touch()
+        monkeypatch.setattr("ingest.project.CURSOR_USER_DATA", base)
+        dbs = get_cursor_workspace_dbs(proj)
+        assert len(dbs) == 1
+        assert dbs[0].name == "state.vscdb"

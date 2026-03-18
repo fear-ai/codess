@@ -68,21 +68,25 @@ They are hard to read (large JSONL, nested structures) and harder to interpret (
 ### 3.3 Cursor
 
 - **Source:** `Cursor` \| `IDE` \| About Cursor version
-- **Locations:** macOS: `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`; workspace: `workspaceStorage/<md5(workspace-path)>/state.vscdb`; Windows: `%APPDATA%\Cursor\User\...`; Linux: `~/.config/Cursor/User/...`
-- **Format:** SQLite. Tables: `ItemTable`, `cursorDiskKV`. Key patterns: `composerData:<composerId>` (metadata; may be null in newer Cursor), `bubbleId:<composerId>:<bubbleId>` (messages)
+- **Locations:** macOS: `~/Library/Application Support/Cursor/User/`; Windows: `%APPDATA%\Cursor\User\`; Linux: `~/.config/Cursor/User/`. Global: `{base}globalStorage/state.vscdb`; workspace: `{base}workspaceStorage/<hash>/state.vscdb`
+- **Storage migration (v44.9+):** Chat moved from workspaceStorage to **globalStorage**. Workspace DBs often empty; bubbleId data in global DB. [cursor-chat-browser #18](https://github.com/thomas-pedersen/cursor-chat-browser/issues/18)
+- **Workspace hash:** MD5 of `(path + inode)` on Linux; `(path + birthtime_ms)` on macOS/Windows. `workspaceStorage/<hash>/workspace.json` has `folder` = project path.
+- **Format:** SQLite `cursorDiskKV`. Key `bubbleId:<composerId>:<bubbleId>` (messages). `composerData` may be null in 0.43+; use bubbleId only.
 - **Message (bubbleId):** type (1=User, 2=Assistant), text, codeBlocks, fileActions, toolResults, timingInfo.clientStartTime
-- **Adapter approach:** `SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'`; group by composerId; sort by timingInfo; map to normalized events
-- **Caveats:** Schema drift (0.43+); composerData may be empty; use bubbleId; workspace hash = MD5; DB can grow large (2.9 GB observed)
-- **Existing tools:** [legel export](https://gist.github.com/legel/ebd0bbc012bf019a1db5212b825e7d16), [cursor-chat-browser](https://github.com/thomas-pedersen/cursor-chat-browser), [cursor-export](https://github.com/WooodHead/cursor-export), [SpecStory](https://marketplace.visualstudio.com/items?itemName=SpecStory.specstory)
+- **toolResults:** `[{toolName, result}]` — tool *results*; tool *calls* may be in assistant structure (TBD)
+- **session_id:** composerId. **event_id:** `composerId:bubbleId`
+- **Adapter approach:** Read from **globalStorage** (bubbleId present); workspace DBs often empty. Project association: composerData may have workspace; if null, ingest all and set project_path from filter or "unknown". Fallback: try workspace first, then global.
+- **Existing tools:** [legel/Xinihiko](https://gist.github.com/legel/ebd0bbc012bf019a1db5212b825e7d16), [cursor-chat-browser](https://github.com/thomas-pedersen/cursor-chat-browser), [cursor-view](https://github.com/saharmor/cursor-view), [cursor-export](https://github.com/WooodHead/cursor-export), [SpecStory](https://marketplace.visualstudio.com/items?itemName=SpecStory.specstory)
 
 ### 3.4 Codex
 
 - **Source:** `Codex` \| `Code` \| `@openai/codex` semver
 - **Locations:** `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`; `~/.codex/history.jsonl`; config: `~/.codex/config.toml`, `<project>/.codex/config.toml`
-- **Format:** JSONL; `timestamp`, `type`, `payload`. Types: `session_meta` (id, cwd, cli_version, base_instructions, git), `response_item` (type=message, role=developer/user, content[]), `event_msg` (task_started, turn_id, model_context_window)
-- **Message:** role=developer (assistant) or user; content: `{type: "input_text", text: "..."}`; system prompts, permissions, AGENTS.md as developer messages
-- **Project:** `session_meta.payload.cwd` gives project path; no slug encoding
-- **Adapter approach:** Glob `~/.codex/sessions/**/*.jsonl`; map type+payload to normalized events; tool calls from payload (structure TBD)
+- **Format:** JSONL; `timestamp`, `type`, `payload`. Types: `session_meta` (id, cwd, cli_version), `turn_context`, `response_item` (role=developer/user, content[]), `event_msg` (user_message, turn_aborted, token_count)
+- **session_meta:** Use `payload.id` for session_id, `payload.cwd` for project_path
+- **Message:** role=developer (assistant) or user; content blocks. Tool call payload not documented; inspect real session files for command_execution, MCP
+- **event_id:** Line number (like CC) or payload id
+- **Adapter approach:** Glob `~/.codex/sessions/**/*.jsonl`; map session_meta→session, response_item→user/assistant; tool calls TBD
 - **Existing tools:** [Codex transcript #2765](https://github.com/openai/codex/issues/2765) — proposed in-repo transcripts; not yet implemented
 
 ---
@@ -134,6 +138,8 @@ They are hard to read (large JSONL, nested structures) and harder to interpret (
 |-----|------------|
 | Schema drift | Version adapter; sample before ingest |
 | Cursor/Codex schema changes | Adapter updates; §3.3, §3.4 |
+| Codex tool payload | No public schema; inspect real session JSONL |
+| Cursor tool calls | toolResults = results; tool call structure TBD in bubbleId |
 | System reminders | Not in JSONL; would need CC telemetry |
 | Compaction | Summary replaces history; raw turns lost |
 | IDE context | Cursor/Codex: selections, cursor; TBD per product |
@@ -151,9 +157,11 @@ They are hard to read (large JSONL, nested structures) and harder to interpret (
 
 ### Cursor
 - [Cursor CLI](https://cursor.com/en/cli)
-- [legel: Cursor chat export (SQLite)](https://gist.github.com/legel/ebd0bbc012bf019a1db5212b825e7d16)
-- [cursor-chat-browser](https://github.com/thomas-pedersen/cursor-chat-browser)
+- [legel: Cursor chat export (SQLite)](https://gist.github.com/legel/ebd0bbc012bf019a1db5212b825e7d16) — composerData (fails on null); [Xinihiko fork](https://gist.github.com/legel/ebd0bbc012bf019a1db5212b825e7d16#gistcomment-5234568) uses bubbleId
+- [cursor-chat-browser](https://github.com/thomas-pedersen/cursor-chat-browser) — supports globalStorage (v44.9+); workspaceStorage for older
+- [cursor-view](https://github.com/saharmor/cursor-view) — browse, search, export; reads global + workspace
 - [Cursor forum: chat history](https://forum.cursor.com/t/chat-history-folder/7653/2)
+- [Where metadata stored](https://forum.cursor.com/t/where-are-all-the-metadata-chat-composer-history-indexed-cached-data-workplace-settings-etc-stored/42699)
 
 ### Codex
 - [Codex CLI (openai/codex)](https://github.com/openai/codex)

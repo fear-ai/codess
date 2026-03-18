@@ -181,8 +181,9 @@ class TestNormalizeAssistant:
         assert tm == {"t1": "Bash"}
 
     def test_truncated_stop_reason(self):
-        rec = {"message": {"role": "assistant", "content": [{"type": "text", "text": "x" * 500}],
-               "stop_reason": "max_tokens"}}
+        """CC adapter reads stop_reason from message."""
+        rec = {"message": {"role": "assistant", "stop_reason": "max_tokens",
+               "content": [{"type": "text", "text": "x" * 500}]}}
         evs, _ = normalize_assistant(rec, 1, "s1", "/f", {"redact": False})
         assert evs[0]["subtype"] == "truncated"
 

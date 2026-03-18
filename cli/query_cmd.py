@@ -25,7 +25,8 @@ def _get_sessions_ordered(conn, limit: int | None = None) -> list:
         ORDER BY COALESCE(ended_at, started_at) DESC
     """
     if limit is not None and limit > 0:
-        sql += f" LIMIT {limit}"
+        sql += " LIMIT ?"
+        return conn.execute(sql, (limit,)).fetchall()
     return conn.execute(sql).fetchall()
 
 

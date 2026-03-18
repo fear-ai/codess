@@ -15,8 +15,12 @@ def main() -> int:
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    ingest_p = sub.add_parser("ingest", help="Ingest CC sessions")
+    ingest_p = sub.add_parser("ingest", help="Ingest sessions from CC, Codex, Cursor")
     ingest_p.add_argument("--project", type=str, help="Project root (default: git root)")
+    ingest_p.add_argument("--source", choices=["cc", "codex", "cursor", "all"], default="all",
+                          help="Source to ingest: cc, codex, cursor, all (default: all)")
+    ingest_p.add_argument("--cursor-global", action="store_true",
+                          help="Cursor: use globalStorage (v44.9+); skip workspace DBs")
     ingest_p.add_argument("--debug", action="store_true", help="Store source_raw BLOB")
     ingest_p.add_argument("--redact", action="store_true", help="Redact secrets")
     ingest_p.add_argument("--force", action="store_true", help="Ignore incremental state")

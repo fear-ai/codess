@@ -19,7 +19,8 @@
 | `--stats`, `--taxonomy` | Done |
 | `--task-review` | Done (Task/Web tool counts, Task descriptions, outcomes) |
 | `--permissions` | Done |
-| Codex, Cursor adapters | Deferred; see [CodingSess.md](CodingSess.md) §3.3, §3.4 |
+| Codex adapter | Done |
+| Cursor adapter | Done |
 
 **Event taxonomy:** `tool_call`; `user_message` (prompt, slash_command, tool_result, permission_denied); `assistant_message` (response, dialog, truncated).
 
@@ -222,8 +223,10 @@ CodingSess/
 ├── coding-sessions-schema.sql
 ├── ingest/
 │   ├── __init__.py
-│   ├── project.py          # project derivation, slug encode/decode
+│   ├── project.py          # project derivation, slug, Codex/Cursor paths
 │   ├── cc_adapter.py       # CC JSONL parser, normalizer
+│   ├── codex_adapter.py    # Codex JSONL parser, normalizer
+│   ├── cursor_adapter.py   # Cursor SQLite bubbleId extractor
 │   ├── store.py            # SQLite init, upsert, incremental state
 │   └── sanitize.py         # control chars, ANSI, redact
 ├── cli/
@@ -273,6 +276,9 @@ ingest/sanitize.py
 | TRUNCATE_DIALOG | int | 200 |
 | TRUNCATE_TOOL_RESULT | int | 500 |
 | TRUNCATE_GREP_PATTERN | int | 120 |
+| TRUNCATE_PROMPT | int | 10000 (user prompts) |
+| CODEX_SESSIONS_DIR | Path | `CODINGSESS_CODEX_SESSIONS_DIR` or `~/.codex/sessions` |
+| CURSOR_USER_DATA | Path | `CODINGSESS_CURSOR_USER_DATA` or platform default |
 | MIN_SESSION_FILE_SIZE | int | 20*1024 (20 KB) |
 | REDACT_PATTERNS | list[re.Pattern] | Default patterns for API keys, tokens |
 | get_store_path(project_root: Path) -> Path | Returns `project_root / STORE_DIR_NAME / STORE_DB_NAME` |
@@ -467,6 +473,8 @@ ingest/sanitize.py
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--project` | PATH | git root or cwd | Project root; store at `<project>/.coding-sess/` |
+| `--source` | cc\|codex\|cursor\|all | all | Source(s) to ingest |
+| `--cursor-global` | flag | false | Cursor: use globalStorage (v44.9+); skip workspace |
 | `--force` | flag | false | Re-ingest all files; ignore mtime |
 | `--min-size` | BYTES | 20480 | Skip JSONL files smaller than this |
 | `--redact` | flag | false | Apply redaction patterns to content |

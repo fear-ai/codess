@@ -124,6 +124,99 @@ def test_malformed_json_skipped():
     assert records[1][1]["type"] == "assistant"
 
 
+def test_codex_ingest_and_query():
+    """Codex ingest → query cycle with temp Codex dir."""
+    import json
+    import sqlite3
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        proj = tmp / "myproj"
+        proj.mkdir()
+        codex_dir = tmp / "codex" / "sessions" / "2024" / "01"
+        codex_dir.mkdir(parents=True)
+        sess_file = codex_dir / "rollout-abc.jsonl"
+        proj_str = str(proj.resolve())
+        sess_file.write_text(
+            f'{{"type":"session_meta","payload":{{"id":"s1","cwd":"{proj_str}"}}}}\n'
+            '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}}\n'
+            '{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"Hello"}]}}\n'
+        )
+        env = os.environ.copy()
+        env["CODINGSESS_CODEX_SESSIONS_DIR"] = str(tmp / "codex" / "sessions")
+
+        r = subprocess.run(
+            [sys.executable, "-m", "main", "ingest", "--project", str(proj), "--source", "codex", "--force", "--min-size", "0"],
+            cwd=str(Path(__file__).parent.parent),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 0, f"ingest: {r.stderr}"
+        assert "2 event" in r.stdout or "2 session" in r.stdout or "1 session" in r.stdout
+
+        r = subprocess.run(
+            [sys.executable, "-m", "main", "query", "--project", str(proj), "--stats"],
+            cwd=str(Path(__file__).parent.parent),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 0
+        assert "Sessions:" in r.stdout and "Events:" in r.stdout
+
+
+def test_cursor_ingest_and_query():
+    """Cursor ingest from workspace DB → query cycle."""
+    import json
+    import sqlite3
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        proj = tmp / "myproj"
+        proj.mkdir()
+        cursor_base = tmp / "cursor" / "User"
+        ws = cursor_base / "workspaceStorage" / "abc123"
+        ws.mkdir(parents=True)
+        (ws / "workspace.json").write_text(f'{{"folder":{{"path":"{proj}"}}}}')
+        db = ws / "state.vscdb"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+            ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "hi", "timingInfo": {"clientStartTime": 1}})),
+        )
+        conn.execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+            ("bubbleId:c1:b2", json.dumps({"type": 2, "text": "ok", "timingInfo": {"clientStartTime": 2}})),
+        )
+        conn.commit()
+        conn.close()
+
+        env = os.environ.copy()
+        env["CODINGSESS_CURSOR_USER_DATA"] = str(cursor_base)
+
+        r = subprocess.run(
+            [sys.executable, "-m", "main", "ingest", "--project", str(proj), "--source", "cursor", "--force"],
+            cwd=str(Path(__file__).parent.parent),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 0, f"ingest: {r.stderr}"
+        assert "1 session" in r.stdout or "2 event" in r.stdout or "session" in r.stdout.lower()
+
+        r = subprocess.run(
+            [sys.executable, "-m", "main", "query", "--project", str(proj), "--stats"],
+            cwd=str(Path(__file__).parent.parent),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 0
+        assert "Sessions:" in r.stdout and "Events:" in r.stdout
+
+
 def test_incremental_skip_unchanged():
     """Re-ingest of unchanged file adds no new rows."""
     with tempfile.TemporaryDirectory() as tmp:

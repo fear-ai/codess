@@ -1,10 +1,11 @@
-"""Project derivation, slug encode/decode."""
+"""Project derivation, slug encode/decode, Codex/Cursor paths."""
 
+import json
 import logging
 import subprocess
 from pathlib import Path
 
-from config import CC_PROJECTS_DIR
+from config import CC_PROJECTS_DIR, CODEX_SESSIONS_DIR, CURSOR_USER_DATA
 
 log = logging.getLogger(__name__)
 
@@ -65,3 +66,70 @@ def get_cc_session_dir(project_root: Path) -> Path | None:
     if slug:
         return get_cc_projects_dir() / slug
     return None
+
+
+def get_codex_session_files(project_root: Path) -> list[Path]:
+    """Return Codex JSONL files whose session_meta.cwd matches project. Empty if none."""
+    project_root = project_root.resolve()
+    project_str = str(project_root)
+    files = []
+    if not CODEX_SESSIONS_DIR.exists():
+        return files
+    for path in sorted(CODEX_SESSIONS_DIR.rglob("*.jsonl")):
+        try:
+            with path.open(encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        if rec.get("type") == "session_meta":
+                            payload = rec.get("payload") or {}
+                            cwd = payload.get("cwd") or ""
+                            if cwd and (cwd == project_str or cwd.startswith(project_str + "/")):
+                                files.append(path)
+                            break
+                    except json.JSONDecodeError:
+                        continue
+        except OSError:
+            continue
+    return files
+
+
+def get_cursor_global_db() -> Path | None:
+    """Return global state.vscdb path. None if not found. Chat data in v44.9+ is here."""
+    db = CURSOR_USER_DATA / "globalStorage" / "state.vscdb"
+    return db if db.exists() else None
+
+
+def get_cursor_workspace_dbs(project_root: Path) -> list[Path]:
+    """Return Cursor state.vscdb paths for workspaces matching project. Empty if none."""
+    project_root = project_root.resolve()
+    project_str = str(project_root)
+    ws_dir = CURSOR_USER_DATA / "workspaceStorage"
+    if not ws_dir.exists():
+        return []
+    dbs = []
+    for hash_dir in ws_dir.iterdir():
+        if not hash_dir.is_dir():
+            continue
+        ws_json = hash_dir / "workspace.json"
+        if not ws_json.exists():
+            continue
+        try:
+            data = json.loads(ws_json.read_text(encoding="utf-8"))
+            folder = data.get("folder")
+            if isinstance(folder, dict):
+                folder = folder.get("path") or ""
+            folder = str(folder or "")
+            if folder.startswith("file://"):
+                folder = folder[7:]
+            folder = str(Path(folder).resolve()) if folder else ""
+            if folder and (folder == project_str or folder.startswith(project_str + "/")):
+                db = hash_dir / "state.vscdb"
+                if db.exists():
+                    dbs.append(db)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return dbs
