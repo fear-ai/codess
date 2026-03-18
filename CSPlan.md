@@ -612,15 +612,15 @@ SELECT * FROM events WHERE session_id = (SELECT id FROM sessions LIMIT 1);
 | Phase | Scope | Details |
 |-------|-------|---------|
 | **Phase 2** | Derived tables, FTS5 | `session_summary` view; FTS5 when full-text search needed; `tool_counts` as materialized view if useful |
-| **Phase 3** | Codex, Cursor adapters | Ingest from `~/.codex/sessions/**` and `history.jsonl`; Cursor `state.vscdb` extraction; unified store; source column distinguishes |
+| **Phase 3** | further Codex, Cursor adapters | Ingest from `~/.codex/sessions/**` and `history.jsonl`; Cursor `state.vscdb` extraction; unified store; source column distinguishes |
 | **Phase 4** | Ad-hoc queries, templates | Query templates; optional embedding index; Markdown export |
 | **Later** | MEMORY.md, sidecar | Summary.md, debug/, file-history/; sidecar for Edit/Write/Agent content when needed |
 
 ---
 
-## 8. Discovered Projects (~/Work)
+## 8. Ingest Project Discovery
 
-Projects under `~/Work` with session data from Claude Code, Codex, or Cursor (as of scan).
+Looked for candidate projects/directories/repos under `~/Work` with session data from Claude Code, Codex, or Cursor (as of 3/18).
 
 ### Claude Code
 
@@ -664,6 +664,51 @@ Projects under `~/Work` with session data from Claude Code, Codex, or Cursor (as
 | ~/Work/ZK/zerowalletmac |
 | ~/Work/ZK/zerowalletmac/src |
 
-**Sources:** Claude Code from `~/.claude/projects/<slug>/`; Codex from `~/.codex/sessions/**/*.jsonl` session_meta.cwd; Cursor from `workspaceStorage/*/workspace.json` folder. Cursor global storage (v44.9+) not included (project_path NULL).
+**Sources:**
+  Claude Code from `~/.claude/projects/<slug>/`
+  Codex from `~/.codex/sessions/**/*.jsonl` session_meta.cwd; Cursor from `workspaceStorage/*/workspace.json` folder
+  Cursor global storage (v44.9+) not included (project_path NULL)
 
-**Workflow:** Run `python3 scripts/test_candidate_workflow.py` to review candidates with metrics: weeks since mtime/commit, git remote status, session count/size. Aggregators (WP, ZK, Claw, Claude, Cursor, Github, CODE) are parent dirs; leaf projects are listed. Add `--fetch-check` to verify remote reachability (slow). Full criteria and analysis: [CSCandidates.md](CSCandidates.md).
+**Workflow:**
+  Run `python3 scripts/test_candidate_workflow.py` to review candidates with metrics: weeks since mtime/commit, git remote status, session count/size
+  Aggregators (WP, ZK, Claw, Claude, Cursor, Github, CODE) are parent dirs; leaf projects are listed
+  Add `--fetch-check` to verify remote reachability (slow). Full criteria and analysis: [CSCandidates.md](CSCandidates.md)
+
+---
+
+## 9. Specific Configuration
+
+Developer and system-specific conventions. General criteria (what to exclude, why) live in [CSCandidates.md](CSCandidates.md).
+Future search/ingest scripts will get configuration from file or CLI args instead of hardcoding: `exclude_backup_patterns`, `exclude_review_dirs`, `aggregators`, `work_root`.
+
+### 9.1 Backup and Obsolete Directories
+
+| Pattern | Meaning |
+|---------|---------|
+| `OLD` | backup/obsolete dirs `OLD` (e.g. `WP/OLD`) |
+| `Save` | Dumping grounds; e.g. `Github/Save` holds AVTran backups |
+
+### 9.2 Download/Review Directories
+
+Directories of cloned OSS repos for search and implementation review; little or no meaningful coding work. Often named with plural `s`:
+
+| Path | Content |
+|------|---------|
+| CODE | OSS coding tools (cline, continue, codex, WindsurfVS, etc.) |
+| MCP/MCPs | MCP-related repos |
+| Claw/Claws | OpenClaw adjacent |
+| ZK/ZKs | Zero Knowledge Crypto |
+| Spank/sOSS | Splunk and adjacent OSS |
+| Claude | OSS tools (tweakcc, claude-code-proxy, agency-agents) |
+
+**Config:** `exclude_review_dirs` = `["CODE", "MCP/MCPs", "Claw/Claws", "ZK/ZKs", "Spank/sOSS"]` or pattern `*s` for top-level plural names.
+
+### 9.4 Path and Internal Name Issues
+
+| Issue | Detail |
+|-------|--------|
+| **Slug decode** | CC slug `-Users-walter-Work-Spank-spank-py` decodes to `Spank/spank/py` (hyphen→slash); real path is `Spank/spank-py`. Slug format is lossy for path segments containing hyphens or looks to convert common extensions. |
+| **Worktree cwd** | Claw/openclaw-docs is worktree of openclaw; Codex `session_meta.cwd` may point to either; sessions can be split. |
+| **Github** | Mixed: clones, forks, some active (Transcript/avtran). May require manual review. |
+| **zerowalletmac/src** | Redundant with `zerowalletmac`; prefer parent. |
+
