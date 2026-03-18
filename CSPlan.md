@@ -22,7 +22,7 @@
 | Codex adapter | Done |
 | Cursor adapter | Done |
 
-**Event taxonomy:** `tool_call`; `user_message` (prompt, slash_command, tool_result, permission_denied); `assistant_message` (response, dialog, truncated).
+**Event glossary:** `tool_call`; `user_message` (prompt, slash_command, tool_result, permission_denied); `assistant_message` (response, dialog, truncated). See [§2.5](#25-record-processing-specification) for type mapping.
 
 ---
 
@@ -35,7 +35,7 @@
 | R1 | Ingest CC JSONL from `~/.claude/projects/<slug>/*.jsonl` | P0 | All user/assistant records normalized; progress, file-history-snapshot, queue-operation, last-prompt, system skipped | Empty files; malformed lines; mixed encodings; symlinked project dirs |
 | R2 | Ingest Cursor SQLite from platform-specific paths | P0 | Deferred Phase 3 | — |
 | R3 | Ingest Codex JSONL from `~/.codex/sessions/**` and `history.jsonl` | P0 | Deferred Phase 3 | — |
-| R4 | Normalize to unified event model | P0 | All events conform to schema; event_type, subtype, role, content, tool_name, tool_input, tool_output, timestamp populated per §2.2 | Multi-block content; tool_use_id pairing for permission_denied |
+| R4 | Normalize to unified event model | P0 | All events conform to schema; event_type, subtype, role, content, tool_name, tool_input, tool_output, timestamp populated per [§2.2](#22-schema-specification) | Multi-block content; tool_use_id pairing for permission_denied |
 | R5 | Full-text search over session content | P0 | FTS5 postponed; use LIKE for Phase 1 | — |
 | R6 | Redaction of secrets before indexing | P1 | Optional `--redact`; configurable regex patterns; replace with `[REDACTED]` | Patterns must not match false positives (e.g. short hex strings) |
 | R7 | Export transcript to Markdown | P1 | Deferred | — |
@@ -57,7 +57,7 @@
 | NF3 | Adapter versioned for schema drift; document CC version compatibility | CC may change record types; adapter must be updatable |
 | NF4 | Sidecar off by default; no archive of re-extractable content | Storage; content_ref points to source for fetch |
 
-### 1.3 Out of Scope (Phase 1)
+### 1.3 Out of Scope
 
 - Cursor, Codex adapters
 - FTS5, embedding index
@@ -219,7 +219,7 @@ for each line in JSONL (1-based line_num):
 ### 3.1 Directory Layout
 
 ```
-CodingSess/
+CodeSess/
 ├── CodingSess.md           # Methodology
 ├── CSPlan.md               # This file
 ├── coding-sessions-schema.sql
@@ -236,7 +236,10 @@ CodingSess/
 │   ├── ingest_cmd.py       # session-ingest
 │   └── query_cmd.py        # session-query
 ├── main.py                 # CLI entry (argparse → subcommands)
-└── config.py               # Paths, options, defaults
+├── config.py               # Paths, options, defaults
+└── scripts/
+    ├── find_candidate.py   # Candidate discovery (ingest workflow)
+    └── conf_candidate.py   # Paths, aggregators, exclude patterns (env overrides)
 ```
 
 ### 3.2 Module Dependencies
@@ -335,9 +338,7 @@ ingest/sanitize.py
 
 #### cli/ingest_cmd.py
 
-**Args:** `--project PATH`, `--debug`, `--redact`, `--force`, `--min-size BYTES`
-
-**Flow:**
+**Args:** See [§5](#5-cli-reference). **Flow:**
 1. project_root = get_project_root() or --project
 2. cc_dir = get_cc_session_dir(project_root); if None, exit 1 "No CC project dir for {project_root}"
 3. store_path = get_store_path(project_root); init_db(store_path)
@@ -350,25 +351,7 @@ ingest/sanitize.py
 
 #### cli/query_cmd.py
 
-**Args:** `--project PATH`, `--tool`, `--tool-counts`, `--sessions`, `--id`, `-sess N`, `--show`, `--permissions`, `--task-review`, `--stats`, `--taxonomy`
-
-**--tool N:** Tool histogram: rows=tools (standard first, then loaded), cols=sessions 1..N. N=0 all sessions. Sorted by total use.
-
-**--sessions --id:** Sessions ordered by ended_at DESC; numbered 1=most recent.
-
-**-sess N --show MODES:** Show session N content. Modes: prompt, pr, agent, tool, perm. pr = prompt+response (no dialog chatter).
-
-**--stats:** Sessions and events count.
-
-**--taxonomy:** Event types and subtypes (vertical list).
-
-**--task-review:** Task/Web tool counts, Task descriptions, outcomes.
-
-**--tool-counts:** Legacy; simple tool_name\tcount.
-
-**--sessions:** `SELECT id, source, started_at, ended_at, project_path FROM sessions ORDER BY COALESCE(ended_at,started_at) DESC`.
-
-**--permissions:** `SELECT session_id, timestamp, tool_name FROM events WHERE subtype='permission_denied' ORDER BY timestamp`; print table.
+**Args and behavior:** See [§5](#5-cli-reference).
 
 ### 3.4 Data Structures
 
@@ -502,16 +485,11 @@ ingest/sanitize.py
 
 ## 6. SQLite Access
 
-Store path: `<project>/.coding-sess/sessions.db`. Use `sqlite3` CLI or any SQLite client.
+Store path: `<project>/.coding-sess/sessions.db` (see [§2.1](#21-store-layout)). Use `sqlite3` CLI or any SQLite client.
 
 ### 6.1 Schema
 
-```sql
--- sessions: one row per conversation
--- id, source (Claude|Codex|Cursor), type (Code|IDE), started_at, ended_at, project_path, metadata
--- events: one row per message/tool_call
--- session_id, event_id, event_type, subtype, role, content, tool_name, tool_input, tool_output, timestamp
-```
+See [§2.2](#22-schema-specification) for full schema. Key tables: `sessions` (id, source, started_at, ended_at, project_path); `events` (session_id, event_id, event_type, subtype, content, tool_name, timestamp).
 
 ### 6.2 CLI examples
 
@@ -612,15 +590,15 @@ SELECT * FROM events WHERE session_id = (SELECT id FROM sessions LIMIT 1);
 | Phase | Scope | Details |
 |-------|-------|---------|
 | **Phase 2** | Derived tables, FTS5 | `session_summary` view; FTS5 when full-text search needed; `tool_counts` as materialized view if useful |
-| **Phase 3** | further Codex, Cursor adapters | Ingest from `~/.codex/sessions/**` and `history.jsonl`; Cursor `state.vscdb` extraction; unified store; source column distinguishes |
+| **Phase 3** | Codex, Cursor adapters | Ingest from `~/.codex/sessions/**` and `history.jsonl`; Cursor `state.vscdb` extraction; unified store; source column distinguishes |
 | **Phase 4** | Ad-hoc queries, templates | Query templates; optional embedding index; Markdown export |
 | **Later** | MEMORY.md, sidecar | Summary.md, debug/, file-history/; sidecar for Edit/Write/Agent content when needed |
 
 ---
 
-## 8. Ingest Project Discovery
+## 8. Discovered Projects (~/Work)
 
-Looked for candidate projects/directories/repos under `~/Work` with session data from Claude Code, Codex, or Cursor (as of 3/18).
+Illustrative list (as of scan). Run `find_candidate.py` for current output.
 
 ### Claude Code
 
@@ -639,7 +617,7 @@ Looked for candidate projects/directories/repos under `~/Work` with session data
 
 | Project |
 |---------|
-| ~/Work/CODE/codex/codex-rs |
+| ~/Work/CodingTools/codex/codex-rs |
 | ~/Work/Claw/openclaw |
 | ~/Work/Claw/openclaw-docs |
 | ~/Work/WP/ZD |
@@ -664,29 +642,25 @@ Looked for candidate projects/directories/repos under `~/Work` with session data
 | ~/Work/ZK/zerowalletmac |
 | ~/Work/ZK/zerowalletmac/src |
 
-**Sources:**
-  Claude Code from `~/.claude/projects/<slug>/`
-  Codex from `~/.codex/sessions/**/*.jsonl` session_meta.cwd; Cursor from `workspaceStorage/*/workspace.json` folder
-  Cursor global storage (v44.9+) not included (project_path NULL)
+**Sources:** Claude Code from `~/.claude/projects/<slug>/`; Codex from `~/.codex/sessions/**/*.jsonl` session_meta.cwd; Cursor from `workspaceStorage/*/workspace.json` folder. Cursor global storage (v44.9+) not included (project_path NULL).
 
-**Workflow:**
-  Run `python3 scripts/test_candidate_workflow.py` to review candidates with metrics: weeks since mtime/commit, git remote status, session count/size
-  Aggregators (WP, ZK, Claw, Claude, Cursor, Github, CODE) are parent dirs; leaf projects are listed
-  Add `--fetch-check` to verify remote reachability (slow). Full criteria and analysis: [CSCandidates.md](CSCandidates.md)
+**Workflow:** Run `python3 scripts/find_candidate.py` to review candidates with metrics: weeks since mtime/commit, git remote status, session count/size. Aggregators (WP, ZK, Claw, Claude, Cursor, Github, CodingTools) are parent dirs; leaf projects are listed. Add `--fetch-check` to verify remote reachability (slow). Full criteria: [CSCandidates §3](CSCandidates.md#3-criteria).
 
 ---
 
-## 9. Specific Configuration
+## 9. Project-Specific Configuration
 
-Developer and system-specific conventions. General criteria (what to exclude, why) live in [CSCandidates.md](CSCandidates.md).
-Future search/ingest scripts will get configuration from file or CLI args instead of hardcoding: `exclude_backup_patterns`, `exclude_review_dirs`, `aggregators`, `work_root`.
+Developer and system-specific conventions. Future search/ingest scripts will read these from config or CLI args. See [CSCandidates §3](CSCandidates.md#3-criteria) and [§4](CSCandidates.md#4-directory-categories) for general criteria and directory categories.
 
 ### 9.1 Backup and Obsolete Directories
 
 | Pattern | Meaning |
 |---------|---------|
-| `OLD` | backup/obsolete dirs `OLD` (e.g. `WP/OLD`) |
-| `Save` | Dumping grounds; e.g. `Github/Save` holds AVTran backups |
+| `OLD` | We name backup/obsolete dirs `OLD` (e.g. `WP/OLD`) |
+| `*/OLD/*` | Contents under OLD are obsolete |
+| `Save`, `Save*` | Dumping grounds; e.g. `Github/Save` holds AVTran backups; `Save*` = any dir starting with Save |
+
+**Config:** `exclude_backup_patterns` = `["*/OLD/*", "*/Save*", "*/Save"]`
 
 ### 9.2 Download/Review Directories
 
@@ -694,21 +668,35 @@ Directories of cloned OSS repos for search and implementation review; little or 
 
 | Path | Content |
 |------|---------|
-| CODE | OSS coding tools (cline, continue, codex, WindsurfVS, etc.) |
+| CodingTools | `/Users/walter/Work/CodingTools` — OSS coding tools (cline, continue, codex, WindsurfVS, etc.) |
 | MCP/MCPs | MCP-related repos |
-| Claw/Claws | OpenClaw adjacent |
-| ZK/ZKs | Zero Knowledge Crypto |
-| Spank/sOSS | Splunk and adjacent OSS |
-| Claude | OSS tools (tweakcc, claude-code-proxy, agency-agents) |
+| Claw/Claws | (if exists) |
+| ZK/ZKs | (if exists) |
+| Spank/sOSS | Spank OSS |
+| Claude, Claude/Claudes | Mix of tools; Claudes = OSS repos (tweakcc, claude-code-proxy, agency-agents) |
 
-**Config:** `exclude_review_dirs` = `["CODE", "MCP/MCPs", "Claw/Claws", "ZK/ZKs", "Spank/sOSS"]` or pattern `*s` for top-level plural names.
+**Config:** `exclude_review_dirs` = `["CodingTools", "MCP/MCPs", "Claw/Claws", "ZK/ZKs", "Spank/sOSS", "Claude/Claudes"]` or pattern `*s` for top-level plural names.
+
+### 9.3 CodeSess vs CodingSess
+
+| Name | Role |
+|------|------|
+| **CodeSess** | Actual project directory with `.git`, full codebase (main.py, ingest/, cli/, tests/) |
+| **CodingSess** | Was retained after repo rename; had docs-only copy (CSCandidates, scripts); now merged into CodeSess |
+
+**History:** Project directory was renamed (likely to CodeSess). We kept working in the old directory (CodingSess), which accumulated new docs and scripts. That work has been merged into CodeSess. Use **CodeSess** as the canonical project path.
 
 ### 9.4 Path and Internal Name Issues
 
 | Issue | Detail |
 |-------|--------|
-| **Slug decode** | CC slug `-Users-walter-Work-Spank-spank-py` decodes to `Spank/spank/py` (hyphen→slash); real path is `Spank/spank-py`. Slug format is lossy for path segments containing hyphens or looks to convert common extensions. |
+| **Slug decode** | CC slug `-Users-walter-Work-Spank-spank-py` decodes to `Spank/spank/py` (hyphen→slash); real path is `Spank/spank-py`. Slug format is lossy for path segments containing hyphens. |
 | **Worktree cwd** | Claw/openclaw-docs is worktree of openclaw; Codex `session_meta.cwd` may point to either; sessions can be split. |
-| **Github** | Mixed: clones, forks, some active (Transcript/avtran). May require manual review. |
+| **Github** | Mixed: clones, forks, some active (Transcript/avtran). Requires manual review. `Github/Save` = exclude. |
 | **zerowalletmac/src** | Redundant with `zerowalletmac`; prefer parent. |
 
+### 9.5 Config and Future CLI
+
+**Config split:** Ingest/query: `config.py`. Candidate discovery: `conf_candidate.py`. Override via env: ingest uses `CODINGSESS_CC_PROJECTS_DIR`, etc.; find_candidate uses `CODINGSESS_WORK_ROOT`, `CODINGSESS_CC_PROJECTS`, `CODINGSESS_CODEX_SESSIONS`, `CODINGSESS_CURSOR_WS`.
+
+**Planned:** Config file or CLI args for `exclude_backup_patterns`, `exclude_review_dirs`, `aggregators`, `work_root`.

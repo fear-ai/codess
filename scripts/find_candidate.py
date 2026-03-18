@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Ingestion candidate review: canonicalize, filter, collect metrics.
 Aggregators (WP, ZK, Claw, etc.) are parent dirs; we keep leaf projects.
-Metrics: weeks since last update, .git, remote status, session count/size/span."""
+Metrics: weeks since last update, .git, remote status, session count/size/span.
+Config: conf_candidate.py (paths, dirs, exclude patterns)."""
 
 import json
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
-WORK = Path("/Users/walter/Work")
-CC_PROJECTS = Path.home() / ".claude" / "projects"
-CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
-CURSOR_WS = Path.home() / "Library/Application Support/Cursor/User/workspaceStorage"
-# Parent dirs that aggregate projects; don't treat as projects
-AGGREGATORS = frozenset({"WP", "ZK", "Claw", "Claude", "Cursor", "Github", "CODE"})
-RECENT_DAYS = 90
+from conf_candidate import (
+    AGGREGATORS,
+    CC_PROJECTS,
+    CODEX_SESSIONS,
+    CURSOR_WS,
+    EXCLUDE_REVIEW_DIRS,
+    RECENT_DAYS,
+    WORK,
+)
 
 
 def slug_to_path(slug: str) -> Path:
@@ -86,6 +89,24 @@ def is_aggregator(p: Path) -> bool:
         return len(rel.parts) == 1 and rel.parts[0] in AGGREGATORS
     except ValueError:
         return False
+
+
+def is_excluded(p: Path) -> bool:
+    """True if path is under backup or review dir (CSPlan §9.1, §9.2)."""
+    try:
+        rel = str(p.relative_to(WORK))
+    except ValueError:
+        return False
+    # Backup: */OLD/*, */Save*
+    if "/OLD/" in rel or rel.startswith("OLD/"):
+        return True
+    if "/Save" in rel or rel.startswith("Save"):
+        return True
+    # Review dirs: under CodingTools, MCP/MCPs, etc.
+    for d in EXCLUDE_REVIEW_DIRS:
+        if rel == d or rel.startswith(d + "/"):
+            return True
+    return False
 
 
 def session_metrics_cc(p: Path) -> dict:
@@ -170,10 +191,11 @@ def main():
     all_paths = cc_paths | codex_paths | cursor_paths
 
     # Canonicalize: don't keep aggregators; drop child only if non-aggregator parent in keep
+    # Exclude paths under backup/review dirs (CSPlan §9)
     def canonicalize(paths):
         keep = set()
         for p in sorted(paths, key=lambda x: len(x.parts)):
-            if is_aggregator(p):
+            if is_aggregator(p) or is_excluded(p):
                 continue
             skip = any(
                 p != q and str(p).startswith(str(q) + "/")
@@ -250,7 +272,7 @@ def main():
             if not child.is_dir():
                 continue
             proj = child.resolve()
-            if str(proj) in seen:
+            if str(proj) in seen or is_excluded(proj):
                 continue
             if not (proj / ".git").exists():
                 continue
