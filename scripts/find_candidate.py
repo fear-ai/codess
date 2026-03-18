@@ -21,11 +21,19 @@ from conf_candidate import (
 
 
 def slug_to_path(slug: str) -> Path:
+    """Decode slug to path. Lossy: 'spank-py' and 'spank/py' both encode to same slug."""
     if not slug:
         return Path(".")
     if slug.startswith("-"):
-        return Path("/" + slug[1:].replace("-", "/"))
-    return Path(slug.replace("-", "/"))
+        p = Path("/" + slug[1:].replace("-", "/"))
+    else:
+        p = Path(slug.replace("-", "/"))
+    # Fallback: decoded path may be wrong (e.g. spank/py vs spank-py). Try hyphen variant.
+    if not p.exists() and len(p.parts) >= 3:
+        alt = Path(*p.parts[:-2], p.parts[-2] + "-" + p.parts[-1])
+        if alt.exists():
+            return alt
+    return p
 
 
 def path_recent(p: Path, cutoff: datetime) -> bool:
@@ -110,6 +118,7 @@ def is_excluded(p: Path) -> bool:
 
 
 def session_metrics_cc(p: Path) -> dict:
+    """Main sessions only (top-level uuid.jsonl); exclude subagents (uuid/subagents/*.jsonl)."""
     slug = "-" + str(p).lstrip("/").replace("/", "-")
     cc_dir = CC_PROJECTS / slug
     count, total_bytes, min_ts, max_ts = 0, 0, float("inf"), 0.0
@@ -157,10 +166,21 @@ def main():
 
     if CC_PROJECTS.exists():
         for d in CC_PROJECTS.iterdir():
-            if d.is_dir():
-                p = Path(str(slug_to_path(d.name)))
-                if str(p).startswith(str(WORK)):
-                    cc_paths.add(p.resolve())
+            if not d.is_dir():
+                continue
+            idx = d / "sessions-index.json"
+            if idx.exists():
+                try:
+                    data = json.loads(idx.read_text())
+                    for e in data.get("entries", []):
+                        pp = e.get("projectPath")
+                        if pp and str(Path(pp).resolve()).startswith(str(WORK)):
+                            cc_paths.add(Path(pp).resolve())
+                except (json.JSONDecodeError, OSError, KeyError):
+                    pass
+            p = Path(str(slug_to_path(d.name)))
+            if str(p).startswith(str(WORK)):
+                cc_paths.add(p.resolve())
 
     if CODEX_SESSIONS.exists():
         for f in CODEX_SESSIONS.rglob("*.jsonl"):

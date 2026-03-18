@@ -26,6 +26,8 @@ def main() -> int:
     ingest_p.add_argument("--force", action="store_true", help="Ignore incremental state")
     ingest_p.add_argument("--min-size", type=int, default=MIN_SESSION_FILE_SIZE, metavar="BYTES",
                           help=f"Skip files smaller than BYTES (default: {MIN_SESSION_FILE_SIZE})")
+    ingest_p.add_argument("--legacy", action="store_true", help="Use single sessions.db (default: per-vendor DBs)")
+    ingest_p.add_argument("--registry", type=str, metavar="PATH", help="Registry root for ingested_projects.json (default: project root)")
     ingest_p.set_defaults(run=run_ingest)
 
     query_p = sub.add_parser("query", help="Query session store")

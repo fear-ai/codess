@@ -646,6 +646,18 @@ Illustrative list (as of scan). Run `find_candidate.py` for current output.
 
 **Workflow:** Run `python3 scripts/find_candidate.py` to review candidates with metrics: weeks since mtime/commit, git remote status, session count/size. Aggregators (WP, ZK, Claw, Claude, Cursor, Github, CodingTools) are parent dirs; leaf projects are listed. Add `--fetch-check` to verify remote reachability (slow). Full criteria: [CSCandidates §3](CSCandidates.md#3-criteria).
 
+### 8.1 Find vs Documented List (Comparison)
+
+| Aspect | Documented (§8) | Current find |
+|--------|-----------------|--------------|
+| **CC** | Spank/spank-py, WP/harduw, WP/multiwp, WP/multiwp/python, WP/must/py, WP/spank-py, WP/splunk-py | Spank/spank-py (23 sess), WP/harduw (1), WP/multiwp (0), WP/must-py (0). WP/multiwp/python, WP/spank-py, WP/splunk-py in GONE (path gone or slug decode) |
+| **Codex** | codex-rs, openclaw, openclaw-docs, WP/ZD, WP/harduw, WP/wp, WP/wpages, zduploads | openclaw, openclaw-docs, WP/wp, WP/wpages, zduploads. codex-rs, WP/ZD in GONE |
+| **Cursor** | claude-code, claude-code-system-prompts, openclaw, Study, cStudy, Schema, skip, ZeroM, ZeroMac, zerowalletmac, zerowalletmac/src | openclaw, cStudy, Schema, skip, ZeroMac, zerowalletmac. claude-code, claude-code-system-prompts, Study, ZeroM in GONE |
+
+**CC session counts:** Find and ingest use main sessions only (`cc_dir.glob("*.jsonl")`); subagents (`uuid/subagents/*.jsonl`) are excluded to avoid overcounting. Previously `rglob` included subagents (e.g. spank-py showed 196 vs 23 main).
+
+**Slug decode:** Hyphen is lossy (`spank-py` vs `spank/py`). Find applies fallback: if decoded path missing, try collapsing last two segments with hyphen.
+
 ---
 
 ## 9. Project-Specific Configuration
@@ -700,3 +712,17 @@ Directories of cloned OSS repos for search and implementation review; little or 
 **Config split:** Ingest/query: `config.py`. Candidate discovery: `conf_candidate.py`. Override via env: ingest uses `CODINGSESS_CC_PROJECTS_DIR`, etc.; find_candidate uses `CODINGSESS_WORK_ROOT`, `CODINGSESS_CC_PROJECTS`, `CODINGSESS_CODEX_SESSIONS`, `CODINGSESS_CURSOR_WS`.
 
 **Planned:** Config file or CLI args for `exclude_backup_patterns`, `exclude_review_dirs`, `aggregators`, `work_root`.
+
+---
+
+## 10. Global Project List
+
+Maintain a decoded/ingested project registry with:
+
+| Column | Description |
+|--------|-------------|
+| **path** | Project path (absolute) |
+| **last_ingestion** | ISO timestamp of last ingest |
+| **sources** | Per-vendor: Claude, Codex, Cursor → sessions, events, last_ingestion |
+
+**Implementation:** `ingested_projects.json` in registry root (default: project `.coding-sess/`; batch: CodeSess `.coding-sess/`). Populated on ingest. Per-vendor DBs: `sessions_cc.db`, `sessions_codex.db`, `sessions_cursor.db` per project (see [CSCandidates Appendix D](CSCandidates.md#appendix-d-store-layout--per-vendor-per-directory-dbs)).

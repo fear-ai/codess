@@ -33,7 +33,11 @@ def _cursor_user_data() -> Path:
 CURSOR_USER_DATA = _cursor_user_data()
 STORE_DIR_NAME = ".coding-sess"
 STORE_DB_NAME = "sessions.db"
+STORE_DB_CC = "sessions_cc.db"
+STORE_DB_CODEX = "sessions_codex.db"
+STORE_DB_CURSOR = "sessions_cursor.db"
 STATE_FILE_NAME = "ingest_state.json"
+STATS_FILE_NAME = "ingested_projects.json"
 
 TRUNCATE_RESPONSE = 1000
 TRUNCATE_DIALOG = 200
@@ -52,11 +56,32 @@ REDACT_PATTERNS = [
 ]
 
 
-def get_store_path(project_root: Path) -> Path:
-    """Return path to sessions.db under project."""
-    return project_root / STORE_DIR_NAME / STORE_DB_NAME
+def get_store_path(project_root: Path, source: str | None = None) -> Path:
+    """Return path to sessions DB under project. source='Claude'|'Codex'|'Cursor' uses per-vendor DB."""
+    base = project_root / STORE_DIR_NAME
+    if source == "Claude":
+        return base / STORE_DB_CC
+    if source == "Codex":
+        return base / STORE_DB_CODEX
+    if source == "Cursor":
+        return base / STORE_DB_CURSOR
+    return base / STORE_DB_NAME
 
 
 def get_state_path(project_root: Path) -> Path:
     """Return path to ingest_state.json under project."""
     return project_root / STORE_DIR_NAME / STATE_FILE_NAME
+
+
+def get_stats_path(registry_root: Path) -> Path:
+    """Return path to ingested_projects.json (registry of decoded/ingested projects)."""
+    return registry_root / STORE_DIR_NAME / STATS_FILE_NAME
+
+
+def get_project_stores(project_root: Path) -> list[Path]:
+    """Return existing DB paths: legacy sessions.db first, else per-vendor DBs."""
+    base = project_root / STORE_DIR_NAME
+    legacy = base / STORE_DB_NAME
+    if legacy.exists():
+        return [legacy]
+    return [p for p in (base / STORE_DB_CC, base / STORE_DB_CODEX, base / STORE_DB_CURSOR) if p.exists()]

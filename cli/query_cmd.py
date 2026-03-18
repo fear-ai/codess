@@ -5,7 +5,7 @@ import re
 import sys
 from pathlib import Path
 
-from config import get_store_path
+from config import get_project_stores, get_store_path
 from ingest.project import get_project_root
 from ingest.store import connect, init_db
 
@@ -42,12 +42,11 @@ def run(args) -> int:
     """Run session-query. Returns exit code."""
     project_root = Path(args.project) if args.project else get_project_root()
     project_root = project_root.resolve()
-    store_path = get_store_path(project_root)
-
-    if not store_path.exists():
+    stores = get_project_stores(project_root)
+    if not stores:
         print("No store found. Run session-ingest first.", file=sys.stderr)
         return 1
-
+    store_path = stores[0]
     init_db(store_path)
     conn = connect(store_path)
 
