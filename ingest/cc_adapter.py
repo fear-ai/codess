@@ -51,7 +51,7 @@ def should_skip(record: dict) -> bool:
 
 
 def extract_tool_input(tool_name: str, input_obj: dict) -> dict:
-    """Per-tool field selection per SessionRec §4.4."""
+    """Per-tool field selection per CSPlan §3.3 extract_tool_input."""
     if not input_obj:
         return {}
     out = {}

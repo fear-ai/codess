@@ -1,6 +1,27 @@
 # Coding Sessions Plan — Requirements, Design, Implementation, Validation
 
-Implementation plan for the session record store. Methodology and schema details in [SessionRec.md](SessionRec.md).
+**Purpose:** Requirements, design, implementation, validation — what builders need.
+
+---
+
+## Implementation Status (Current)
+
+| Feature | Status |
+|---------|--------|
+| CC ingest | Done |
+| Incremental (mtime) | Done |
+| 20 KB min file size | Done (`--min-size`, config) |
+| Ingest stats (added + overall) | Done |
+| `--tool-counts` | Done (legacy) |
+| `--tool N` | Done (N=0 all, N=1 most recent; table with session columns) |
+| `--sessions --id` | Done (numbered, most recent first) |
+| `-sess N --show pr\|prompt\|agent\|tool\|perm` | Done |
+| `--stats`, `--taxonomy` | Done |
+| `--task-review` | Done (Task/Web tool counts, Task descriptions, outcomes) |
+| `--permissions` | Done |
+| Codex, Cursor adapters | Deferred; see [CodingSess.md](CodingSess.md) §3.3, §3.4 |
+
+**Event taxonomy:** `tool_call`; `user_message` (prompt, slash_command, tool_result, permission_denied); `assistant_message` (response, dialog, truncated).
 
 ---
 
@@ -13,7 +34,7 @@ Implementation plan for the session record store. Methodology and schema details
 | R1 | Ingest CC JSONL from `~/.claude/projects/<slug>/*.jsonl` | P0 | All user/assistant records normalized; progress, file-history-snapshot, queue-operation, last-prompt, system skipped | Empty files; malformed lines; mixed encodings; symlinked project dirs |
 | R2 | Ingest Cursor SQLite from platform-specific paths | P0 | Deferred Phase 3 | — |
 | R3 | Ingest Codex JSONL from `~/.codex/sessions/**` and `history.jsonl` | P0 | Deferred Phase 3 | — |
-| R4 | Normalize to unified event model | P0 | All events conform to schema; event_type, subtype, role, content, tool_name, tool_input, tool_output, timestamp populated per §4.6 | Multi-block content; tool_use_id pairing for permission_denied |
+| R4 | Normalize to unified event model | P0 | All events conform to schema; event_type, subtype, role, content, tool_name, tool_input, tool_output, timestamp populated per §2.2 | Multi-block content; tool_use_id pairing for permission_denied |
 | R5 | Full-text search over session content | P0 | FTS5 postponed; use LIKE for Phase 1 | — |
 | R6 | Redaction of secrets before indexing | P1 | Optional `--redact`; configurable regex patterns; replace with `[REDACTED]` | Patterns must not match false positives (e.g. short hex strings) |
 | R7 | Export transcript to Markdown | P1 | Deferred | — |
@@ -141,7 +162,7 @@ for each line in JSONL (1-based line_num):
 | user, content.tool_result, is_error=true | Include | user_message | permission_denied | Same pairing |
 | assistant, content.text, no tool_use follows | Include | assistant_message | response | Truncate 1000 |
 | assistant, content.text, tool_use follows | Include | assistant_message | dialog | Truncate 200 |
-| assistant, content.tool_use | Include | tool_call | (none) | Extract tool_input per §4.4 |
+| assistant, content.tool_use | Include | tool_call | (none) | Extract tool_input per extract_tool_input |
 | assistant, stop_reason=max_tokens | Include | assistant_message | truncated | — |
 | progress, file-history-snapshot, queue-operation, last-prompt, system | Skip | — | — | — |
 
@@ -196,7 +217,7 @@ for each line in JSONL (1-based line_num):
 
 ```
 CodingSess/
-├── SessionRec.md           # Methodology
+├── CodingSess.md           # Methodology
 ├── CSPlan.md               # This file
 ├── coding-sessions-schema.sql
 ├── ingest/
@@ -252,6 +273,7 @@ ingest/sanitize.py
 | TRUNCATE_DIALOG | int | 200 |
 | TRUNCATE_TOOL_RESULT | int | 500 |
 | TRUNCATE_GREP_PATTERN | int | 120 |
+| MIN_SESSION_FILE_SIZE | int | 20*1024 (20 KB) |
 | REDACT_PATTERNS | list[re.Pattern] | Default patterns for API keys, tokens |
 | get_store_path(project_root: Path) -> Path | Returns `project_root / STORE_DIR_NAME / STORE_DB_NAME` |
 | get_state_path(project_root: Path) -> Path | Returns `project_root / STORE_DIR_NAME / STATE_FILE_NAME` |
@@ -287,7 +309,7 @@ ingest/sanitize.py
 | should_skip(record: dict) -> bool | `record.get("type") in SKIP_TYPES` or (type=="system" and not record.get("message", {}).get("content")) |
 | normalize_user(record, line_num, session_id, source_file, tool_map: dict) -> list[dict] | Extract content blocks; for text→prompt/slash_command; for tool_result→tool_result/permission_denied; use tool_map for tool_name |
 | normalize_assistant(record, line_num, session_id, source_file) -> tuple[list[dict], dict] | Extract content; classify response vs dialog; yield events; return (events, tool_map) for tool_use_id→tool_name |
-| extract_tool_input(tool_name: str, input_obj: dict) -> dict | Per SessionRec §4.4: Bash→{command}, Read→{path,offset,limit}, Edit→{path,old_len,new_len}, Grep→{pattern,path,output_mode,glob}, etc. |
+| extract_tool_input(tool_name: str, input_obj: dict) -> dict | Bash→{command}, Read→{path,offset,limit}, Edit→{path,old_len,new_len}, Grep→{pattern,path,output_mode,glob}, Agent/mcp_task→{description,prompt,subagent_type}, Skill→{skill,args}, etc. |
 | truncate_content(text: str, limit: int) -> tuple[str, int] | If len<=limit return (text, len); else return (text[:limit-1]+"…", len(text)) |
 | process_file(path: Path, session_id: str, opts: dict) -> Iterator[dict] | iter_cc_records; for each record, if not should_skip: normalize (two-pass: first assistant for tool_map, then user); yield events. Apply truncation per opts. |
 
@@ -305,7 +327,7 @@ ingest/sanitize.py
 
 #### cli/ingest_cmd.py
 
-**Args:** `--project PATH`, `--debug`, `--redact`, `--force`
+**Args:** `--project PATH`, `--debug`, `--redact`, `--force`, `--min-size BYTES`
 
 **Flow:**
 1. project_root = get_project_root() or --project
@@ -313,18 +335,30 @@ ingest/sanitize.py
 3. store_path = get_store_path(project_root); init_db(store_path)
 4. state_path = get_state_path(project_root); state = load_ingest_state(state_path)
 5. jsonl_files = sorted(cc_dir.glob("*.jsonl"))
-6. For each path in jsonl_files: mtime = path.stat().st_mtime; if not should_ingest(state_path, str(path), mtime, force): continue
+6. For each path: if st.st_size < min_size: continue; mtime = path.stat().st_mtime; if not should_ingest(state_path, str(path), mtime, force): continue
 7. For each path: session_id = path.stem; conn = connect(store_path); for event in process_file(path, session_id, {debug, redact}): upsert_event(conn, event); upsert_session(conn, {...}); state[str(path)] = mtime
 8. save_ingest_state(state_path, state)
-9. Print summary: N files ingested, M events
+9. Print summary: N files ingested, M events; "Added: X sessions, Y events | Overall: Z sessions, W events"
 
 #### cli/query_cmd.py
 
-**Args:** `--project PATH`, `--tool-counts`, `--sessions`, `--permissions`
+**Args:** `--project PATH`, `--tool`, `--tool-counts`, `--sessions`, `--id`, `-sess N`, `--show`, `--permissions`, `--task-review`, `--stats`, `--taxonomy`
 
-**--tool-counts:** `SELECT tool_name, COUNT(*) as cnt FROM events WHERE event_type='tool_call' AND tool_name IS NOT NULL GROUP BY tool_name ORDER BY cnt DESC`; print "tool_name\tcount" per line.
+**--tool N:** Tool histogram: rows=tools (standard first, then loaded), cols=sessions 1..N. N=0 all sessions. Sorted by total use.
 
-**--sessions:** `SELECT id, source, started_at, ended_at, project_path FROM sessions ORDER BY started_at DESC`; print table.
+**--sessions --id:** Sessions ordered by ended_at DESC; numbered 1=most recent.
+
+**-sess N --show MODES:** Show session N content. Modes: prompt, pr, agent, tool, perm. pr = prompt+response (no dialog chatter).
+
+**--stats:** Sessions and events count.
+
+**--taxonomy:** Event types and subtypes (vertical list).
+
+**--task-review:** Task/Web tool counts, Task descriptions, outcomes.
+
+**--tool-counts:** Legacy; simple tool_name\tcount.
+
+**--sessions:** `SELECT id, source, started_at, ended_at, project_path FROM sessions ORDER BY COALESCE(ended_at,started_at) DESC`.
 
 **--permissions:** `SELECT session_id, timestamp, tool_name FROM events WHERE subtype='permission_denied' ORDER BY timestamp`; print table.
 
@@ -421,5 +455,46 @@ ingest/sanitize.py
 
 | Check | Action |
 |-------|--------|
-| Multiple CC versions | Run ingest on sessions from different CC versions; document adapter compatibility in CHANGELOG or SessionRec |
+| Multiple CC versions | Run ingest on sessions from different CC versions; document adapter compatibility in CHANGELOG or CodingSess |
 | New record type | If CC adds new type: sample; add to SKIP_TYPES or mapping |
+
+---
+
+## 5. CLI Reference
+
+### session-ingest
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--project` | PATH | git root or cwd | Project root; store at `<project>/.coding-sess/` |
+| `--force` | flag | false | Re-ingest all files; ignore mtime |
+| `--min-size` | BYTES | 20480 | Skip JSONL files smaller than this |
+| `--redact` | flag | false | Apply redaction patterns to content |
+| `--debug` | flag | false | Store source_raw BLOB for decoder debug |
+
+### session-query
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--project` | PATH | git root or cwd | Project root |
+| `--stats` | flag | — | Print session and event counts |
+| `--taxonomy` | flag | — | List event types and subtypes |
+| `--sessions` | flag | — | List sessions (ended_at DESC) |
+| `--id` | flag | — | With --sessions: show numbered IDs (1=most recent) |
+| `--tool` | N? | 0 | Tool histogram; N sessions. N=0 all sessions |
+| `--tool-counts` | flag | — | Legacy: tool_name\tcount |
+| `-sess N` | int | — | Select session N (1=most recent) |
+| `--show` | MODES | — | With -sess: prompt, pr, agent, tool, perm |
+| `--permissions` | flag | — | List permission_denied events |
+| `--task-review` | flag | — | Task/Web tool counts, descriptions, outcomes |
+
+---
+
+## 6. Expansion Plans
+
+| Phase | Scope | Details |
+|-------|-------|---------|
+| **Phase 2** | Derived tables, FTS5 | `session_summary` view; FTS5 when full-text search needed; `tool_counts` as materialized view if useful |
+| **Phase 3** | Codex, Cursor adapters | Ingest from `~/.codex/sessions/**` and `history.jsonl`; Cursor `state.vscdb` extraction; unified store; source column distinguishes |
+| **Phase 4** | Ad-hoc queries, templates | Query templates; optional embedding index; Markdown export |
+| **Later** | MEMORY.md, sidecar | Summary.md, debug/, file-history/; sidecar for Edit/Write/Agent content when needed |
