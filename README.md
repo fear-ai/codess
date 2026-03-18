@@ -23,13 +23,58 @@ python -m main query --project /path/to/project --tool
 python -m main query --project /path/to/project -sess 1 --show pr > session1.md
 ```
 
+## Examples
+
+### Ingest by vendor
+
+```bash
+# Claude Code only (default: ~/.claude/projects/<slug>/*.jsonl)
+python -m main ingest --project /path/to/project --source cc
+
+# Codex only (~/.codex/sessions/**/*.jsonl, filtered by session_meta.cwd)
+python -m main ingest --project /path/to/project --source codex
+
+# Cursor workspace DBs (workspaceStorage/<hash>/state.vscdb)
+python -m main ingest --project /path/to/project --source cursor
+
+# Cursor global storage only (v44.9+; globalStorage/state.vscdb)
+python -m main ingest --project /path/to/project --source cursor --cursor-global
+
+# All sources (default)
+python -m main ingest --project /path/to/project
+```
+
+### Display by vendor
+
+```bash
+# List sessions with source column
+python -m main query --project /path/to/project --sessions --id
+# Output: id  num  source   started_at  ended_at  project_path
+
+# Filter by source via SQL (see SQLite Access below)
+sqlite3 .coding-sess/sessions.db "SELECT id, source FROM sessions WHERE source='Claude'"
+sqlite3 .coding-sess/sessions.db "SELECT id, source FROM sessions WHERE source='Codex'"
+sqlite3 .coding-sess/sessions.db "SELECT id, source FROM sessions WHERE source='Cursor'"
+
+# Show session content (works for any source)
+python -m main query --project /path/to/project -sess 1 --show pr    # prompt + response
+python -m main query --project /path/to/project -sess 1 --show tool   # tool calls
+python -m main query --project /path/to/project -sess 1 --show perm   # permission_denied
+```
+
 ## Commands
 
 Ingest: `--source cc|codex|cursor|all` (default all), `--cursor-global` (Cursor v44.9+ global storage), `--project`, `--force`, `--min-size`, `--redact`, `--debug`. Query: `--stats`, `--sessions`, `--id`, `-sess N --show pr`, `--tool`, `--permissions`, `--task-review`, `--taxonomy`. Full reference: [CSPlan §5](CSPlan.md#5-cli-reference).
 
 ## Store
 
-`<project>/.coding-sess/sessions.db`; state in `ingest_state.json`. Details: [CSPlan §2.1](CSPlan.md#21-store-layout).
+One database per project: `<project>/.coding-sess/sessions.db`. All vendors (Claude, Codex, Cursor) ingest into the same store. State in `ingest_state.json`. Details: [CSPlan §2.1](CSPlan.md#21-store-layout). SQLite access: [CSPlan §6](CSPlan.md#6-sqlite-access).
+
+**Projects and vendors:** The store is project-local. `sessions.source` = `Claude` | `Codex` | `Cursor`. `sessions.project_path` = project root for that session (NULL for Cursor global). To list ingested projects by vendor:
+
+```bash
+sqlite3 .coding-sess/sessions.db "SELECT source, project_path, COUNT(*) FROM sessions GROUP BY source, project_path ORDER BY source"
+```
 
 ## Config
 

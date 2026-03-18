@@ -104,7 +104,9 @@ They are hard to read (large JSONL, nested structures) and harder to interpret (
 
 **Separation:** Ingestion produces a normalized store. Queries never touch raw sources.
 
-**Store:** Project-local `<project>/.coding-sess/sessions.db`. Derive project from git root or cwd.
+**Store:** Project-local `<project>/.coding-sess/sessions.db`. One DB per project; all vendors ingest into the same store. `source` column = Claude | Codex | Cursor. `project_path` = project root (NULL for Cursor global). Derive project from git root or cwd.
+
+**Examples:** Ingest and display by vendor: [README Examples](README.md#examples). SQLite access: [CSPlan §6](CSPlan.md#6-sqlite-access).
 
 ---
 

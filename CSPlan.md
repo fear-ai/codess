@@ -79,6 +79,8 @@
 
 **Creation:** `mkdir -p .coding-sess` on first ingest; fail if parent dir not writable.
 
+**Projects and vendors:** One store per project. All vendors ingest into the same `sessions.db`. `sessions.source` distinguishes vendor (`Claude`, `Codex`, `Cursor`). `sessions.project_path` is the project root for that session (from slug decode, session_meta.cwd, or workspace path; NULL for Cursor global storage).
+
 ### 2.2 Schema Specification
 
 **sessions**
@@ -92,7 +94,7 @@
 | release_value | INTEGER | NULL | — | — | major*256 + minor*16 + build |
 | started_at | REAL | NOT NULL | — | — | Unix ms; first event timestamp or file mtime |
 | ended_at | REAL | NULL | — | — | Unix ms; last event timestamp or file mtime |
-| project_path | TEXT | NULL | — | — | Decoded path from slug |
+| project_path | TEXT | NULL | — | — | Project root: slug decode (CC), session_meta.cwd (Codex), workspace path (Cursor); NULL for Cursor global |
 | metadata | TEXT | NULL | — | — | JSON; extensible |
 
 **events**
@@ -498,7 +500,114 @@ ingest/sanitize.py
 
 ---
 
-## 6. Expansion Plans
+## 6. SQLite Access
+
+Store path: `<project>/.coding-sess/sessions.db`. Use `sqlite3` CLI or any SQLite client.
+
+### 6.1 Schema
+
+```sql
+-- sessions: one row per conversation
+-- id, source (Claude|Codex|Cursor), type (Code|IDE), started_at, ended_at, project_path, metadata
+-- events: one row per message/tool_call
+-- session_id, event_id, event_type, subtype, role, content, tool_name, tool_input, tool_output, timestamp
+```
+
+### 6.2 CLI examples
+
+```bash
+# Session count by source
+sqlite3 .coding-sess/sessions.db "SELECT source, COUNT(*) FROM sessions GROUP BY source"
+
+# Ingested projects by vendor (source, project_path, session count)
+sqlite3 .coding-sess/sessions.db "SELECT source, COALESCE(project_path,'(global)') as project, COUNT(*) FROM sessions GROUP BY source, project_path ORDER BY source, project_path"
+
+# Recent sessions (last 5)
+sqlite3 .coding-sess/sessions.db "SELECT id, source, datetime(started_at/1000,'unixepoch') FROM sessions ORDER BY ended_at DESC LIMIT 5"
+
+# Sessions from Claude Code only
+sqlite3 .coding-sess/sessions.db "SELECT id, project_path FROM sessions WHERE source='Claude'"
+
+# Sessions from Codex only
+sqlite3 .coding-sess/sessions.db "SELECT id, project_path FROM sessions WHERE source='Codex'"
+
+# Sessions from Cursor (global storage has project_path=NULL)
+sqlite3 .coding-sess/sessions.db "SELECT id, project_path FROM sessions WHERE source='Cursor'"
+
+# Tool counts per source
+sqlite3 .coding-sess/sessions.db "SELECT s.source, e.tool_name, COUNT(*) FROM events e JOIN sessions s ON e.session_id=s.id WHERE e.event_type='tool_call' GROUP BY s.source, e.tool_name"
+
+# Prompt events from session
+sqlite3 .coding-sess/sessions.db "SELECT subtype, substr(content,1,80) FROM events WHERE session_id='<id>' AND event_type='user_message' ORDER BY timestamp"
+```
+
+### 6.3 Python examples
+
+```python
+import sqlite3
+from pathlib import Path
+
+db = Path("/path/to/project/.coding-sess/sessions.db")
+conn = sqlite3.connect(db)
+conn.row_factory = sqlite3.Row
+
+# Sessions by source
+for row in conn.execute(
+    "SELECT source, COUNT(*) as cnt FROM sessions GROUP BY source"
+):
+    print(f"{row['source']}: {row['cnt']} sessions")
+
+# Ingested projects by vendor
+for row in conn.execute(
+    "SELECT source, COALESCE(project_path,'(global)') as proj, COUNT(*) as cnt FROM sessions GROUP BY source, project_path ORDER BY source, proj"
+):
+    print(f"{row['source']}\t{row['proj']}\t{row['cnt']} sessions")
+
+# Events for a session
+session_id = "abc-123"
+for row in conn.execute(
+    """
+    SELECT event_type, subtype, role, content, tool_name, timestamp
+    FROM events WHERE session_id = ? ORDER BY timestamp
+    """,
+    (session_id,),
+):
+    content_preview = (row['content'] or '')[:60]
+    print(f"{row['event_type']}: {content_preview}...")
+
+# Sessions with permission_denied
+for row in conn.execute(
+    """
+    SELECT s.id, s.source, e.tool_name, e.timestamp
+    FROM events e
+    JOIN sessions s ON e.session_id = s.id
+    WHERE e.subtype = 'permission_denied'
+    ORDER BY e.timestamp
+    """
+):
+    print(f"{row['id']} ({row['source']}): {row['tool_name']}")
+
+conn.close()
+```
+
+### 6.4 SQLite3 shell
+
+```bash
+sqlite3 .coding-sess/sessions.db
+```
+
+```sql
+.tables                    -- list tables
+.schema sessions           -- show sessions schema
+.schema events             -- show events schema
+SELECT * FROM sessions LIMIT 5;
+SELECT * FROM events WHERE session_id = (SELECT id FROM sessions LIMIT 1);
+.quit
+```
+
+---
+
+## 7. Expansion Plans
 
 | Phase | Scope | Details |
 |-------|-------|---------|
@@ -506,3 +615,53 @@ ingest/sanitize.py
 | **Phase 3** | Codex, Cursor adapters | Ingest from `~/.codex/sessions/**` and `history.jsonl`; Cursor `state.vscdb` extraction; unified store; source column distinguishes |
 | **Phase 4** | Ad-hoc queries, templates | Query templates; optional embedding index; Markdown export |
 | **Later** | MEMORY.md, sidecar | Summary.md, debug/, file-history/; sidecar for Edit/Write/Agent content when needed |
+
+---
+
+## 8. Discovered Projects (~/Work)
+
+Projects under `~/Work` with session data from Claude Code, Codex, or Cursor (as of scan).
+
+### Claude Code
+
+| Project |
+|---------|
+| ~/Work/Spank/spank-py |
+| ~/Work/WP |
+| ~/Work/WP/harduw |
+| ~/Work/WP/multiwp |
+| ~/Work/WP/multiwp/python |
+| ~/Work/WP/must/py |
+| ~/Work/WP/spank-py |
+| ~/Work/WP/splunk-py |
+
+### Codex
+
+| Project |
+|---------|
+| ~/Work/CODE/codex/codex-rs |
+| ~/Work/Claw/openclaw |
+| ~/Work/Claw/openclaw-docs |
+| ~/Work/WP/ZD |
+| ~/Work/WP/harduw |
+| ~/Work/WP/wp |
+| ~/Work/WP/wpages |
+| ~/Work/zduploads |
+
+### Cursor
+
+| Project |
+|---------|
+| ~/Work/Claude/claude-code |
+| ~/Work/Claude/claude-code-system-prompts |
+| ~/Work/Claw/openclaw |
+| ~/Work/Cursor/Study |
+| ~/Work/Cursor/cStudy |
+| ~/Work/Github/Schema |
+| ~/Work/Github/skip |
+| ~/Work/ZK/ZeroM |
+| ~/Work/ZK/ZeroMac |
+| ~/Work/ZK/zerowalletmac |
+| ~/Work/ZK/zerowalletmac/src |
+
+**Sources:** Claude Code from `~/.claude/projects/<slug>/`; Codex from `~/.codex/sessions/**/*.jsonl` session_meta.cwd; Cursor from `workspaceStorage/*/workspace.json` folder. Cursor global storage (v44.9+) not included (project_path NULL).
