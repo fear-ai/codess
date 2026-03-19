@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ingest.cc_adapter import (
+from codess.adapters.cc import (
     extract_tool_input,
     iter_cc_records,
     normalize_assistant,
@@ -234,17 +234,17 @@ class TestGetTimestamp:
     """_get_timestamp handles float and ISO 8601."""
 
     def test_float_timestamp(self):
-        from ingest.cc_adapter import _get_timestamp
+        from codess.adapters.cc import _get_timestamp
         assert _get_timestamp({"timestamp": 1710000000123.0}) == 1710000000123.0
         assert _get_timestamp({"message": {"timestamp": 1710000000123.0}}) == 1710000000123.0
 
     def test_iso8601_timestamp(self):
-        from ingest.cc_adapter import _get_timestamp
+        from codess.adapters.cc import _get_timestamp
         ts = _get_timestamp({"timestamp": "2026-03-07T18:01:43.313Z"})
         assert ts is not None and ts > 1e12
 
     def test_missing_returns_none(self):
-        from ingest.cc_adapter import _get_timestamp
+        from codess.adapters.cc import _get_timestamp
         assert _get_timestamp({}) is None
         assert _get_timestamp({"message": {}}) is None
 

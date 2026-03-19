@@ -5,7 +5,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from config import CC_PROJECTS, CODEX_SESSIONS, CURSOR_USER_DATA
+from codess.config import CC_PROJECTS, CODEX_SESSIONS, CURSOR_DATA
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def get_codex_session_files(project_root: Path) -> list[Path]:
 
 def get_cursor_global_db() -> Path | None:
     """Return global state.vscdb path. None if not found. Chat data in v44.9+ is here."""
-    db = CURSOR_USER_DATA / "globalStorage" / "state.vscdb"
+    db = CURSOR_DATA / "globalStorage" / "state.vscdb"
     return db if db.exists() else None
 
 
@@ -107,7 +107,7 @@ def get_cursor_workspace_dbs(project_root: Path) -> list[Path]:
     """Return Cursor state.vscdb paths for workspaces matching project. Empty if none."""
     project_root = project_root.resolve()
     project_str = str(project_root)
-    ws_dir = CURSOR_USER_DATA / "workspaceStorage"
+    ws_dir = CURSOR_DATA / "workspaceStorage"
     if not ws_dir.exists():
         return []
     dbs = []

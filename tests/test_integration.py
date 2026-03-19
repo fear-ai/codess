@@ -7,12 +7,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from ingest.project import path_to_slug
+from codess.project import path_to_slug, slug_to_path
 
 
 def test_path_to_slug_roundtrip():
     """Slug encode/decode round-trip. Note: slug format uses - as separator, so paths with hyphens are lossy."""
-    from ingest.project import slug_to_path
 
     path = Path("/Users/walter/Work/Spank/spankpy")
     slug = path_to_slug(path)
@@ -23,7 +22,7 @@ def test_path_to_slug_roundtrip():
 
 def test_sanitize_control_chars():
     """Sanitization strips control chars and ANSI."""
-    from ingest.sanitize import sanitize_text
+    from codess.sanitize import sanitize_text
 
     assert sanitize_text("hello\x00world") == "helloworld"
     assert sanitize_text("hello\x1b[31mred\x1b[0m") == "hellored"
@@ -32,7 +31,7 @@ def test_sanitize_control_chars():
 
 def test_truncate_content():
     """Truncation adds ellipsis and returns full len."""
-    from ingest.cc_adapter import truncate_content
+    from codess.adapters.cc import truncate_content
 
     short, n = truncate_content("hi", 10)
     assert short == "hi" and n == 2
@@ -43,7 +42,7 @@ def test_truncate_content():
 
 def test_cc_adapter_iter_and_skip():
     """iter_cc_records and should_skip."""
-    from ingest.cc_adapter import iter_cc_records, should_skip
+    from codess.adapters.cc import iter_cc_records, should_skip
 
     fixtures = Path(__file__).parent / "fixtures" / "sample.jsonl"
     records = list(iter_cc_records(fixtures))
@@ -75,12 +74,12 @@ def test_full_ingest_and_query():
         shutil.copy(fixture, session_dir / "test-session.jsonl")
 
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(projects_dir)
+        env["CODESS_CC_PROJECTS"] = str(projects_dir)
 
         # Run ingest
         import subprocess
         result = subprocess.run(
-            [sys.executable, "-m", "main", "ingest", "--project", str(project_root), "--force", "--min-size", "0"],
+            [sys.executable, "-m", "main", "ingest", "--dir", str(project_root), "--force", "--min-size", "0"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -90,7 +89,7 @@ def test_full_ingest_and_query():
 
         # Run query --tool-counts
         result = subprocess.run(
-            [sys.executable, "-m", "main", "query", "--project", str(project_root), "--tool-counts"],
+            [sys.executable, "-m", "main", "query", "--dir", str(project_root), "--tool-counts"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -103,7 +102,7 @@ def test_full_ingest_and_query():
 
         # Run query --sessions
         result = subprocess.run(
-            [sys.executable, "-m", "main", "query", "--project", str(project_root), "--sessions"],
+            [sys.executable, "-m", "main", "query", "--dir", str(project_root), "--sessions"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -115,7 +114,7 @@ def test_full_ingest_and_query():
 
 def test_malformed_json_skipped():
     """Malformed JSON lines are skipped; ingest continues."""
-    from ingest.cc_adapter import iter_cc_records
+    from codess.adapters.cc import iter_cc_records
 
     fixtures = Path(__file__).parent / "fixtures" / "malformed.jsonl"
     records = list(iter_cc_records(fixtures))
@@ -143,10 +142,10 @@ def test_codex_ingest_and_query():
             '{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"Hello"}]}}\n'
         )
         env = os.environ.copy()
-        env["CODINGSESS_CODEX_SESSIONS"] = str(tmp / "codex" / "sessions")
+        env["CODESS_CODEX_SESSIONS"] = str(tmp / "codex" / "sessions")
 
         r = subprocess.run(
-            [sys.executable, "-m", "main", "ingest", "--project", str(proj), "--source", "codex", "--force", "--min-size", "0"],
+            [sys.executable, "-m", "main", "ingest", "--dir", str(proj), "--source", "codex", "--force", "--min-size", "0"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -156,7 +155,7 @@ def test_codex_ingest_and_query():
         assert "2 event" in r.stdout or "2 session" in r.stdout or "1 session" in r.stdout
 
         r = subprocess.run(
-            [sys.executable, "-m", "main", "query", "--project", str(proj), "--stats"],
+            [sys.executable, "-m", "main", "query", "--dir", str(proj), "--stats"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -194,10 +193,10 @@ def test_cursor_ingest_and_query():
         conn.close()
 
         env = os.environ.copy()
-        env["CODINGSESS_CURSOR_USER_DATA"] = str(cursor_base)
+        env["CODESS_CURSOR_DATA"] = str(cursor_base)
 
         r = subprocess.run(
-            [sys.executable, "-m", "main", "ingest", "--project", str(proj), "--source", "cursor", "--force"],
+            [sys.executable, "-m", "main", "ingest", "--dir", str(proj), "--source", "cursor", "--force"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -207,7 +206,7 @@ def test_cursor_ingest_and_query():
         assert "1 session" in r.stdout or "2 event" in r.stdout or "session" in r.stdout.lower()
 
         r = subprocess.run(
-            [sys.executable, "-m", "main", "query", "--project", str(proj), "--stats"],
+            [sys.executable, "-m", "main", "query", "--dir", str(proj), "--stats"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -231,11 +230,11 @@ def test_incremental_skip_unchanged():
         shutil.copy(fixture, projects_dir / slug / "s1.jsonl")
 
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(projects_dir)
+        env["CODESS_CC_PROJECTS"] = str(projects_dir)
 
         # First ingest
         r1 = subprocess.run(
-            [sys.executable, "-m", "main", "ingest", "--project", str(project_root), "--min-size", "0"],
+            [sys.executable, "-m", "main", "ingest", "--dir", str(project_root), "--min-size", "0"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -245,7 +244,7 @@ def test_incremental_skip_unchanged():
 
         # Query count
         r2 = subprocess.run(
-            [sys.executable, "-m", "main", "query", "--project", str(project_root), "--tool-counts"],
+            [sys.executable, "-m", "main", "query", "--dir", str(project_root), "--tool-counts"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -255,7 +254,7 @@ def test_incremental_skip_unchanged():
 
         # Second ingest (unchanged)
         r3 = subprocess.run(
-            [sys.executable, "-m", "main", "ingest", "--project", str(project_root), "--min-size", "0"],
+            [sys.executable, "-m", "main", "ingest", "--dir", str(project_root), "--min-size", "0"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,

@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from ingest.project import path_to_slug
+from codess.project import path_to_slug
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -32,7 +32,7 @@ def test_query_no_store_exit_1():
     """Query before any ingest exits 1."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        r = _run(["query", "--project", str(tmp), "--tool-counts"])
+        r = _run(["query", "--dir", str(tmp), "--tool-counts"])
         assert r.returncode == 1
         assert "No store" in r.stderr or "store" in r.stderr.lower()
 
@@ -42,9 +42,9 @@ def test_query_no_mode_exit_1():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         # Create empty store
-        (tmp / ".coding-sess").mkdir()
-        init_db(tmp / ".coding-sess" / "sessions.db")
-        r = _run(["query", "--project", str(tmp)])
+        (tmp / ".codess").mkdir()
+        init_db(tmp / ".codess" / "sessions.db")
+        r = _run(["query", "--dir", str(tmp)])
         assert r.returncode == 1
         assert "Specify" in r.stderr or "tool-counts" in r.stderr.lower()
 
@@ -56,8 +56,8 @@ def test_ingest_no_cc_dir_exit_1():
         proj = tmp / "orphan"
         proj.mkdir()
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(tmp)
-        r = _run(["ingest", "--source", "cc", "--project", str(proj), "--min-size", "0"], env=env)
+        env["CODESS_CC_PROJECTS"] = str(tmp)
+        r = _run(["ingest", "--source", "cc", "--dir", str(proj), "--min-size", "0"], env=env)
         assert r.returncode == 1
         assert "No CC project" in r.stderr
 
@@ -73,8 +73,8 @@ def test_ingest_empty_jsonl_dir_success():
         slug = path_to_slug(proj.resolve())
         (cc_dir / slug).mkdir(parents=True)
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
-        r = _run(["ingest", "--source", "cc", "--project", str(proj), "--min-size", "0"], env=env)
+        env["CODESS_CC_PROJECTS"] = str(cc_dir)
+        r = _run(["ingest", "--source", "cc", "--dir", str(proj), "--min-size", "0"], env=env)
         assert r.returncode == 0
         assert "0 file" in r.stdout or "0 event" in r.stdout
 
@@ -91,8 +91,8 @@ def test_ingest_empty_jsonl_file():
         (cc_dir / slug).mkdir(parents=True)
         (cc_dir / slug / "empty.jsonl").write_text("")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
-        r = _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+        env["CODESS_CC_PROJECTS"] = str(cc_dir)
+        r = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         assert r.returncode == 0
 
 
@@ -107,9 +107,9 @@ def test_query_empty_store():
         slug = path_to_slug(proj.resolve())
         (cc_dir / slug).mkdir(parents=True)
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
-        _run(["ingest", "--project", str(proj), "--source", "cc", "--min-size", "0"], env=env)
-        r = _run(["query", "--project", str(proj), "--tool-counts"], env=env)
+        env["CODESS_CC_PROJECTS"] = str(cc_dir)
+        _run(["ingest", "--dir", str(proj), "--source", "cc", "--min-size", "0"], env=env)
+        r = _run(["query", "--dir", str(proj), "--tool-counts"], env=env)
         assert r.returncode == 0
         assert r.stdout.strip() == "" or "Bash" not in r.stdout
 
@@ -127,13 +127,13 @@ def test_idempotent_same_data():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
-        r1 = _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+        env["CODESS_CC_PROJECTS"] = str(cc_dir)
+        r1 = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         assert r1.returncode == 0
-        r2 = _run(["query", "--project", str(proj), "--tool-counts"], env=env)
+        r2 = _run(["query", "--dir", str(proj), "--tool-counts"], env=env)
         lines1 = r2.stdout.strip().split("\n")
-        r3 = _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
-        r4 = _run(["query", "--project", str(proj), "--tool-counts"], env=env)
+        r3 = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+        r4 = _run(["query", "--dir", str(proj), "--tool-counts"], env=env)
         lines2 = r4.stdout.strip().split("\n")
         assert sorted(lines1) == sorted(lines2)
 
@@ -151,8 +151,8 @@ def test_ingest_shows_stats():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
-        r = _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+        env["CODESS_CC_PROJECTS"] = str(cc_dir)
+        r = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         assert r.returncode == 0
         assert "Added:" in r.stdout and "Overall:" in r.stdout
 
@@ -170,9 +170,9 @@ def test_query_stats():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
-        _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
-        r = _run(["query", "--project", str(proj), "--stats"], env=env)
+        env["CODESS_CC_PROJECTS"] = str(cc_dir)
+        _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+        r = _run(["query", "--dir", str(proj), "--stats"], env=env)
         assert r.returncode == 0
         assert "Sessions:" in r.stdout and "Events:" in r.stdout
 
@@ -190,9 +190,9 @@ def test_query_taxonomy():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
-        _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
-        r = _run(["query", "--project", str(proj), "--taxonomy"], env=env)
+        env["CODESS_CC_PROJECTS"] = str(cc_dir)
+        _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+        r = _run(["query", "--dir", str(proj), "--taxonomy"], env=env)
         assert r.returncode == 0
         assert "tool_call" in r.stdout and "user_message" in r.stdout
 
@@ -210,9 +210,9 @@ def test_query_sessions_with_id():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
-        _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
-        r = _run(["query", "--project", str(proj), "--sessions", "--id"], env=env)
+        env["CODESS_CC_PROJECTS"] = str(cc_dir)
+        _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+        r = _run(["query", "--dir", str(proj), "--sessions", "--id"], env=env)
         assert r.returncode == 0
         assert "num" in r.stdout and "\t1\t" in r.stdout
 
@@ -226,14 +226,14 @@ def test_ingest_source_codex_only():
         codex_empty = tmp / "codex_empty" / "sessions"
         codex_empty.mkdir(parents=True)
         env = os.environ.copy()
-        env["CODINGSESS_CODEX_SESSIONS"] = str(codex_empty)
-        r = _run(["ingest", "--project", str(proj), "--source", "codex", "--min-size", "0"], env=env)
+        env["CODESS_CODEX_SESSIONS"] = str(codex_empty)
+        r = _run(["ingest", "--dir", str(proj), "--source", "codex", "--min-size", "0"], env=env)
         assert r.returncode == 0
         assert "0 session" in r.stdout or "0 event" in r.stdout
 
 
-def test_ingest_cursor_global_flag():
-    """Ingest --source cursor --cursor-global uses global storage only."""
+def test_ingest_cursor_global():
+    """Ingest --source cursor uses global storage when present."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         proj = tmp / "proj"
@@ -251,8 +251,8 @@ def test_ingest_cursor_global_flag():
         conn.commit()
         conn.close()
         env = os.environ.copy()
-        env["CODINGSESS_CURSOR_USER_DATA"] = str(cursor_base)
-        r = _run(["ingest", "--project", str(proj), "--source", "cursor", "--cursor-global", "--force"], env=env)
+        env["CODESS_CURSOR_DATA"] = str(cursor_base)
+        r = _run(["ingest", "--dir", str(proj), "--source", "cursor", "--force"], env=env)
         assert r.returncode == 0
         assert "1 session" in r.stdout or "1 event" in r.stdout or "session" in r.stdout.lower()
 
@@ -271,13 +271,13 @@ def test_only_skipped_records():
             '{"type":"progress","message":{}}\n{"type":"system","message":{}}\n'
         )
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
-        r = _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+        env["CODESS_CC_PROJECTS"] = str(cc_dir)
+        r = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         assert r.returncode == 0
-        r2 = _run(["query", "--project", str(proj), "--sessions"], env=env)
+        r2 = _run(["query", "--dir", str(proj), "--sessions"], env=env)
         # May or may not have session row (we don't upsert session if 0 events)
         assert r2.returncode == 0
 
 
 # Need init_db for test_query_no_mode
-from ingest.store import init_db
+from codess.store import init_db

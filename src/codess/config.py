@@ -1,4 +1,4 @@
-"""Unified config for CodingSess. Override via env: CODINGSESS_WORK, CODINGSESS_CC_PROJECTS, etc."""
+"""Unified config for Codess. Override via env: CODESS_CC_PROJECTS, CODESS_DAYS, etc."""
 
 import os
 import platform
@@ -6,21 +6,22 @@ import re
 from pathlib import Path
 
 # --- Paths (env overrides) ---
-WORK = Path(os.environ.get("CODINGSESS_WORK", str(Path.home() / "Work")))
+# Default work root when no explicit dir given (for is_excluded fallback)
+DEFAULT_WORK = Path.home() / "Work"
 
 CC_PROJECTS = Path(
-    os.environ.get("CODINGSESS_CC_PROJECTS", str(Path.home() / ".claude" / "projects"))
+    os.environ.get("CODESS_CC_PROJECTS", str(Path.home() / ".claude" / "projects"))
 )
 CODEX_SESSIONS = Path(
-    os.environ.get("CODINGSESS_CODEX_SESSIONS", str(Path.home() / ".codex" / "sessions"))
+    os.environ.get("CODESS_CODEX_SESSIONS", str(Path.home() / ".codex" / "sessions"))
 )
 CODEX_HISTORY = Path(
-    os.environ.get("CODINGSESS_CODEX_HISTORY", str(Path.home() / ".codex" / "history.jsonl"))
+    os.environ.get("CODESS_CODEX_HISTORY", str(Path.home() / ".codex" / "history.jsonl"))
 )
 
 
-def _cursor_user_data() -> Path:
-    override = os.environ.get("CODINGSESS_CURSOR_USER_DATA")
+def _cursor_data() -> Path:
+    override = os.environ.get("CODESS_CURSOR_DATA")
     if override:
         return Path(override)
     home = Path.home()
@@ -32,10 +33,10 @@ def _cursor_user_data() -> Path:
     return home / ".config" / "Cursor" / "User"
 
 
-CURSOR_USER_DATA = _cursor_user_data()
-CURSOR_WS = CURSOR_USER_DATA / "workspaceStorage"
+CURSOR_DATA = _cursor_data()
+CURSOR_WS = CURSOR_DATA / "workspaceStorage"
 
-# --- Discovery (find_candidate) ---
+# --- Discovery ---
 AGGREGATORS = frozenset(
     {"WP", "ZK", "Claw", "Claude", "Cursor", "Github", "CodingTools"}
 )
@@ -47,10 +48,18 @@ EXCLUDE_REVIEW_DIRS = (
     "Spank/sOSS",
     "Claude/Claudes",
 )
-RECENT_DAYS = int(os.environ.get("CODINGSESS_RECENT_DAYS", "90"))
+CODESS_DAYS = int(os.environ.get("CODESS_DAYS", "90"))
+
+# --- Recursion exclude (case-insensitive) ---
+EXCLUDE_RECURSE = frozenset({
+    ".git", ".*", "node_modules", "__pycache__",
+    "build", "debug", "release", "test", "tests",
+    "doc", "docs", "bin", "lib", "libs", "var", "log", "logs",
+    "env", "venv", "OLD", "Save",
+})
 
 # --- Store layout ---
-STORE_DIR = ".coding-sess"
+STORE_DIR = ".codess"
 STORE_DB = "sessions.db"
 STORE_DB_CC = "sessions_cc.db"
 STORE_DB_CODEX = "sessions_codex.db"
@@ -58,8 +67,15 @@ STORE_DB_CURSOR = "sessions_cursor.db"
 STATE_FILE = "ingest_state.json"
 STATS_FILE = "ingested_projects.json"
 
+# --- Registry (central ingested_projects.json, default ~/.codess) ---
+REGISTRY = Path(os.environ.get("CODESS_REGISTRY", str(Path.home() / ".codess"))).expanduser()
+
+# --- Debug ---
+DEBUG = os.environ.get("CODESS_DEBUG", "0").lower() in ("1", "true", "yes")
+
 # --- Ingest ---
-MIN_SESSION_SIZE = int(os.environ.get("CODINGSESS_MIN_SESSION_SIZE", str(20 * 1024)))  # 20 KB
+MIN_SIZE = int(os.environ.get("CODESS_MIN_SIZE", str(20 * 1024)))  # 20 KB
+FORCE = os.environ.get("CODESS_FORCE", "0").lower() in ("1", "true", "yes")
 
 # --- Truncation ---
 TRUNCATE_RESPONSE = 1000
@@ -93,9 +109,10 @@ def get_state_path(project_root: Path) -> Path:
     return project_root / STORE_DIR / STATE_FILE
 
 
-def get_stats_path(registry_root: Path) -> Path:
+def get_stats_path(registry_root: Path | None = None) -> Path:
     """Return path to ingested_projects.json (registry of decoded/ingested projects)."""
-    return registry_root / STORE_DIR / STATS_FILE
+    root = registry_root if registry_root is not None else REGISTRY
+    return root / STATS_FILE
 
 
 def get_project_stores(project_root: Path) -> list[Path]:

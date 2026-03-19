@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from config import (
+from codess.config import (
     CC_PROJECTS,
     CODEX_SESSIONS,
     get_state_path,

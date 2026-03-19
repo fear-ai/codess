@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ingest.store import (
+from codess.store import (
     init_db,
     load_ingest_state,
     save_ingest_state,

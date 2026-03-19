@@ -1,7 +1,7 @@
 """Content sanitization: control chars, ANSI, redaction."""
 
 import re
-from config import REDACT_PATTERNS
+from codess.config import REDACT_PATTERNS
 
 # Exclude \t (0x09) and \n (0x0a) - we keep those; \r normalized to \n first
 CONTROL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0d-\x1f\x7f]')

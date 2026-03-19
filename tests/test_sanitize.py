@@ -2,7 +2,7 @@
 
 import pytest
 
-from ingest.sanitize import (
+from codess.sanitize import (
     apply_sanitization,
     redact,
     sanitize_for_display,

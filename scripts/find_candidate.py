@@ -11,9 +11,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 _root = Path(__file__).resolve().parent.parent
-if str(_root) not in sys.path:
-    sys.path.insert(0, str(_root))
-from config import (
+_src = _root / "src"
+if str(_src) not in sys.path:
+    sys.path.insert(0, str(_src))
+from codess.config import (
     AGGREGATORS,
     CC_PROJECTS,
     CODEX_SESSIONS,
@@ -22,22 +23,7 @@ from config import (
     RECENT_DAYS,
     WORK,
 )
-
-
-def slug_to_path(slug: str) -> Path:
-    """Decode slug to path. Lossy: 'spank-py' and 'spank/py' both encode to same slug."""
-    if not slug:
-        return Path(".")
-    if slug.startswith("-"):
-        p = Path("/" + slug[1:].replace("-", "/"))
-    else:
-        p = Path(slug.replace("-", "/"))
-    # Fallback: decoded path may be wrong (e.g. spank/py vs spank-py). Try hyphen variant.
-    if not p.exists() and len(p.parts) >= 3:
-        alt = Path(*p.parts[:-2], p.parts[-2] + "-" + p.parts[-1])
-        if alt.exists():
-            return alt
-    return p
+from codess.helpers import is_excluded as helpers_is_excluded, slug_to_path
 
 
 def path_recent(p: Path, cutoff: datetime) -> bool:
@@ -312,6 +298,116 @@ def main():
     print("\n=== Summary ===")
     print(f"Projects: {len(projects)} | Gone: {len(gone)}")
     print("WksM=weeks since dir mtime; WksC=weeks since last commit; Remote=git remote; Sess=session count; MB=size; SpanW=session span weeks")
+
+
+def run_find(work_root: Path, vendor_filter: list[str] | None = None) -> list[dict]:
+    """Discover projects with session data. Return list of dicts: path, vendor, sess, mb, span_weeks.
+    vendor_filter: ['cc','codex','cursor'] or None for all."""
+    # Re-run discovery with work_root
+    cc_paths, codex_paths, cursor_paths = set(), set(), set()
+    if CC_PROJECTS.exists():
+        for d in CC_PROJECTS.iterdir():
+            if not d.is_dir():
+                continue
+            idx = d / "sessions-index.json"
+            if idx.exists():
+                try:
+                    data = json.loads(idx.read_text())
+                    for e in data.get("entries", []):
+                        pp = e.get("projectPath")
+                        if pp and str(Path(pp).resolve()).startswith(str(work_root)):
+                            cc_paths.add(Path(pp).resolve())
+                except (json.JSONDecodeError, OSError, KeyError):
+                    pass
+            p = Path(str(slug_to_path(d.name)))
+            if str(p).startswith(str(work_root)):
+                cc_paths.add(p.resolve())
+    if CODEX_SESSIONS.exists():
+        for f in CODEX_SESSIONS.rglob("*.jsonl"):
+            try:
+                d = json.loads(next(f.open()))
+                if d.get("type") == "session_meta":
+                    cwd = (d.get("payload") or {}).get("cwd", "")
+                    if cwd and cwd.startswith(str(work_root)):
+                        codex_paths.add(Path(cwd).resolve())
+            except (StopIteration, json.JSONDecodeError, OSError):
+                pass
+    if CURSOR_WS.exists():
+        for ws in CURSOR_WS.iterdir():
+            wj = ws / "workspace.json"
+            if wj.exists():
+                try:
+                    data = json.loads(wj.read_text())
+                    f = data.get("folder") or ""
+                    f = f.get("path", f) if isinstance(f, dict) else str(f)
+                    if f.startswith("file://"):
+                        f = f[7:]
+                    if f and f.startswith(str(work_root)):
+                        cursor_paths.add(Path(f).resolve())
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+    vendors = frozenset((vendor_filter or ["cc", "codex", "cursor"]))
+    all_paths = set()
+    if "cc" in vendors:
+        all_paths |= cc_paths
+    if "codex" in vendors:
+        all_paths |= codex_paths
+    if "cursor" in vendors:
+        all_paths |= cursor_paths
+
+    def _is_agg(p: Path) -> bool:
+        try:
+            rel = p.relative_to(work_root)
+            return len(rel.parts) == 1 and rel.parts[0] in AGGREGATORS
+        except ValueError:
+            return False
+
+    def canonicalize(paths):
+        keep = set()
+        for p in sorted(paths, key=lambda x: len(x.parts)):
+            if _is_agg(p) or helpers_is_excluded(p, work_root):
+                continue
+            skip = any(p != q and str(p).startswith(str(q) + "/") for q in keep)
+            if not skip:
+                keep.add(p)
+        return keep
+
+    projects = sorted({p for p in canonicalize(all_paths) if p.exists()}, key=str)
+    rows = []
+    for p in projects:
+        try:
+            rel = str(p.relative_to(work_root))
+        except ValueError:
+            rel = str(p)
+        src = []
+        if "cc" in vendors and p in cc_paths:
+            src.append("CC")
+        if "codex" in vendors and p in codex_paths:
+            src.append("Codex")
+        if "cursor" in vendors and p in cursor_paths:
+            src.append("Cursor")
+        if not src:
+            continue
+        sess_count, sess_mb, span_w = 0, 0.0, None
+        if p in cc_paths:
+            m = session_metrics_cc(p)
+            sess_count += m["count"]
+            sess_mb += m["size_mb"]
+            span_w = m["span_weeks"]
+        if p in codex_paths:
+            m = session_metrics_codex(p)
+            sess_count += m["count"]
+            sess_mb += m["size_mb"]
+            span_w = span_w or m["span_weeks"]
+        rows.append({
+            "path": rel,
+            "vendor": "|".join(src),
+            "sess": sess_count,
+            "mb": sess_mb,
+            "span_weeks": span_w,
+        })
+    return rows
 
 
 if __name__ == "__main__":

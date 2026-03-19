@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ingest.project import (
+from codess.project import (
     find_slug_for_project,
     get_cc_session_dir,
     get_codex_session_files,
@@ -72,8 +72,8 @@ class TestFindSlugForProject:
         proj.mkdir()
         slug = path_to_slug(proj.resolve())
         (cc_dir / slug).mkdir(parents=True)
-        monkeypatch.setattr("ingest.project.CC_PROJECTS", cc_dir)
-        import ingest.project as proj_mod
+        monkeypatch.setattr("codess.project.CC_PROJECTS", cc_dir)
+        import codess.project as proj_mod
         found = proj_mod.find_slug_for_project(proj)
         assert found == slug
 
@@ -82,8 +82,8 @@ class TestGetCcSessionDir:
     """get_cc_session_dir returns None when not found."""
 
     def test_none_when_no_slug(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ingest.project.CC_PROJECTS", tmp_path)
-        import ingest.project as proj_mod
+        monkeypatch.setattr("codess.project.CC_PROJECTS", tmp_path)
+        import codess.project as proj_mod
         proj = tmp_path / "orphan"
         proj.mkdir()
         assert proj_mod.get_cc_session_dir(proj) is None
@@ -93,13 +93,13 @@ class TestGetCodexSessionFiles:
     """get_codex_session_files filters by cwd."""
 
     def test_empty_when_no_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ingest.project.CODEX_SESSIONS", tmp_path / "nonexistent")
+        monkeypatch.setattr("codess.project.CODEX_SESSIONS", tmp_path / "nonexistent")
         proj = tmp_path / "proj"
         proj.mkdir()
         assert get_codex_session_files(proj) == []
 
     def test_matches_cwd(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ingest.project.CODEX_SESSIONS", tmp_path / "codex")
+        monkeypatch.setattr("codess.project.CODEX_SESSIONS", tmp_path / "codex")
         (tmp_path / "codex").mkdir()
         proj = tmp_path / "myproj"
         proj.mkdir()
@@ -116,7 +116,7 @@ class TestGetCursorPaths:
     """get_cursor_workspace_dbs and get_cursor_global_db."""
 
     def test_global_db_none_when_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ingest.project.CURSOR_USER_DATA", tmp_path / "cursor")
+        monkeypatch.setattr("codess.project.CURSOR_DATA", tmp_path / "cursor")
         assert get_cursor_global_db() is None
 
     def test_global_db_returns_path_when_exists(self, tmp_path, monkeypatch):
@@ -126,11 +126,11 @@ class TestGetCursorPaths:
         global_dir.mkdir()
         db = global_dir / "state.vscdb"
         db.touch()
-        monkeypatch.setattr("ingest.project.CURSOR_USER_DATA", base)
+        monkeypatch.setattr("codess.project.CURSOR_DATA", base)
         assert get_cursor_global_db() == db
 
     def test_workspace_dbs_empty_when_no_match(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ingest.project.CURSOR_USER_DATA", tmp_path / "cursor")
+        monkeypatch.setattr("codess.project.CURSOR_DATA", tmp_path / "cursor")
         (tmp_path / "cursor" / "workspaceStorage").mkdir(parents=True)
         proj = tmp_path / "other"
         proj.mkdir()
@@ -146,7 +146,7 @@ class TestGetCursorPaths:
             f'{{"folder":{{"path":"{proj}"}}}}'
         )
         (ws / "state.vscdb").touch()
-        monkeypatch.setattr("ingest.project.CURSOR_USER_DATA", base)
+        monkeypatch.setattr("codess.project.CURSOR_DATA", base)
         dbs = get_cursor_workspace_dbs(proj)
         assert len(dbs) == 1
         assert dbs[0].name == "state.vscdb"

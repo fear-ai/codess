@@ -1,37 +1,66 @@
 #!/usr/bin/env python3
-"""CodingSess CLI: session-ingest, session-query."""
+"""Codess CLI: scan, ingest, query."""
 
 import argparse
 import logging
 import sys
+from pathlib import Path
 
-from config import MIN_SESSION_SIZE
+# Ensure src/ is on path for codess and cli packages
+_src = Path(__file__).resolve().parent / "src"
+if str(_src) not in sys.path:
+    sys.path.insert(0, str(_src))
+
+from codess.config import FORCE, MIN_SIZE, REGISTRY
+from cli.scan_cmd import run as run_scan
 from cli.ingest_cmd import run as run_ingest
 from cli.query_cmd import run as run_query
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="coding-sess", description="Session record store")
+    parser = argparse.ArgumentParser(prog="codess", description="Session record store")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    scan_p = sub.add_parser("scan", help="Discover projects with session data")
+    scan_p.add_argument("--dirs", type=str, metavar="PATH",
+                        help="File with dirs (one per line)")
+    scan_p.add_argument("--dir", type=str, action="append", dest="dir_list",
+                        help="Add dir (repeatable)")
+    scan_p.add_argument("--source", type=str, metavar="cc,codex,cursor",
+                        help="Filter sources (default: all)")
+    scan_p.add_argument("--out", type=str, default="find_codess.csv",
+                        help="Output CSV path (default: find_codess.csv; - for stdout)")
+    scan_p.add_argument("--norec", action="store_true", help="No recursion; cwd or listed dirs only")
+    scan_p.add_argument("--days", type=int, metavar="N",
+                        help="[CODESS_DAYS] Include sessions from last N days (default: 90)")
+    scan_p.add_argument("--debug", action="store_true", help="Print each directory visited with project path")
+    scan_p.add_argument("--registry", type=str, metavar="PATH",
+                        help="[CODESS_REGISTRY] Override ~/.codess")
+    scan_p.set_defaults(run=run_scan)
+
     ingest_p = sub.add_parser("ingest", help="Ingest sessions from CC, Codex, Cursor")
-    ingest_p.add_argument("--project", type=str, help="Project root (default: git root)")
+    ingest_p.add_argument("--dirs", type=str, metavar="PATH",
+                        help="File with dirs (one per line)")
+    ingest_p.add_argument("--dir", type=str, action="append", dest="dir_list",
+                        help="Add dir (repeatable)")
     ingest_p.add_argument("--source", choices=["cc", "codex", "cursor", "all"], default="all",
                           help="Source to ingest: cc, codex, cursor, all (default: all)")
-    ingest_p.add_argument("--cursor-global", action="store_true",
-                          help="Cursor: use globalStorage (v44.9+); skip workspace DBs")
-    ingest_p.add_argument("--debug", action="store_true", help="Store source_raw BLOB")
+    ingest_p.add_argument("--debug", action="store_true", help="Store source_raw BLOB [CODESS_DEBUG]")
     ingest_p.add_argument("--redact", action="store_true", help="Redact secrets")
-    ingest_p.add_argument("--force", action="store_true", help="Ignore incremental state")
-    ingest_p.add_argument("--min-size", type=int, default=MIN_SESSION_SIZE, metavar="BYTES",
-                          help=f"Skip files smaller than BYTES (default: {MIN_SESSION_SIZE})")
-    ingest_p.add_argument("--legacy", action="store_true", help="Use single sessions.db (default: per-vendor DBs)")
-    ingest_p.add_argument("--registry", type=str, metavar="PATH", help="Registry root for ingested_projects.json (default: project root)")
+    ingest_p.add_argument("--force", action="store_true", default=FORCE,
+                        help="[CODESS_FORCE] Ignore incremental state (default: false)")
+    ingest_p.add_argument("--min-size", type=int, default=MIN_SIZE, metavar="BYTES",
+                        help="[CODESS_MIN_SIZE] Skip files smaller than BYTES (default: 20480)")
+    ingest_p.add_argument("--registry", type=str, metavar="PATH",
+                        help="[CODESS_REGISTRY] Override ~/.codess")
     ingest_p.set_defaults(run=run_ingest)
 
     query_p = sub.add_parser("query", help="Query session store")
-    query_p.add_argument("--project", type=str, help="Project root (default: git root)")
+    query_p.add_argument("--dirs", type=str, metavar="PATH",
+                        help="File with dirs (one per line)")
+    query_p.add_argument("--dir", type=str, action="append", dest="dir_list",
+                        help="Add dir (repeatable)")
     query_p.add_argument("--tool-counts", action="store_true", help="Print tool invocation counts (legacy, use --tool 0)")
     query_p.add_argument("--tool", type=int, nargs="?", default=None, const=0, metavar="N",
                           help="Tool histogram: N=0 all sessions, N=1 most recent; no arg = 0")

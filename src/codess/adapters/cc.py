@@ -6,13 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from config import (
+from codess.config import (
     TRUNCATE_DIALOG,
     TRUNCATE_GREP_PATTERN,
     TRUNCATE_RESPONSE,
     TRUNCATE_TOOL_RESULT,
 )
-from ingest.sanitize import apply_sanitization
+from codess.sanitize import apply_sanitization
 
 log = logging.getLogger(__name__)
 

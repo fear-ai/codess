@@ -4,40 +4,27 @@ import json
 import sqlite3
 from pathlib import Path
 
-SCHEMA_SQL = """
+# Schema at project root sql/CoSchema.sql (store.py is in src/codess/)
+_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "sql" / "CoSchema.sql"
+
+
+def _load_schema() -> str:
+    """Load schema from sql/CoSchema.sql."""
+    if _SCHEMA_PATH.exists():
+        return _SCHEMA_PATH.read_text(encoding="utf-8")
+    # Fallback if file missing
+    return """
 CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY,
-  source TEXT NOT NULL,
-  type TEXT NOT NULL,
-  release TEXT,
-  release_value INTEGER,
-  started_at REAL NOT NULL,
-  ended_at REAL,
-  project_path TEXT,
-  metadata TEXT
+  id TEXT PRIMARY KEY, source TEXT NOT NULL, type TEXT NOT NULL,
+  release TEXT, release_value INTEGER, started_at REAL NOT NULL, ended_at REAL,
+  project_path TEXT, metadata TEXT
 );
-
 CREATE TABLE IF NOT EXISTS events (
-  id INTEGER PRIMARY KEY,
-  session_id TEXT NOT NULL REFERENCES sessions(id),
-  event_id TEXT NOT NULL,
-  event_type TEXT,
-  subtype TEXT,
-  role TEXT,
-  content TEXT,
-  content_len INTEGER,
-  content_ref TEXT,
-  tool_name TEXT,
-  tool_input TEXT,
-  tool_output TEXT,
-  timestamp REAL,
-  file_path TEXT,
-  source_file TEXT,
-  metadata TEXT,
-  source_raw BLOB,
-  UNIQUE(session_id, event_id)
+  id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), event_id TEXT NOT NULL,
+  event_type TEXT, subtype TEXT, role TEXT, content TEXT, content_len INTEGER, content_ref TEXT,
+  tool_name TEXT, tool_input TEXT, tool_output TEXT, timestamp REAL, file_path TEXT, source_file TEXT,
+  metadata TEXT, source_raw BLOB, UNIQUE(session_id, event_id)
 );
-
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_tool_name ON events(tool_name);
@@ -46,11 +33,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path);
 
 
 def init_db(db_path: Path) -> None:
-    """Create parent dir if needed; execute schema SQL."""
+    """Create parent dir if needed; execute schema from sql/CoSchema.sql."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
-        conn.executescript(SCHEMA_SQL)
+        conn.executescript(_load_schema())
         conn.commit()
     finally:
         conn.close()

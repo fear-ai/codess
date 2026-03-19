@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ingest.codex_adapter import get_session_meta, iter_codex_records, process_file
+from codess.adapters.codex import get_session_meta, iter_codex_records, process_file
 
 
 class TestIterCodexRecords:

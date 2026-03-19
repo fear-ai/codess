@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ingest.cursor_adapter import _bubble_to_events, _iter_bubbles, process_db
+from codess.adapters.cursor import _bubble_to_events, _iter_bubbles, get_db_metrics, process_db
 
 
 def _make_cursor_db(tmp_path: Path, bubbles: list[tuple[str, str, dict]]) -> Path:
@@ -25,6 +25,39 @@ def _make_cursor_db(tmp_path: Path, bubbles: list[tuple[str, str, dict]]) -> Pat
     conn.commit()
     conn.close()
     return db
+
+
+class TestGetDbMetrics:
+    """get_db_metrics unit tests."""
+
+    def test_missing_db(self, tmp_path):
+        m = get_db_metrics(tmp_path / "nonexistent.vscdb")
+        assert m["count"] == 0
+        assert m["events"] == 0
+        assert m["size_bytes"] == 0
+
+    def test_empty_db(self, tmp_path):
+        db = tmp_path / "state.vscdb"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        conn.commit()
+        conn.close()
+        m = get_db_metrics(db)
+        assert m["count"] == 0
+        assert m["events"] == 0
+        assert m["size_bytes"] > 0
+
+    def test_counts_composers_and_bubbles(self, tmp_path):
+        bubbles = [
+            ("c1", "b1", {"type": 1, "text": "hi"}),
+            ("c1", "b2", {"type": 2, "text": "ok"}),
+            ("c2", "b1", {"type": 1, "text": "bye"}),
+        ]
+        db = _make_cursor_db(tmp_path, bubbles)
+        m = get_db_metrics(db)
+        assert m["count"] == 2
+        assert m["events"] == 3
+        assert m["size_bytes"] > 0
 
 
 class TestBubbleToEvents:

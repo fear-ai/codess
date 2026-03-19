@@ -5,9 +5,10 @@ import re
 import sys
 from pathlib import Path
 
-from config import get_project_stores, get_store_path
-from ingest.project import get_project_root
-from ingest.store import connect, init_db
+from codess.config import get_project_stores, get_store_path
+from codess.helpers import parse_dir_list
+from codess.project import get_project_root
+from codess.store import connect, init_db
 
 # Standard (built-in) tools for grouping; others are "loaded"
 STANDARD_TOOLS = frozenset({
@@ -40,8 +41,12 @@ def _session_id_by_number(conn, n: int) -> str | None:
 
 def run(args) -> int:
     """Run session-query. Returns exit code."""
-    project_root = Path(args.project) if args.project else get_project_root()
-    project_root = project_root.resolve()
+    dirs_file = Path(args.dirs) if getattr(args, "dirs", None) else None
+    dir_list = getattr(args, "dir_list", None) or []
+    roots = parse_dir_list(dirs_file, dir_list)
+    if not roots:
+        roots = [get_project_root()]
+    project_root = roots[0].resolve()
     stores = get_project_stores(project_root)
     if not stores:
         print("No store found. Run session-ingest first.", file=sys.stderr)

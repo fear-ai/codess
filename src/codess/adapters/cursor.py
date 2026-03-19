@@ -5,8 +5,8 @@ import logging
 from pathlib import Path
 from typing import Iterator
 
-from config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
-from ingest.sanitize import apply_sanitization
+from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
+from codess.sanitize import apply_sanitization
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +22,34 @@ def _truncate(text: str, limit: int) -> tuple[str, int]:
     if n <= limit:
         return s, n
     return s[: limit - 1] + "…", n
+
+
+def get_db_metrics(db_path: Path) -> dict:
+    """Return sess (composer count), events (bubble count), size_bytes from state.vscdb."""
+    import sqlite3
+
+    if not db_path.exists():
+        return {"count": 0, "events": 0, "size_bytes": 0}
+    try:
+        size_bytes = db_path.stat().st_size
+    except OSError:
+        size_bytes = 0
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        cur = conn.execute(
+            "SELECT key FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
+        )
+        composers = set()
+        events = 0
+        for (key,) in cur:
+            parts = key.split(":")
+            if len(parts) >= 3:
+                composers.add(parts[1])
+                events += 1
+        conn.close()
+        return {"count": len(composers), "events": events, "size_bytes": size_bytes}
+    except Exception:
+        return {"count": 0, "events": 0, "size_bytes": size_bytes}
 
 
 def _iter_bubbles(db_path: Path) -> Iterator[tuple[str, str, dict]]:
