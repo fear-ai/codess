@@ -72,7 +72,7 @@ class TestFindSlugForProject:
         proj.mkdir()
         slug = path_to_slug(proj.resolve())
         (cc_dir / slug).mkdir(parents=True)
-        monkeypatch.setattr("ingest.project.CC_PROJECTS_DIR", cc_dir)
+        monkeypatch.setattr("ingest.project.CC_PROJECTS", cc_dir)
         import ingest.project as proj_mod
         found = proj_mod.find_slug_for_project(proj)
         assert found == slug
@@ -82,7 +82,7 @@ class TestGetCcSessionDir:
     """get_cc_session_dir returns None when not found."""
 
     def test_none_when_no_slug(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ingest.project.CC_PROJECTS_DIR", tmp_path)
+        monkeypatch.setattr("ingest.project.CC_PROJECTS", tmp_path)
         import ingest.project as proj_mod
         proj = tmp_path / "orphan"
         proj.mkdir()
@@ -93,13 +93,13 @@ class TestGetCodexSessionFiles:
     """get_codex_session_files filters by cwd."""
 
     def test_empty_when_no_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ingest.project.CODEX_SESSIONS_DIR", tmp_path / "nonexistent")
+        monkeypatch.setattr("ingest.project.CODEX_SESSIONS", tmp_path / "nonexistent")
         proj = tmp_path / "proj"
         proj.mkdir()
         assert get_codex_session_files(proj) == []
 
     def test_matches_cwd(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ingest.project.CODEX_SESSIONS_DIR", tmp_path / "codex")
+        monkeypatch.setattr("ingest.project.CODEX_SESSIONS", tmp_path / "codex")
         (tmp_path / "codex").mkdir()
         proj = tmp_path / "myproj"
         proj.mkdir()

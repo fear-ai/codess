@@ -75,7 +75,7 @@ def test_full_ingest_and_query():
         shutil.copy(fixture, session_dir / "test-session.jsonl")
 
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(projects_dir)
+        env["CODINGSESS_CC_PROJECTS"] = str(projects_dir)
 
         # Run ingest
         import subprocess
@@ -143,7 +143,7 @@ def test_codex_ingest_and_query():
             '{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"Hello"}]}}\n'
         )
         env = os.environ.copy()
-        env["CODINGSESS_CODEX_SESSIONS_DIR"] = str(tmp / "codex" / "sessions")
+        env["CODINGSESS_CODEX_SESSIONS"] = str(tmp / "codex" / "sessions")
 
         r = subprocess.run(
             [sys.executable, "-m", "main", "ingest", "--project", str(proj), "--source", "codex", "--force", "--min-size", "0"],
@@ -231,7 +231,7 @@ def test_incremental_skip_unchanged():
         shutil.copy(fixture, projects_dir / slug / "s1.jsonl")
 
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(projects_dir)
+        env["CODINGSESS_CC_PROJECTS"] = str(projects_dir)
 
         # First ingest
         r1 = subprocess.run(

@@ -56,7 +56,7 @@ def test_ingest_no_cc_dir_exit_1():
         proj = tmp / "orphan"
         proj.mkdir()
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(tmp)
+        env["CODINGSESS_CC_PROJECTS"] = str(tmp)
         r = _run(["ingest", "--source", "cc", "--project", str(proj), "--min-size", "0"], env=env)
         assert r.returncode == 1
         assert "No CC project" in r.stderr
@@ -73,7 +73,7 @@ def test_ingest_empty_jsonl_dir_success():
         slug = path_to_slug(proj.resolve())
         (cc_dir / slug).mkdir(parents=True)
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(cc_dir)
+        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
         r = _run(["ingest", "--source", "cc", "--project", str(proj), "--min-size", "0"], env=env)
         assert r.returncode == 0
         assert "0 file" in r.stdout or "0 event" in r.stdout
@@ -91,7 +91,7 @@ def test_ingest_empty_jsonl_file():
         (cc_dir / slug).mkdir(parents=True)
         (cc_dir / slug / "empty.jsonl").write_text("")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(cc_dir)
+        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
         r = _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         assert r.returncode == 0
 
@@ -107,7 +107,7 @@ def test_query_empty_store():
         slug = path_to_slug(proj.resolve())
         (cc_dir / slug).mkdir(parents=True)
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(cc_dir)
+        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
         _run(["ingest", "--project", str(proj), "--source", "cc", "--min-size", "0"], env=env)
         r = _run(["query", "--project", str(proj), "--tool-counts"], env=env)
         assert r.returncode == 0
@@ -127,7 +127,7 @@ def test_idempotent_same_data():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(cc_dir)
+        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
         r1 = _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         assert r1.returncode == 0
         r2 = _run(["query", "--project", str(proj), "--tool-counts"], env=env)
@@ -151,7 +151,7 @@ def test_ingest_shows_stats():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(cc_dir)
+        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
         r = _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         assert r.returncode == 0
         assert "Added:" in r.stdout and "Overall:" in r.stdout
@@ -170,7 +170,7 @@ def test_query_stats():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(cc_dir)
+        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
         _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         r = _run(["query", "--project", str(proj), "--stats"], env=env)
         assert r.returncode == 0
@@ -190,7 +190,7 @@ def test_query_taxonomy():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(cc_dir)
+        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
         _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         r = _run(["query", "--project", str(proj), "--taxonomy"], env=env)
         assert r.returncode == 0
@@ -210,7 +210,7 @@ def test_query_sessions_with_id():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(cc_dir)
+        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
         _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         r = _run(["query", "--project", str(proj), "--sessions", "--id"], env=env)
         assert r.returncode == 0
@@ -226,7 +226,7 @@ def test_ingest_source_codex_only():
         codex_empty = tmp / "codex_empty" / "sessions"
         codex_empty.mkdir(parents=True)
         env = os.environ.copy()
-        env["CODINGSESS_CODEX_SESSIONS_DIR"] = str(codex_empty)
+        env["CODINGSESS_CODEX_SESSIONS"] = str(codex_empty)
         r = _run(["ingest", "--project", str(proj), "--source", "codex", "--min-size", "0"], env=env)
         assert r.returncode == 0
         assert "0 session" in r.stdout or "0 event" in r.stdout
@@ -271,7 +271,7 @@ def test_only_skipped_records():
             '{"type":"progress","message":{}}\n{"type":"system","message":{}}\n'
         )
         env = os.environ.copy()
-        env["CODINGSESS_CC_PROJECTS_DIR"] = str(cc_dir)
+        env["CODINGSESS_CC_PROJECTS"] = str(cc_dir)
         r = _run(["ingest", "--project", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         assert r.returncode == 0
         r2 = _run(["query", "--project", str(proj), "--sessions"], env=env)

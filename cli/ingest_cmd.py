@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import get_state_path, get_stats_path, get_store_path, MIN_SESSION_FILE_SIZE
+from config import get_state_path, get_stats_path, get_store_path, MIN_SESSION_SIZE
 from ingest.cc_adapter import process_file as process_cc_file
 from ingest.codex_adapter import get_session_meta, process_file as process_codex_file
 from ingest.cursor_adapter import process_db as process_cursor_db
@@ -304,7 +304,7 @@ def run(args) -> int:
         "redact": getattr(args, "redact", False),
     }
     force = getattr(args, "force", False)
-    min_size = getattr(args, "min_size", MIN_SESSION_FILE_SIZE)
+    min_size = getattr(args, "min_size", MIN_SESSION_SIZE)
 
     total_ingested = 0
     total_events = 0

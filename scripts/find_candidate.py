@@ -2,14 +2,18 @@
 """Ingestion candidate review: canonicalize, filter, collect metrics.
 Aggregators (WP, ZK, Claw, etc.) are parent dirs; we keep leaf projects.
 Metrics: weeks since last update, .git, remote status, session count/size/span.
-Config: conf_candidate.py (paths, dirs, exclude patterns)."""
+Config: config.py (paths, dirs, exclude patterns)."""
 
 import json
 import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from conf_candidate import (
+_root = Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+from config import (
     AGGREGATORS,
     CC_PROJECTS,
     CODEX_SESSIONS,

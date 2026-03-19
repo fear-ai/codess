@@ -1,23 +1,24 @@
-"""Paths, options, and defaults for CodingSess."""
+"""Unified config for CodingSess. Override via env: CODINGSESS_WORK, CODINGSESS_CC_PROJECTS, etc."""
 
 import os
 import platform
 import re
 from pathlib import Path
 
-CC_PROJECTS_DIR = Path(
-    os.environ.get("CODINGSESS_CC_PROJECTS_DIR", str(Path.home() / ".claude" / "projects"))
+# --- Paths (env overrides) ---
+WORK = Path(os.environ.get("CODINGSESS_WORK", str(Path.home() / "Work")))
+
+CC_PROJECTS = Path(
+    os.environ.get("CODINGSESS_CC_PROJECTS", str(Path.home() / ".claude" / "projects"))
+)
+CODEX_SESSIONS = Path(
+    os.environ.get("CODINGSESS_CODEX_SESSIONS", str(Path.home() / ".codex" / "sessions"))
+)
+CODEX_HISTORY = Path(
+    os.environ.get("CODINGSESS_CODEX_HISTORY", str(Path.home() / ".codex" / "history.jsonl"))
 )
 
-# Codex
-CODEX_SESSIONS_DIR = Path(
-    os.environ.get("CODINGSESS_CODEX_SESSIONS_DIR", str(Path.home() / ".codex" / "sessions"))
-)
-CODEX_HISTORY_PATH = Path(
-    os.environ.get("CODINGSESS_CODEX_HISTORY_PATH", str(Path.home() / ".codex" / "history.jsonl"))
-)
 
-# Cursor (platform-specific)
 def _cursor_user_data() -> Path:
     override = os.environ.get("CODINGSESS_CURSOR_USER_DATA")
     if override:
@@ -30,25 +31,44 @@ def _cursor_user_data() -> Path:
         return Path(os.environ.get("APPDATA", "")) / "Cursor" / "User"
     return home / ".config" / "Cursor" / "User"
 
+
 CURSOR_USER_DATA = _cursor_user_data()
-STORE_DIR_NAME = ".coding-sess"
-STORE_DB_NAME = "sessions.db"
+CURSOR_WS = CURSOR_USER_DATA / "workspaceStorage"
+
+# --- Discovery (find_candidate) ---
+AGGREGATORS = frozenset(
+    {"WP", "ZK", "Claw", "Claude", "Cursor", "Github", "CodingTools"}
+)
+EXCLUDE_REVIEW_DIRS = (
+    "CodingTools",
+    "MCP/MCPs",
+    "Claw/Claws",
+    "ZK/ZKs",
+    "Spank/sOSS",
+    "Claude/Claudes",
+)
+RECENT_DAYS = int(os.environ.get("CODINGSESS_RECENT_DAYS", "90"))
+
+# --- Store layout ---
+STORE_DIR = ".coding-sess"
+STORE_DB = "sessions.db"
 STORE_DB_CC = "sessions_cc.db"
 STORE_DB_CODEX = "sessions_codex.db"
 STORE_DB_CURSOR = "sessions_cursor.db"
-STATE_FILE_NAME = "ingest_state.json"
-STATS_FILE_NAME = "ingested_projects.json"
+STATE_FILE = "ingest_state.json"
+STATS_FILE = "ingested_projects.json"
 
+# --- Ingest ---
+MIN_SESSION_SIZE = int(os.environ.get("CODINGSESS_MIN_SESSION_SIZE", str(20 * 1024)))  # 20 KB
+
+# --- Truncation ---
 TRUNCATE_RESPONSE = 1000
 TRUNCATE_DIALOG = 200
 TRUNCATE_TOOL_RESULT = 500
 TRUNCATE_GREP_PATTERN = 120
-TRUNCATE_PROMPT = 10000  # User prompts (Codex/Cursor)
+TRUNCATE_PROMPT = 10000
 
-# Skip session files smaller than this (bytes). Small files are typically command-only or resume chains.
-MIN_SESSION_FILE_SIZE = 20 * 1024  # 20 KB
-
-# Default redaction patterns: API keys, tokens, .env-style values
+# --- Redaction ---
 REDACT_PATTERNS = [
     re.compile(r'sk-[a-zA-Z0-9]{20,}', re.I),
     re.compile(r'api[_-]?key["\']?\s*[:=]\s*["\']?[a-zA-Z0-9_\-]{20,}', re.I),
@@ -58,30 +78,30 @@ REDACT_PATTERNS = [
 
 def get_store_path(project_root: Path, source: str | None = None) -> Path:
     """Return path to sessions DB under project. source='Claude'|'Codex'|'Cursor' uses per-vendor DB."""
-    base = project_root / STORE_DIR_NAME
+    base = project_root / STORE_DIR
     if source == "Claude":
         return base / STORE_DB_CC
     if source == "Codex":
         return base / STORE_DB_CODEX
     if source == "Cursor":
         return base / STORE_DB_CURSOR
-    return base / STORE_DB_NAME
+    return base / STORE_DB
 
 
 def get_state_path(project_root: Path) -> Path:
     """Return path to ingest_state.json under project."""
-    return project_root / STORE_DIR_NAME / STATE_FILE_NAME
+    return project_root / STORE_DIR / STATE_FILE
 
 
 def get_stats_path(registry_root: Path) -> Path:
     """Return path to ingested_projects.json (registry of decoded/ingested projects)."""
-    return registry_root / STORE_DIR_NAME / STATS_FILE_NAME
+    return registry_root / STORE_DIR / STATS_FILE
 
 
 def get_project_stores(project_root: Path) -> list[Path]:
     """Return existing DB paths: legacy sessions.db first, else per-vendor DBs."""
-    base = project_root / STORE_DIR_NAME
-    legacy = base / STORE_DB_NAME
+    base = project_root / STORE_DIR
+    legacy = base / STORE_DB
     if legacy.exists():
         return [legacy]
     return [p for p in (base / STORE_DB_CC, base / STORE_DB_CODEX, base / STORE_DB_CURSOR) if p.exists()]

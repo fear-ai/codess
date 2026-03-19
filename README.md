@@ -78,7 +78,19 @@ sqlite3 .coding-sess/sessions.db "SELECT source, project_path, COUNT(*) FROM ses
 
 ## Config
 
-`CODINGSESS_CC_PROJECTS_DIR` (default `~/.claude/projects`); `CODINGSESS_CODEX_SESSIONS_DIR` (default `~/.codex/sessions`); `CODINGSESS_CURSOR_USER_DATA` (override Cursor User dir for tests); `MIN_SESSION_FILE_SIZE` in `config.py` (20 KB).
+Override via env: `CODINGSESS_WORK`, `CODINGSESS_CC_PROJECTS`, `CODINGSESS_CODEX_SESSIONS`, `CODINGSESS_CURSOR_USER_DATA`, `CODINGSESS_RECENT_DAYS`, `CODINGSESS_MIN_SESSION_SIZE`. See `config.py`.
+
+## Layout
+
+| Dir | Role |
+|-----|------|
+| **config.py** | Single config: paths, discovery, store, ingest options. Env overrides. |
+| **main.py** | CLI entry; subparsers for ingest, query. |
+| **cli/** | CLI commands: `ingest_cmd.py`, `query_cmd.py`. Parse args, call ingest/query logic. |
+| **ingest/** | Adapters (cc, codex, cursor), project path helpers, store, sanitize. No CLI. |
+| **scripts/** | Standalone scripts: `find_candidate.py` (discovery), `batch_ingest.py` (find → ingest loop). Add project root to path to import config. |
+
+**Partitioning:** `cli/` = user-facing commands; `ingest/` = core logic (no argparse); `scripts/` = discovery/batch (run directly or via batch).
 
 ## Dev
 

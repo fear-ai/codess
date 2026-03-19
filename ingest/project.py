@@ -5,7 +5,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from config import CC_PROJECTS_DIR, CODEX_SESSIONS_DIR, CURSOR_USER_DATA
+from config import CC_PROJECTS, CODEX_SESSIONS, CURSOR_USER_DATA
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def slug_to_path(slug: str) -> Path:
 
 def get_cc_projects_dir() -> Path:
     """Return CC projects directory."""
-    return CC_PROJECTS_DIR
+    return CC_PROJECTS
 
 
 def find_slug_for_project(project_root: Path) -> str | None:
@@ -73,9 +73,9 @@ def get_codex_session_files(project_root: Path) -> list[Path]:
     project_root = project_root.resolve()
     project_str = str(project_root)
     files = []
-    if not CODEX_SESSIONS_DIR.exists():
+    if not CODEX_SESSIONS.exists():
         return files
-    for path in sorted(CODEX_SESSIONS_DIR.rglob("*.jsonl")):
+    for path in sorted(CODEX_SESSIONS.rglob("*.jsonl")):
         try:
             with path.open(encoding="utf-8", errors="replace") as f:
                 for line in f:

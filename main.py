@@ -5,7 +5,7 @@ import argparse
 import logging
 import sys
 
-from config import MIN_SESSION_FILE_SIZE
+from config import MIN_SESSION_SIZE
 from cli.ingest_cmd import run as run_ingest
 from cli.query_cmd import run as run_query
 
@@ -24,8 +24,8 @@ def main() -> int:
     ingest_p.add_argument("--debug", action="store_true", help="Store source_raw BLOB")
     ingest_p.add_argument("--redact", action="store_true", help="Redact secrets")
     ingest_p.add_argument("--force", action="store_true", help="Ignore incremental state")
-    ingest_p.add_argument("--min-size", type=int, default=MIN_SESSION_FILE_SIZE, metavar="BYTES",
-                          help=f"Skip files smaller than BYTES (default: {MIN_SESSION_FILE_SIZE})")
+    ingest_p.add_argument("--min-size", type=int, default=MIN_SESSION_SIZE, metavar="BYTES",
+                          help=f"Skip files smaller than BYTES (default: {MIN_SESSION_SIZE})")
     ingest_p.add_argument("--legacy", action="store_true", help="Use single sessions.db (default: per-vendor DBs)")
     ingest_p.add_argument("--registry", type=str, metavar="PATH", help="Registry root for ingested_projects.json (default: project root)")
     ingest_p.set_defaults(run=run_ingest)

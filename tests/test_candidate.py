@@ -3,11 +3,12 @@
 import sys
 from pathlib import Path
 
-# Allow importing from scripts/
-scripts = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts))
+# Allow importing from project root and scripts/
+root = Path(__file__).parent.parent
+sys.path.insert(0, str(root))
+sys.path.insert(0, str(root / "scripts"))
 import find_candidate as wf
-import conf_candidate as conf
+from config import AGGREGATORS as conf_aggregators
 
 
 def test_slug_to_path_empty():
@@ -54,4 +55,4 @@ def test_is_not_excluded_mcp_top_level():
 
 
 def test_aggregators_contains_codingtools():
-    assert "CodingTools" in conf.AGGREGATORS
+    assert "CodingTools" in conf_aggregators

@@ -9,13 +9,9 @@ from pathlib import Path
 
 # CodeSess root (parent of scripts/)
 CODESS_ROOT = Path(__file__).resolve().parent.parent
-
-# Import WORK from conf (same as find_candidate)
-import importlib.util
-_spec = importlib.util.spec_from_file_location("conf_candidate", CODESS_ROOT / "scripts" / "conf_candidate.py")
-_conf = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_conf)
-WORK = _conf.WORK
+if str(CODESS_ROOT) not in sys.path:
+    sys.path.insert(0, str(CODESS_ROOT))
+from config import WORK
 
 
 def main() -> int:
