@@ -6,17 +6,16 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from codess.config import DEBUG, FORCE, get_state_path, get_stats_path, get_store_path, MIN_SIZE, REGISTRY
+from codess.config import get_state_path, get_stats_path, get_store_path, REGISTRY
 from codess.adapters.cc import process_file as process_cc_file
 from codess.adapters.codex import get_session_meta, process_file as process_codex_file
 from codess.adapters.cursor import process_db as process_cursor_db
-from codess.helpers import parse_dir_list
+from codess.project import RootsWhenEmpty, build_ingest_run_options, resolve_cli_roots
 from codess.project import (
     get_cc_session_dir,
     get_codex_session_files,
     get_cursor_global_db,
     get_cursor_workspace_dbs,
-    get_project_root,
 )
 from codess.store import (
     connect,
@@ -31,7 +30,16 @@ from codess.store import (
 log = logging.getLogger(__name__)
 
 
-def _ingest_cc(project_root: Path, store_path: Path, state_path: Path, opts: dict, force: bool, min_size: int) -> tuple[int, int]:
+def _ingest_cc(
+    project_root: Path,
+    store_path: Path,
+    state_path: Path,
+    opts: dict,
+    force: bool,
+    min_size: int,
+    *,
+    stop_on_error: bool,
+) -> tuple[int, int]:
     """Ingest CC. Return (sessions_added, events_added)."""
     cc_dir = get_cc_session_dir(project_root)
     if cc_dir is None:
@@ -79,7 +87,9 @@ def _ingest_cc(project_root: Path, store_path: Path, state_path: Path, opts: dic
         except Exception as e:
             conn.rollback()
             log.exception("Ingest failed for %s: %s", path, e)
-            raise
+            if stop_on_error:
+                raise
+            continue
         finally:
             conn.close()
         state = load_ingest_state(state_path)
@@ -89,7 +99,16 @@ def _ingest_cc(project_root: Path, store_path: Path, state_path: Path, opts: dic
     return ingested, total_events
 
 
-def _ingest_codex(project_root: Path, store_path: Path, state_path: Path, opts: dict, force: bool, min_size: int) -> tuple[int, int]:
+def _ingest_codex(
+    project_root: Path,
+    store_path: Path,
+    state_path: Path,
+    opts: dict,
+    force: bool,
+    min_size: int,
+    *,
+    stop_on_error: bool,
+) -> tuple[int, int]:
     """Ingest Codex. Return (sessions_added, events_added)."""
     files = get_codex_session_files(project_root)
     ingested, total_events = 0, 0
@@ -132,7 +151,9 @@ def _ingest_codex(project_root: Path, store_path: Path, state_path: Path, opts: 
         except Exception as e:
             conn.rollback()
             log.exception("Ingest failed for %s: %s", path, e)
-            raise
+            if stop_on_error:
+                raise
+            continue
         finally:
             conn.close()
         state = load_ingest_state(state_path)
@@ -148,6 +169,8 @@ def _ingest_cursor(
     state_path: Path,
     opts: dict,
     force: bool,
+    *,
+    stop_on_error: bool,
 ) -> tuple[int, int]:
     """Ingest Cursor (workspace + global). Return (sessions_added, events_added)."""
     proj_str = str(project_root.resolve())
@@ -192,7 +215,9 @@ def _ingest_cursor(
         except Exception as e:
             conn.rollback()
             log.exception("Ingest failed for %s: %s", db_path, e)
-            raise
+            if stop_on_error:
+                raise
+            continue
         finally:
             conn.close()
         state = load_ingest_state(state_path)
@@ -246,13 +271,15 @@ def _ingest_cursor(
                     log.exception(
                         "Ingest failed for global %s: %s", global_db, e
                     )
-                    raise
+                    if stop_on_error:
+                        raise
+                else:
+                    state = load_ingest_state(state_path)
+                    state[state_key] = mtime
+                    save_ingest_state(state_path, state)
+                    ingested += len(sessions_events)
                 finally:
                     conn.close()
-                state = load_ingest_state(state_path)
-                state[state_key] = mtime
-                save_ingest_state(state_path, state)
-                ingested += len(sessions_events)
 
     return ingested, total_events
 
@@ -281,15 +308,24 @@ def _save_stats(project_root: Path, registry_root: Path, source_stats: dict) -> 
 
 def run(args) -> int:
     """Run session-ingest. Returns exit code."""
-    dirs_file = Path(args.dirs) if getattr(args, "dirs", None) else None
-    dir_list = getattr(args, "dir_list", None) or []
-    roots = parse_dir_list(dirs_file, dir_list)
-    if not roots:
-        roots = [get_project_root()]
+    roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.PROJECT_ROOT)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
 
     registry_root = Path(args.registry).expanduser() if getattr(args, "registry", None) else REGISTRY
 
-    source = getattr(args, "source", "all")
+    raw_src = getattr(args, "source", None) or "all"
+    if "," in raw_src:
+        print(
+            "codess: ingest --source must be one token: cc | codex | cursor | all (not a comma list)",
+            file=sys.stderr,
+        )
+        return 1
+    source = raw_src.strip().lower()
+    if source not in ("cc", "codex", "cursor", "all"):
+        print(f"codess: invalid ingest --source: {raw_src!r}", file=sys.stderr)
+        return 1
     if source == "cc":
         sources = ["cc"]
     elif source == "codex":
@@ -299,88 +335,128 @@ def run(args) -> int:
     else:
         sources = ["cc", "codex", "cursor"]
 
-    opts = {
-        "debug": getattr(args, "debug", False) or DEBUG,
-        "redact": getattr(args, "redact", False),
-    }
-    force = getattr(args, "force", FORCE)
-    min_size = getattr(args, "min_size", MIN_SIZE)
+    iopt = build_ingest_run_options(args)
+    opts = {"debug": iopt.debug, "redact": iopt.redact}
+    force = iopt.force
+    min_size = iopt.min_size
 
     total_ingested = 0
     total_events = 0
     source_stats = {}
+    had_error = False
 
     def _store_path(proj: Path, src: str) -> Path:
         return get_store_path(proj, {"cc": "Claude", "codex": "Codex", "cursor": "Cursor"}[src])
 
     for project_root in roots:
-        project_root = project_root.resolve()
-        state_path = get_state_path(project_root)
-        proj_stats = {}
+        try:
+            project_root = project_root.resolve()
+            state_path = get_state_path(project_root)
+            proj_stats = {}
 
-        if "cc" in sources:
-            store_path = _store_path(project_root, "cc")
-            init_db(store_path)
-            cc_dir = get_cc_session_dir(project_root)
-            if cc_dir is None and source == "cc":
-                print(f"No CC project dir for {project_root}", file=sys.stderr)
-                return 1
-            if cc_dir is not None:
-                n, e = _ingest_cc(project_root, store_path, state_path, opts, force, min_size)
+            if "cc" in sources:
+                store_path = _store_path(project_root, "cc")
+                init_db(store_path)
+                cc_dir = get_cc_session_dir(project_root)
+                if cc_dir is None and source == "cc":
+                    print(f"No CC project dir for {project_root}", file=sys.stderr)
+                    had_error = True
+                    if iopt.stop_on_error:
+                        return 1
+                if cc_dir is not None:
+                    n, e = _ingest_cc(
+                        project_root,
+                        store_path,
+                        state_path,
+                        opts,
+                        force,
+                        min_size,
+                        stop_on_error=iopt.stop_on_error,
+                    )
+                    total_ingested += n
+                    total_events += e
+                if store_path.exists():
+                    conn = connect(store_path)
+                    try:
+                        s = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+                        ev = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+                        proj_stats["Claude"] = {
+                            "sessions": s,
+                            "events": ev,
+                            "last_ingestion": datetime.now(timezone.utc).isoformat(),
+                        }
+                    finally:
+                        conn.close()
+
+            if "codex" in sources:
+                store_path = _store_path(project_root, "codex")
+                init_db(store_path)
+                n, e = _ingest_codex(
+                    project_root,
+                    store_path,
+                    state_path,
+                    opts,
+                    force,
+                    min_size,
+                    stop_on_error=iopt.stop_on_error,
+                )
                 total_ingested += n
                 total_events += e
-            if store_path.exists():
-                conn = connect(store_path)
-                try:
-                    s = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-                    ev = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-                    proj_stats["Claude"] = {"sessions": s, "events": ev, "last_ingestion": datetime.now(timezone.utc).isoformat()}
-                finally:
-                    conn.close()
+                if store_path.exists():
+                    conn = connect(store_path)
+                    try:
+                        s = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+                        ev = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+                        proj_stats["Codex"] = {
+                            "sessions": s,
+                            "events": ev,
+                            "last_ingestion": datetime.now(timezone.utc).isoformat(),
+                        }
+                    finally:
+                        conn.close()
 
-        if "codex" in sources:
-            store_path = _store_path(project_root, "codex")
-            init_db(store_path)
-            n, e = _ingest_codex(project_root, store_path, state_path, opts, force, min_size)
-            total_ingested += n
-            total_events += e
-            if store_path.exists():
-                conn = connect(store_path)
-                try:
-                    s = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-                    ev = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-                    proj_stats["Codex"] = {"sessions": s, "events": ev, "last_ingestion": datetime.now(timezone.utc).isoformat()}
-                finally:
-                    conn.close()
+            if "cursor" in sources:
+                store_path = _store_path(project_root, "cursor")
+                init_db(store_path)
+                n, e = _ingest_cursor(
+                    project_root,
+                    store_path,
+                    state_path,
+                    opts,
+                    force,
+                    stop_on_error=iopt.stop_on_error,
+                )
+                total_ingested += n
+                total_events += e
+                if store_path.exists():
+                    conn = connect(store_path)
+                    try:
+                        s = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+                        ev = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+                        proj_stats["Cursor"] = {
+                            "sessions": s,
+                            "events": ev,
+                            "last_ingestion": datetime.now(timezone.utc).isoformat(),
+                        }
+                    finally:
+                        conn.close()
 
-        if "cursor" in sources:
-            store_path = _store_path(project_root, "cursor")
-            init_db(store_path)
-            n, e = _ingest_cursor(
-                project_root, store_path, state_path, opts, force
-            )
-            total_ingested += n
-            total_events += e
-            if store_path.exists():
-                conn = connect(store_path)
-                try:
-                    s = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-                    ev = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-                    proj_stats["Cursor"] = {"sessions": s, "events": ev, "last_ingestion": datetime.now(timezone.utc).isoformat()}
-                finally:
-                    conn.close()
-
-        if proj_stats:
-            _save_stats(project_root, registry_root, proj_stats)
-            for k, v in proj_stats.items():
-                if k not in source_stats:
-                    source_stats[k] = {"sessions": 0, "events": 0}
-                source_stats[k]["sessions"] += v["sessions"]
-                source_stats[k]["events"] += v["events"]
+            if proj_stats:
+                _save_stats(project_root, registry_root, proj_stats)
+                for k, v in proj_stats.items():
+                    if k not in source_stats:
+                        source_stats[k] = {"sessions": 0, "events": 0}
+                    source_stats[k]["sessions"] += v["sessions"]
+                    source_stats[k]["events"] += v["events"]
+        except Exception:
+            log.exception("Ingest failed for project root %s", project_root)
+            had_error = True
+            if iopt.stop_on_error:
+                return 1
 
     overall_sessions = sum(s["sessions"] for s in source_stats.values())
     overall_events = sum(s["events"] for s in source_stats.values())
 
     print(f"Ingested {total_ingested} session(s), {total_events} event(s)")
     print(f"Added: {total_ingested} sessions, {total_events} events | Overall: {overall_sessions} sessions, {overall_events} events")
-    return 0
+    return 1 if had_error else 0

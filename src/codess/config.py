@@ -5,8 +5,14 @@ import platform
 import re
 from pathlib import Path
 
+
+def env_bool(key: str, default: str = "0") -> bool:
+    """True if env ``key`` is ``1`` / ``true`` / ``yes`` (case-insensitive); else false."""
+    return os.environ.get(key, default).lower() in ("1", "true", "yes")
+
+
 # --- Paths (env overrides) ---
-# Default work root when no explicit dir given (for is_excluded fallback)
+# Fallback anchor for `helpers.is_excluded` when `work_root` is omitted (not CC/Codex/Cursor install roots).
 DEFAULT_WORK = Path.home() / "Work"
 
 CC_PROJECTS = Path(
@@ -14,9 +20,6 @@ CC_PROJECTS = Path(
 )
 CODEX_SESSIONS = Path(
     os.environ.get("CODESS_CODEX_SESSIONS", str(Path.home() / ".codex" / "sessions"))
-)
-CODEX_HISTORY = Path(
-    os.environ.get("CODESS_CODEX_HISTORY", str(Path.home() / ".codex" / "history.jsonl"))
 )
 
 
@@ -34,12 +37,15 @@ def _cursor_data() -> Path:
 
 
 CURSOR_DATA = _cursor_data()
+# Cursor stores per-workspace state under User/workspaceStorage/<hash>/ (see CursorSchema).
 CURSOR_WS = CURSOR_DATA / "workspaceStorage"
 
 # --- Discovery ---
+# Top-level folder names under a work root treated as “aggregator” parents (skip as leaf projects in scan canonicalize).
 AGGREGATORS = frozenset(
     {"WP", "ZK", "Claw", "Claude", "Cursor", "Github", "CodingTools"}
 )
+# Path prefixes (relative to work root) excluded as review/backup-style trees in `is_excluded`.
 EXCLUDE_REVIEW_DIRS = (
     "CodingTools",
     "MCP/MCPs",
@@ -51,8 +57,9 @@ EXCLUDE_REVIEW_DIRS = (
 CODESS_DAYS = int(os.environ.get("CODESS_DAYS", "90"))
 
 # --- Recursion exclude (case-insensitive) ---
+# Dirname skip: `helpers.should_skip_recurse` also skips any name starting with "." (covers .git, .venv, …).
 EXCLUDE_RECURSE = frozenset({
-    ".git", ".*", "node_modules", "__pycache__",
+    "node_modules", "__pycache__",
     "build", "debug", "release", "test", "tests",
     "doc", "docs", "bin", "lib", "libs", "var", "log", "logs",
     "env", "venv", "OLD", "Save",
@@ -70,22 +77,34 @@ STATS_FILE = "ingested_projects.json"
 # --- Registry (central ingested_projects.json, default ~/.codess) ---
 REGISTRY = Path(os.environ.get("CODESS_REGISTRY", str(Path.home() / ".codess"))).expanduser()
 
+# --- CLI / logging ---
+VERBOSE = env_bool("CODESS_VERBOSE")
+
+# --- Scan (walk / recursion; flag not yet passed through run_scan — see scan_cmd) ---
+NOREC = env_bool("CODESS_NOREC")
+
 # --- Debug ---
-DEBUG = os.environ.get("CODESS_DEBUG", "0").lower() in ("1", "true", "yes")
+DEBUG = env_bool("CODESS_DEBUG")
 
 # --- Ingest ---
 MIN_SIZE = int(os.environ.get("CODESS_MIN_SIZE", str(20 * 1024)))  # 20 KB
-FORCE = os.environ.get("CODESS_FORCE", "0").lower() in ("1", "true", "yes")
+FORCE = env_bool("CODESS_FORCE")
 
 # --- Subagent (CC scan) ---
-SUBAGENT = os.environ.get("CODESS_SUBAGENT", "0").lower() in ("1", "true", "yes")
+SUBAGENT = env_bool("CODESS_SUBAGENT")
 
-# --- Truncation ---
-TRUNCATE_RESPONSE = 1000
+# --- Ingest redaction default (CLI --redact ORs on top) ---
+INGEST_REDACT = env_bool("CODESS_REDACT")
+
+# --- Batch / resilience: stop entire command on first error (otherwise log and continue) ---
+STOP = env_bool("CODESS_STOP")
+
+# --- Truncation (display / stored excerpt limits) ---
+TRUNCATE_RESPONSE = 2000
 TRUNCATE_DIALOG = 200
-TRUNCATE_TOOL_RESULT = 500
-TRUNCATE_GREP_PATTERN = 120
-TRUNCATE_PROMPT = 10000
+TRUNCATE_TOOL_RESULT = 2000
+TRUNCATE_GREP_PATTERN = 200
+TRUNCATE_PROMPT = 2000
 
 # --- Redaction ---
 REDACT_PATTERNS = [

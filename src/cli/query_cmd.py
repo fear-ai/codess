@@ -3,11 +3,9 @@
 import json
 import re
 import sys
-from pathlib import Path
 
-from codess.config import get_project_stores, get_store_path
-from codess.helpers import parse_dir_list
-from codess.project import get_project_root
+from codess.config import get_project_stores
+from codess.project import RootsWhenEmpty, resolve_cli_roots
 from codess.store import connect, init_db
 
 # Standard (built-in) tools for grouping; others are "loaded"
@@ -41,11 +39,11 @@ def _session_id_by_number(conn, n: int) -> str | None:
 
 def run(args) -> int:
     """Run session-query. Returns exit code."""
-    dirs_file = Path(args.dirs) if getattr(args, "dirs", None) else None
-    dir_list = getattr(args, "dir_list", None) or []
-    roots = parse_dir_list(dirs_file, dir_list)
-    if not roots:
-        roots = [get_project_root()]
+    roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.PROJECT_ROOT)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+
     project_root = roots[0].resolve()
     stores = get_project_stores(project_root)
     if not stores:
@@ -62,8 +60,6 @@ def run(args) -> int:
             return _taxonomy(conn)
         if getattr(args, "tool", None) is not None:
             return _tool_table(conn, args.tool)
-        if args.tool_counts:
-            return _tool_counts(conn)
         if args.sessions:
             return _sessions(conn, getattr(args, "sess_id", False))
         if getattr(args, "sess", None) is not None:
@@ -72,7 +68,10 @@ def run(args) -> int:
             return _permissions(conn)
         if args.task_review:
             return _task_review(conn)
-        print("Specify --tool, --sessions, -sess, --permissions, --task-review, --stats, or --taxonomy", file=sys.stderr)
+        print(
+            "Specify --tool, --sessions, -sess, --permissions, --task-review, --stats, or --taxonomy",
+            file=sys.stderr,
+        )
         return 1
     finally:
         conn.close()
@@ -256,22 +255,6 @@ def _sessions(conn, with_id: bool) -> int:
         print("id\tsource\tstarted_at\tended_at\tproject_path")
         for row in rows:
             print(f"{row['id']}\t{row['source']}\t{row['started_at']}\t{row['ended_at']}\t{row['project_path'] or ''}")
-    return 0
-
-
-def _tool_counts(conn) -> int:
-    """Print tool_name and count per line."""
-    cur = conn.execute(
-        """
-        SELECT tool_name, COUNT(*) as cnt
-        FROM events
-        WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
-        GROUP BY tool_name
-        ORDER BY cnt DESC
-        """
-    )
-    for row in cur:
-        print(f"{row['tool_name']}\t{row['cnt']}")
     return 0
 
 

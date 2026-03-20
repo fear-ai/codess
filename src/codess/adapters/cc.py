@@ -9,6 +9,7 @@ from typing import Iterator
 from codess.config import (
     TRUNCATE_DIALOG,
     TRUNCATE_GREP_PATTERN,
+    TRUNCATE_PROMPT,
     TRUNCATE_RESPONSE,
     TRUNCATE_TOOL_RESULT,
 )
@@ -84,8 +85,9 @@ def extract_tool_input(tool_name: str, input_obj: dict) -> dict:
                 out[k] = input_obj[k]
         if "prompt" in input_obj:
             p = input_obj["prompt"]
-            if isinstance(p, str) and len(p) > 200:
-                out["prompt"] = p[:199] + "…"
+            if isinstance(p, str):
+                truncated, _ = truncate_content(p, TRUNCATE_PROMPT)
+                out["prompt"] = truncated
             else:
                 out["prompt"] = p
     elif name == "skill":
@@ -98,8 +100,9 @@ def extract_tool_input(tool_name: str, input_obj: dict) -> dict:
                 out[k] = input_obj[k]
         if "prompt" in input_obj:
             p = input_obj["prompt"]
-            if isinstance(p, str) and len(p) > 200:
-                out["prompt"] = p[:199] + "…"
+            if isinstance(p, str):
+                truncated, _ = truncate_content(p, TRUNCATE_PROMPT)
+                out["prompt"] = truncated
             else:
                 out["prompt"] = p
     else:
