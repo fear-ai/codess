@@ -90,4 +90,4 @@ Ingest adapter primarily uses:
 | Unified DB columns | **CoSchema.md** |
 | Claude Code storage | **CCSchema.md** |
 | Cursor storage | **CursorSchema.md** |
-| Work plan | **CoPlan.md** |
+| Implementation plan | **CoPlan.md** |

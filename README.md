@@ -1,12 +1,8 @@
 # Codess — Session record store
 
-Link to Codess.md; getting started; minimal applications. Doc map: **Codess.md** §5.
+Session records for Claude Code, Codex, and Cursor: ingest JSONL/SQLite into SQLite; query tool counts, sessions, and content.
 
----
-
-Session record store for Claude Code, Codex, Cursor. Ingest JSONL/SQLite into SQLite; query tool counts, sessions, content.
-
-**See [Codess.md](Codess.md) for goals, architecture, and full documentation.**
+**Full documentation, document index, and goals:** **[Codess.md](Codess.md)**.
 
 ---
 
@@ -30,7 +26,7 @@ python -m main query --dir /path/to/project --tool
 
 ---
 
-## Minimal applications
+## Minimal examples
 
 ```bash
 # Ingest by source
@@ -42,5 +38,3 @@ python -m main query --dir /path/to/project -sess 1 --show pr
 ```
 
 Store: `<project>/.codess/`. Config: `CODESS_*` env vars. Registry: `~/.codess/ingested_projects.json`.
-
-Vendor on-disk detail: **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md**.

@@ -100,14 +100,23 @@ Line-delimited JSON. Types used by adapter include `user`, `assistant`, `system`
 - Index may omit `fullPath` → size uses directory rglob (may mix subagent files).
 - Ingest does not recurse into `{uuid}/subagents/*.jsonl`.
 - CC package version not stored in these files; use your installed `claude-code` version separately.
+- **Slug decode (implementation impact):** `slug_to_path` is lossy (e.g. hyphen vs path segment). Discovery prefers `projectPath` from `sessions-index.json` when present; `project.py` / scan fall back to slug-derived paths.
+
+## 9. Open implementation gaps (Codess)
+
+| Gap | Detail |
+|-----|--------|
+| Subagent ingest | Ingest only globs top-level `*.jsonl` under project slug; nested subagent transcripts are skipped unless future work adds recursion or index-driven paths. |
+| Parent/child linking | Upstream CC may add `parentSessionId` / tool-call ids in metadata (see CC GitHub issues); not required for current scan counts. |
 
 ---
 
-## 9. Cross-reference
+## 10. Cross-reference
 
 | Topic | Document |
 |-------|----------|
 | Unified DB columns | **CoSchema.md** |
 | Cursor storage | **CursorSchema.md** |
 | Codex storage | **CodexSchema.md** |
-| Work plan / issues | **CoPlan.md** |
+| Features & code plan | **CoPlan.md** |
+

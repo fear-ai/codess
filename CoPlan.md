@@ -1,116 +1,107 @@
-# CoPlan — Developer guidance and work plan
+# CoPlan — Codess Implementation Plan and Engineering Guide
 
-Coding approaches; work items, tasks, issues by module, feature, implementation sequence.
+**Scope:** Repository layout, **architecture**, **features** (what the code does), **coding techniques**, CLI/runtime contract, phases, backlog, and tests.
+
+**Out of scope here:** Vendor paths, files, DB keys, field names, and on-disk values.
+Those live only in **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md**.
+Normalized store documented in **CoSchema.md** / **sql/CoSchema.sql**.
+
+**Operator spec:** §6 (CLI, ENV, walk rules).
 
 ---
 
-## 1. Module layout
+## 1. Purpose and document boundaries
 
-**Naming:** **scan** = discover projects with session data; **walk** = traverse directory tree.
+| Topic | Document |
+|-------|----------|
+| Why the product exists, doc map | **Codess.md** |
+| Claude Code layout & fields | **CCSchema.md** |
+| Codex session files | **CodexSchema.md** |
+| Cursor `state.vscdb` | **CursorSchema.md** |
+| Our SQLite tables/columns | **CoSchema.md** |
+| This file | How code is structured, built, and extended |
+
+---
+
+## 2. Repository layout
 
 ```
-src/
-├── codess/
-│   ├── __init__.py
-│   ├── config.py           # Paths, env, EXCLUDE_RECURSE, STORE_DIR
-│   ├── helpers.py          # Shared: path, slug, exclude, csv, dirlist (parse_dir_list)
-│   ├── store.py            # SQLite init (reads CoSchema.sql), upsert, state
-│   ├── project.py          # Slug, get_cc_dir, get_codex_files, get_cursor_dbs
-│   ├── sanitize.py         # Control chars, ANSI, redaction
-│   ├── walk.py             # Directory traversal; exclude; dedupe; no symlinks
-│   ├── adapters/
-│   │   ├── __init__.py
-│   │   ├── cc.py
-│   │   ├── codex.py
-│   │   └── cursor.py
-│   └── scan.py             # Discover projects with session data; vendor filter; CSV
-├── cli/
-│   ├── __init__.py
-│   ├── scan_cmd.py
-│   ├── ingest_cmd.py
-│   └── query_cmd.py
-└── main.py                 # codess scan | ingest | query
+src/codess/     config, helpers, store, project, sanitize, walk, scan, adapters/{cc,codex,cursor}
+src/cli/        scan_cmd, ingest_cmd, query_cmd
+main.py         Entrypoint: codess scan | ingest | query
+tests/          Per-module and integration tests
+sql/            CoSchema.sql (+ future queries.sql)
+```
+**Naming:**
+  **scan** = discover projects with session data
+  **walk** = directory tree traversal (shared infra, not vendor-specific).
 
-tests/
-├── conftest.py             # Fixtures, temp dirs, env
-├── test_helpers.py
-├── test_config.py
-├── test_store.py
-├── test_project.py
-├── test_sanitize.py
-├── test_candidate.py
-├── test_cc_adapter.py
-├── test_codex_adapter.py
-├── test_cursor_adapter.py
-├── test_scan.py
-├── test_walk.py
-├── test_cli.py
-├── test_subagent_detail.py
-└── test_integration.py
+---
 
-sql/
-├── CoSchema.sql            # Canonical DDL; store reads this
-└── queries.sql             # Phase 4: query strings for query_cmd; named sections
+## 3. System architecture
 
-scripts/                     # Plan to obsolete and delete
-├── batch_ingest.py         # Replaced by codess ingest --dirs/--dir
-└── find_candidate.py       # Replaced by codess scan
+### 3.1 Layers (dependency direction)
+
+```
+CLI (argparse)
+  → helpers (paths, dir lists, CSV, excludes)
+  → scan | ingest_cmd | query_cmd
+        → scan.py          # index-based discovery, CSV rows
+        → walk.py          # optional recursion; excludes; time/depth caps
+        → project.py       # resolve vendor roots → project paths / DB paths
+        → adapters/*       # parse vendor → normalized events (streaming)
+        → store.py         # SQLite init, upsert, ingest state
 ```
 
-**Shared helpers:** `src/codess/helpers.py`. Used by adapters, scan, walk, cli.
+- **Vendor logic** is isolated in `adapters/` + vendor-specific helpers in `project.py` / `scan.py` calls.
+- **No adapter imports scan**; scan may call `project` and `get_db_metrics`-style helpers.
 
-**Store:** `.codess/` (new). Archive/remove `.coding-sess` as we migrate.
+### 3.2 Major data flows
 
----
+| Flow | Mechanism |
+|------|-----------|
+| Discovery | Read vendor indices or filesystem hints → canonicalize project paths → CSV |
+| Ingest | For each project root, resolve sources → adapter iterators → `upsert_*` → `ingest_state.json` mtime keys |
+| Query | Open per-vendor or legacy DB under `.codess/` → SQL / CLI presenters |
 
-## 2. Modules and interactions (reference)
+### 3.3 Configuration surface
 
-| Module | Role |
-|--------|------|
-| config | Paths, env, EXCLUDE_RECURSE, STORE_DIR |
-| helpers | Path, slug, exclude, CSV, dir list (shared) |
-| walk | Directory traversal; exclude; dedupe; no symlinks |
-| adapters | CC, Codex, Cursor parsers |
-| store | SQLite init (CoSchema.sql), upsert, state |
-| project | Slug, get_cc_dir, get_codex_files, get_cursor_dbs |
-| scan | Discovery, filters, CSV output |
-| ingest / query | CLI commands |
-
-Layout: `src/codess/`, `src/cli/`, `tests/`, `sql/`. Vendor storage detail: **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md**.
+Single module **`config.py`**: env-backed paths, `EXCLUDE_RECURSE`, store filenames, truncation limits, `validate_config()`. CLI flags override or complement env for scan/ingest.
 
 ---
 
-## 3. Implementation phases
+## 4. Feature → implementation map
 
-**Order:** CC/Codex scan+ingest → walk+recurse → Cursor → query (project + batch).
-
-### Phase 1: CC and Codex scan + ingest
-
-| Step | Task | Module |
-|------|------|--------|
-| 1.1–1.9 | Config, CoSchema, helpers, scan, ingest, CLI, tests | config, scan, cli, tests |
-
-### Phase 2: Walk and recurse
-
-| Step | Task | Module |
-|------|------|--------|
-| 2.1–2.7 | walk.py, .codessignore, parse_dir_list, scan prune, CLI, tests | walk, scan, cli |
-
-### Phase 3: Cursor
-
-| Step | Task | Module |
-|------|------|--------|
-| 3.1–3.7 | **CursorSchema.md**, adapter filters, scan+ingest global+workspace, tests | adapters/cursor, scan, ingest |
-
-### Phase 4: Query
-
-| Step | Task | Module |
-|------|------|--------|
-| 4.1–4.6 | queries.sql, query_cmd, batch, CoSchema review | sql, cli |
+| Feature | Primary modules | Notes |
+|---------|-----------------|--------|
+| Multi-root discovery | `helpers.parse_dir_list`, CLI | Dedupe resolved paths; no `..` |
+| Vendor filter | `scan`, `ingest_cmd`, argparse `--source` | String list → frozenset |
+| Recent-session window | `scan`, `config.CODESS_DAYS` | Cutoff ms; debug mode may bypass |
+| CC sidechain counts | `scan._session_metrics_cc`, `CODESS_SUBAGENT` / `--subagent` | Semantics: **CCSchema.md** |
+| Cursor workspace + global | `scan`, `project.get_cursor_*`, `adapters/cursor` | Two storage modes; **CursorSchema.md** |
+| Incremental ingest | `store.should_ingest`, `ingest_state.json` | Per-file or per-DB mtime |
+| Idempotent upsert | `store.upsert_session`, `upsert_event` | Unique (session_id, event_id) |
+| Redaction | `sanitize.py`, adapter opts | Pattern-based before persist |
+| Walk safeguards | `walk.walk_dirs` | `MAX_DEPTH`, `MAX_TIME_MIN`; skip symlinks |
 
 ---
 
-## 4. CLI flags (summary)
+## 5. Coding techniques
+
+- **Streaming:** Adapters yield events; ingest batches commits per file/DB, not load-all.
+- **SQLite read-only:** Cursor reads use `file:…?mode=ro` URI where possible.
+- **Tests:** Pytest per module; temp dirs + `CODESS_*` overrides for isolation; subprocess CLI tests for `main.py`.
+- **Errors:** Log and skip bad lines/rows in adapters; scan tolerates missing index fields.
+- **CSV output:** `csv.writer` / `write_csv`; stable column order for scan.
+- **Single source for DDL:** `sql/CoSchema.sql` executed by `store.init_db()` — no duplicated CREATE strings in Python.
+
+---
+
+## 6. CLI and runtime contract
+
+Canonical flags, environment variables, walk rules, and command behavior. **Per-vendor meaning of counts and filters** → vendor Schema (**§ scan metrics** / ingest sections).
+
+### 6.0 Quick flag reference
 
 | Flag | Meaning |
 |------|---------|
@@ -120,136 +111,144 @@ Layout: `src/codess/`, `src/cli/`, `tests/`, `sql/`. Vendor storage detail: **CC
 | --source cc,codex,cursor | Filter sources |
 | --out PATH | Output file; `-` stdout |
 | --registry PATH | Override `~/.codess` |
-| --subagent | CC scan: include sidechain sessions |
-| --days N | Scan recent window |
+| --subagent | CC scan: include sidechain session counts |
+| --days N | Scan recent window (days) |
 
-Full spec: **Codess.md** §4.
+### 6.1 Configuration (ENV)
+
+| Variable | Role |
+|----------|------|
+| `CODESS_CC_PROJECTS`, `CODESS_CODEX_SESSIONS`, `CODESS_CURSOR_DATA` | Override vendor data roots (paths only; semantics → *Schema.md) |
+| `CODESS_DAYS` | Default scan recency |
+| `CODESS_SUBAGENT` | CC scan sidechain inclusion |
+| `CODESS_MIN_SIZE`, `CODESS_FORCE`, `CODESS_DEBUG`, `CODESS_REGISTRY` | Ingest / debug / registry |
+
+`validate_config()` (scan entry): range checks; stderr warnings.
+
+### 6.2 Roots and `--dirs` file format
+
+- `--dir` repeatable; `--dirs` one path per line; `#` comments; empty/`..` skipped.
+
+### 6.3 Walk behavior
+
+- Default roots: cwd if no dirs given.
+- `--norec`: yield roots only.
+- Skip rules: `should_skip_recurse` + `load_codessignore`; exact sets in **`config.EXCLUDE_RECURSE`** (not duplicated here).
+- Caps: `walk.MAX_DEPTH`, `walk.MAX_TIME_MIN`.
+- **Planned:** prune when directory already has session data (feature hook; vendor detection TBD).
+
+### 6.4 Commands
+
+- **scan:** CSV columns `path,vendor,sess,mb,span_weeks` (+ `dir_path` in debug). Metric definitions: **CCSchema.md** §7, **CodexSchema.md** §6, **CursorSchema.md** §6.
+- **ingest / query:** See `main.py` / `*_cmd.py` and `--help`.
+
+### 6.5 Filters (wiring only)
+
+| Mechanism | Wired in | Semantics |
+|-----------|----------|-----------|
+| min_size | ingest, `CODESS_MIN_SIZE` | Skip small **source** files (CC/Codex); thresholds are bytes, not vendor records |
+| subagent | scan | CC index flag; **CCSchema.md** |
+| recent | scan | CC/Codex timestamps; **CCSchema.md**, **CodexSchema.md** |
+| min_events / min_duration | — | Planned; **§9** |
+
+### 6.6 Operational tips
+
+See **Codess.md** or run `codess scan --help`. Quick check: `codess scan --dir . --out -`.
+
+### 6.7 Planned spec work
+
+Backlog: **§9** (e.g. `--days 0`, `--validate`, `--source` validation).
 
 ---
 
-## 5. General coding approaches
+## 7. Delivery phases
 
-- Shared helpers in `src/codess/helpers.py`
-- Directory traversal in `walk.py`; separate from vendor logic
-- Per-vendor behavior documented in `*Schema.md`
-- Tests per area; conftest for fixtures
-- `.codess` for project stores
+| Phase | Goal | Code focus |
+|-------|------|------------|
+| 1 | CC + Codex scan & ingest stable | adapters/cc, codex; scan; store; CLI |
+| 2 | Walk integrated with multi-root workflows | walk.py; parse_dir_list; prune (planned) |
+| 3 | Cursor read + ingest + scan rows | adapters/cursor; project; global + workspace |
+| 4 | Query batch + external SQL | queries.sql; query_cmd |
 
----
-
-## 6. Schema timing
-
-| When | Action |
-|------|--------|
-| Phase 1 | CoSchema.sql + store.init_db() |
-| Before/during Cursor | **CursorSchema.md** kept in sync |
-| After Cursor stable | Review CoSchema vs normalized events |
+**DDL / store:** Keep **CoSchema.sql** aligned with **CoSchema.md** after Cursor event shapes stabilize.
 
 ---
 
-## 7. Exclude and safeguards
+## 8. Implementation gaps (track in code; detail in Schema)
 
-**Exclude file:** `cwd/.codessignore` first; else `~/.codessignore`. One directory name per line; `#` comments.
+Short list; **data/model truth** in vendor Schema **§ quirks / open gaps**.
 
-**Scan prune:** When scan notes a directory has Coding tool work, do not recurse further (planned).
-
-**Walk:** `max_depth` 16; `max_time` 100 min.
-
-**CODESS_DAYS:** Default scan recency (see config).
-
----
-
-## 8. Issues
-
-- Cursor global: `project_path` NULL in store; directory filter deferred
-- Slug decode lossy (CC): hyphen vs slash segments
-- **Subagent:** scan supports `--subagent` / `CODESS_SUBAGENT`; ingest does not read nested CC subagent files
-- **Cursor central:** `composerData` often null; `workspaceRoot` unverified — see **CursorSchema.md**
-- **Cursor DB bloat:** large `state.vscdb` reported in forums; read-only tooling recommended
+| Area | Pointer |
+|------|---------|
+| CC slug / path decode | **CCSchema.md** §8–§9 |
+| CC subagent ingest | **CCSchema.md** §9 |
+| Cursor global `project_path` | **CursorSchema.md** §7–§8.1 |
+| Cursor scan time range | **CursorSchema.md** §8.1 |
 
 ---
 
-## 9. Roadmap and platform selection
+## 9. Improvement backlog
 
-### 9.1 Roadmap (implementation order)
+### 9.1 Scan / discovery
 
-1. Phase 1: CC + Codex scan + ingest; CoSchema; helpers
-2. Phase 2: Search/recurse; `--dirs`, `--dir`, `--norec`
-3. Phase 3: Cursor read, filter, ingest; **CursorSchema.md**
-4. Phase 4: Query project + batch; external SQL; CoSchema review
-5. Optional: timeouts, ^C, threads, progress
+| Item | P | Notes |
+|------|---|--------|
+| Validate roots exist | 1 | Warn missing `--dir` |
+| Walk + scan integration | 2 | Today index-led; walk for discovery |
+| Scan prune | 2 | Stop recursing after session hit |
+| CSV assertions | 2 | Header + types (partial) |
 
-### 9.2 Platform selection
+### 9.2 Filters / CLI
+
+| Item | P | Notes |
+|------|---|--------|
+| `--days 0` semantics | 1 | All-time vs cutoff |
+| Cursor scan timestamps | 2 | Aggregate in scan |
+| `--source` validation | 2 | Reject unknown tokens |
+
+### 9.3 Ingest / store
+
+| Item | P | Notes |
+|------|---|--------|
+| Subagent / nested sources | 2 | Feature; **CCSchema.md** |
+| Skip Cursor global | 2 | `--no-central` |
+| MIN_SIZE warnings | 2 | Sanity |
+| `validate_config` on all subcommands | 2 | Today: scan |
+| `--validate` | 2 | Exit 0 after checks |
+
+### 9.4 Platform / runtime
 
 | Choice | Decision |
 |--------|----------|
 | Store | SQLite |
-| Location | Project-local `.codess/` |
-| Project scope | Git repo root (typical) |
+| Location | `<project>/.codess/` |
+| Project anchor | Git root (typical) |
 | FTS5 | Postponed |
 
----
-
-## 10. Improvement backlog (from former docs/improvements.md)
-
-### 10.1 Scan
-
-| Item | Priority | Notes |
-|------|----------|--------|
-| Validate roots exist | P1 | Warn if `--dir` missing |
-| Walk + scan integration | P2 | Indices today; walk for discovery later |
-| Scan prune | P2 | Stop recursing when session data found |
-| CSV tests | P2 | Header + numeric columns (partially done) |
-
-### 10.2 Filter
-
-| Item | Priority | Notes |
-|------|----------|--------|
-| `--days 0` = all time | P1 | Define semantics vs current cutoff |
-| Cursor `days_ago` in scan | P2 | From bubble timestamps |
-| `--source` validation | P2 | Reject unknown vendors |
-
-### 10.3 Ingest
-
-| Item | Priority | Notes |
-|------|----------|--------|
-| CC subagent file ingest | P2 | Nested JSONL |
-| `--no-central` | P2 | Skip Cursor global DB |
-| MIN_SIZE sanity warning | P2 | If absurdly large |
-| Store parent writable check | P2 | |
-
-### 10.4 Config / CLI
-
-| Item | Priority | Notes |
-|------|----------|--------|
-| `validate_config()` on ingest/query | P2 | Today: scan only |
-| `--validate` | P2 | Check config and exit |
+Optional: timeouts, ^C, threads, progress.
 
 ---
 
-## 11. Test ↔ implementation (scan)
+## 10. Test ↔ implementation
 
-| Test | Behavior verified |
-|------|-------------------|
-| `test_scan_cc_subagent` | `_session_metrics_cc` + `--subagent` / `CODESS_SUBAGENT` |
-| `test_cc_subagent_vs_main_detailed` | Fixture layout + scan counts |
-| `test_scan_cursor_central_db` | Global row `(global)` |
-| `test_scan_debug_dir_label` | `[dir]` / `[scan]` labels |
-| `test_scan_days_ago_in_debug` | `days_ago` in stderr |
-| `test_scan_mixed_dir_dirs` | `--dirs` + `--dir` dedupe |
-| `test_scan_csv_format` | CSV header and numeric columns |
-| `test_walk` | Recursion, excludes, max_depth, prune |
+| Test area | Validates |
+|-----------|-----------|
+| `test_scan_*` | scan CLI, `_session_metrics_*`, CSV, mixed `--dirs`/`--dir` |
+| `test_subagent_detail` | CC fixture vs scan flags |
+| `test_walk` | Recursion, excludes, depth, prune set |
+| `test_*_adapter` | Normalization and edge records |
+| `test_store`, `test_config` | DDL path, env, `validate_config` |
 
 ---
 
-## 12. Development sequences (dependencies)
+## 11. Dependencies and documentation rule
 
-- **Subagent ingest:** After CC metadata links parent/child (e.g. GitHub CC issues on `parentSessionId`).
-- **Cursor central improvements:** `get_composer_data()` probes; optional `--storage` filter for query.
-- **Docs:** Vendor edits go to **CCSchema.md** / **CodexSchema.md** / **CursorSchema.md** only; **Codess.md** stays high-level.
+- **Upstream format changes:** Update **vendor Schema first**, then adapters, then tests.
+- **New CLI flag:** **CoPlan §6**, `main.py`, relevant `_cmd.py`, and **Codess.md** if user-facing.
+- **New normalized column:** **CoSchema.md** + **sql/CoSchema.sql** + `store.py` upserts.
 
 ---
 
-## 13. Intermediate lists
+## 12. Optional splits
 
-Optional: `CoPlan-steps-1.md`, `CoPlan-steps-2.md` for long step lists; or keep all in this file.
+If this file grows: `CoPlan-cli.md` (§6 only) or phase files `CoPlan-phase-N.md`; keep §1 boundaries in each derivative.

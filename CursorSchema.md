@@ -113,6 +113,15 @@ Vendor-specific structure for **Cursor** chat/composer persistence. Normalized i
 - **Central DB:** No per-directory filter; all chats in one row in scan output `(global)`.
 - **DB bloat:** Forum reports of multi-GB `state.vscdb`; vacuum may not reclaim; use read-only access for tools.
 - **composerData null:** Prefer bubbleId pipeline.
+- **workspaceRoot / project path in KV:** Not reliably present in public dumps; `get_composer_data()` surfaces keys if Cursor adds them.
+
+### 8.1 Open implementation gaps (Codess)
+
+| Gap | Detail |
+|-----|--------|
+| Global → project | Ingest stores `project_path` NULL for global DB; no join from composer to filesystem path without new heuristics or Cursor metadata. |
+| Scan filter by dir | Central row `(global)` is not scoped to `--dir`; workspace rows are. |
+| `days_ago` in scan | Metrics omit Cursor time range until min/max bubble times are aggregated in scan. |
 
 ---
 
@@ -134,4 +143,4 @@ Vendor-specific structure for **Cursor** chat/composer persistence. Normalized i
 | Unified DB columns | **CoSchema.md** |
 | Claude Code | **CCSchema.md** |
 | Codex | **CodexSchema.md** |
-| Backlog / issues | **CoPlan.md** |
+| Features & backlog | **CoPlan.md** |
