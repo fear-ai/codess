@@ -2,7 +2,7 @@
 
 Goals, product framing, architecture, **documentation map** (authoritative index: §4), glossary, references.
 
-**CLI and operations spec:** **CoPlan.md** §6.
+**Implementation guide:** **CoPlan.md** (architecture → configuration → CLI → code & tests).
 
 ---
 
@@ -26,7 +26,7 @@ Goals, product framing, architecture, **documentation map** (authoritative index
 - **Exclusion:** Invalid paths; slug-decode ambiguity; backup trees (`OLD`, `Save`); review dirs (CodingTools, MCPs, etc.).
 - **Filters:** `min_size`, optional future `min_events` / `min_duration` (CC/Codex); Cursor-specific filters TBD — see **CoPlan** backlog.
 
-*Operational criteria imply CLI and walk behavior in **CoPlan.md** §6.*
+*Operational criteria imply CLI, walk, and configuration behavior in **CoPlan.md** §4–§5.*
 
 ### 2.2 Capabilities and priorities
 
@@ -56,8 +56,8 @@ Goals, product framing, architecture, **documentation map** (authoritative index
 |------|--------|-----------------|
 | Multi-vendor inputs | CC projects dir, Codex `sessions`, Cursor `state.vscdb` | **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md** |
 | Normalized store | SQLite under `<project>/.codess/` | **CoSchema.md**, `sql/CoSchema.sql` |
-| Incremental ingest | mtime + state file; idempotent upsert | **CoPlan.md** §3–§4, §7 |
-| CLI | `codess scan`, `ingest`, `query` | **CoPlan.md** §6 |
+| Incremental ingest | mtime + state file; idempotent upsert | **CoPlan.md** §3.3, §5.2; **store** / adapters |
+| CLI & configuration | Flags, ENV, defaults, walk rules | **CoPlan.md** §4–§5 |
 
 ---
 
@@ -78,20 +78,36 @@ Goals, product framing, architecture, **documentation map** (authoritative index
 
 ## 4. Documentation map
 
-Each row states **goal** (why the doc exists), **include** (what belongs there), and **exclude** (what belongs elsewhere).
+**Reading order for implementation:** **CoPlan.md** §2 (tree) → §3 (architecture, before config) → §4 (configuration) → §5 (CLI) → §6–§8 (features, code, tests). This matches progressive detail: mental model, then knobs, then operator contract, then code.
+
+### 4.1 What each document is for (boundaries)
+
+Use this table to decide **where a change belongs** before editing.
+
+| Topic | Document |
+|-------|----------|
+| Why the product exists; audience; this index | **Codess.md** |
+| Repository layout, layers, data flows, **configuration**, **CLI tables**, coding & test strategy, phases, backlog | **CoPlan.md** |
+| Claude Code paths, index, JSONL fields, scan metrics | **CCSchema.md** |
+| Codex session files | **CodexSchema.md** |
+| Cursor `state.vscdb` keys and values | **CursorSchema.md** |
+| Our normalized `sessions` / `events` columns | **CoSchema.md** |
+| Executable DDL | **sql/CoSchema.sql** |
+
+### 4.2 Map table (goal / include / exclude)
 
 | Document | Goal | Include | Exclude |
 |----------|------|---------|---------|
-| **Codess.md** (this file) | Single entry point for *what* and *why*; product narrative; doc index | Goals, framing, architecture, glossary, references, **this map only** | Vendor field-level specs; DDL; implementation detail (→ CoPlan §6) |
-| **CoPlan.md** | Implement and maintain the codebase | Architecture, feature→module map, coding conventions, **§6 CLI/ops**, phases, backlog, tests, platform | Product vision; vendor paths/fields/values (→ *Schema.md) |
-| **CoSchema.md** | Document *our* normalized SQLite | Table/column semantics for `sessions` / `events`; store layout narrative | Vendor source formats (→ CC/Codex/Cursor schema) |
-| **sql/CoSchema.sql** | Executable canonical DDL | `CREATE TABLE`, indexes | Prose (→ CoSchema.md) |
-| **CCSchema.md** | Claude Code storage truth | Paths, index/JSONL shapes, scan metrics, quirks, open gaps | Codex/Cursor content; architecture/tasks (→ CoPlan) |
-| **CodexSchema.md** | Codex CLI session file truth | Same pattern as CCSchema for Codex | CC/Cursor content; architecture/tasks (→ CoPlan) |
-| **CursorSchema.md** | Cursor `state.vscdb` truth | Keys, bubble/composer JSON, workspace vs global, scan metrics, quirks, open gaps | CC/Codex content; architecture/tasks (→ CoPlan) |
-| **README.md** | Onboard and run commands | Install, minimal examples, pointer to **Codess.md** | **No doc map** (map lives only here, §4) |
+| **Codess.md** (this file) | *What* and *why*; product narrative; **§4 doc index** | Goals, framing, high-level architecture diagram, glossary, references, boundary table §4.1 | Vendor field catalogs; DDL; CLI flag tables (→ **CoPlan** §5) |
+| **CoPlan.md** | *How* the repo implements behavior | Tree, layered architecture, persistence notes, **§4 configuration**, **§5 CLI**, features→modules, coding & tests, phases, backlog | Vendor on-disk truth (→ *Schema.md) |
+| **CoSchema.md** | Normalized SQLite semantics | Tables, columns, store layout story | Vendor sources |
+| **sql/CoSchema.sql** | Single executable DDL (avoids duplicated `CREATE` in code) | `CREATE`, indexes; executed by **`store.init_db()`** | Prose; column definitions → **CoSchema.md**; vendor sources |
+| **CCSchema.md** | CC storage truth | Layout, metrics, quirks, gaps | Other vendors |
+| **CodexSchema.md** | Codex storage truth | Same role as CC for Codex | Other vendors |
+| **CursorSchema.md** | Cursor storage truth | Keys, JSON, workspace vs global | Other vendors |
+| **README.md** | Onboard quickly | Install, minimal commands, link to **Codess.md** | Doc map (here only) |
 
-**Rule:** Add or change vendor-specific structure only in **CCSchema.md** / **CodexSchema.md** / **CursorSchema.md**. Add implementation tasks only in **CoPlan.md**. Add normalized-store changes in **CoSchema.md** + **sql/CoSchema.sql**.
+**Rule:** Vendor structure → **\*Schema.md**. Implementation tasks → **CoPlan.md**. Store shape → **CoSchema.md** + **sql/CoSchema.sql**.
 
 ---
 
