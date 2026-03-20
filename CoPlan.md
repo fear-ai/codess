@@ -188,3 +188,5 @@ Or maintain in this file; split only if it grows unwieldy.
 
 - Cursor global: project_path NULL; directory filter deferred until schema confirmed
 - Slug decode lossy: spank-py vs spank/py; fallback in place
+- **Subagent:** Scan has `--subagent` (CC only); ingest does not support subagent files
+- **Cursor central:** composerData decoded via `get_composer_data()`; workspaceRoot unverified — see docs/scan-metrics.md

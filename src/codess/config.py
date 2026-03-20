@@ -77,6 +77,9 @@ DEBUG = os.environ.get("CODESS_DEBUG", "0").lower() in ("1", "true", "yes")
 MIN_SIZE = int(os.environ.get("CODESS_MIN_SIZE", str(20 * 1024)))  # 20 KB
 FORCE = os.environ.get("CODESS_FORCE", "0").lower() in ("1", "true", "yes")
 
+# --- Subagent (CC scan) ---
+SUBAGENT = os.environ.get("CODESS_SUBAGENT", "0").lower() in ("1", "true", "yes")
+
 # --- Truncation ---
 TRUNCATE_RESPONSE = 1000
 TRUNCATE_DIALOG = 200
@@ -113,6 +116,18 @@ def get_stats_path(registry_root: Path | None = None) -> Path:
     """Return path to ingested_projects.json (registry of decoded/ingested projects)."""
     root = registry_root if registry_root is not None else REGISTRY
     return root / STATS_FILE
+
+
+def validate_config() -> list[str]:
+    """Return list of validation warnings/errors. Empty if ok."""
+    errs = []
+    if CODESS_DAYS < 1 or CODESS_DAYS > 3650:
+        errs.append(f"CODESS_DAYS={CODESS_DAYS} out of range [1, 3650]")
+    if MIN_SIZE < 0:
+        errs.append(f"CODESS_MIN_SIZE={MIN_SIZE} must be >= 0")
+    if not CC_PROJECTS.is_absolute():
+        errs.append(f"CODESS_CC_PROJECTS must be absolute: {CC_PROJECTS}")
+    return errs
 
 
 def get_project_stores(project_root: Path) -> list[Path]:

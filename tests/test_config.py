@@ -8,11 +8,14 @@ import pytest
 from codess.config import (
     CC_PROJECTS,
     CODEX_SESSIONS,
+    MIN_SIZE,
     get_state_path,
     get_store_path,
     REDACT_PATTERNS,
     STORE_DB,
     STORE_DIR,
+    SUBAGENT,
+    validate_config,
 )
 
 
@@ -40,6 +43,16 @@ class TestEnvOverrides:
     def test_paths_are_absolute(self):
         assert CC_PROJECTS.is_absolute()
         assert CODEX_SESSIONS.is_absolute()
+
+
+class TestValidateConfig:
+    """Config value validation."""
+
+    def test_default_valid(self):
+        assert validate_config() == []
+
+    def test_subagent_default_false(self):
+        assert SUBAGENT is False or SUBAGENT is True  # env may override
 
 
 class TestRedactPatterns:

@@ -1,6 +1,8 @@
 """Tests for codess scan CLI and run_scan."""
 
 import json
+
+import pytest
 import os
 import subprocess
 import sys
@@ -22,6 +24,30 @@ def _run(cmd, cwd=None, env=None, **kw):
         **kw,
     )
 
+
+def test_scan_mixed_dir_dirs(tmp_path):
+    """Scan with both --dirs file and --dir: dedupe, both used."""
+    work = tmp_path / "work"
+    work.mkdir()
+    proj = work / "proj"
+    proj.mkdir()
+    cc = tmp_path / "cc"
+    cc.mkdir()
+    slug = "-" + str(proj.resolve()).lstrip("/").replace("/", "-")
+    (cc / slug).mkdir(parents=True)
+    (cc / slug / "sessions-index.json").write_text(
+        json.dumps({"entries": [{"projectPath": str(proj), "sessionId": "s1", "fileMtime": 1e12, "messageCount": 1, "isSidechain": False}]})
+    )
+    (tmp_path / "codex").mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    cursor_base.mkdir(parents=True)
+    dirs_file = tmp_path / "dirs.txt"
+    dirs_file.write_text(str(work) + "\n")
+    env = {"CODESS_CC_PROJECTS": str(cc), "CODESS_CODEX_SESSIONS": str(tmp_path / "codex"), "CODESS_CURSOR_DATA": str(cursor_base)}
+    r = _run(["scan", "--dirs", str(dirs_file), "--dir", str(work), "--days", "9999", "--out", "-"], env={**os.environ, **env})
+    assert r.returncode == 0
+    lines = r.stdout.strip().split("\n")
+    assert len(lines) >= 2  # header + at least one project (deduped)
 
 def test_scan_help():
     """Scan subcommand shows help."""
@@ -52,6 +78,34 @@ def test_scan_stdout_empty_work():
         assert len(lines) == 1  # header only, no projects
 
 
+def test_scan_csv_format(tmp_path):
+    """Scan output: header path,vendor,sess,mb,span_weeks; numeric sess and mb."""
+    work = tmp_path / "work"
+    work.mkdir()
+    proj = work / "proj"
+    proj.mkdir()
+    cc = tmp_path / "cc"
+    cc.mkdir()
+    slug = "-" + str(proj.resolve()).lstrip("/").replace("/", "-")
+    (cc / slug).mkdir(parents=True)
+    (cc / slug / "sessions-index.json").write_text(
+        json.dumps({"entries": [{"projectPath": str(proj), "sessionId": "s1", "fileMtime": 1e12, "messageCount": 2, "isSidechain": False}]})
+    )
+    (tmp_path / "codex").mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    cursor_base.mkdir(parents=True)
+    env = {"CODESS_CC_PROJECTS": str(cc), "CODESS_CODEX_SESSIONS": str(tmp_path / "codex"), "CODESS_CURSOR_DATA": str(cursor_base)}
+    r = _run(["scan", "--dir", str(work), "--days", "9999", "--out", "-"], env={**os.environ, **env})
+    assert r.returncode == 0
+    lines = r.stdout.strip().split("\n")
+    assert lines[0] == "path,vendor,sess,mb,span_weeks"
+    if len(lines) > 1:
+        parts = lines[1].split(",")
+        assert len(parts) >= 4
+        int(parts[2])  # sess numeric
+        float(parts[3])  # mb numeric
+
+
 def test_scan_writes_csv(tmp_path):
     """Scan --out writes CSV file."""
     work = tmp_path / "work"
@@ -70,11 +124,16 @@ def test_scan_writes_csv(tmp_path):
     assert "path,vendor" in out_file.read_text()
 
 
-def test_scan_cc_excludes_subagent():
-    """CC sessions exclude isSidechain entries."""
+@pytest.mark.parametrize("subagent_flag,env_val,expected_sess", [
+    (False, None, 1),
+    (True, None, 2),
+    (False, "1", 2),
+])
+def test_scan_cc_subagent(subagent_flag, env_val, expected_sess):
+    """CC subagent: default exclude (sess=1), --subagent or CODESS_SUBAGENT include (sess=2)."""
     import time
 
-    mtime_ms = int((time.time() - 1) * 1000)  # recent, passes --days filter
+    mtime_ms = int((time.time() - 1) * 1000)
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         work = tmp / "work"
@@ -99,14 +158,18 @@ def test_scan_cc_excludes_subagent():
         env["CODESS_CC_PROJECTS"] = str(cc)
         env["CODESS_CODEX_SESSIONS"] = str(tmp / "codex")
         env["CODESS_CURSOR_DATA"] = str(cursor_base)
-        r = _run(["scan", "--dir", str(work), "--out", "-"], env=env)
+        if env_val is not None:
+            env["CODESS_SUBAGENT"] = env_val
+        cmd = ["scan", "--dir", str(work)]
+        if subagent_flag:
+            cmd.append("--subagent")
+        cmd.extend(["--out", "-"])
+        r = _run(cmd, env=env)
         assert r.returncode == 0
         lines = r.stdout.strip().split("\n")
-        # sess=1 (only main), events=3 (from s1 only)
         assert len(lines) == 2
-        row = lines[1]
-        parts = row.split(",")
-        assert int(parts[2]) == 1  # sess
+        parts = lines[1].split(",")
+        assert int(parts[2]) == expected_sess
 
 
 def test_scan_debug_dir_label():

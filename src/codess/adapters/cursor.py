@@ -24,6 +24,47 @@ def _truncate(text: str, limit: int) -> tuple[str, int]:
     return s[: limit - 1] + "…", n
 
 
+def get_composer_data(db_path: Path) -> list[dict]:
+    """Decode composerData keys from cursorDiskKV. Returns list of {composer_id, keys, has_conversation, ...}.
+    Based on: legel gist, Cursor forum; composerData can be None for some entries."""
+    import base64
+    import sqlite3
+
+    if not db_path.exists():
+        return []
+    out = []
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        cur = conn.execute("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'")
+        for key, value in cur:
+            composer_id = key.split(":", 1)[1] if ":" in key else key
+            entry = {"composer_id": composer_id, "key": key, "value_null": value is None}
+            if value is None:
+                out.append(entry)
+                continue
+            try:
+                data = json.loads(value)
+            except json.JSONDecodeError:
+                try:
+                    data = json.loads(base64.b64decode(value).decode("utf-8", errors="replace"))
+                except Exception:
+                    entry["decode_error"] = True
+                    out.append(entry)
+                    continue
+            if isinstance(data, dict):
+                entry["top_keys"] = list(data.keys())
+                entry["has_conversation"] = "conversation" in data and len(data.get("conversation") or []) > 0
+                # Known/possible fields from forums, OSS: conversation, workspaceRoot?, ...
+                for k in ("workspaceRoot", "workspace", "folder", "projectPath"):
+                    if k in data:
+                        entry[k] = data[k]
+            out.append(entry)
+        conn.close()
+    except Exception:
+        pass
+    return out
+
+
 def get_db_metrics(db_path: Path) -> dict:
     """Return sess (composer count), events (bubble count), size_bytes from state.vscdb."""
     import sqlite3

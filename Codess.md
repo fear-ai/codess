@@ -142,9 +142,10 @@ Layout: `src/codess/`, `src/cli/`, `tests/`, `sql/`. See CoPlan §1.
 | min_size | CC, Codex | CODESS_MIN_SIZE |
 | min_events | CC, Codex | CODESS_MIN_EVENTS |
 | min_duration | CC, Codex | CODESS_MIN_DURATION |
+| subagent | CC (scan) | CODESS_SUBAGENT |
 | (Cursor) | TBD | TBD |
 
-CODESS_DAYS: scan filter for recent sessions.
+CODESS_DAYS: scan filter for recent sessions. CODESS_SUBAGENT / --subagent: CC scan includes subagent (default: exclude).
 
 ---
 
@@ -179,6 +180,8 @@ CODESS_DAYS: scan filter for recent sessions.
 | **CoSchema.md** | Our SQLite schema (doc). | Schema description |
 | **coding-sessions-schema.sql** | DDL for sessions, events, indexes. | Canonical schema; store.py or init reads |
 | **CursorSchema.md** | Cursor state.vscdb (emerging). | Cursor-specific only |
+| **docs/scan-metrics.md** | Scan metrics, subagent vs main, Cursor central vs workspace, composerData, suggestions. | Metrics; analysis; gaps; recommendations |
+| **docs/improvements.md** | Scan/filter/ingest improvements, config validation, recommendations. | Roadmap |
 | **README.md** | Intro, getting started, minimal apps. | Obligatory; minimal |
 
 ---

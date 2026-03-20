@@ -35,6 +35,8 @@ def main() -> int:
     scan_p.add_argument("--days", type=int, metavar="N",
                         help="[CODESS_DAYS] Include sessions from last N days (default: 90)")
     scan_p.add_argument("--debug", action="store_true", help="Print each directory visited with project path")
+    scan_p.add_argument("--subagent", action="store_true", dest="subagent",
+                        help="[CC only] Include subagent sessions [CODESS_SUBAGENT]")
     scan_p.add_argument("--registry", type=str, metavar="PATH",
                         help="[CODESS_REGISTRY] Override ~/.codess")
     scan_p.set_defaults(run=run_scan)

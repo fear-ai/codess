@@ -93,3 +93,28 @@ class TestParseDirList:
         f.write_text(f"{d1}\n")
         result = parse_dir_list(f, [])
         assert result == [d1.resolve()]
+
+    def test_mixed_dir_and_dirs_dedup(self, tmp_path):
+        """Mixed --dir and --dirs: dedupe, dirs file first then dir args."""
+        d1 = tmp_path / "d1"
+        d2 = tmp_path / "d2"
+        d1.mkdir()
+        d2.mkdir()
+        f = tmp_path / "dirs.txt"
+        f.write_text(f"{d1}\n# comment\n{d2}\n")
+        result = parse_dir_list(f, [str(d1), str(d2)])
+        assert len(result) == 2
+        assert d1.resolve() in result and d2.resolve() in result
+
+    def test_skip_dotdot(self, tmp_path):
+        """Paths with .. are skipped."""
+        result = parse_dir_list(None, ["/a/b/../c"])
+        assert result == []
+
+    def test_skip_empty_and_comments(self, tmp_path):
+        d1 = tmp_path / "d1"
+        d1.mkdir()
+        f = tmp_path / "dirs.txt"
+        f.write_text("\n# skip\n  \n" + str(d1) + "\n")
+        result = parse_dir_list(f, [])
+        assert result == [d1.resolve()]

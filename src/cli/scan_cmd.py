@@ -10,6 +10,9 @@ from codess.scan import run_scan
 
 def run(args) -> int:
     """Run codess scan. Returns exit code."""
+    from codess.config import validate_config
+    for msg in validate_config():
+        print(f"codess: {msg}", file=sys.stderr)
     dirs_file = Path(args.dirs) if getattr(args, "dirs", None) else None
     dir_list = getattr(args, "dir_list", None) or []
     roots = parse_dir_list(dirs_file, dir_list)
@@ -26,7 +29,9 @@ def run(args) -> int:
     all_rows = []
     seen_paths = set()
     for work_root in roots:
-        rows = run_scan(work_root, vendor_filter=vendors, recent_days=None if debug else recent_days, debug=debug)
+        from codess.config import SUBAGENT
+        subagent = getattr(args, "subagent", False) or SUBAGENT
+        rows = run_scan(work_root, vendor_filter=vendors, recent_days=None if debug else recent_days, debug=debug, subagent=subagent)
         for r in rows:
             full = str((work_root / r["path"]).resolve())
             if full not in seen_paths:

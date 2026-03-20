@@ -18,8 +18,8 @@ def _days_ago(max_ts: float) -> float | None:
     return round((time.time() * 1000 - max_ts) / (24 * 3600 * 1000), 1)
 
 
-def _session_metrics_cc(p: Path, cutoff_ms: float | None = None) -> dict:
-    """Use sessions-index.json when present; else top-level *.jsonl. Exclude subagents. cutoff_ms: only count sessions with mtime >= cutoff."""
+def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool = False) -> dict:
+    """Use sessions-index.json when present; else top-level *.jsonl. Exclude subagents unless subagent. cutoff_ms: only count sessions with mtime >= cutoff."""
     slug = "-" + str(p).lstrip("/").replace("/", "-")
     cc_dir = CC_PROJECTS / slug
     count, total_bytes, events, min_ts, max_ts = 0, 0, 0, float("inf"), 0.0
@@ -35,7 +35,7 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None) -> dict:
                     mtime = e.get("fileMtime") or 0
                     if cutoff_ms and mtime < cutoff_ms:
                         continue
-                    if e.get("isSidechain"):
+                    if e.get("isSidechain") and not subagent:
                         continue
                     count += 1
                     events += e.get("messageCount", 0)
@@ -143,7 +143,7 @@ def _session_metrics_cursor_global() -> dict:
     return {"count": m["count"], "events": m["events"], "size_mb": round(m["size_bytes"] / (1024 * 1024), 2), "span_weeks": None, "max_ts": None, "days_ago": None}
 
 
-def run_scan(work_root: Path, vendor_filter: list[str] | None = None, recent_days: int | None = None, debug: bool = False) -> list[dict]:
+def run_scan(work_root: Path, vendor_filter: list[str] | None = None, recent_days: int | None = None, debug: bool = False, subagent: bool = False) -> list[dict]:
     """Discover projects with session data. Return list of dicts: path, vendor, sess, mb, span_weeks.
     recent_days: if set, only include sessions from last N days (CODESS_DAYS).
     debug: print each dir visited with findings; include all projects regardless of filters."""
@@ -268,7 +268,7 @@ def run_scan(work_root: Path, vendor_filter: list[str] | None = None, recent_day
         has_recent = False
         m_cc, m_codex = {}, {}
         if p in cc_paths:
-            m_cc = _session_metrics_cc(p, cutoff_ms)
+            m_cc = _session_metrics_cc(p, cutoff_ms, subagent)
             if not cutoff_ms or m_cc.get("max_ts", 0) >= cutoff_ms:
                 has_recent = True
             sess_count += m_cc["count"]
