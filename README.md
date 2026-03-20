@@ -1,6 +1,6 @@
 # Codess — Session record store
 
-Link to Codess.md; getting started; minimal applications. Doc map: Codess.md §11.
+Link to Codess.md; getting started; minimal applications. Doc map: **Codess.md** §5.
 
 ---
 
@@ -42,3 +42,5 @@ python -m main query --dir /path/to/project -sess 1 --show pr
 ```
 
 Store: `<project>/.codess/`. Config: `CODESS_*` env vars. Registry: `~/.codess/ingested_projects.json`.
+
+Vendor on-disk detail: **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md**.
