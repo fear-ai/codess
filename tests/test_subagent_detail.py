@@ -25,6 +25,12 @@ def _run(cmd, env=None, **kw):
     )
 
 
+def _scan_env(base: Path, **extra: str) -> dict:
+    reg = base / "_test_codess_registry"
+    reg.mkdir(parents=True, exist_ok=True)
+    return {**os.environ.copy(), "CODESS_REGISTRY": str(reg), **extra}
+
+
 def test_cc_subagent_vs_main_detailed(capsys):
     """Print detailed field/size/format comparison: main vs subagent sessions."""
     mtime_ms = int((time.time() - 1) * 1000)
@@ -91,10 +97,12 @@ def test_cc_subagent_vs_main_detailed(capsys):
         (tmp / "codex").mkdir()
         cursor_base = tmp / "cursor" / "User"
         cursor_base.mkdir(parents=True)
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(cc)
-        env["CODESS_CODEX_SESSIONS"] = str(tmp / "codex")
-        env["CODESS_CURSOR_DATA"] = str(cursor_base)
+        env = _scan_env(
+            tmp,
+            CODESS_CC_PROJECTS=str(cc),
+            CODESS_CODEX_SESSIONS=str(tmp / "codex"),
+            CODESS_CURSOR_DATA=str(cursor_base),
+        )
 
         # Scan without --subagent
         r_excl = _run(["scan", "--dir", str(work), "--out", "-"], env=env)

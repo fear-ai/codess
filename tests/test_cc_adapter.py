@@ -93,14 +93,14 @@ class TestExtractToolInput:
         }
 
     def test_grep_truncates_pattern(self):
-        long_pat = "x" * 150
+        long_pat = "x" * 250
         out = extract_tool_input("Grep", {"pattern": long_pat})
-        assert len(out["pattern"]) == 120 and out["pattern"].endswith("…")
+        assert len(out["pattern"]) == 200 and out["pattern"].endswith("…")
 
     def test_agent_truncates_prompt(self):
-        long_p = "y" * 300
+        long_p = "y" * 2500
         out = extract_tool_input("Agent", {"prompt": long_p})
-        assert len(out["prompt"]) == 200 and out["prompt"].endswith("…")
+        assert len(out["prompt"]) == 2000 and out["prompt"].endswith("…")
 
     def test_mcp_task_extracts_description_prompt_subagent(self):
         out = extract_tool_input("mcp_task", {"description": "Research X", "prompt": "Find Y", "subagent_type": "explore"})

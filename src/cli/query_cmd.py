@@ -1,12 +1,17 @@
 """session-query CLI command."""
 
 import json
+import logging
 import re
 import sys
+from pathlib import Path
 
 from codess.config import get_project_stores
-from codess.project import RootsWhenEmpty, resolve_cli_roots
+from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
+from codess.registry_store import merge_query_stats, update_project_entry
 from codess.store import connect, init_db
+
+log = logging.getLogger(__name__)
 
 # Standard (built-in) tools for grouping; others are "loaded"
 STANDARD_TOOLS = frozenset({
@@ -55,7 +60,7 @@ def run(args) -> int:
 
     try:
         if getattr(args, "stats", False):
-            return _stats(conn)
+            return _stats(conn, project_root, resolve_registry_directory(args))
         if getattr(args, "taxonomy", False):
             return _taxonomy(conn)
         if getattr(args, "tool", None) is not None:
@@ -77,12 +82,21 @@ def run(args) -> int:
         conn.close()
 
 
-def _stats(conn) -> int:
-    """DB stats: sessions, events."""
+def _stats(conn, project_root: Path, registry_root: Path) -> int:
+    """DB stats: sessions, events; merge counts into registry at ``registry_root``."""
     sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     print(f"Sessions: {sessions}")
     print(f"Events: {events}")
+    proj_str = str(project_root.resolve())
+
+    def mut(e: dict, s: int = sessions, ev: int = events) -> None:
+        merge_query_stats(e, s, ev)
+
+    try:
+        update_project_entry(registry_root, proj_str, mut)
+    except OSError as ex:
+        log.warning("Registry update failed for %s: %s", proj_str, ex)
     return 0
 
 

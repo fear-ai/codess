@@ -192,6 +192,20 @@ def resolve_cli_roots(
     return roots, None
 
 
+def resolve_registry_directory(args: Any) -> Path:
+    """Directory for ``ingested_projects.json`` (``CODESS_REGISTRY``, default ``~/.codess``).
+
+    ``--registry PATH`` overrides that default for this invocation (ingest, scan writes,
+    query ``--stats`` updates). Omitted flag → **config** ``REGISTRY``.
+    """
+    from codess.config import REGISTRY
+
+    raw = getattr(args, "registry", None)
+    if raw is None or not str(raw).strip():
+        return REGISTRY
+    return Path(str(raw).strip()).expanduser()
+
+
 @dataclass(frozen=True)
 class ScanRunOptions:
     """Resolved scan behavior for one CLI invocation."""
@@ -202,6 +216,36 @@ class ScanRunOptions:
     norec: bool  # no recursion when walk applies (reserved; not yet passed to run_scan)
     recent_days: int | None  # None when debug bypasses day filter
     vendors: list[str] | None  # None = all vendors
+
+
+SCAN_SOURCE_TOKENS = frozenset({"cc", "codex", "cursor"})
+
+
+def validate_scan_source_for_cli(source: str | None) -> str | None:
+    """Return stderr line if ``--source`` is invalid for scan; else ``None``.
+
+    Scan ``--source`` is a comma list (or ``all``). Invalid tokens are a
+    **global** invocation error: reject the whole argv, do not partially apply.
+    """
+    if source is None or not str(source).strip():
+        return None
+    raw = str(source).strip()
+    if raw.lower() == "all":
+        return None
+    bad: list[str] = []
+    for part in raw.split(","):
+        t = part.strip().lower()
+        if not t:
+            continue
+        if t not in SCAN_SOURCE_TOKENS:
+            bad.append(part.strip())
+    if not bad:
+        return None
+    return (
+        "codess: invalid --source token(s) for scan: "
+        + ", ".join(repr(x) for x in bad)
+        + " (allowed: cc, codex, cursor, all; comma-separated)"
+    )
 
 
 def build_scan_run_options(args: Any) -> ScanRunOptions:
@@ -342,8 +386,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--registry",
         type=str,
+        default=None,
         metavar="PATH",
-        help="ingest: [CODESS_REGISTRY] central registry dir",
+        help="Central registry dir for ingested_projects.json (default CODESS_REGISTRY). "
+        "PATH overrides ~/.codess default. scan: also filters CSV to known paths + reg_* "
+        "when set; scan always merges index metrics into registry (default or PATH).",
     )
 
     p.add_argument(

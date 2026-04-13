@@ -73,7 +73,10 @@ def test_full_ingest_and_query():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, session_dir / "test-session.jsonl")
 
+        reg = tmp / "_central_reg"
+        reg.mkdir()
         env = os.environ.copy()
+        env["CODESS_REGISTRY"] = str(reg)
         env["CODESS_CC_PROJECTS"] = str(projects_dir)
 
         # Run ingest
@@ -87,9 +90,9 @@ def test_full_ingest_and_query():
         )
         assert result.returncode == 0, f"ingest failed: {result.stderr}"
 
-        # Run query --tool-counts
+        # Run query --tool 0
         result = subprocess.run(
-            [sys.executable, "-m", "main", "query", "--dir", str(project_root), "--tool-counts"],
+            [sys.executable, "-m", "main", "query", "--dir", str(project_root), "--tool", "0"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -141,7 +144,10 @@ def test_codex_ingest_and_query():
             '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}}\n'
             '{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"Hello"}]}}\n'
         )
+        reg = tmp / "_central_reg"
+        reg.mkdir()
         env = os.environ.copy()
+        env["CODESS_REGISTRY"] = str(reg)
         env["CODESS_CODEX_SESSIONS"] = str(tmp / "codex" / "sessions")
 
         r = subprocess.run(
@@ -192,7 +198,10 @@ def test_cursor_ingest_and_query():
         conn.commit()
         conn.close()
 
+        reg = tmp / "_central_reg"
+        reg.mkdir()
         env = os.environ.copy()
+        env["CODESS_REGISTRY"] = str(reg)
         env["CODESS_CURSOR_DATA"] = str(cursor_base)
 
         r = subprocess.run(
@@ -229,7 +238,10 @@ def test_incremental_skip_unchanged():
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, projects_dir / slug / "s1.jsonl")
 
+        reg = tmp / "_central_reg"
+        reg.mkdir()
         env = os.environ.copy()
+        env["CODESS_REGISTRY"] = str(reg)
         env["CODESS_CC_PROJECTS"] = str(projects_dir)
 
         # First ingest
@@ -244,7 +256,7 @@ def test_incremental_skip_unchanged():
 
         # Query count
         r2 = subprocess.run(
-            [sys.executable, "-m", "main", "query", "--dir", str(project_root), "--tool-counts"],
+            [sys.executable, "-m", "main", "query", "--dir", str(project_root), "--tool", "0"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,

@@ -132,7 +132,11 @@ def get_state_path(project_root: Path) -> Path:
 
 
 def get_stats_path(registry_root: Path | None = None) -> Path:
-    """Return path to ingested_projects.json (registry of decoded/ingested projects)."""
+    """Return path to ``ingested_projects.json`` — merged project registry.
+
+    Updated by **scan** (index metrics), **ingest** (store counts), **query** (e.g. ``--stats``),
+    and (when wired) **walk** via ``codess.registry_store``.
+    """
     root = registry_root if registry_root is not None else REGISTRY
     return root / STATS_FILE
 

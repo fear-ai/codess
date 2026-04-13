@@ -37,4 +37,4 @@ python -m main ingest --dir /path/to/project --source cursor
 python -m main query --dir /path/to/project -sess 1 --show pr
 ```
 
-Store: `<project>/.codess/`. Config: `CODESS_*` env vars. Registry: `~/.codess/ingested_projects.json`.
+Store: `<project>/.codess/`. Config: `CODESS_*` env vars. Central registry: `CODESS_REGISTRY` (default `~/.codess`) / `ingested_projects.json` — merged updates from **scan** (index metrics), **ingest** (store stats), **query --stats**; optional **`--registry PATH`** overrides the directory. Subprocess tests should set **`CODESS_REGISTRY`** to a temp dir so runs do not touch your home tree.

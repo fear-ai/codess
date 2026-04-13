@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from codess.config import get_state_path, get_stats_path, get_store_path, REGISTRY
+from codess.config import get_state_path, get_store_path
 from codess.adapters.cc import process_file as process_cc_file
 from codess.adapters.codex import get_session_meta, process_file as process_codex_file
 from codess.adapters.cursor import process_db as process_cursor_db
@@ -285,25 +285,15 @@ def _ingest_cursor(
 
 
 def _save_stats(project_root: Path, registry_root: Path, source_stats: dict) -> None:
-    """Append/update project stats in ingested_projects.json."""
-    stats_path = get_stats_path(registry_root)
-    stats_path.parent.mkdir(parents=True, exist_ok=True)
-    data = {}
-    if stats_path.exists():
-        try:
-            data = json.loads(stats_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    projects = data.get("projects", [])
+    """Merge ingest store stats into registry (preserves ``scan`` / ``query`` / etc.)."""
+    from codess.registry_store import merge_ingest_sources, update_project_entry
+
     proj_str = str(project_root.resolve())
-    now = datetime.now(timezone.utc).isoformat()
-    entry = {"path": proj_str, "last_ingestion": now, "sources": source_stats}
-    # Replace or append
-    projects = [p for p in projects if p.get("path") != proj_str]
-    projects.append(entry)
-    data["projects"] = projects
-    data["updated"] = now
-    stats_path.write_text(json.dumps(data, indent=2))
+
+    def mut(e: dict) -> None:
+        merge_ingest_sources(e, source_stats)
+
+    update_project_entry(registry_root, proj_str, mut)
 
 
 def run(args) -> int:
@@ -313,7 +303,9 @@ def run(args) -> int:
         print(err, file=sys.stderr)
         return 1
 
-    registry_root = Path(args.registry).expanduser() if getattr(args, "registry", None) else REGISTRY
+    from codess.project import resolve_registry_directory
+
+    registry_root = resolve_registry_directory(args)
 
     raw_src = getattr(args, "source", None) or "all"
     if "," in raw_src:

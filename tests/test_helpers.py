@@ -10,6 +10,8 @@ from codess.helpers import (
     path_to_slug,
     should_skip_recurse,
     slug_to_path,
+    user_root_string_disallowed,
+    validate_dirs_file,
     write_csv,
 )
 
@@ -110,6 +112,25 @@ class TestParseDirList:
         """Paths with .. are skipped."""
         result = parse_dir_list(None, ["/a/b/../c"])
         assert result == []
+
+    def test_validate_dirs_file_missing(self, tmp_path):
+        missing = tmp_path / "nope.txt"
+        assert validate_dirs_file(missing) is not None
+
+    def test_validate_dirs_file_empty(self, tmp_path):
+        f = tmp_path / "empty.txt"
+        f.write_text("# only\n\n")
+        assert validate_dirs_file(f) is not None
+
+    def test_user_root_hidden_relative_skipped(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".hidden").mkdir()
+        result = parse_dir_list(None, [".hidden"])
+        assert result == []
+        d = tmp_path / "ok"
+        d.mkdir()
+        result2 = parse_dir_list(None, ["ok"])
+        assert result2 == [d.resolve()]
 
     def test_skip_empty_and_comments(self, tmp_path):
         d1 = tmp_path / "d1"

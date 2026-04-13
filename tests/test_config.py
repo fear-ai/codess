@@ -5,10 +5,18 @@ from pathlib import Path
 
 import pytest
 
+from types import SimpleNamespace
+
+from codess.project import (
+    build_ingest_run_options,
+    build_scan_run_options,
+    resolve_registry_directory,
+    validate_scan_source_for_cli,
+)
 from codess.config import (
     CC_PROJECTS,
     CODEX_SESSIONS,
-    MIN_SIZE,
+    env_bool,
     get_state_path,
     get_store_path,
     REDACT_PATTERNS,
@@ -64,3 +72,92 @@ class TestRedactPatterns:
     def test_patterns_are_compiled(self):
         for p in REDACT_PATTERNS:
             assert hasattr(p, "search")
+
+
+class TestEnvBool:
+    """env_bool truth table (same rules as CODESS_* booleans)."""
+
+    def test_unset_false(self, monkeypatch):
+        monkeypatch.delenv("CODESS_TESTBOOL", raising=False)
+        assert env_bool("CODESS_TESTBOOL") is False
+
+    def test_one_true(self, monkeypatch):
+        monkeypatch.setenv("CODESS_TESTBOOL", "1")
+        assert env_bool("CODESS_TESTBOOL") is True
+
+    def test_yes_true(self, monkeypatch):
+        monkeypatch.setenv("CODESS_TESTBOOL", "YES")
+        assert env_bool("CODESS_TESTBOOL") is True
+
+    def test_on_false(self, monkeypatch):
+        monkeypatch.setenv("CODESS_TESTBOOL", "on")
+        assert env_bool("CODESS_TESTBOOL") is False
+
+    def test_two_false(self, monkeypatch):
+        monkeypatch.setenv("CODESS_TESTBOOL", "2")
+        assert env_bool("CODESS_TESTBOOL") is False
+
+
+class TestCliOptionsEnvMerge:
+    """ENV-backed bools merged in build_*_run_options (monkeypatch config module)."""
+
+    def test_ingest_redact_env(self, monkeypatch):
+        monkeypatch.setattr("codess.config.INGEST_REDACT", True)
+        args = SimpleNamespace(
+            stop=False, force=False, min_size=100, debug=False, redact=False
+        )
+        assert build_ingest_run_options(args).redact is True
+
+    def test_ingest_redact_cli_overrides_false_env(self, monkeypatch):
+        monkeypatch.setattr("codess.config.INGEST_REDACT", False)
+        args = SimpleNamespace(
+            stop=False, force=False, min_size=100, debug=False, redact=True
+        )
+        assert build_ingest_run_options(args).redact is True
+
+    def test_scan_norec_env(self, monkeypatch):
+        monkeypatch.setattr("codess.config.NOREC", True)
+        args = SimpleNamespace(
+            stop=False,
+            debug=False,
+            subagent=False,
+            norec=False,
+            days=None,
+            source=None,
+        )
+        assert build_scan_run_options(args).norec is True
+
+
+class TestValidateScanSource:
+    """Scan --source is validated globally before run (see scan_cmd)."""
+
+    def test_none_ok(self):
+        assert validate_scan_source_for_cli(None) is None
+
+    def test_all_ok(self):
+        assert validate_scan_source_for_cli("all") is None
+        assert validate_scan_source_for_cli(" ALL ") is None
+
+    def test_single_vendor_ok(self):
+        assert validate_scan_source_for_cli("cc") is None
+        assert validate_scan_source_for_cli("CC, Codex ") is None
+
+    def test_bad_token(self):
+        err = validate_scan_source_for_cli("cc,foo")
+        assert err and "foo" in err
+        assert "invalid" in err.lower()
+
+
+class TestRegistryArgResolution:
+    """``--registry PATH`` vs omitted → ``resolve_registry_directory``."""
+
+    def test_omitted_uses_config_registry(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("codess.config.REGISTRY", tmp_path)
+        args = SimpleNamespace(registry=None)
+        assert resolve_registry_directory(args) == tmp_path
+
+    def test_explicit_path_overrides(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("codess.config.REGISTRY", tmp_path)
+        other = tmp_path / "other"
+        args = SimpleNamespace(registry=str(other))
+        assert resolve_registry_directory(args) == other

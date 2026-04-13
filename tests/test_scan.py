@@ -25,6 +25,13 @@ def _run(cmd, cwd=None, env=None, **kw):
     )
 
 
+def _scan_env(base: Path, **extra: str) -> dict:
+    """Isolate ``ingested_projects.json`` writes from the developer home."""
+    reg = base / "_test_codess_registry"
+    reg.mkdir(parents=True, exist_ok=True)
+    return {**os.environ.copy(), "CODESS_REGISTRY": str(reg), **extra}
+
+
 def test_scan_mixed_dir_dirs(tmp_path):
     """Scan with both --dirs file and --dir: dedupe, both used."""
     work = tmp_path / "work"
@@ -43,8 +50,13 @@ def test_scan_mixed_dir_dirs(tmp_path):
     cursor_base.mkdir(parents=True)
     dirs_file = tmp_path / "dirs.txt"
     dirs_file.write_text(str(work) + "\n")
-    env = {"CODESS_CC_PROJECTS": str(cc), "CODESS_CODEX_SESSIONS": str(tmp_path / "codex"), "CODESS_CURSOR_DATA": str(cursor_base)}
-    r = _run(["scan", "--dirs", str(dirs_file), "--dir", str(work), "--days", "9999", "--out", "-"], env={**os.environ, **env})
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(cc),
+        CODESS_CODEX_SESSIONS=str(tmp_path / "codex"),
+        CODESS_CURSOR_DATA=str(cursor_base),
+    )
+    r = _run(["scan", "--dirs", str(dirs_file), "--dir", str(work), "--days", "9999", "--out", "-"], env=env)
     assert r.returncode == 0
     lines = r.stdout.strip().split("\n")
     assert len(lines) >= 2  # header + at least one project (deduped)
@@ -67,10 +79,12 @@ def test_scan_stdout_empty_work():
         (tmp / "codex").mkdir()
         cursor_base = tmp / "cursor" / "User"
         cursor_base.mkdir(parents=True)
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(tmp / "cc")
-        env["CODESS_CODEX_SESSIONS"] = str(tmp / "codex")
-        env["CODESS_CURSOR_DATA"] = str(cursor_base)
+        env = _scan_env(
+            tmp,
+            CODESS_CC_PROJECTS=str(tmp / "cc"),
+            CODESS_CODEX_SESSIONS=str(tmp / "codex"),
+            CODESS_CURSOR_DATA=str(cursor_base),
+        )
         r = _run(["scan", "--dir", str(work), "--out", "-"], env=env)
         assert r.returncode == 0
         lines = r.stdout.strip().split("\n")
@@ -94,8 +108,13 @@ def test_scan_csv_format(tmp_path):
     (tmp_path / "codex").mkdir()
     cursor_base = tmp_path / "cursor" / "User"
     cursor_base.mkdir(parents=True)
-    env = {"CODESS_CC_PROJECTS": str(cc), "CODESS_CODEX_SESSIONS": str(tmp_path / "codex"), "CODESS_CURSOR_DATA": str(cursor_base)}
-    r = _run(["scan", "--dir", str(work), "--days", "9999", "--out", "-"], env={**os.environ, **env})
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(cc),
+        CODESS_CODEX_SESSIONS=str(tmp_path / "codex"),
+        CODESS_CURSOR_DATA=str(cursor_base),
+    )
+    r = _run(["scan", "--dir", str(work), "--days", "9999", "--out", "-"], env=env)
     assert r.returncode == 0
     lines = r.stdout.strip().split("\n")
     assert lines[0] == "path,vendor,sess,mb,span_weeks"
@@ -114,9 +133,11 @@ def test_scan_writes_csv(tmp_path):
     cc.mkdir()
     codex = tmp_path / "codex"
     codex.mkdir()
-    env = os.environ.copy()
-    env["CODESS_CC_PROJECTS"] = str(cc)
-    env["CODESS_CODEX_SESSIONS"] = str(codex)
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(cc),
+        CODESS_CODEX_SESSIONS=str(codex),
+    )
     out_file = tmp_path / "scan_out.csv"
     r = _run(["scan", "--dir", str(work), "--out", str(out_file)], env=env)
     assert r.returncode == 0
@@ -154,12 +175,14 @@ def test_scan_cc_subagent(subagent_flag, env_val, expected_sess):
         (tmp / "codex").mkdir()
         cursor_base = tmp / "cursor" / "User"
         cursor_base.mkdir(parents=True)
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(cc)
-        env["CODESS_CODEX_SESSIONS"] = str(tmp / "codex")
-        env["CODESS_CURSOR_DATA"] = str(cursor_base)
+        extra = {
+            "CODESS_CC_PROJECTS": str(cc),
+            "CODESS_CODEX_SESSIONS": str(tmp / "codex"),
+            "CODESS_CURSOR_DATA": str(cursor_base),
+        }
         if env_val is not None:
-            env["CODESS_SUBAGENT"] = env_val
+            extra["CODESS_SUBAGENT"] = env_val
+        env = _scan_env(tmp, **extra)
         cmd = ["scan", "--dir", str(work)]
         if subagent_flag:
             cmd.append("--subagent")
@@ -188,10 +211,12 @@ def test_scan_debug_dir_label():
         (tmp / "codex").mkdir()
         cursor_base = tmp / "cursor" / "User"
         cursor_base.mkdir(parents=True)
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(cc)
-        env["CODESS_CODEX_SESSIONS"] = str(tmp / "codex")
-        env["CODESS_CURSOR_DATA"] = str(cursor_base)
+        env = _scan_env(
+            tmp,
+            CODESS_CC_PROJECTS=str(cc),
+            CODESS_CODEX_SESSIONS=str(tmp / "codex"),
+            CODESS_CURSOR_DATA=str(cursor_base),
+        )
         r = _run(["scan", "--dir", str(work), "--debug", "--out", "-"], env=env)
         assert r.returncode == 0
         assert "[dir]" in r.stderr
@@ -220,10 +245,12 @@ def test_scan_cursor_central_db():
         conn.close()
         (tmp / "cc").mkdir()
         (tmp / "codex").mkdir()
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(tmp / "cc")
-        env["CODESS_CODEX_SESSIONS"] = str(tmp / "codex")
-        env["CODESS_CURSOR_DATA"] = str(cursor_base)
+        env = _scan_env(
+            tmp,
+            CODESS_CC_PROJECTS=str(tmp / "cc"),
+            CODESS_CODEX_SESSIONS=str(tmp / "codex"),
+            CODESS_CURSOR_DATA=str(cursor_base),
+        )
         r = _run(["scan", "--dir", str(work), "--out", "-"], env=env)
         assert r.returncode == 0
         lines = r.stdout.strip().split("\n")
@@ -244,10 +271,6 @@ def test_scan_days_ago_in_debug():
         (tmp / "codex").mkdir()
         cursor_base = tmp / "cursor" / "User"
         cursor_base.mkdir(parents=True)
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(cc)
-        env["CODESS_CODEX_SESSIONS"] = str(tmp / "codex")
-        env["CODESS_CURSOR_DATA"] = str(cursor_base)
         proj = work / "proj"
         proj.mkdir()
         slug = "-" + str(proj.resolve()).lstrip("/").replace("/", "-")
@@ -255,6 +278,165 @@ def test_scan_days_ago_in_debug():
         slug_dir.mkdir(parents=True)
         idx = slug_dir / "sessions-index.json"
         idx.write_text(json.dumps({"entries": [{"projectPath": str(proj), "sessionId": "s1", "fileMtime": 1e12, "messageCount": 5, "isSidechain": False}]}))
+        env = _scan_env(
+            tmp,
+            CODESS_CC_PROJECTS=str(cc),
+            CODESS_CODEX_SESSIONS=str(tmp / "codex"),
+            CODESS_CURSOR_DATA=str(cursor_base),
+        )
         r = _run(["scan", "--dir", str(work), "--debug", "--out", "-"], env=env)
         assert r.returncode == 0
         assert "days_ago=" in r.stderr
+
+
+def test_scan_invalid_source_exit(tmp_path):
+    """Unknown scan --source tokens are a global error (stderr + exit 1)."""
+    env = _scan_env(tmp_path)
+    r = _run(["scan", "--source", "cc,bogus", "--out", "-"], env=env)
+    assert r.returncode == 1
+    assert "bogus" in r.stderr
+    assert "invalid" in r.stderr.lower()
+
+
+def test_scan_registry_missing_file_exit(tmp_path):
+    """--registry with no ingested_projects.json exits 1."""
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    (tmp_path / "cc").mkdir()
+    (tmp_path / "codex").mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    cursor_base.mkdir(parents=True)
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(tmp_path / "cc"),
+        CODESS_CODEX_SESSIONS=str(tmp_path / "codex"),
+        CODESS_CURSOR_DATA=str(cursor_base),
+    )
+    r = _run(
+        ["scan", "--dir", str(work), "--registry", str(reg), "--out", "-"],
+        env=env,
+    )
+    assert r.returncode == 1
+    assert "not found" in r.stderr.lower()
+
+
+def test_scan_merges_registry_without_registry_flag(tmp_path):
+    """Every scan upserts index metrics into CODESS_REGISTRY (isolated in test)."""
+    work = tmp_path / "work"
+    work.mkdir()
+    proj = work / "proj"
+    proj.mkdir()
+    cc = tmp_path / "cc"
+    cc.mkdir()
+    slug = "-" + str(proj.resolve()).lstrip("/").replace("/", "-")
+    (cc / slug).mkdir(parents=True)
+    (cc / slug / "sessions-index.json").write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "projectPath": str(proj),
+                        "sessionId": "s1",
+                        "fileMtime": 1e12,
+                        "messageCount": 2,
+                        "isSidechain": False,
+                    }
+                ]
+            }
+        )
+    )
+    (tmp_path / "codex").mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    cursor_base.mkdir(parents=True)
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(cc),
+        CODESS_CODEX_SESSIONS=str(tmp_path / "codex"),
+        CODESS_CURSOR_DATA=str(cursor_base),
+    )
+    reg_home = tmp_path / "_test_codess_registry"
+    r = _run(
+        ["scan", "--dir", str(work), "--days", "9999", "--out", "-"],
+        env=env,
+    )
+    assert r.returncode == 0
+    stats_path = reg_home / "ingested_projects.json"
+    assert stats_path.exists()
+    data = json.loads(stats_path.read_text())
+    byp = {p["path"]: p for p in data.get("projects", [])}
+    pkey = str(proj.resolve())
+    assert pkey in byp
+    assert "scan" in byp[pkey]
+    assert "last_scan" in byp[pkey]
+
+
+def test_scan_registry_filter_and_ref_columns(tmp_path):
+    """--registry keeps only ingested paths and appends ref columns (no sidecar)."""
+    work = tmp_path / "work"
+    work.mkdir()
+    proj = work / "proj"
+    proj.mkdir()
+    cc = tmp_path / "cc"
+    cc.mkdir()
+    slug = "-" + str(proj.resolve()).lstrip("/").replace("/", "-")
+    (cc / slug).mkdir(parents=True)
+    (cc / slug / "sessions-index.json").write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "projectPath": str(proj),
+                        "sessionId": "s1",
+                        "fileMtime": 1e12,
+                        "messageCount": 2,
+                        "isSidechain": False,
+                    }
+                ]
+            }
+        )
+    )
+    (tmp_path / "codex").mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    cursor_base.mkdir(parents=True)
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    stats = {
+        "projects": [
+            {
+                "path": str(proj.resolve()),
+                "last_ingestion": "2025-01-01T00:00:00+00:00",
+                "sources": {"Claude": {"sessions": 1, "events": 2}},
+            }
+        ]
+    }
+    (reg / "ingested_projects.json").write_text(json.dumps(stats))
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(cc),
+        CODESS_CODEX_SESSIONS=str(tmp_path / "codex"),
+        CODESS_CURSOR_DATA=str(cursor_base),
+    )
+    r = _run(
+        [
+            "scan",
+            "--dir",
+            str(work),
+            "--days",
+            "9999",
+            "--registry",
+            str(reg),
+            "--out",
+            "-",
+        ],
+        env=env,
+    )
+    assert r.returncode == 0
+    lines = r.stdout.strip().split("\n")
+    assert lines[0] == (
+        "path,vendor,sess,mb,span_weeks,reg_path,reg_updated,reg_sources"
+    )
+    assert len(lines) == 2
+    assert "Claude" in lines[1]
+    assert str(proj.resolve()) in lines[1]

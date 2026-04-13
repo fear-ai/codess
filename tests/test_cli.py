@@ -32,13 +32,13 @@ def test_query_no_store_exit_1():
     """Query before any ingest exits 1."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        r = _run(["query", "--dir", str(tmp), "--tool-counts"])
+        r = _run(["query", "--dir", str(tmp), "--tool", "0"])
         assert r.returncode == 1
         assert "No store" in r.stderr or "store" in r.stderr.lower()
 
 
 def test_query_no_mode_exit_1():
-    """Query without --tool-counts/--sessions/--permissions exits 1."""
+    """Query without a mode flag exits 1."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         # Create empty store
@@ -46,7 +46,7 @@ def test_query_no_mode_exit_1():
         init_db(tmp / ".codess" / "sessions.db")
         r = _run(["query", "--dir", str(tmp)])
         assert r.returncode == 1
-        assert "Specify" in r.stderr or "tool-counts" in r.stderr.lower()
+        assert "Specify" in r.stderr
 
 
 def test_ingest_no_cc_dir_exit_1():
@@ -97,7 +97,7 @@ def test_ingest_empty_jsonl_file():
 
 
 def test_query_empty_store():
-    """Query --tool-counts on empty store: empty output, exit 0."""
+    """Query --tool 0 on empty store: empty output, exit 0."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         proj = tmp / "proj"
@@ -109,7 +109,7 @@ def test_query_empty_store():
         env = os.environ.copy()
         env["CODESS_CC_PROJECTS"] = str(cc_dir)
         _run(["ingest", "--dir", str(proj), "--source", "cc", "--min-size", "0"], env=env)
-        r = _run(["query", "--dir", str(proj), "--tool-counts"], env=env)
+        r = _run(["query", "--dir", str(proj), "--tool", "0"], env=env)
         assert r.returncode == 0
         assert r.stdout.strip() == "" or "Bash" not in r.stdout
 
@@ -130,10 +130,10 @@ def test_idempotent_same_data():
         env["CODESS_CC_PROJECTS"] = str(cc_dir)
         r1 = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         assert r1.returncode == 0
-        r2 = _run(["query", "--dir", str(proj), "--tool-counts"], env=env)
+        r2 = _run(["query", "--dir", str(proj), "--tool", "0"], env=env)
         lines1 = r2.stdout.strip().split("\n")
         r3 = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
-        r4 = _run(["query", "--dir", str(proj), "--tool-counts"], env=env)
+        r4 = _run(["query", "--dir", str(proj), "--tool", "0"], env=env)
         lines2 = r4.stdout.strip().split("\n")
         assert sorted(lines1) == sorted(lines2)
 
@@ -158,23 +158,32 @@ def test_ingest_shows_stats():
 
 
 def test_query_stats():
-    """Query --stats prints sessions and events."""
+    """Query --stats prints sessions and events; merges query counts into registry."""
+    import json
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         proj = tmp / "proj"
         proj.mkdir()
         cc_dir = tmp / "cc"
         cc_dir.mkdir()
+        reg = tmp / "central_reg"
+        reg.mkdir()
         slug = path_to_slug(proj.resolve())
         (cc_dir / slug).mkdir(parents=True)
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
         env["CODESS_CC_PROJECTS"] = str(cc_dir)
+        env["CODESS_REGISTRY"] = str(reg)
         _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         r = _run(["query", "--dir", str(proj), "--stats"], env=env)
         assert r.returncode == 0
         assert "Sessions:" in r.stdout and "Events:" in r.stdout
+        data = json.loads((reg / "ingested_projects.json").read_text())
+        ent = next(p for p in data["projects"] if p["path"] == str(proj.resolve()))
+        assert "query" in ent
+        assert "sessions" in ent["query"]
 
 
 def test_query_taxonomy():
