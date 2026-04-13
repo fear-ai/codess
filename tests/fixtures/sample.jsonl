@@ -1,0 +1,9 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"List files in current directory"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll run ls for you."},{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls -la"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-1","content":"total 4\ndrwxr-x 1 user 4096 Mar 14 10:00 .\n-rw-r--r-- 1 user  100 Mar 14 10:00 main.py\n"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Here are the files in the directory."}],"stop_reason":"end_turn"}}
+{"type":"progress","message":{"role":"assistant"}}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Read main.py"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading main.py."},{"type":"tool_use","id":"tu-2","name":"Read","input":{"path":"main.py"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-2","content":"print('hello')\n"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The file contains a simple print statement."}]}}
