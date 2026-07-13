@@ -10,6 +10,7 @@ from codess.adapters.cursor import get_db_metrics
 from codess.config import AGGREGATORS, CC_PROJECTS, CODESS_DAYS, CURSOR_WS
 from codess.helpers import is_excluded, slug_to_path
 from codess.project import (
+    get_codex_session_files,
     get_codex_session_roots,
     get_cursor_global_db,
     get_cursor_workspace_dbs,
@@ -121,42 +122,39 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool 
 def _session_metrics_codex(p: Path, cutoff_ms: float | None = None) -> dict:
     count, total_bytes, events, min_ts, max_ts = 0, 0, 0, float("inf"), 0.0
     p_res = str(p.resolve())
-    for root in get_codex_session_roots():
-        if not root.exists():
-            continue
-        for f in root.rglob("*.jsonl"):
-            try:
-                d = read_codex_session_meta(f)
-                if d is None:
-                    continue
-                cwd = (d.get("payload") or {}).get("cwd", "")
-                if not cwd or str(Path(cwd).resolve()) != p_res:
-                    continue
-                ts = d.get("timestamp")
-                if isinstance(ts, (int, float)):
-                    ts_ms = ts * 1000 if ts < 1e12 else ts
-                elif isinstance(ts, str):
-                    try:
-                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        ts_ms = dt.timestamp() * 1000
-                    except (ValueError, TypeError):
-                        ts_ms = 0
-                else:
-                    ts_ms = 0
-                if cutoff_ms and ts_ms < cutoff_ms:
-                    continue
-                count += 1
-                total_bytes += f.stat().st_size
+    for f in get_codex_session_files(p):
+        try:
+            d = read_codex_session_meta(f)
+            if d is None:
+                continue
+            cwd = (d.get("payload") or {}).get("cwd", "")
+            if not cwd or str(Path(cwd).resolve()) != p_res:
+                continue
+            ts = d.get("timestamp")
+            if isinstance(ts, (int, float)):
+                ts_ms = ts * 1000 if ts < 1e12 else ts
+            elif isinstance(ts, str):
                 try:
-                    with f.open() as fp:
-                        events += sum(1 for _ in fp if _.strip())
-                except OSError:
-                    pass
-                if ts_ms:
-                    min_ts = min(min_ts, ts_ms)
-                    max_ts = max(max_ts, ts_ms)
-            except (StopIteration, json.JSONDecodeError, OSError, KeyError):
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    ts_ms = dt.timestamp() * 1000
+                except (ValueError, TypeError):
+                    ts_ms = 0
+            else:
+                ts_ms = 0
+            if cutoff_ms and ts_ms < cutoff_ms:
+                continue
+            count += 1
+            total_bytes += f.stat().st_size
+            try:
+                with f.open() as fp:
+                    events += sum(1 for _ in fp if _.strip())
+            except OSError:
                 pass
+            if ts_ms:
+                min_ts = min(min_ts, ts_ms)
+                max_ts = max(max_ts, ts_ms)
+        except (StopIteration, json.JSONDecodeError, OSError, KeyError):
+            pass
     span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
     return {"count": count, "events": events, "size_mb": round(total_bytes / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts)}
 

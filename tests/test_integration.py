@@ -200,6 +200,58 @@ def test_cc_ingest_includes_nested_subagent_with_parent_metadata():
             conn.close()
 
 
+def test_cc_force_reingest_replaces_shortened_transcript(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    projects = tmp_path / "claude"
+    session_dir = projects / path_to_slug(project.resolve())
+    session_dir.mkdir(parents=True)
+    transcript = session_dir / "replace-me.jsonl"
+    records = [
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "one"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "two"}],
+            },
+        },
+    ]
+    env = {
+        **os.environ,
+        "CODESS_CC_PROJECTS": str(projects),
+        "CODESS_REGISTRY": str(tmp_path / "registry"),
+    }
+    command = [
+        sys.executable, "-m", "main", "ingest",
+        "--dir", str(project), "--source", "cc",
+        "--force", "--min-size", "0",
+    ]
+    transcript.write_text(
+        "".join(json.dumps(record) + "\n" for record in records)
+    )
+    assert subprocess.run(
+        command, cwd=str(Path(__file__).parent.parent), env=env,
+        capture_output=True, text=True,
+    ).returncode == 0
+    transcript.write_text(json.dumps(records[0]) + "\n")
+    assert subprocess.run(
+        command, cwd=str(Path(__file__).parent.parent), env=env,
+        capture_output=True, text=True,
+    ).returncode == 0
+    with sqlite3.connect(
+        project / ".codess" / "sessions_cc.db"
+    ) as store:
+        assert store.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
+        assert store.execute("SELECT content FROM events").fetchone()[0] == "one"
+
+
 def test_malformed_json_skipped():
     """Malformed JSON lines are skipped; ingest continues."""
     from codess.adapters.cc import iter_cc_records
@@ -256,6 +308,74 @@ def test_codex_ingest_and_query():
         assert "Sessions:" in r.stdout and "Events:" in r.stdout
 
 
+def test_codex_force_reingest_replaces_and_empty_removes_session(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    sessions = tmp_path / "codex" / "sessions"
+    sessions.mkdir(parents=True)
+    transcript = sessions / "rollout.jsonl"
+    meta = {
+        "type": "session_meta",
+        "payload": {"id": "replace-me", "cwd": str(project)},
+    }
+    user = {
+        "type": "response_item",
+        "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "one"}],
+        },
+    }
+    assistant = {
+        "type": "response_item",
+        "payload": {
+            "type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": "two"}],
+        },
+    }
+    env = {
+        **os.environ,
+        "CODESS_CODEX_SESSIONS": str(sessions),
+        "CODESS_REGISTRY": str(tmp_path / "registry"),
+    }
+
+    def ingest():
+        return subprocess.run(
+            [
+                sys.executable, "-m", "main", "ingest",
+                "--dir", str(project), "--source", "codex",
+                "--force", "--min-size", "0",
+            ],
+            cwd=str(Path(__file__).parent.parent),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+    transcript.write_text(
+        "".join(json.dumps(record) + "\n" for record in (meta, user, assistant))
+    )
+    assert ingest().returncode == 0
+    store = project / ".codess" / "sessions_codex.db"
+    with sqlite3.connect(store) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 2
+
+    transcript.write_text(
+        "".join(json.dumps(record) + "\n" for record in (meta, user))
+    )
+    assert ingest().returncode == 0
+    with sqlite3.connect(store) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
+        assert conn.execute("SELECT content FROM events").fetchone()[0] == "one"
+
+    transcript.write_text(json.dumps(meta) + "\n")
+    result = ingest()
+    assert result.returncode == 0
+    assert "empty_sources=1" in result.stderr
+    with sqlite3.connect(store) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+
+
 def test_cursor_ingest_and_query():
     """Cursor ingest from workspace DB → query cycle."""
     import json
@@ -308,6 +428,66 @@ def test_cursor_ingest_and_query():
         )
         assert r.returncode == 0
         assert "Sessions:" in r.stdout and "Events:" in r.stdout
+
+
+def test_cursor_force_reingest_removes_sessions_deleted_from_source(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    workspace = cursor_base / "workspaceStorage" / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"folder": {"path": str(project)}})
+    )
+    db = workspace / "state.vscdb"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    conn.executemany(
+        "INSERT INTO cursorDiskKV VALUES (?, ?)",
+        [
+            ("bubbleId:keep:b1", json.dumps({"type": 1, "text": "keep"})),
+            ("bubbleId:remove:b1", json.dumps({"type": 1, "text": "remove"})),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    env = {
+        **os.environ,
+        "CODESS_CURSOR_DATA": str(cursor_base),
+        "CODESS_REGISTRY": str(tmp_path / "registry"),
+    }
+    command = [
+        sys.executable, "-m", "main", "ingest",
+        "--dir", str(project), "--source", "cursor", "--force",
+    ]
+    first = subprocess.run(
+        command,
+        cwd=str(Path(__file__).parent.parent),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert first.returncode == 0
+
+    conn = sqlite3.connect(db)
+    conn.execute("DELETE FROM cursorDiskKV WHERE key LIKE 'bubbleId:remove:%'")
+    conn.commit()
+    conn.close()
+    second = subprocess.run(
+        command,
+        cwd=str(Path(__file__).parent.parent),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert second.returncode == 0
+
+    with sqlite3.connect(
+        project / ".codess" / "sessions_cursor.db"
+    ) as store:
+        assert [
+            row[0] for row in store.execute("SELECT id FROM sessions")
+        ] == ["keep"]
 
 
 def test_cursor_global_ingest_is_scoped_by_composer_headers():

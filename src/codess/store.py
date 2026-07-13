@@ -103,6 +103,50 @@ def upsert_event(conn: sqlite3.Connection, event: dict) -> None:
     )
 
 
+def replace_session_events(
+    conn: sqlite3.Connection,
+    session: dict | None,
+    events: list[dict],
+    *,
+    session_id: str,
+) -> None:
+    """Replace one transcript-backed session inside the caller's transaction."""
+    conn.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
+    if session is None:
+        conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        return
+    upsert_session(conn, session)
+    for event in events:
+        upsert_event(conn, event)
+
+
+def replace_source_sessions(
+    conn: sqlite3.Connection,
+    source_file: str,
+    sessions: dict[str, dict],
+    events: list[dict],
+) -> None:
+    """Replace events owned by one multi-session source such as a Cursor DB."""
+    old_session_ids = {
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT session_id FROM events WHERE source_file = ?",
+            (source_file,),
+        )
+    }
+    conn.execute("DELETE FROM events WHERE source_file = ?", (source_file,))
+    for session in sessions.values():
+        upsert_session(conn, session)
+    for event in events:
+        upsert_event(conn, event)
+    for session_id in old_session_ids - set(sessions):
+        remaining = conn.execute(
+            "SELECT 1 FROM events WHERE session_id = ? LIMIT 1", (session_id,)
+        ).fetchone()
+        if remaining is None:
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+
 def load_ingest_state(state_path: Path) -> dict[str, float]:
     """Read ingest_state.json; return {} if missing/invalid."""
     if not state_path.exists():

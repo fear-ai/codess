@@ -86,6 +86,11 @@ queryable without copying the full envelope. Task-list metadata under
 `~/.claude/tasks/` is separate from transcript JSONL and from live background
 processes.
 
+Re-ingesting a changed or forced transcript transactionally replaces its
+normalized session events. If the transcript remains valid but yields no
+supported events, Codess removes the prior normalized session and reports an
+`empty_sources` diagnostic.
+
 **Timestamps:** `timestamp` on record or nested in `message`; ISO 8601 strings or numeric ms.
 
 ---

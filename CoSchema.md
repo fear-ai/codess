@@ -13,6 +13,15 @@ Sessions, events, indexes. Executable DDL is `sql/CoSchema.sql`.
 ## Store layout
 
 ```
+
+## Replacement semantics
+
+Claude and Codex transcripts own one normalized session. Re-ingesting one
+replaces that session's events in a single transaction; a valid source with no
+supported events removes the previous session. Cursor databases own many
+sessions, so refresh replaces events whose `source_file` is that database and
+removes only sessions left without events from any Cursor source. Ingest state
+is updated only after the database commit.
 <project>/.codess/
 ├── sessions.db          # Legacy: all vendors
 ├── sessions_cc.db       # Per-vendor
@@ -47,7 +56,7 @@ Sessions, events, indexes. Executable DDL is `sql/CoSchema.sql`.
 | session_id | TEXT | NOT NULL | FK sessions(id) |
 | event_id | TEXT | NOT NULL | Stable vendor/adapter identifier; UNIQUE(session_id, event_id). Claude uses the line number for the first emitted block and `line:block` for additional blocks. |
 | event_type | TEXT | NULL | user_message, assistant_message, tool_call |
-| subtype | TEXT | NULL | prompt, slash_command, response, dialog, permission_denied |
+| subtype | TEXT | NULL | prompt, slash_command, response, dialog, truncated, tool_result, permission_denied |
 | role | TEXT | NULL | user, assistant, system |
 | content | TEXT | NULL | Truncated |
 | content_len | INTEGER | NULL | Full length |

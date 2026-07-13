@@ -286,6 +286,16 @@ class TestProcessFile:
         evs = list(process_file(fixtures, "s1", {"redact": False}))
         assert any(e.get("subtype") == "slash_command" for e in evs)
 
+    def test_lineage_fixture_contract(self):
+        fixture = Path(__file__).parent / "fixtures" / "claude_lineage.jsonl"
+        events = list(process_file(fixture, "lineage", {"redact": False}))
+        assert [event["event_id"] for event in events] == ["1", "1:1", "2"]
+        call = events[1]
+        result = events[2]
+        assert json.loads(call["metadata"])["tool_use_id"] == "tool-read"
+        assert json.loads(result["metadata"])["tool_use_id"] == "tool-read"
+        assert call["tool_name"] == result["tool_name"] == "Read"
+
     def test_redaction_disables_raw_debug_capture(self, tmp_path):
         path = tmp_path / "session.jsonl"
         path.write_text(

@@ -22,6 +22,7 @@ python -m main ingest --dir /path/to/project
 python -m main query --dir /path/to/project --stats
 python -m main query --dir /path/to/project --sessions --id
 python -m main query --dir /path/to/project --tool
+python -m main query --dir /path/to/project --lineage
 python -m main query --dir /path/to/project-a --dir /path/to/project-b --stats
 ```
 
@@ -40,6 +41,12 @@ python -m main query --dir /path/to/project -sess 1 --show pr
 
 Query aggregates all selected project and vendor stores read-only. Session
 numbers form one global most-recent-first order; `--stats` prints aggregate
-totals while updating the registry with per-project counts.
+totals while updating the registry with per-project counts. `--lineage`
+joins tool calls to results and identifies missing or orphaned outcomes.
+
+Changed or forced source ingestion is replacement-based: stale normalized
+events are removed transactionally. A valid transcript with no supported
+events removes its previous normalized session and is reported as an empty
+source.
 
 Store: `<project>/.codess/`. Config: `CODESS_*` env vars. Central registry: `CODESS_REGISTRY` (default `~/.codess`) / `ingested_projects.json` — merged updates from **scan** (index metrics), **ingest** (store stats), **query --stats**; optional **`--registry PATH`** overrides the directory. Subprocess tests should set **`CODESS_REGISTRY`** to a temp dir so runs do not touch your home tree.

@@ -32,6 +32,9 @@ Active and archived roots are both read by default. Setting
 `CODESS_CODEX_SESSIONS` isolates active input and disables the default archive
 root; set `CODESS_CODEX_ARCHIVED_SESSIONS` explicitly to add an archive root.
 Codess does not currently infer Codex subagent parentage from transcripts.
+If active and archived roots contain the same session id, the active transcript
+wins; within one root the newest file wins. Re-ingest transactionally replaces
+the selected session rather than leaving events removed from the transcript.
 
 ---
 
@@ -99,6 +102,8 @@ call/result lineage is stored in event metadata through `call_id`.
 - Transcript compatibility must be maintained with fixtures because the
   [official hook guidance](https://developers.openai.com/codex/config-advanced#hooks)
   says the transcript format may change.
+- A valid transcript with no supported events removes its prior normalized
+  session and is counted in the `empty_sources` diagnostic.
 
 ---
 

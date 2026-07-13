@@ -1,0 +1,2 @@
+{"type":"assistant","uuid":"record-call","parentUuid":"record-user","timestamp":"2026-07-10T12:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"I will inspect it."},{"type":"tool_use","id":"tool-read","name":"Read","input":{"path":"README.md"}}]}}
+{"type":"user","uuid":"record-result","parentUuid":"record-call","timestamp":"2026-07-10T12:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-read","content":"Project notes","is_error":false}]}}

@@ -26,10 +26,10 @@ from codess.store import (
     connect,
     init_db,
     load_ingest_state,
+    replace_session_events,
+    replace_source_sessions,
     save_ingest_state,
     should_ingest,
-    upsert_event,
-    upsert_session,
 )
 
 log = logging.getLogger(__name__)
@@ -75,11 +75,9 @@ def _ingest_cc(
         rel = path.relative_to(cc_dir)
         session_id = path.stem
         conn = connect(store_path)
-        events_list = []
         try:
-            for event in process_cc_file(path, session_id, opts):
-                upsert_event(conn, event)
-                events_list.append(event)
+            events_list = list(process_cc_file(path, session_id, opts))
+            session = None
             if events_list:
                 timestamps = [e["timestamp"] for e in events_list if e.get("timestamp") is not None]
                 started_at = min(timestamps) if timestamps else mtime * 1000
@@ -105,7 +103,15 @@ def _ingest_cc(
                         else None
                     ),
                 }
-                upsert_session(conn, session)
+            else:
+                diagnostics = opts.get("diagnostics")
+                if diagnostics is not None:
+                    diagnostics["empty_sources"] = (
+                        diagnostics.get("empty_sources", 0) + 1
+                    )
+            replace_session_events(
+                conn, session, events_list, session_id=session_id
+            )
             conn.commit()
             total_events += len(events_list)
         except Exception as e:
@@ -120,7 +126,7 @@ def _ingest_cc(
         state = load_ingest_state(state_path)
         state[str(path.resolve())] = mtime
         save_ingest_state(state_path, state)
-        ingested += 1
+        ingested += int(bool(events_list))
     return ingested, total_events, failures
 
 
@@ -152,11 +158,11 @@ def _ingest_codex(
         session_id, proj_path = get_session_meta(path)
         session_metadata = get_session_metadata(path)
         conn = connect(store_path)
-        events_list = []
         try:
-            for event in process_codex_file(path, session_id, proj_path, opts):
-                upsert_event(conn, event)
-                events_list.append(event)
+            events_list = list(
+                process_codex_file(path, session_id, proj_path, opts)
+            )
+            session = None
             if events_list:
                 timestamps = [e["timestamp"] for e in events_list if e.get("timestamp") is not None]
                 started_at = min(timestamps) if timestamps else mtime * 1000
@@ -176,7 +182,15 @@ def _ingest_codex(
                         else None
                     ),
                 }
-                upsert_session(conn, session)
+            else:
+                diagnostics = opts.get("diagnostics")
+                if diagnostics is not None:
+                    diagnostics["empty_sources"] = (
+                        diagnostics.get("empty_sources", 0) + 1
+                    )
+            replace_session_events(
+                conn, session, events_list, session_id=session_id
+            )
             conn.commit()
             total_events += len(events_list)
         except Exception as e:
@@ -191,7 +205,7 @@ def _ingest_codex(
         state = load_ingest_state(state_path)
         state[str(path.resolve())] = mtime
         save_ingest_state(state_path, state)
-        ingested += 1
+        ingested += int(bool(events_list))
     return ingested, total_events, failures
 
 
@@ -223,15 +237,15 @@ def _ingest_cursor(
         sessions_events: dict[str, list[dict]] = {}
         try:
             for session_id, event in process_cursor_db(db_path, proj_str, opts):
-                upsert_event(conn, event)
                 if session_id not in sessions_events:
                     sessions_events[session_id] = []
                 sessions_events[session_id].append(event)
+            sessions = {}
             for session_id, evs in sessions_events.items():
                 timestamps = [e["timestamp"] for e in evs if e.get("timestamp") is not None]
                 ts = min(timestamps) if timestamps else mtime * 1000
                 ts_end = max(timestamps) if timestamps else mtime * 1000
-                session = {
+                sessions[session_id] = {
                     "id": session_id,
                     "source": "Cursor",
                     "type": "IDE",
@@ -242,7 +256,16 @@ def _ingest_cursor(
                     "project_path": proj_str,
                     "metadata": None,
                 }
-                upsert_session(conn, session)
+            replace_source_sessions(
+                conn,
+                str(db_path.resolve()),
+                sessions,
+                [
+                    event
+                    for session_events in sessions_events.values()
+                    for event in session_events
+                ],
+            )
             conn.commit()
             total_events += sum(len(events) for events in sessions_events.values())
         except Exception as e:
@@ -288,10 +311,10 @@ def _ingest_cursor(
                         opts,
                         composer_ids=set(headers),
                     ):
-                        upsert_event(conn, event)
                         if session_id not in sessions_events:
                             sessions_events[session_id] = []
                         sessions_events[session_id].append(event)
+                    sessions = {}
                     for session_id, evs in sessions_events.items():
                         timestamps = [
                             e["timestamp"]
@@ -300,7 +323,7 @@ def _ingest_cursor(
                         ]
                         ts = min(timestamps) if timestamps else mtime * 1000
                         ts_end = max(timestamps) if timestamps else mtime * 1000
-                        session = {
+                        sessions[session_id] = {
                             "id": session_id,
                             "source": "Cursor",
                             "type": "IDE",
@@ -316,7 +339,16 @@ def _ingest_cursor(
                                 }
                             ),
                         }
-                        upsert_session(conn, session)
+                    replace_source_sessions(
+                        conn,
+                        str(global_db.resolve()),
+                        sessions,
+                        [
+                            event
+                            for session_events in sessions_events.values()
+                            for event in session_events
+                        ],
+                    )
                     conn.commit()
                     total_events += sum(
                         len(events) for events in sessions_events.values()
@@ -538,6 +570,7 @@ def run(args) -> int:
             "codess: ingest diagnostics: "
             f"malformed={diagnostics.get('malformed_records', 0)} "
             f"ignored={diagnostics.get('ignored_records', 0)} "
+            f"empty_sources={diagnostics.get('empty_sources', 0)} "
             f"failed_sources={diagnostics.get('failed_sources', 0)}",
             file=sys.stderr,
         )

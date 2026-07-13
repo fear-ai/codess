@@ -20,7 +20,9 @@ Material is ordered **outcomes → capabilities → audiences → traceable requ
 
 - **Inclusion:** Path exists; session data present; typically git root; not under backup/review dirs.
 - **Exclusion:** Invalid paths; slug-decode ambiguity; backup trees (`OLD`, `Save`); review dirs (CodingTools, MCPs, etc.).
-- **Filters:** `min_size`, optional future `min_events` / `min_duration` (CC/Codex); Cursor-specific filters TBD — see **CoPlan** backlog.
+- **Filters:** Scan supports source and recency filters. Ingest supports source
+  selection and a run-wide minimum source-file size; it does not define
+  vendor-specific event-count or duration thresholds.
 
 *Operational criteria imply CLI scan and configuration behavior in **CoPlan.md** (configuration §4, CLI §5).*
 
@@ -53,7 +55,7 @@ active backlog only if the product revives them.
 |------|--------|-----------------|
 | Multi-vendor inputs | CC projects dir, Codex `sessions`, Cursor `state.vscdb` | **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md** |
 | Normalized store | SQLite under `<project>/.codess/` | **CoSchema.md**, `sql/CoSchema.sql` |
-| Incremental ingest | mtime + state file; idempotent upsert | **CoPlan.md** §3.4, §5.2; **store** / adapters |
+| Incremental ingest | mtime state plus transactional source replacement | **CoPlan.md** §3.4, §5.2; **store** / adapters |
 | CLI & configuration | Flags, ENV, defaults, and root resolution | **CoPlan.md** §4–§5 |
 
 ---
@@ -139,7 +141,7 @@ Use this table to decide **where a change belongs** before editing.
 |------|------------|
 | adapter | Source-specific parser (CC, Codex, Cursor) |
 | event | Normalized record in our DB |
-| ingest | Read source → upsert into `.codess/` |
+| ingest | Read source → transactionally replace its normalized data in `.codess/` |
 | session | One conversation (varies by vendor; see vendor schema) |
 | slug | CC path encoding: `/Users/x/y` → `-Users-x-y` |
 | scan | Discover projects with vendor session data (CSV) |

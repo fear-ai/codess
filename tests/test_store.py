@@ -10,6 +10,8 @@ from codess.store import (
     save_ingest_state,
     should_ingest,
     connect,
+    replace_session_events,
+    replace_source_sessions,
     upsert_event,
     upsert_session,
 )
@@ -103,4 +105,98 @@ class TestUpsert:
         cur = conn.execute("SELECT COUNT(*) FROM events")
         n2 = cur.fetchone()[0]
         assert n1 == n2 == 1
+        conn.close()
+
+    def test_replace_session_removes_stale_events_and_rolls_back(self, tmp_path):
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        session = {
+            "id": "s1", "source": "Claude", "type": "Code",
+            "started_at": 1.0,
+        }
+        old_events = [
+            {"session_id": "s1", "event_id": str(i), "content": f"old-{i}"}
+            for i in (1, 2)
+        ]
+        replace_session_events(
+            conn, session, old_events, session_id="s1"
+        )
+        conn.commit()
+
+        replacement = [
+            {"session_id": "s1", "event_id": "1", "content": "new"}
+        ]
+        replace_session_events(
+            conn, session, replacement, session_id="s1"
+        )
+        assert [
+            tuple(row)
+            for row in conn.execute("SELECT event_id, content FROM events")
+        ] == [("1", "new")]
+        conn.rollback()
+        assert [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT event_id, content FROM events ORDER BY event_id"
+            )
+        ] == [("1", "old-1"), ("2", "old-2")]
+        conn.close()
+
+    def test_replace_empty_session_removes_previous_session(self, tmp_path):
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        session = {
+            "id": "s1", "source": "Codex", "type": "Code",
+            "started_at": 1.0,
+        }
+        replace_session_events(
+            conn,
+            session,
+            [{"session_id": "s1", "event_id": "1"}],
+            session_id="s1",
+        )
+        replace_session_events(conn, None, [], session_id="s1")
+        conn.commit()
+        assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+        conn.close()
+
+    def test_replace_source_removes_only_orphaned_sessions(self, tmp_path):
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        sessions = {
+            sid: {
+                "id": sid, "source": "Cursor", "type": "IDE",
+                "started_at": 1.0,
+            }
+            for sid in ("gone", "shared")
+        }
+        replace_source_sessions(
+            conn,
+            "/one.db",
+            sessions,
+            [
+                {"session_id": "gone", "event_id": "1", "source_file": "/one.db"},
+                {"session_id": "shared", "event_id": "1", "source_file": "/one.db"},
+            ],
+        )
+        replace_source_sessions(
+            conn,
+            "/two.db",
+            {"shared": sessions["shared"]},
+            [{"session_id": "shared", "event_id": "2", "source_file": "/two.db"}],
+        )
+        conn.commit()
+
+        replace_source_sessions(conn, "/one.db", {}, [])
+        conn.commit()
+        assert [
+            row[0] for row in conn.execute("SELECT id FROM sessions ORDER BY id")
+        ] == ["shared"]
+        assert [
+            row[0] for row in conn.execute("SELECT source_file FROM events")
+        ] == ["/two.db"]
         conn.close()

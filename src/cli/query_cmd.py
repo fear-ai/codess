@@ -47,7 +47,7 @@ def _open_query_scope(roots: list[Path]) -> tuple[QueryScope, list[Path]]:
                 conn = None
                 try:
                     conn = sqlite3.connect(
-                        f"file:{path.resolve()}?mode=ro", uri=True
+                        path.resolve().as_uri() + "?mode=ro", uri=True
                     )
                     conn.row_factory = sqlite3.Row
                     conn.execute("SELECT 1 FROM sessions LIMIT 1")
@@ -71,7 +71,8 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
     for store_index, store in enumerate(scope.stores):
         rows = store["conn"].execute(
             """
-            SELECT id, source, started_at, ended_at, project_path
+            SELECT id, source, release, started_at, ended_at,
+                   project_path, metadata
             FROM sessions
             """
         )
@@ -81,9 +82,11 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
                     "id": row["id"],
                     "query_id": (store_index, row["id"]),
                     "source": row["source"],
+                    "release": row["release"],
                     "started_at": row["started_at"],
                     "ended_at": row["ended_at"],
                     "project_path": row["project_path"],
+                    "metadata": row["metadata"],
                     "query_project": str(store["project_root"]),
                     "conn": store["conn"],
                 }
@@ -160,8 +163,11 @@ def run(args) -> int:
             return _permissions(scope)
         if args.task_review:
             return _task_review(scope)
+        if getattr(args, "lineage", False):
+            return _lineage(scope)
         print(
-            "Specify --tool, --sessions, -sess, --permissions, --task-review, --stats, or --taxonomy",
+            "Specify --tool, --sessions, -sess, --permissions, --task-review, "
+            "--lineage, --stats, or --taxonomy",
             file=sys.stderr,
         )
         return 1
@@ -366,22 +372,167 @@ def _sessions(scope: QueryScope, with_id: bool) -> int:
     if not rows:
         return 0
     if with_id:
-        print("id\tnum\tsource\tstarted_at\tended_at\tproject_path")
+        print("id\tnum\tsource\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for i, row in enumerate(rows, 1):
             project = row["project_path"] or row["query_project"]
+            details = _session_details(row["metadata"])
             print(
                 f"{sanitize_tabular(row['id'])}\t{i}\t"
-                f"{sanitize_tabular(row['source'])}\t{row['started_at']}\t"
+                f"{sanitize_tabular(row['source'])}\t"
+                f"{sanitize_tabular(row['release'])}\t{details}\t"
+                f"{row['started_at']}\t"
                 f"{row['ended_at']}\t{sanitize_tabular(project)}"
             )
     else:
-        print("id\tsource\tstarted_at\tended_at\tproject_path")
+        print("id\tsource\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for row in rows:
             project = row["project_path"] or row["query_project"]
+            details = _session_details(row["metadata"])
             print(
                 f"{sanitize_tabular(row['id'])}\t{sanitize_tabular(row['source'])}\t"
+                f"{sanitize_tabular(row['release'])}\t{details}\t"
                 f"{row['started_at']}\t{row['ended_at']}\t{sanitize_tabular(project)}"
             )
+    return 0
+
+
+def _json_metadata(raw) -> dict:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _session_details(raw) -> str:
+    metadata = _json_metadata(raw)
+    details = []
+    for key in ("originator", "source", "storage", "parent_session_id"):
+        if metadata.get(key) is not None:
+            details.append(f"{key}={metadata[key]}")
+    if metadata.get("is_sidechain"):
+        details.append("sidechain=true")
+    return sanitize_tabular(",".join(details))
+
+
+def _lineage_id(raw) -> str:
+    metadata = _json_metadata(raw)
+    return str(metadata.get("call_id") or metadata.get("tool_use_id") or "")
+
+
+def _lineage(scope: QueryScope) -> int:
+    """Print tool calls joined to results using vendor lineage identifiers."""
+    rows = []
+    for store_index, store in enumerate(scope.stores):
+        events = [
+            dict(row)
+            for row in store["conn"].execute(
+                """
+                SELECT session_id, event_id, event_type, subtype, tool_name,
+                       content_len, timestamp, metadata
+                FROM events
+                WHERE event_type = 'tool_call'
+                   OR subtype IN ('tool_result', 'permission_denied')
+                ORDER BY timestamp, id
+                """
+            )
+        ]
+        results: dict[tuple[str, str], list[dict]] = {}
+        unlinked_results = []
+        calls = []
+        for event in events:
+            lineage_id = _lineage_id(event["metadata"])
+            event["lineage_id"] = lineage_id
+            if event["event_type"] == "tool_call":
+                calls.append(event)
+            elif lineage_id:
+                results.setdefault(
+                    (event["session_id"], lineage_id), []
+                ).append(event)
+            else:
+                unlinked_results.append(event)
+
+        for call in calls:
+            key = (call["session_id"], call["lineage_id"])
+            matched = results.get(key, []) if call["lineage_id"] else []
+            result = matched.pop(0) if matched else None
+            call_metadata = _json_metadata(call["metadata"])
+            if result is None:
+                outcome = (
+                    "missing_result" if call["lineage_id"] else "unlinked_call"
+                )
+                result_len = ""
+            else:
+                outcome = (
+                    "permission_denied"
+                    if result["subtype"] == "permission_denied"
+                    else "result"
+                )
+                result_len = result["content_len"] or 0
+            rows.append({
+                "store_index": store_index,
+                "project": str(store["project_root"]),
+                "session_id": call["session_id"],
+                "timestamp": call["timestamp"],
+                "tool_name": call["tool_name"] or (
+                    result["tool_name"] if result else ""
+                ),
+                "lineage_id": call["lineage_id"],
+                "status": call_metadata.get("status", ""),
+                "outcome": outcome,
+                "result_len": result_len,
+            })
+
+        for remaining in results.values():
+            unlinked_results.extend(remaining)
+        for result in unlinked_results:
+            rows.append({
+                "store_index": store_index,
+                "project": str(store["project_root"]),
+                "session_id": result["session_id"],
+                "timestamp": result["timestamp"],
+                "tool_name": result["tool_name"] or "",
+                "lineage_id": result.get("lineage_id", ""),
+                "status": "",
+                "outcome": (
+                    "permission_denied"
+                    if result["subtype"] == "permission_denied"
+                    else "unlinked_result"
+                ),
+                "result_len": result["content_len"] or 0,
+            })
+
+    def sort_key(row: dict) -> tuple:
+        try:
+            timestamp = float(row["timestamp"])
+        except (TypeError, ValueError):
+            timestamp = float("inf")
+        return (
+            timestamp,
+            row["project"],
+            row["store_index"],
+            row["session_id"],
+            row["lineage_id"],
+        )
+
+    rows.sort(key=sort_key)
+    if not rows:
+        return 0
+    print(
+        "project_path\tsession_id\ttimestamp\ttool_name\tlineage_id\t"
+        "status\toutcome\tresult_len"
+    )
+    for row in rows:
+        print(
+            f"{sanitize_tabular(row['project'])}\t"
+            f"{sanitize_tabular(row['session_id'])}\t{row['timestamp']}\t"
+            f"{sanitize_tabular(row['tool_name'])}\t"
+            f"{sanitize_tabular(row['lineage_id'])}\t"
+            f"{sanitize_tabular(row['status'])}\t{row['outcome']}\t"
+            f"{row['result_len']}"
+        )
     return 0
 
 

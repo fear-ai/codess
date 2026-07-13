@@ -180,6 +180,29 @@ class TestGetCodexSessionFiles:
         )
         assert get_codex_session_files(project) == [transcript]
 
+    def test_active_session_wins_over_archived_duplicate(
+        self, tmp_path, monkeypatch
+    ):
+        active = tmp_path / "sessions"
+        archived = tmp_path / "archived_sessions"
+        active.mkdir()
+        archived.mkdir()
+        project = tmp_path / "project"
+        project.mkdir()
+        record = json.dumps({
+            "type": "session_meta",
+            "payload": {"id": "same-id", "cwd": str(project)},
+        }) + "\n"
+        active_file = active / "active.jsonl"
+        archived_file = archived / "archived.jsonl"
+        active_file.write_text(record)
+        archived_file.write_text(record)
+        monkeypatch.setattr("codess.project.CODEX_SESSIONS", active)
+        monkeypatch.setattr(
+            "codess.project.CODEX_ARCHIVED_SESSIONS", archived
+        )
+        assert get_codex_session_files(project) == [active_file]
+
 
 class TestGetCursorPaths:
     """get_cursor_workspace_dbs and get_cursor_global_db."""

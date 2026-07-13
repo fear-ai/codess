@@ -1,5 +1,9 @@
 # Claude Code background work and process cleanup
 
+**Scope:** This is an operational recovery note, not the Codess engineering
+backlog. Current work items, priorities, and delivery order live in
+**CoPlan.md §11**.
+
 Claude's task view and the operating-system process list track different state.
 
 | State | Inspect | Stop or update |

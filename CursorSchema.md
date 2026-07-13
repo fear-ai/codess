@@ -124,6 +124,10 @@ root. Project-level ingest filters global bubbles to composer headers mapped to
 the selected project's workspace ids. Archived and subagent flags are preserved
 in session metadata; unmapped composers are excluded.
 
+Re-ingesting a Cursor database replaces events whose `source_file` is that
+database. Sessions removed from the database are deleted only when no events
+from another Cursor source remain.
+
 ## 6. Read-only access
 
 Use SQLite read-only mode:

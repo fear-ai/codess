@@ -73,6 +73,25 @@ class TestGetSessionMeta:
 
 
 class TestProcessFile:
+    def test_modern_fixture_contract(self, tmp_path):
+        fixture = Path(__file__).parent / "fixtures" / "codex_modern.jsonl"
+        project = tmp_path / "project"
+        project.mkdir()
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(
+            fixture.read_text().replace("__PROJECT__", str(project))
+        )
+        session_id, cwd = get_session_meta(path)
+        events = list(process_file(path, session_id, cwd, {}))
+        assert session_id == "codex-modern"
+        assert len(events) == 8
+        assert [event["event_type"] for event in events].count("tool_call") == 3
+        assert [event["subtype"] for event in events].count("tool_result") == 2
+        assert {event["tool_name"] for event in events if event["tool_name"]} == {
+            "shell", "apply_patch", "web_search"
+        }
+        assert all(event["timestamp"] is not None for event in events)
+
     def test_user_and_assistant_messages_with_iso_timestamps(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
             f.write('{"type":"session_meta","payload":{"id":"s1","cwd":"/p"}}\n')

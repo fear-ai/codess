@@ -36,6 +36,11 @@ def _make_cursor_db(tmp_path: Path, bubbles: list[tuple[str, str, dict]]) -> Pat
     return db
 
 
+def _cursor_fixture() -> list[tuple[str, str, dict]]:
+    path = Path(__file__).parent / "fixtures" / "cursor_bubbles.json"
+    return [tuple(item) for item in json.loads(path.read_text())]
+
+
 class TestGetComposerData:
     """get_composer_data unit tests."""
 
@@ -388,6 +393,14 @@ class TestProcessDb:
         sids = [o[0] for o in out]
         assert sids.count("c1") == 2
         assert sids.count("c2") == 1
+
+    def test_representative_fixture_contract(self, tmp_path):
+        db = _make_cursor_db(tmp_path, _cursor_fixture())
+        events = list(process_db(db, "/project", {}))
+        assert len(events) == 4
+        assert [event[0] for event in events].count("composer-main") == 3
+        assert events[-1][0] == "composer-undated"
+        assert events[-1][1]["timestamp"] is None
 
     def test_process_db_sorts_by_timing(self, tmp_path):
         bubbles = [

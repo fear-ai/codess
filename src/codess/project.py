@@ -116,20 +116,28 @@ def get_codex_session_files(project_root: Path) -> list[Path]:
     """Return Codex JSONL files whose session_meta.cwd matches project. Empty if none."""
     project_root = project_root.resolve()
     project_str = str(project_root)
-    files = []
-    paths = (
-        path
-        for root in get_codex_session_roots()
-        if root.exists()
-        for path in root.rglob("*.jsonl")
-    )
-    for path in sorted(paths):
-        record = read_codex_session_meta(path)
-        payload = (record or {}).get("payload") or {}
-        cwd = payload.get("cwd") or ""
-        if cwd and (cwd == project_str or cwd.startswith(project_str + "/")):
-            files.append(path)
-    return files
+    selected: dict[str, tuple[tuple[int, float, str], Path]] = {}
+    for root_index, root in enumerate(get_codex_session_roots()):
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*.jsonl")):
+            record = read_codex_session_meta(path)
+            payload = (record or {}).get("payload") or {}
+            cwd = payload.get("cwd") or ""
+            if not cwd or not (
+                cwd == project_str or cwd.startswith(project_str + "/")
+            ):
+                continue
+            session_id = str(payload.get("id") or path.stem)
+            try:
+                negative_mtime = -path.stat().st_mtime
+            except OSError:
+                negative_mtime = 0
+            rank = (root_index, negative_mtime, str(path))
+            current = selected.get(session_id)
+            if current is None or rank < current[0]:
+                selected[session_id] = (rank, path)
+    return sorted((item[1] for item in selected.values()), key=str)
 
 
 def get_cursor_global_db() -> Path | None:
@@ -490,6 +498,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--task-review",
         action="store_true",
         help="query: Task/Web tool review block",
+    )
+    p.add_argument(
+        "--lineage",
+        action="store_true",
+        help="query: tool call/result lineage, status, and missing outcomes",
     )
     p.add_argument(
         "--stats",

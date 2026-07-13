@@ -279,6 +279,57 @@ def test_query_aggregates_permissions_and_task_review():
         assert "task 0" in tasks.stdout and "task 1" in tasks.stdout
 
 
+def test_query_lineage_and_session_metadata_report():
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        store = project / ".codess" / "sessions_codex.db"
+        init_db(store)
+        conn = sqlite3.connect(store)
+        conn.execute(
+            "INSERT INTO sessions "
+            "(id, source, type, release, started_at, metadata) "
+            "VALUES ('s1', 'Codex', 'Code', '1.2.3', 1, ?)",
+            (json.dumps({"originator": "codex_cli_rs", "source": "cli"}),),
+        )
+        conn.executemany(
+            "INSERT INTO events "
+            "(session_id, event_id, event_type, subtype, tool_name, "
+            "content_len, timestamp, metadata) "
+            "VALUES ('s1', ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "call-1", "tool_call", None, "shell", None, 1,
+                    json.dumps({"call_id": "lineage-1", "status": "completed"}),
+                ),
+                (
+                    "result-1", "user_message", "tool_result", "shell", 12, 2,
+                    json.dumps({"call_id": "lineage-1"}),
+                ),
+                (
+                    "call-2", "tool_call", None, "apply_patch", None, 3,
+                    json.dumps({"call_id": "lineage-2"}),
+                ),
+                (
+                    "orphan", "user_message", "tool_result", "Read", 5, 4,
+                    json.dumps({"tool_use_id": "orphan-id"}),
+                ),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        lineage = _run(["query", "--dir", str(project), "--lineage"])
+        sessions = _run(["query", "--dir", str(project), "--sessions"])
+
+        assert lineage.returncode == 0
+        assert "lineage-1\tcompleted\tresult\t12" in lineage.stdout
+        assert "lineage-2\t\tmissing_result" in lineage.stdout
+        assert "orphan-id\t\tunlinked_result\t5" in lineage.stdout
+        assert sessions.returncode == 0
+        assert "1.2.3" in sessions.stdout
+        assert "originator=codex_cli_rs,source=cli" in sessions.stdout
+
+
 def test_query_no_mode_exit_1():
     """Query without a mode flag exits 1."""
     with tempfile.TemporaryDirectory() as tmp:
