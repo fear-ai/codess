@@ -80,7 +80,7 @@ active backlog only if the product revives them.
 
 ### 4.0 Maintenance rules
 
-1. **Boundaries:** Use §4.1 before moving prose. Vendor on-disk facts live in **\*Schema.md**; normalized store in **CoSchema.md** + **`sql/CoSchema.sql`**; operator flags and ENV in **CoPlan.md** §5; implementation status, **verified wiring vs `src/`** (**§3.5–§3.6**), tests, and backlog in **CoPlan.md** (§8 Tests after code, §11 including §11.6 test work, §14–§15).
+1. **Boundaries:** Use §4.1 before moving prose. Vendor on-disk facts live in **\*Schema.md**; normalized store in **CoSchema.md** + **`sql/CoSchema.sql`**; operator flags and ENV in **CoPlan.md** §5; implementation status, **verified wiring vs `src/`** (**§3.5–§3.6**), tests, and backlog in **CoPlan.md** (§8 Tests after code, §11 including §11.5 test work, §14–§15).
 
    *Why one engineering doc owns this:* avoids split-brain between README, random markdown, and CoPlan; reviewers know where to look for “what’s left to do.”
 
@@ -98,7 +98,7 @@ active backlog only if the product revives them.
 
 8. **Cross-links:** Link to another section **only** when the reader would otherwise miss a dependency or duplicate content. Do **not** sprinkle “see §x” for every related topic.
 
-9. **Work items:** **All** actionable tasks, test work, and tracked issues belong in **CoPlan.md**: **§11** themed backlog tables (including **§11.6** testing), **§8** for strategy and module↔test map, **§14** for current and open decisions, **§15** for consolidated gap themes. **Why:** one queue for triage; **Codess** and **\*Schema** stay spec-only. Ordering and blockers: **§11** intro + row **Notes**, or **§14.2**.
+9. **Work items:** **All** actionable tasks, test work, and tracked issues belong in **CoPlan.md**: **§11** themed backlog tables (including **§11.5** testing), **§8** for strategy and module↔test map, **§14** for current and open decisions, **§15** for consolidated gap themes. **Why:** one queue for triage; **Codess** and **\*Schema** stay spec-only. Ordering and blockers: **§11** intro + row **Notes**, or **§14.2**.
 
 10. **Gaps and open items:** When listing an open question or gap, add enough for discussion: **background** (what broke or what we deferred), **options** with **pro/con**, and a **recommended direction** when the author has one. If undecided, say so explicitly.
 

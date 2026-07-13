@@ -220,7 +220,19 @@ class TestProcessFile:
         )
         events = list(process_file(path, "s1", "/p", {"redact": True}))
         assert events[0]["content"] == "safe [REDACTED]"
-        assert events[0]["subtype"] == "truncated"
+        assert events[0]["subtype"] == "turn_aborted"
+
+    def test_audit_fixture_contract(self, tmp_path):
+        fixture = Path(__file__).parent / "fixtures" / "codex_audit.jsonl"
+        project = tmp_path / "project"
+        project.mkdir()
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(fixture.read_text().replace("__PROJECT__", str(project)))
+        events = list(process_file(path, "codex-audit", str(project), {}))
+        assert [event["subtype"] for event in events] == [
+            "tool_failure", "turn_aborted"
+        ]
+        assert json.loads(events[0]["metadata"])["status"] == "failed"
 
     def test_slash_command(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:

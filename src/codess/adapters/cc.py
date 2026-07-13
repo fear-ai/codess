@@ -21,6 +21,12 @@ SKIP_TYPES = frozenset({
     "progress", "file-history-snapshot", "queue-operation", "last-prompt", "system",
 })
 
+PERMISSION_DENIAL_MARKERS = (
+    "permission for this tool use was denied",
+    "tool use was rejected",
+    "doesn't want to proceed with this tool use",
+)
+
 
 def iter_cc_records(
     path: Path,
@@ -59,6 +65,43 @@ def should_skip(record: dict) -> bool:
     if rtype in SKIP_TYPES:
         return True
     return False
+
+
+def _is_permission_denial(text: str) -> bool:
+    """Recognize explicit Claude denial text; other error results are failures."""
+    lowered = text.lower()
+    return any(marker in lowered for marker in PERMISSION_DENIAL_MARKERS)
+
+
+def _normalize_compaction(
+    record: dict,
+    line_num: int,
+    session_id: str,
+    source_file: str,
+) -> dict:
+    """Retain a compact boundary without its summary or token-accounting body."""
+    compact = record.get("compactMetadata") or {}
+    metadata = {"audit_kind": "context_compaction"}
+    if compact.get("trigger") is not None:
+        metadata["trigger"] = compact["trigger"]
+    return {
+        "session_id": session_id,
+        "event_id": str(line_num),
+        "event_type": "system_event",
+        "subtype": "context_compaction",
+        "role": "system",
+        "content": None,
+        "content_len": None,
+        "content_ref": None,
+        "tool_name": None,
+        "tool_input": None,
+        "tool_output": None,
+        "timestamp": _get_timestamp(record),
+        "file_path": None,
+        "source_file": source_file,
+        "metadata": json.dumps(metadata, separators=(",", ":")),
+        "source_raw": None,
+    }
 
 
 def extract_tool_input(tool_name: str, input_obj: dict) -> dict:
@@ -345,7 +388,14 @@ def normalize_user(
             text = str(content_val) if content_val else ""
             text = apply_sanitization(text, redact_enabled)
             truncated, content_len = truncate_content(text, TRUNCATE_TOOL_RESULT)
-            subtype = "permission_denied" if is_error else "tool_result"
+            if is_error:
+                subtype = (
+                    "permission_denied"
+                    if _is_permission_denial(text)
+                    else "tool_failure"
+                )
+            else:
+                subtype = "tool_result"
             events.append({
                 "session_id": session_id,
                 "event_id": _block_event_id(line_num, emitted_index),
@@ -380,6 +430,9 @@ def process_file(
     diagnostics = opts.get("diagnostics")
 
     for line_num, record, raw_line in iter_cc_records(path, diagnostics):
+        if record.get("type") == "system" and record.get("subtype") == "compact_boundary":
+            yield _normalize_compaction(record, line_num, session_id, source_file)
+            continue
         if should_skip(record):
             if diagnostics is not None:
                 diagnostics["ignored_records"] = (

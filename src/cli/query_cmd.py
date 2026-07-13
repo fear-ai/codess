@@ -108,9 +108,13 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
         )
 
     sessions.sort(key=sort_key)
-    if limit is not None and limit > 0:
+    if limit is not None:
         return sessions[:limit]
     return sessions
+
+
+def _limited(rows: list[dict], limit: int | None) -> list[dict]:
+    return rows if limit is None else rows[:limit]
 
 
 def _session_by_number(scope: QueryScope, n: int) -> dict | None:
@@ -127,6 +131,11 @@ def run(args) -> int:
     for msg in config_errors:
         print(f"codess: {msg}", file=sys.stderr)
     if config_errors:
+        return 1
+
+    limit = getattr(args, "limit", None)
+    if limit is not None and limit < 0:
+        print("codess: --limit must be >= 0", file=sys.stderr)
         return 1
 
     roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.PROJECT_ROOT)
@@ -156,18 +165,20 @@ def run(args) -> int:
         if getattr(args, "tool", None) is not None:
             return _tool_table(scope, args.tool)
         if args.sessions:
-            return _sessions(scope, getattr(args, "sess_id", False))
+            return _sessions(scope, getattr(args, "sess_id", False), limit)
         if getattr(args, "sess", None) is not None:
             return _show_session(scope, args.sess, getattr(args, "show", None))
         if args.permissions:
-            return _permissions(scope)
+            return _permissions(scope, limit)
         if args.task_review:
             return _task_review(scope)
         if getattr(args, "lineage", False):
-            return _lineage(scope)
+            return _lineage(scope, limit)
+        if getattr(args, "audit", False):
+            return _audit(scope, limit)
         print(
             "Specify --tool, --sessions, -sess, --permissions, --task-review, "
-            "--lineage, --stats, or --taxonomy",
+            "--lineage, --audit, --stats, or --taxonomy",
             file=sys.stderr,
         )
         return 1
@@ -216,10 +227,14 @@ def _taxonomy(_scope: QueryScope) -> int:
     print("  slash_command")
     print("  tool_result")
     print("  permission_denied")
+    print("  tool_failure")
     print("assistant_message")
     print("  response")
     print("  dialog")
     print("  truncated")
+    print("  turn_aborted")
+    print("system_event")
+    print("  context_compaction")
     return 0
 
 
@@ -328,9 +343,9 @@ def _show_session(scope: QueryScope, sess_num: int, show_modes: list | None) -> 
                     print(text)
                     print("```")
                     print()
-            elif subtype == "tool_result":
+            elif subtype in ("tool_result", "tool_failure"):
                 if show_tool:
-                    print(f"[tool_result] {sanitize_tabular(tool_name)}")
+                    print(f"[{subtype}] {sanitize_tabular(tool_name)}")
                     print(sanitize_for_display(content or "", 500))
                     print()
             elif subtype == "permission_denied":
@@ -366,9 +381,9 @@ def _show_session(scope: QueryScope, sess_num: int, show_modes: list | None) -> 
     return 0
 
 
-def _sessions(scope: QueryScope, with_id: bool) -> int:
+def _sessions(scope: QueryScope, with_id: bool, limit: int | None = None) -> int:
     """List sessions. with_id: number them (1=most recent)."""
-    rows = _get_sessions_ordered(scope)
+    rows = _get_sessions_ordered(scope, limit=limit)
     if not rows:
         return 0
     if with_id:
@@ -422,7 +437,7 @@ def _lineage_id(raw) -> str:
     return str(metadata.get("call_id") or metadata.get("tool_use_id") or "")
 
 
-def _lineage(scope: QueryScope) -> int:
+def _lineage(scope: QueryScope, limit: int | None = None) -> int:
     """Print tool calls joined to results using vendor lineage identifiers."""
     rows = []
     for store_index, store in enumerate(scope.stores):
@@ -434,7 +449,7 @@ def _lineage(scope: QueryScope) -> int:
                        content_len, timestamp, metadata
                 FROM events
                 WHERE event_type = 'tool_call'
-                   OR subtype IN ('tool_result', 'permission_denied')
+                   OR subtype IN ('tool_result', 'permission_denied', 'tool_failure')
                 ORDER BY timestamp, id
                 """
             )
@@ -465,11 +480,10 @@ def _lineage(scope: QueryScope) -> int:
                 )
                 result_len = ""
             else:
-                outcome = (
-                    "permission_denied"
-                    if result["subtype"] == "permission_denied"
-                    else "result"
-                )
+                outcome = {
+                    "permission_denied": "permission_denied",
+                    "tool_failure": "tool_failure",
+                }.get(result["subtype"], "result")
                 result_len = result["content_len"] or 0
             rows.append({
                 "store_index": store_index,
@@ -496,11 +510,10 @@ def _lineage(scope: QueryScope) -> int:
                 "tool_name": result["tool_name"] or "",
                 "lineage_id": result.get("lineage_id", ""),
                 "status": "",
-                "outcome": (
-                    "permission_denied"
-                    if result["subtype"] == "permission_denied"
-                    else "unlinked_result"
-                ),
+                "outcome": {
+                    "permission_denied": "permission_denied",
+                    "tool_failure": "tool_failure",
+                }.get(result["subtype"], "unlinked_result"),
                 "result_len": result["content_len"] or 0,
             })
 
@@ -518,6 +531,7 @@ def _lineage(scope: QueryScope) -> int:
         )
 
     rows.sort(key=sort_key)
+    rows = _limited(rows, limit)
     if not rows:
         return 0
     print(
@@ -643,7 +657,7 @@ def _task_review(scope: QueryScope) -> int:
     return 0
 
 
-def _permissions(scope: QueryScope) -> int:
+def _permissions(scope: QueryScope, limit: int | None = None) -> int:
     """Print permission_denied events."""
     rows = []
     for store in scope.stores:
@@ -661,9 +675,12 @@ def _permissions(scope: QueryScope) -> int:
     rows.sort(
         key=lambda row: (
             float(row["timestamp"]) if row["timestamp"] is not None else float("inf"),
+            row["project_path"],
             row["session_id"],
+            row["tool_name"] or "",
         )
     )
+    rows = _limited(rows, limit)
     if not rows:
         return 0
     print("session_id\tproject_path\ttimestamp\ttool_name")
@@ -672,5 +689,70 @@ def _permissions(scope: QueryScope) -> int:
             f"{sanitize_tabular(row['session_id'])}\t"
             f"{sanitize_tabular(row['project_path'])}\t"
             f"{row['timestamp']}\t{sanitize_tabular(row['tool_name'])}"
+        )
+    return 0
+
+
+def _audit(scope: QueryScope, limit: int | None = None) -> int:
+    """Print only normalized, evidence-backed audit events."""
+    rows = []
+    supported = (
+        "permission_denied",
+        "tool_failure",
+        "turn_aborted",
+        "context_compaction",
+    )
+    placeholders = ",".join("?" for _ in supported)
+    for store_index, store in enumerate(scope.stores):
+        cur = store["conn"].execute(
+            f"""
+            SELECT e.session_id, e.event_id, e.timestamp, e.subtype,
+                   e.tool_name, e.metadata, s.source
+            FROM events e
+            JOIN sessions s ON s.id = e.session_id
+            WHERE e.subtype IN ({placeholders})
+            """,
+            supported,
+        )
+        for row in cur:
+            item = dict(row)
+            item["project_path"] = str(store["project_root"])
+            item["store_index"] = store_index
+            rows.append(item)
+
+    def sort_key(row: dict) -> tuple:
+        try:
+            timestamp = float(row["timestamp"])
+        except (TypeError, ValueError):
+            timestamp = float("inf")
+        return (
+            timestamp,
+            row["project_path"],
+            row["store_index"],
+            row["session_id"],
+            row["event_id"],
+        )
+
+    rows.sort(key=sort_key)
+    rows = _limited(rows, limit)
+    if not rows:
+        return 0
+    print(
+        "project_path\tsession_id\tsource\ttimestamp\taudit_kind\t"
+        "tool_name\tdetail"
+    )
+    for row in rows:
+        metadata = _json_metadata(row["metadata"])
+        detail = ""
+        if row["subtype"] == "context_compaction":
+            detail = f"trigger={metadata.get('trigger', 'unknown')}"
+        elif metadata.get("status") is not None:
+            detail = f"status={metadata['status']}"
+        print(
+            f"{sanitize_tabular(row['project_path'])}\t"
+            f"{sanitize_tabular(row['session_id'])}\t"
+            f"{sanitize_tabular(row['source'])}\t{row['timestamp']}\t"
+            f"{row['subtype']}\t{sanitize_tabular(row['tool_name'])}\t"
+            f"{sanitize_tabular(detail)}"
         )
     return 0

@@ -1,0 +1,6 @@
+{"type":"assistant","uuid":"call-denied","timestamp":"2026-07-10T12:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-denied","name":"Edit","input":{"path":"README.md"}}]}}
+{"type":"user","uuid":"result-denied","parentUuid":"call-denied","timestamp":"2026-07-10T12:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-denied","content":"Permission for this tool use was denied. The tool use was rejected.","is_error":true}]}}
+{"type":"assistant","uuid":"call-failed","timestamp":"2026-07-10T12:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-failed","name":"Read","input":{"path":"missing.txt"}}]}}
+{"type":"user","uuid":"result-failed","parentUuid":"call-failed","timestamp":"2026-07-10T12:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-failed","content":"<tool_use_error>File does not exist.</tool_use_error>","is_error":true}]}}
+{"type":"system","subtype":"compact_boundary","uuid":"compact-1","timestamp":"2026-07-10T12:00:04Z","compactMetadata":{"trigger":"auto","preTokens":64000,"postTokens":8000,"durationMs":1200}}
+{"type":"user","isCompactSummary":true,"uuid":"summary-1","parentUuid":"compact-1","timestamp":"2026-07-10T12:00:04Z","message":{"role":"user","content":"summary body is not retained"}}

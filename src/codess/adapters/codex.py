@@ -140,6 +140,12 @@ def _metadata(payload: dict) -> str | None:
     return json.dumps(values, separators=(",", ":")) if values else None
 
 
+def _failed_status(payload: dict) -> bool:
+    return str(payload.get("status") or "").lower() in {
+        "failed", "failure", "error", "incomplete",
+    }
+
+
 def process_file(
     path: Path,
     session_id: str,
@@ -231,7 +237,7 @@ def process_file(
                     "session_id": session_id,
                     "event_id": str(line_num),
                     "event_type": "tool_call",
-                    "subtype": None,
+                    "subtype": "tool_failure" if _failed_status(payload) else None,
                     "role": "assistant",
                     "content": None,
                     "content_len": None,
@@ -323,7 +329,7 @@ def process_file(
                 "session_id": session_id,
                 "event_id": str(line_num),
                 "event_type": "assistant_message",
-                "subtype": "truncated",
+                "subtype": "turn_aborted",
                 "role": "assistant",
                 "content": truncated,
                 "content_len": content_len,

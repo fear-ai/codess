@@ -81,6 +81,11 @@ Fields relevant to normalization:
 | `toolResults` | Tool name and result payloads | Emitted as normalized tool-result events |
 | `codeBlocks`, `fileActions`, context fields | Product state and supporting content | Not normalized |
 
+Current verified bubble shapes do not expose stable permission decisions, a
+structured tool-failure flag, turn aborts, or context compaction boundaries.
+Cursor therefore contributes no `query --audit` rows; missing results or error-
+looking prose are not treated as audit evidence.
+
 The adapter uses parsed `createdAt` for sorting and event timestamps. Numeric
 fallback values are accepted only when they plausibly represent Unix seconds or
 milliseconds; small relative values are rejected.

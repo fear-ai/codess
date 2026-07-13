@@ -260,6 +260,12 @@ def test_query_aggregates_permissions_and_task_review():
             )
             conn.execute(
                 "INSERT INTO events "
+                "(session_id, event_id, event_type, subtype, tool_name, timestamp) "
+                "VALUES (?, 'failure', 'user_message', 'tool_failure', 'Read', ?)",
+                (f"s{index}", index + 1.5),
+            )
+            conn.execute(
+                "INSERT INTO events "
                 "(session_id, event_id, event_type, tool_name, tool_input, timestamp) "
                 "VALUES (?, 'task', 'tool_call', 'Task', ?, ?)",
                 (f"s{index}", json.dumps({"description": f"task {index}"}), index + 1),
@@ -269,11 +275,17 @@ def test_query_aggregates_permissions_and_task_review():
         root_args = ["--dir", str(roots[0]), "--dir", str(roots[1])]
 
         permissions = _run(["query", *root_args, "--permissions"])
+        audit = _run(["query", *root_args, "--audit", "--limit", "3"])
         tasks = _run(["query", *root_args, "--task-review"])
 
         assert permissions.returncode == 0
         assert str(roots[0].resolve()) in permissions.stdout
         assert str(roots[1].resolve()) in permissions.stdout
+        assert audit.returncode == 0
+        audit_rows = audit.stdout.strip().splitlines()
+        assert len(audit_rows) == 4  # header plus one global three-row window
+        assert "permission_denied" in audit.stdout
+        assert "tool_failure" in audit.stdout
         assert tasks.returncode == 0
         assert "Task\t2" in tasks.stdout
         assert "task 0" in tasks.stdout and "task 1" in tasks.stdout
@@ -313,6 +325,14 @@ def test_query_lineage_and_session_metadata_report():
                     "orphan", "user_message", "tool_result", "Read", 5, 4,
                     json.dumps({"tool_use_id": "orphan-id"}),
                 ),
+                (
+                    "call-3", "tool_call", None, "shell", None, 5,
+                    json.dumps({"call_id": "lineage-3"}),
+                ),
+                (
+                    "result-3", "user_message", "tool_failure", "shell", 9, 6,
+                    json.dumps({"call_id": "lineage-3"}),
+                ),
             ],
         )
         conn.commit()
@@ -320,14 +340,29 @@ def test_query_lineage_and_session_metadata_report():
 
         lineage = _run(["query", "--dir", str(project), "--lineage"])
         sessions = _run(["query", "--dir", str(project), "--sessions"])
+        limited_lineage = _run(
+            ["query", "--dir", str(project), "--lineage", "--limit", "1"]
+        )
+        zero_sessions = _run(
+            ["query", "--dir", str(project), "--sessions", "--limit", "0"]
+        )
 
         assert lineage.returncode == 0
         assert "lineage-1\tcompleted\tresult\t12" in lineage.stdout
         assert "lineage-2\t\tmissing_result" in lineage.stdout
         assert "orphan-id\t\tunlinked_result\t5" in lineage.stdout
+        assert "lineage-3\t\ttool_failure\t9" in lineage.stdout
         assert sessions.returncode == 0
         assert "1.2.3" in sessions.stdout
         assert "originator=codex_cli_rs,source=cli" in sessions.stdout
+        assert len(limited_lineage.stdout.strip().splitlines()) == 2
+        assert zero_sessions.stdout == ""
+
+
+def test_query_rejects_negative_limit():
+    r = _run(["query", "--limit", "-1", "--sessions"])
+    assert r.returncode == 1
+    assert "--limit must be >= 0" in r.stderr
 
 
 def test_query_no_mode_exit_1():

@@ -401,6 +401,10 @@ class TestProcessDb:
         assert [event[0] for event in events].count("composer-main") == 3
         assert events[-1][0] == "composer-undated"
         assert events[-1][1]["timestamp"] is None
+        assert not {
+            "permission_denied", "tool_failure", "turn_aborted",
+            "context_compaction",
+        } & {event[1]["subtype"] for event in events}
 
     def test_process_db_sorts_by_timing(self, tmp_path):
         bubbles = [

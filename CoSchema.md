@@ -55,8 +55,8 @@ is updated only after the database commit.
 | id | INTEGER | NOT NULL | PK autoincrement |
 | session_id | TEXT | NOT NULL | FK sessions(id) |
 | event_id | TEXT | NOT NULL | Stable vendor/adapter identifier; UNIQUE(session_id, event_id). Claude uses the line number for the first emitted block and `line:block` for additional blocks. |
-| event_type | TEXT | NULL | user_message, assistant_message, tool_call |
-| subtype | TEXT | NULL | prompt, slash_command, response, dialog, truncated, tool_result, permission_denied |
+| event_type | TEXT | NULL | user_message, assistant_message, tool_call, system_event |
+| subtype | TEXT | NULL | prompt, slash_command, response, dialog, truncated, tool_result, permission_denied, tool_failure, turn_aborted, context_compaction |
 | role | TEXT | NULL | user, assistant, system |
 | content | TEXT | NULL | Truncated |
 | content_len | INTEGER | NULL | Full length |
@@ -69,6 +69,24 @@ is updated only after the database commit.
 | source_file | TEXT | NULL | Raw path |
 | metadata | TEXT | NULL | JSON; Claude events retain record UUID/parent UUID/tool-use id, Codex calls retain call id/status, and Cursor sessions retain global/header classification |
 | source_raw | BLOB | NULL | Debug only |
+
+### Audit event contract
+
+`query --audit` reports only direct upstream evidence. Unsupported means the
+adapter emits no audit row; Codess does not infer a state from timing, missing
+results, prose similarity, or nearby records.
+
+| Audit state | Claude | Codex | Cursor |
+|---|---|---|---|
+| Permission request | Unsupported | Unsupported | Unsupported |
+| Permission decision | Explicit denial text on an error tool result → `permission_denied`; approvals are not emitted | Unsupported | Unsupported |
+| Tool failure | Error tool result that is not an explicit denial → `tool_failure` | Call record with structured status `failed`, `failure`, `error`, or `incomplete` → `tool_failure` | Unsupported |
+| Turn abort | Unsupported | `event_msg.turn_aborted` → `turn_aborted` | Unsupported |
+| Context compaction | `system` + `compact_boundary` → `context_compaction`; retain trigger only, not summary/token bodies | Unsupported | Unsupported |
+
+The report prints project, session, vendor, timestamp, audit kind, tool name,
+and a bounded structural detail such as status or compaction trigger. It does
+not print failure bodies or compacted summaries.
 
 ---
 

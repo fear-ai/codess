@@ -139,10 +139,19 @@ class TestNormalizeUser:
 
     def test_permission_denied(self):
         rec = {"message": {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "t1", "content": "denied", "is_error": True}
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "Permission for this tool use was denied.", "is_error": True}
         ]}}
         evs = normalize_user(rec, 1, "s1", "/f", {"t1": "Edit"}, {"redact": False})
         assert evs[0]["subtype"] == "permission_denied" and evs[0]["tool_name"] == "Edit"
+
+    def test_non_permission_error_is_tool_failure(self):
+        rec = {"message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "<tool_use_error>File missing.</tool_use_error>", "is_error": True}
+        ]}}
+        evs = normalize_user(rec, 1, "s1", "/f", {"t1": "Read"}, {"redact": False})
+        assert evs[0]["subtype"] == "tool_failure"
 
     def test_tool_result_content_as_list(self):
         rec = {"uuid": "result-record", "parentUuid": "call-record",
@@ -295,6 +304,26 @@ class TestProcessFile:
         assert json.loads(call["metadata"])["tool_use_id"] == "tool-read"
         assert json.loads(result["metadata"])["tool_use_id"] == "tool-read"
         assert call["tool_name"] == result["tool_name"] == "Read"
+
+    def test_audit_fixture_contract(self):
+        fixture = Path(__file__).parent / "fixtures" / "claude_audit.jsonl"
+        events = list(process_file(fixture, "audit", {"redact": False}))
+        audit = {
+            event["subtype"]: event
+            for event in events
+            if event["subtype"] in {
+                "permission_denied", "tool_failure", "context_compaction"
+            }
+        }
+        assert set(audit) == {
+            "permission_denied", "tool_failure", "context_compaction"
+        }
+        compact = audit["context_compaction"]
+        assert compact["content"] is None
+        assert json.loads(compact["metadata"]) == {
+            "audit_kind": "context_compaction", "trigger": "auto"
+        }
+        assert all("summary body" not in (event.get("content") or "") for event in events)
 
     def test_redaction_disables_raw_debug_capture(self, tmp_path):
         path = tmp_path / "session.jsonl"

@@ -69,10 +69,10 @@ Ingest adapter primarily uses:
 |--------|------|
 | `session_meta` | Supplies session identity/metadata; not emitted as an event |
 | `response_item.message` | Canonical user and assistant messages |
-| `response_item.function_call` / `custom_tool_call` | Tool calls with sanitized JSON input and call-id metadata |
+| `response_item.function_call` / `custom_tool_call` | Tool calls with sanitized JSON input and call-id metadata; structured failed/error/incomplete status becomes `tool_failure` |
 | `response_item.web_search_call` | `web_search` tool call with sanitized action metadata |
 | Matching call-output records | Tool results; call id restores the tool name |
-| `event_msg.turn_aborted` | Retained as a truncated/aborted assistant event |
+| `event_msg.turn_aborted` | Retained as a `turn_aborted` assistant audit event |
 | Other notifications, reasoning, token counts, snapshots, and turn context | Counted as ignored diagnostics, not duplicated as conversation events |
 
 Record timestamps accept Unix seconds, Unix milliseconds, and ISO 8601. Tool
@@ -104,6 +104,14 @@ call/result lineage is stored in event metadata through `call_id`.
   says the transcript format may change.
 - A valid transcript with no supported events removes its prior normalized
   session and is counted in the `empty_sources` diagnostic.
+
+### Parent-session evidence
+
+Current verified `session_meta` fixtures provide session id, working directory,
+release/provider/origin fields, but no stable parent-session identifier. Codess
+therefore does not infer parentage from timestamps, path proximity, active vs
+archived location, or similar content. The evidence-gathering procedure and
+acceptance criteria are in **CoPlan.md §11.1**.
 
 ---
 

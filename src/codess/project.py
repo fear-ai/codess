@@ -505,6 +505,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="query: tool call/result lineage, status, and missing outcomes",
     )
     p.add_argument(
+        "--audit",
+        action="store_true",
+        help="query: permission denials, tool failures, aborts, and compactions",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="query: globally limit rows for sessions, permissions, lineage, and audit",
+    )
+    p.add_argument(
         "--stats",
         action="store_true",
         help="query: session/event counts",

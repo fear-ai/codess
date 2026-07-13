@@ -224,16 +224,16 @@ Verification baseline is the full **`pytest tests/`** suite. **Validated** here 
 |------|-------------|-----------|------|
 | Scan (index-led) | Yes | CLI + `test_scan*`, metrics | Cursor time range covers header-indexed sessions only |
 | Ingest | Yes | Adapters, replacement/store integration, CLI | Transactional replacement, empty sources, active/archive deduplication, continue/fail-fast handling, and scoped global Cursor ingest are covered |
-| Query | Yes | CLI, store, scale tests | Read-only aggregation, global numbering, session origin details, and call/result lineage across project/vendor stores |
+| Query | Yes | CLI, store, scale tests | Read-only aggregation, global numbering, session origin details, lineage, evidence-backed audit rows, and globally bounded reports across project/vendor stores |
 | **`validate_config()`** | Yes | Unit and subprocess CLI tests | Applied consistently to scan, ingest, and query |
 | Store / DDL | Yes | `test_store` | — |
-| Sanitize | Yes | Sanitizer, adapter, helper, and CLI tests | Regex redaction is intentionally limited; enterprise PII detection remains open |
+| Sanitize | Yes | Sanitizer, adapter, helper, and CLI tests | Regex redaction is intentionally limited; enterprise PII scanning is explicitly postponed |
 
 **Completeness:** Main workflows, configuration validation, source replacement,
-cross-store query aggregation, and the current Claude/Codex lineage contract are
-covered. Remaining work is deliberately narrower: define useful audit events,
-bound large reports, and decide whether non-mutating ingest validation has a
-real operator workflow. See **§11** and **§15**.
+cross-store query aggregation, lineage, audit normalization/reporting, and
+bounded row reports are covered. The only active investigation is evidence for
+Codex parent-session linkage; speculative validation, machine output, and PII
+scanning are postponed. See **§11** and **§15**.
 
 ### 3.6 Verified wiring
 
@@ -248,7 +248,7 @@ Cross-checked against **`src/`** and **`tests/`** so this plan does not drift fr
 - **`project.py` module imports:** **`codess.config`** only at top level for the public CLI surface.
 - **`adapters/*`:** **no** imports of **`scan`**, **`scan_cmd`**, or **`ingest_cmd`**.
 - **Central registry (`ingested_projects.json`):** **`codess.registry_store`** merges per-project records. **Scan** always upserts **`scan`** / **`last_scan`** for every discovered project path into **`resolve_registry_directory(args)`** (default **`CODESS_REGISTRY`**). **`--registry PATH`** overrides that root and, when set, **also** filters CSV to paths present in the file **before** this run + appends **`reg_*`** columns — **no** sidecar. **Ingest** merges **`sources`** / **`last_ingestion`**. **Query `--stats`** merges **`query`** / **`last_query`** into the same file (**§5**).
-- **`validate_scan_source_for_cli` / scan `--source`:** invalid tokens → **stderr + exit 1** before any scan work (**global** invocation policy — **§11.6**, **§14**).
+- **`validate_scan_source_for_cli` / scan `--source`:** invalid tokens → **stderr + exit 1** before any scan work (**global** invocation policy — **§11.5**, **§14**).
 - **`store.init_db`:** executes **`sql/CoSchema.sql`** when that file exists (path resolved from **`store.py`** location).
 
 ---
@@ -350,7 +350,7 @@ command exits 1 before doing work.
 | `--dirs PATH` | — | — | File of work roots (§4.2). |
 | `--dir PATH` | — | — | Append root; repeatable. |
 | *(no dirs after merge)* | — | **`Path.cwd()`** | **Scan** only; see §4.2. |
-| `--source cc,codex,cursor` | — | all three | Comma-separated vendor subset; **order does not matter**. Tokens are compared case-insensitively after trim. **`all`** clears the filter (same as omitting **`--source`**). **Invalid token** (anything other than **`cc`**, **`codex`**, **`cursor`**, or the whole value **`all`**) is a **global** error: **stderr** message listing bad tokens and **exit 1** — no partial vendor set (**§11.6**). |
+| `--source cc,codex,cursor` | — | all three | Comma-separated vendor subset; **order does not matter**. Tokens are compared case-insensitively after trim. **`all`** clears the filter (same as omitting **`--source`**). **Invalid token** (anything other than **`cc`**, **`codex`**, **`cursor`**, or the whole value **`all`**) is a **global** error: **stderr** message listing bad tokens and **exit 1** — no partial vendor set (**§11.5**). |
 | `--out PATH` | — | `codess_walk.csv` | CSV path; **`write_csv`** creates **parent directories**. |
 | `--out -` | — | — | CSV to **stdout** (not **`write_csv`**). |
 | `--days N` | `CODESS_DAYS` | **`90`** | Recent window; omitted → **`CODESS_DAYS`**. |
@@ -382,16 +382,19 @@ command exits 1 before doing work.
 | `--dirs` / `--dir` | — | **`get_project_root()`** | Same merge as §4.2; empty → git root or cwd. |
 | *(multiple roots)* | — | aggregated | Sessions are globally ordered across selected projects. Roots without stores warn and contribute zero; all roots without stores exit 1. |
 | *(multiple vendor DBs)* | — | aggregated | Every existing legacy or per-vendor store returned by `get_project_stores` participates in one logical report. |
+| `--limit N` | — | unlimited | Globally limit rows after deterministic cross-project/vendor ordering for `--sessions`, `--permissions`, `--lineage`, and `--audit`. `0` emits no rows; negative values fail before stores are opened. |
 
 **Modes:** **`--stats`**, **`--sessions`**, **`--tool`**, **`-sess`**,
 **`--show`**, **`--permissions`**, **`--task-review`**, **`--lineage`**,
-and **`--taxonomy`**. Session numbers form one global recency order with
+**`--audit`**, and **`--taxonomy`**. Session numbers form one global recency order with
 deterministic project/source/id tie-breakers; duplicate original IDs remain
 distinct internally. Session rows include release and concise
 origin/storage/parent details. **`--lineage`** joins Claude tool-use ids and
 Codex call ids to results, and reports missing, orphaned, unlinked, or denied
 outcomes. **`--stats`** prints aggregate totals and merges each project's own
-counts into **`ingested_projects.json`**. Omitting all mode flags exits 1.
+counts into **`ingested_projects.json`**. **`--audit`** reports only the
+evidence-backed contract in **CoSchema.md**; unsupported vendor/state pairs are
+not inferred. Omitting all mode flags exits 1.
 
 ### 5.4 `--dirs` File Format
 
@@ -435,6 +438,7 @@ Further CLI semantics → **Improvement Backlog**.
 | Incremental ingest | `store.should_ingest`, state JSON | mtime keys updated after commit |
 | Source replacement | `store.replace_session_events`, `replace_source_sessions` | removes stale transcript/DB-owned events transactionally |
 | Tool lineage report | `query_cmd._lineage` | joins Claude/Codex ids; shows missing/orphan results |
+| Audit report | `query_cmd._audit` | direct denial/failure/abort/compaction evidence per CoSchema support matrix |
 | Redaction | `sanitize`, adapter opts | regex list in **config** |
 | Central registry JSON | **`registry_store`**, **`ingest_cmd._save_stats`**, **`scan_cmd`**, **`query_cmd._stats`**, **`config.get_stats_path`**, **`project.resolve_registry_directory`** | **`ingested_projects.json`** is a **merged** project registry: **scan** (index metrics), **ingest** (store **`sources`**), and **query `--stats`** (counts). **`--registry PATH`** overrides **`CODESS_REGISTRY`**; **no** bare **`--registry`**. |
 
@@ -503,10 +507,10 @@ Order work by risk and dependency.
 
 | Order | Outcome | Main work |
 |---|---|---|
-| **1. Stabilize the current release** | Replacement and lineage changes are reviewable as one coherent baseline | Review the diff, include the three vendor fixtures and scale tests, run the full suite, then commit |
-| **2. Define audit depth** | Product-state data is purposeful and comparable | Specify exact permission, failure, abort, and compaction questions before retaining more records |
-| **3. Bound reports** | Cross-project output remains predictable | Add a deterministic global row limit; add a machine format only with a named consumer and stable schema |
-| **4. Validate before ingest** | Operators can inspect a planned ingest without mutation | Design and implement `ingest --validate` only to the no-write contract in §11.3 |
+| **1. Audit and bounded reports — complete** | Evidence-backed audit rows and predictable output | Maintain the CoSchema support matrix, vendor fixtures, `query --audit`, and global `--limit` tests |
+| **2. Codex parentage investigation — next** | Parent links are trustworthy or explicitly unsupported | Follow the evidence and acceptance steps in §11.1; do not infer relationships |
+| **3. Compatibility maintenance** | Vendor drift is detected early | Refresh the smallest real-shape fixture when an upstream format changes |
+| **4. Postponed work** | Speculative surfaces stay out of the active queue | Restart validation, machine output, or PII scanning only on the triggers in §11.2 |
 
 Keep **`sql/CoSchema.sql`** aligned with **CoSchema.md** whenever normalized event shapes change.
 
@@ -523,45 +527,54 @@ Vendor-specific **known holes** are documented in schema files, not duplicated h
 
 ## 11. Improvement Backlog
 
-**Immediate order:** (1) finish and commit the current tested change set; (2)
-define the cross-vendor audit contract; (3) implement a global query row limit;
-(4) evaluate the no-write ingest validation workflow. Structured output and
-additional vendor records remain conditional on a concrete consumer.
+**Immediate order:** perform the bounded Codex parent-session evidence
+investigation in §11.1, then either implement a direct identifier or record the
+feature as unsupported. Audit normalization/reporting and global query limits
+are implemented. The items in §11.2 are intentionally postponed.
 
 For each item: settle any product contract, change code and schema docs together,
 then add representative tests in the same change set.
 
 Work items stay grouped by theme below. **Codess.md §4.0** requires **all** tickets to live here or in **§8** / **§14** / **§15** as specified there.
 
-### 11.1 Audit events and vendor depth
+### 11.1 Codex parent-session evidence — next
 
-| Item | P | Depends on | Notes |
-|------|---|------------|-------|
-| **Cross-vendor audit contract** | 1 | Named report questions | Define normalized evidence for permission request/decision, tool failure, turn abort, and context compaction. Document unsupported vendor/event combinations explicitly; do not retain reasoning or token bodies. |
-| **Audit fixtures and report** | 1 | Audit contract | Add the smallest real-shape Claude, Codex, and Cursor fixtures that exercise supported mappings, then expose one read-only report with missing/unsupported states visible. |
-| **Codex parent-session evidence** | 2 | Stable upstream identifier | Inventory modern transcript metadata for a reliable parent id. Implement parentage only if the source supplies one; never infer it from time or directory proximity. |
+Current verified Codex `session_meta` data has no parent id. Investigate without
+changing normalized data until all acceptance checks pass:
 
-### 11.2 Query and reporting
+1. Read only `session_meta` keys from a bounded sample spanning active and
+   archived roots and at least two CLI releases; record field frequencies, not
+   prompt/reasoning bodies.
+2. List candidate direct fields such as `parent_session_id`, `parent_id`, or an
+   explicit thread/fork reference. Timestamps, cwd, filenames, and content
+   similarity are not candidates.
+3. For each candidate, verify that child values resolve to an actual session id
+   and remain stable when the same session appears in active and archived roots.
+4. Add minimal parent/child and orphan fixtures from each supported shape.
+5. Only then retain `parent_session_id` in bounded session metadata, display it
+   through existing session details, and test active/archive deduplication plus
+   missing-parent behavior.
 
-| Item | P | Depends on | Notes |
-|------|---|------------|-------|
-| **Global report limit** | 1 | Existing deterministic merge order | Add `query --limit N` to row-producing reports. Apply the limit after cross-project/vendor ordering, reject negative values, and test single- and multi-store behavior. |
-| **Machine-readable rows** | 2 | Named automation consumer + stable field contract | Prefer JSON Lines if needed. Keep tabular output as the default and verify parity with the bounded report rows. Do not add a format flag speculatively. |
+**Exit rule:** if no direct referential identifier appears across the sample,
+document Codex parentage as unsupported and stop. Reopen only when an upstream
+record supplies such an identifier.
 
-### 11.3 Ingest and store
+### 11.2 Postponed work
 
-| Item | P | Depends on | Notes |
-|------|---|------------|-------|
-| **`ingest --validate` preflight** | 2 | Operator workflow agreed | Parse selected sources and print planned session/event counts plus diagnostics, but create or modify no `.codess` DB, ingest state, or central registry. Return nonzero for invalid configuration/source selection and honor normal root/source/min-size policy. |
+| Item | Status | Restart trigger | Contract if restarted |
+|------|--------|-----------------|-----------------------|
+| **`ingest --validate` preflight** | Postponed | A named operator workflow needs to answer “what would ingest change?” before mutation | Parse selected sources and report planned counts/diagnostics without creating or modifying `.codess`, ingest state, or registry. |
+| **Machine-readable query rows** | Postponed | A named automation consumer accepts a versioned row schema | Prefer JSON Lines, preserve tabular default, and verify exact parity with `--limit` output. |
+| **Enterprise PII/secret scanner** | Postponed | A deployment threat model shows configured regex redaction is insufficient | Choose scanner, false-positive policy, and storage/output boundaries before adding a dependency. |
 
-### 11.4 Platform
+### 11.3 Platform
 
 | Choice | Decision |
 |--------|----------|
 | Store | SQLite |
 | Location | `<project>/.codess/` |
 
-### 11.5 Content and sanitize policy
+### 11.4 Content and sanitize policy
 
 The policy separates normalized storage from output formatting. Vendor text may
 contain Markdown, HTML-like tags, source code, or SQL. Codess preserves those
@@ -572,7 +585,7 @@ strings as content; it does not guess that markup is executable or strip it.
 | Ingested text | Normalize CR/LF, remove ANSI escapes and C0/C1 terminal controls except tab/newline, then apply optional configured regex redaction. |
 | Claude tool input | Apply the same policy recursively to retained JSON-like values before serialization. |
 | Debug raw bytes | Retain the bounded raw line only when debug is enabled **and redaction is disabled**. |
-| Structured query output | Preserve useful line breaks in prompts/responses; sanitize and bound individual tool-result and tool-input displays. |
+| Multi-line query display | Preserve useful line breaks in prompts/responses; sanitize and bound individual tool-result and tool-input displays. |
 | Tabular terminal output | Remove controls and replace tabs/newlines with spaces so a stored value cannot add rows or columns. |
 | CSV | Use Python's `csv.writer` for quoting/newlines and prefix risky **string** cells with a tab when the first character could trigger a spreadsheet formula (`= + - @`, full-width variants, tab, CR, or LF). Numeric values retain their type. |
 
@@ -583,11 +596,11 @@ The implementation follows the threat categories in
 and the serialization behavior in the
 [Python `csv` documentation](https://docs.python.org/3/library/csv.html).
 
-The remaining open policy choice is whether enterprise deployments need a
-dedicated PII/secret scanner beyond the configured regex list. That is a product
-decision, not a missing baseline sanitizer.
+Enterprise PII/secret scanning is postponed under **§11.2**. Configured regex
+redaction remains the baseline until a deployment threat model provides a
+restart trigger.
 
-### 11.6 Testing and validation work
+### 11.5 Testing and validation work
 
 **Contract:** **Scan `--source`** invalid tokens and **ingest `--source`** invalid token are both **global** errors (**stderr + exit 1** for that invocation) — not per-root or per-session partial apply (**§14**).
 
@@ -597,7 +610,7 @@ missing/empty/all-invalid directory lists, environment boolean parsing,
 symlink-root resolution, and Cursor header-time coverage. Add new rows here only
 for a specific uncovered contract or reproduced defect.
 
-### 11.7 Deferred until CoSchema.md revisit
+### 11.6 Deferred until CoSchema.md revisit
 
 | Item | Notes |
 |------|--------|
@@ -632,9 +645,9 @@ context, viable options, and a recommendation when one is available.
 
 | Topic | Current decision | Implementation / owner |
 |---|---|---|
-| Scan source validation | Unknown `--source` tokens fail the invocation with stderr and exit 1. | `validate_scan_source_for_cli`, `scan_cmd`, §5.1, §11.6 |
+| Scan source validation | Unknown `--source` tokens fail the invocation with stderr and exit 1. | `validate_scan_source_for_cli`, `scan_cmd`, §5.1, §11.5 |
 | Central registry | Scan always upserts index metrics. Explicit `--registry PATH` also filters output to paths already present and adds `reg_*` columns. Ingest merges sources; query stats merges query data. | `registry_store`, command modules, registry tests |
-| Query SQL | Keep SQL embedded in `query_cmd` until CoSchema and the query surface are redesigned. | §11.7 |
+| Query SQL | Keep SQL embedded in `query_cmd` until CoSchema and the query surface are redesigned. | §11.6 |
 | Global Cursor ingest | Import only composers whose `composerHeaders.workspaceId` maps to the selected project. Preserve archived and subagent flags as metadata. Exclude unmapped composers. | Cursor adapter, project helpers, ingest integration tests |
 | Cursor scan timestamps | Use header timestamps and report header/time coverage in debug output. Do not decode large bubble payloads during index-led scan merely to fill missing dates. | Cursor adapter, scan debug output, CursorSchema §5–§7 |
 | Discovery | Keep scan index-led. `--dir` / `--dirs` are path filters, not traversal requests; there is no recursion CLI. | `scan`, root resolution, §3.0–§3.3 |
@@ -644,14 +657,14 @@ context, viable options, and a recommendation when one is available.
 | Empty sources | A valid empty transcript removes its stale normalized session and records a nonfatal `empty_sources` diagnostic. | `ingest_cmd`, replacement tests |
 | Codex duplicate sources | When the same session exists in active and archived trees, ingest one canonical source rather than duplicating the session. | Codex discovery/ingest tests |
 | Report formats | Human-readable tabular output remains the default. Machine-readable output is not a contract until a consumer and stable row schema are defined. | §11.2 |
+| Audit events | Normalize only direct evidence in the CoSchema support matrix. Claude supplies explicit denials/failures and compact boundaries; Codex supplies failed call status and turn aborts; current Cursor shapes supply none. | adapters, `query --audit`, vendor fixtures |
+| Query row limit | Apply `--limit` after deterministic global ordering for sessions, permissions, lineage, and audit reports. Zero emits no rows; negative values fail before store access. | `query_cmd`, CLI tests |
 
 ### 14.2 Open decisions
 
-These choices remain open:
-
-- **Enterprise redaction / PII:** whether to integrate third-party scanners vs regex-only (**§11.5**).
-- **Audit event coverage:** which permission, failure, abort, and compaction
-  states have a stable cross-vendor meaning and a report use (**§11.1**).
+The only active evidence decision is Codex parent-session support (**§11.1**).
+Validation, machine-readable output, and enterprise PII scanning are postponed
+with explicit restart triggers in **§11.2**.
 
 ---
 
@@ -661,7 +674,5 @@ These choices remain open:
 
 | Theme | Open questions | Recommendation (lean) | Justification |
 |-------|----------------|----------------------|---------------|
-| **Audit coverage** | Which vendor records reliably represent permission decisions, tool failure, abort, and compaction? | Define the report questions and unsupported states first; then add only the required normalized evidence. | Avoids retaining opaque internal state or presenting vendor-specific events as equivalent when they are not. |
-| **Query bounds** | Which row-producing reports need a limit, and does an automation consumer require JSON Lines? | Implement one deterministic global limit first; defer format expansion until its row schema has a consumer. | Ingest scale is tested, while unbounded terminal output is the immediate usability risk. |
-| **Validation** | Does an operator need a safe answer to “what would this ingest change?” | If yes, implement the strict no-write preflight in §11.3; otherwise remove the item. | A dry run is useful only when its mutation boundary and output answer a real workflow. |
-| **Content policy** | Whether regex redaction is sufficient for enterprise PII/secrets. | Keep the current explicit policy; add a scanner only for a defined deployment requirement. | Avoids silent content loss and a heavy dependency without a concrete threat model. |
+| **Codex parentage** | Does a modern transcript expose a direct, referential parent-session id across releases and active/archive storage? | Run the bounded §11.1 inventory; implement only if every acceptance check passes. | Prevents plausible-looking but false parent links based on time, path, or content. |
+| **Postponed surfaces** | Has a named operator, automation consumer, or deployment threat model triggered validation, JSON Lines, or PII scanning? | Keep all three postponed until their documented trigger exists. | Avoids speculative CLI/schema/dependency commitments. |

@@ -77,12 +77,15 @@ Common record-envelope fields include `sessionId`, `uuid`, `parentUuid`,
 `timestamp`, `cwd`, `gitBranch`, `version`, and `isSidechain`. Field presence
 varies by record type.
 
-The current adapter emits normalized events only from `user` and `assistant`
-records. Product-state records are skipped or ignored, even when a `system`
-record contains content. Each emitted content block has a distinct stable event
-id. Event metadata retains `uuid` / `parentUuid`; tool calls and their results
-also retain the shared tool-use id, making record and call/result lineage
-queryable without copying the full envelope. Task-list metadata under
+The current adapter emits conversation events from `user` and `assistant`
+records and one bounded product-state event from `system` records with subtype
+`compact_boundary`. It retains the compaction trigger but not compacted summary
+or token-accounting bodies. Error tool results are split into explicit
+`permission_denied` evidence and other `tool_failure` results. Each emitted
+content block has a distinct stable event id. Event metadata retains `uuid` /
+`parentUuid`; tool calls and their results also retain the shared tool-use id,
+making record and call/result lineage queryable without copying the full
+envelope. Task-list metadata under
 `~/.claude/tasks/` is separate from transcript JSONL and from live background
 processes.
 
@@ -132,8 +135,8 @@ supported events, Codess removes the prior normalized session and reports an
 
 | Gap | Detail |
 |-----|--------|
-| Product-state coverage | Mode, permission, attachment, snapshot, title, queue, and system records are not normalized; decide which are required for audits before extending CoSchema. |
-| Runtime-context snapshots | Memory, skills, tool schemas, instructions, compaction, and token usage need a separate model if context analysis becomes a goal; message events cannot represent them faithfully. |
+| Product-state coverage | Compaction boundaries are normalized narrowly. Mode, permission-mode, attachment, snapshot, title, queue, and other system records remain unsupported. |
+| Runtime-context snapshots | Memory, skills, tool schemas, instructions, compaction summaries, and token usage need a separate model if context analysis becomes a goal; audit events do not represent runtime context faithfully. |
 
 ---
 
