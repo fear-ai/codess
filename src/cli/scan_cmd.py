@@ -9,6 +9,7 @@ from pathlib import Path
 
 from codess.config import get_stats_path
 from codess.helpers import write_csv
+from codess.sanitize import protect_csv_row
 from codess.project import (
     RootsWhenEmpty,
     build_scan_run_options,
@@ -47,12 +48,30 @@ def _load_registry_map(registry_root: Path) -> tuple[dict[str, dict] | None, str
     return m, None
 
 
+def _print_scan_diagnostics(diagnostics: dict) -> None:
+    counts = {
+        "malformed": diagnostics.get("malformed_sources", 0),
+        "invalid_keys": diagnostics.get("invalid_keys", 0),
+        "failed_sources": diagnostics.get("failed_sources", 0),
+        "failed_roots": diagnostics.get("failed_roots", 0),
+    }
+    if any(counts.values()):
+        print(
+            "codess: scan diagnostics: "
+            + " ".join(f"{key}={value}" for key, value in counts.items()),
+            file=sys.stderr,
+        )
+
+
 def run(args) -> int:
     """Run codess scan. Returns exit code."""
     from codess.config import validate_config
 
-    for msg in validate_config():
+    config_errors = validate_config()
+    for msg in config_errors:
         print(f"codess: {msg}", file=sys.stderr)
+    if config_errors:
+        return 1
 
     src_err = validate_scan_source_for_cli(getattr(args, "source", None))
     if src_err:
@@ -65,11 +84,16 @@ def run(args) -> int:
         return 1
 
     opts = build_scan_run_options(args)
+    if opts.recent_days is not None and opts.recent_days < 0:
+        print("codess: --days must be >= 0 (0 means all time)", file=sys.stderr)
+        return 1
     merged: list[tuple[str, dict]] = []
     seen_paths: set[str] = set()
     had_error = False
+    diagnostics: dict = {}
 
     for work_root in roots:
+        failures_before = diagnostics.get("failed_sources", 0)
         try:
             rows = run_scan(
                 work_root,
@@ -77,13 +101,21 @@ def run(args) -> int:
                 recent_days=opts.recent_days,
                 debug=opts.debug,
                 subagent=opts.subagent,
+                diagnostics=diagnostics,
             )
         except Exception:
             log.exception("Scan failed for work root %s", work_root)
+            diagnostics["failed_roots"] = diagnostics.get("failed_roots", 0) + 1
             had_error = True
             if opts.stop_on_error:
+                _print_scan_diagnostics(diagnostics)
                 return 1
             continue
+        if diagnostics.get("failed_sources", 0) > failures_before:
+            had_error = True
+            if opts.stop_on_error:
+                _print_scan_diagnostics(diagnostics)
+                return 1
         for r in rows:
             full = str((work_root / r["path"]).resolve())
             if full not in seen_paths:
@@ -150,7 +182,7 @@ def run(args) -> int:
                         json.dumps(sources, separators=(",", ":")),
                     ]
                 )
-            w.writerow(row)
+            w.writerow(protect_csv_row(row))
     else:
         headers = (
             ["path", "dir_path", "vendor", "sess", "mb", "span_weeks"]
@@ -180,4 +212,5 @@ def run(args) -> int:
         write_csv(Path(out_path), data, headers=headers)
         print(f"Wrote {len(merged)} rows to {out_path}")
 
+    _print_scan_diagnostics(diagnostics)
     return 1 if had_error else 0

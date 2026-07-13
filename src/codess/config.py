@@ -6,6 +6,21 @@ import re
 from pathlib import Path
 
 
+_CONFIG_ERRORS: list[str] = []
+
+
+def env_int(key: str, default: int) -> int:
+    """Read an integer env value without making module import fail."""
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        _CONFIG_ERRORS.append(f"{key}={raw!r} must be an integer")
+        return default
+
+
 def env_bool(key: str, default: str = "0") -> bool:
     """True if env ``key`` is ``1`` / ``true`` / ``yes`` (case-insensitive); else false."""
     return os.environ.get(key, default).lower() in ("1", "true", "yes")
@@ -18,8 +33,19 @@ DEFAULT_WORK = Path.home() / "Work"
 CC_PROJECTS = Path(
     os.environ.get("CODESS_CC_PROJECTS", str(Path.home() / ".claude" / "projects"))
 )
+_CODEX_SESSIONS_OVERRIDE = os.environ.get("CODESS_CODEX_SESSIONS")
 CODEX_SESSIONS = Path(
-    os.environ.get("CODESS_CODEX_SESSIONS", str(Path.home() / ".codex" / "sessions"))
+    _CODEX_SESSIONS_OVERRIDE or str(Path.home() / ".codex" / "sessions")
+)
+_CODEX_ARCHIVED_OVERRIDE = os.environ.get("CODESS_CODEX_ARCHIVED_SESSIONS")
+CODEX_ARCHIVED_SESSIONS: Path | None = (
+    Path(_CODEX_ARCHIVED_OVERRIDE)
+    if _CODEX_ARCHIVED_OVERRIDE
+    else (
+        None
+        if _CODEX_SESSIONS_OVERRIDE
+        else Path.home() / ".codex" / "archived_sessions"
+    )
 )
 
 
@@ -54,16 +80,7 @@ EXCLUDE_REVIEW_DIRS = (
     "Spank/sOSS",
     "Claude/Claudes",
 )
-CODESS_DAYS = int(os.environ.get("CODESS_DAYS", "90"))
-
-# --- Recursion exclude (case-insensitive) ---
-# Dirname skip: `helpers.should_skip_recurse` also skips any name starting with "." (covers .git, .venv, …).
-EXCLUDE_RECURSE = frozenset({
-    "node_modules", "__pycache__",
-    "build", "debug", "release", "test", "tests",
-    "doc", "docs", "bin", "lib", "libs", "var", "log", "logs",
-    "env", "venv", "OLD", "Save",
-})
+CODESS_DAYS = env_int("CODESS_DAYS", 90)
 
 # --- Store layout ---
 STORE_DIR = ".codess"
@@ -80,14 +97,11 @@ REGISTRY = Path(os.environ.get("CODESS_REGISTRY", str(Path.home() / ".codess")))
 # --- CLI / logging ---
 VERBOSE = env_bool("CODESS_VERBOSE")
 
-# --- Scan (walk / recursion; flag not yet passed through run_scan — see scan_cmd) ---
-NOREC = env_bool("CODESS_NOREC")
-
 # --- Debug ---
 DEBUG = env_bool("CODESS_DEBUG")
 
 # --- Ingest ---
-MIN_SIZE = int(os.environ.get("CODESS_MIN_SIZE", str(20 * 1024)))  # 20 KB
+MIN_SIZE = env_int("CODESS_MIN_SIZE", 20 * 1024)  # 20 KB
 FORCE = env_bool("CODESS_FORCE")
 
 # --- Subagent (CC scan) ---
@@ -134,22 +148,31 @@ def get_state_path(project_root: Path) -> Path:
 def get_stats_path(registry_root: Path | None = None) -> Path:
     """Return path to ``ingested_projects.json`` — merged project registry.
 
-    Updated by **scan** (index metrics), **ingest** (store counts), **query** (e.g. ``--stats``),
-    and (when wired) **walk** via ``codess.registry_store``.
+    Updated by **scan** (index metrics), **ingest** (store counts), and **query**
+    (for example, ``--stats``) via ``codess.registry_store``.
     """
     root = registry_root if registry_root is not None else REGISTRY
     return root / STATS_FILE
 
 
 def validate_config() -> list[str]:
-    """Return list of validation warnings/errors. Empty if ok."""
-    errs = []
-    if CODESS_DAYS < 1 or CODESS_DAYS > 3650:
-        errs.append(f"CODESS_DAYS={CODESS_DAYS} out of range [1, 3650]")
+    """Return configuration errors. Empty if configuration is usable."""
+    errs = list(_CONFIG_ERRORS)
+    if CODESS_DAYS < 0 or CODESS_DAYS > 3650:
+        errs.append(f"CODESS_DAYS={CODESS_DAYS} out of range [0, 3650]")
     if MIN_SIZE < 0:
         errs.append(f"CODESS_MIN_SIZE={MIN_SIZE} must be >= 0")
     if not CC_PROJECTS.is_absolute():
         errs.append(f"CODESS_CC_PROJECTS must be absolute: {CC_PROJECTS}")
+    if not CODEX_SESSIONS.is_absolute():
+        errs.append(f"CODESS_CODEX_SESSIONS must be absolute: {CODEX_SESSIONS}")
+    if CODEX_ARCHIVED_SESSIONS is not None and not CODEX_ARCHIVED_SESSIONS.is_absolute():
+        errs.append(
+            "CODESS_CODEX_ARCHIVED_SESSIONS must be absolute: "
+            f"{CODEX_ARCHIVED_SESSIONS}"
+        )
+    if not CURSOR_DATA.is_absolute():
+        errs.append(f"CODESS_CURSOR_DATA must be absolute: {CURSOR_DATA}")
     return errs
 
 

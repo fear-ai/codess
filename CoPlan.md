@@ -12,18 +12,18 @@
 | [§5](#5-cli-and-runtime-contract) | CLI and Runtime Contract |
 | [§6](#6-feature--implementation-map) | Feature → Implementation Map |
 | [§7](#7-coding-techniques) | Coding Techniques |
-| [§8](#8-testing-strategy) | Testing Strategy |
-| [§9](#9-delivery-phases) | Delivery Phases |
+| [§8](#8-tests) | Tests |
+| [§9](#9-delivery-sequence) | Delivery Sequence |
 | [§10](#10-implementation-gaps) | Implementation Gaps |
 | [§11](#11-improvement-backlog) | Improvement Backlog |
-| [§12](#12-documentation-and-change-rules) | Documentation and Change Rules |
+| [§12](#12-change-routing) | Change Routing |
 | [§13](#13-optional-splits) | Optional Splits |
-| [§14](#14-open-questions-and-resolved-decisions) | Open Questions + Resolved Decisions |
+| [§14](#14-decisions) | Decisions |
 | [§15](#15-consolidated-engineering-gaps-discussion-brief) | Consolidated Engineering Gaps (discussion) |
 
 ### Scope
 
-Repository tree; architecture (call graph, data pipelines, persistence); configuration (what, why, how); CLI contract (flags, ENV, defaults); feature → module index; coding practices; test strategy; delivery phases; backlog, status, and review queue.
+Repository tree; architecture (call graph, data pipelines, persistence); configuration (what, why, how); CLI contract (flags, ENV, defaults); feature → module index; coding practices; test strategy; delivery sequence; backlog, status, and review queue.
 
 ### Not Here
 
@@ -36,7 +36,7 @@ Per **Codess.md §4.1** (verbatim):
 | Topic | Document |
 |-------|----------|
 | Why the product exists; audience; this index | **Codess.md** |
-| Repository layout, layers, data flows, configuration, **CLI tables**, coding, **§8 Tests**, **§3.5–§3.6** status and verified wiring, phases, backlog **§11**, open questions **§14**, gap themes **§15** | **CoPlan.md** |
+| Repository layout, layers, data flows, configuration, **CLI tables**, coding, **§8 Tests**, **§3.5–§3.6** status and verified wiring, delivery sequence, backlog **§11**, decisions **§14**, gap themes **§15** | **CoPlan.md** |
 | Claude Code paths, index, JSONL fields, scan metrics | **CCSchema.md** |
 | Codex session files | **CodexSchema.md** |
 | Cursor `state.vscdb` keys and values | **CursorSchema.md** |
@@ -47,7 +47,7 @@ Per **Codess.md §4.2**, the **CoPlan.md** row (verbatim):
 
 | Document | Goal | Include | Exclude |
 |----------|------|---------|---------|
-| **CoPlan.md** | *How* the repo implements and validates behavior | Tree, layered architecture, persistence notes, **§3.5–§3.6** status and verified wiring, **§4 configuration**, **§5 CLI**, features→modules, coding, **§8 Tests**, phases, backlog **§11**, **§14–§15** | Vendor on-disk truth (→ *Schema.md) |
+| **CoPlan.md** | *How* the repo implements and validates behavior | Tree, layered architecture, persistence notes, **§3.5–§3.6** status and verified wiring, **§4 configuration**, **§5 CLI**, features→modules, coding, **§8 Tests**, delivery sequence, backlog **§11**, **§14–§15** | Vendor on-disk truth (→ *Schema.md) |
 
 Cross-cutting doc rules (ToC, no transient links from core docs, etc.): **Codess.md §4.0**.
 
@@ -55,7 +55,7 @@ Cross-cutting doc rules (ToC, no transient links from core docs, etc.): **Codess
 
 ## 2. Repository Layout
 
-**Terms:** **scan** = discover projects that have vendor session data; **walk** = filesystem tree traversal (library in **`walk.py`** — **no** `walk` CLI subcommand; `CMD` is only `scan` \| `ingest` \| `query` in **`build_parser()`**).
+**Terms:** **scan** = discover projects that have vendor session data from vendor indexes. `CMD` is `scan` \| `ingest` \| `query` in **`build_parser()`**.
 
 ```
 Codess/
@@ -73,12 +73,11 @@ Codess/
 │   ├── cli/
 │   │   ├── scan_cmd.py     # run(): roots, run_scan(), CSV; registry upsert + optional --registry filter + reg_* cols
 │   │   ├── ingest_cmd.py   # run(): roots, _ingest_cc|codex|cursor; registry merge via registry_store
-│   │   └── query_cmd.py    # run(): roots[0], store/SQL; --stats → registry merge
+│   │   └── query_cmd.py    # run(): read-only multi-root/store reports; --stats → registry merge
 │   └── codess/
 │       ├── config.py       # ENV → Path / int / bool; defaults; no other codess imports
 │       ├── helpers.py      # parse_dir_list, validate_dirs_file, write_csv, is_excluded, slug/path … ; imports config
-│       ├── registry_store.py  # ingested_projects.json merge (scan / ingest / query / future walk)
-│       ├── walk.py         # walk_dirs(); imports helpers only; not imported by cli/ or scan.py in current code — tests + future traversal
+│       ├── registry_store.py  # ingested_projects.json merge (scan / ingest / query)
 │       ├── sanitize.py     # text cleanup + redact; imports config
 │       ├── store.py        # SQLite, DDL path, upsert*, ingest state; no codess imports
 │       ├── project.py      # argparse, parse_and_run, roots, run-options, git root, vendor path helpers; imports config only — no walk, no scan
@@ -87,7 +86,6 @@ Codess/
 │       │   ├── cc.py
 │       │   ├── codex.py
 │       │   └── cursor.py   # process_* + get_db_metrics (used by scan for metrics)
-│       └── sanitize.py     # text cleanup + optional redact; adapters only — listed once
 └── tests/                  # order mirrors src/codess + cli; full map in §8 Tests
     ├── test_config.py
     ├── test_helpers.py
@@ -95,7 +93,6 @@ Codess/
     ├── test_store.py
     ├── test_scan.py
     ├── test_registry_store.py
-    ├── test_walk.py
     ├── test_cc_adapter.py
     ├── test_codex_adapter.py
     ├── test_cursor_adapter.py
@@ -112,25 +109,21 @@ Legacy **`scripts/`** (if present): obsolete vs CLI; remove when unused.
 
 ## 3. System Architecture
 
-### 3.0 Walk: Launch, Processing, and Role
+### 3.0 Discovery contract
 
-Filesystem traversal is the **shared primitive** we want for any future “expand this root” or “find artifacts on disk” behavior: one place for **excludes**, **depth**, **time limits**, and **no symlink follow**, so scan, ingest, and batch paths do not fork different recursion rules.
-
-**How `walk_dirs` runs:** Call **`codess.walk.walk_dirs(roots, …)`** from Python. It resolves existing directory roots, optionally runs **`os.walk`** per root (**topdown**, **`followlinks=False`**), filters child names with **`helpers.should_skip_recurse`** and **`.codessignore`**, applies **`MAX_DEPTH`** / **`MAX_TIME_MIN`** from **`walk.py`**, and **yields** resolved directory **`Path`s**. It depends on **`helpers`** only and does **not** import **`project`** or **`scan`**.
-
-**How it is launched today:** It is **not** invoked from **`main`**, **`parse_and_run`**, or any **`cli/*_cmd`**. The only in-repo caller is **`tests/test_walk.py`**. So the **feature exists as library code** ahead of product wiring; index-led **scan** and direct **ingest** paths do not use it yet.
-
-**Intended next uses:** Walk-first discovery, unified multi-root expansion, and honoring **`--norec`** once passed through to whatever command owns traversal — tracked in the Improvement Backlog.
+Discovery is index-led. Claude, Codex, and Cursor keep session data outside the
+project tree and record project paths in their own indexes or session metadata.
+`--dir` and `--dirs` therefore define validated path filters; they do not request
+a filesystem crawl. There is no recursion flag or general walk subsystem.
 
 ### 3.1 Call Graph and Module Roles
 
 - **`main.py`:** Prepends `src/` → `codess.project.main()` → `parse_and_run()` → **`cli.scan_cmd.run`** \| **`cli.ingest_cmd.run`** \| **`cli.query_cmd.run`**.
 - **`codess.config`:** ENV and constants; used by **`project`**, **`scan`**, **`helpers`**, **`adapters/*`**, **`sanitize`**, CLI.
-- **`codess.helpers`:** Roots/CSV/excludes/slug helpers; imports **`config`**. Used by **`scan`**, **`walk`**, and resolution paths.
-- **`codess.walk`:** See **§3.0** for launch, processing, and current callers.
-- **`codess.sanitize`:** Used by **`adapters/*`** for text cleanup and optional redact.
+- **`codess.helpers`:** Roots/CSV/excludes/slug helpers; imports **`config`**. Used by scan and root resolution.
+- **`codess.sanitize`:** Shared ingest, terminal-display, tabular-output, redaction, and CSV-cell policy.
 - **`codess.store`:** SQLite, DDL file, upsert, ingest state. **`ingest_cmd`** and **`query_cmd`** use it; **`scan`** does not write the store.
-- **`codess.project`:** **`build_parser`**, **`parse_and_run`**, **`resolve_cli_roots`**, **`build_*_run_options`**, **`get_project_root`**, vendor path helpers. Imports **`config` only** — **no** **`walk`**, **no** **`scan`**.
+- **`codess.project`:** **`build_parser`**, **`parse_and_run`**, **`resolve_cli_roots`**, **`build_*_run_options`**, **`get_project_root`**, vendor path helpers. Imports **`config` only** — **no** **`scan`**.
 - **`codess.scan`:** **`run_scan()`**; imports **`config`**, **`helpers`**, **`project`**, **`adapters.cursor.get_db_metrics`**.
 - **`cli/*_cmd`:** Thin **`run(args) -> int`**: roots/options, then **`run_scan`** / **`_ingest_*`** / **`store.connect`**.
 
@@ -154,12 +147,10 @@ Filesystem traversal is the **shared primitive** we want for any future “expan
         ▼
  codess.config   codess.helpers   codess.project  (path helpers for scan)
 
- codess.helpers ◄──── codess.walk.walk_dirs   ← not on CLI path yet
-
  ingest_cmd ──► codess.adapters.* ──► store.upsert* … , ingest_state JSON
 ```
 
-**Dependency sketch:** **`adapters/*`** → **`config`**, **`sanitize`**; called from **`ingest_cmd`**, and **`get_db_metrics`** from **`scan.py`**. **`scan.py`** → **`config`**, **`helpers`**, **`project`**, **`adapters.cursor`**. **`walk.py`** → **`helpers`** only; **`test_walk`** today. **`project.py`** → **`config`** only; **`cli/*`**, **`scan.py`**. **`store.py`** → no codess imports; **`ingest_cmd`**, **`query_cmd`**.
+**Dependency sketch:** **`adapters/*`** → **`config`**, **`sanitize`**; called from **`ingest_cmd`**, and **`get_db_metrics`** from **`scan.py`**. **`scan.py`** → **`config`**, **`helpers`**, **`project`**, **`adapters.cursor`**. **`project.py`** → **`config`** only; **`cli/*`**, **`scan.py`**. **`store.py`** → no codess imports; **`ingest_cmd`**, **`query_cmd`**.
 
 ### 3.2 Discouraged Imports
 
@@ -181,23 +172,18 @@ This subsection is **normative policy**, not a full import graph. It answers: *w
 - **Mechanism:** **Index-led** — vendor registries/listings under **`config`** roots, not a full-disk crawl. Maps paths, filters, dedupes, **`canonicalize`**, recency, **`--source`**, CSV out. File opens for metrics are **read-only**, not ingest.
 - **Indices:** CC / Codex / Cursor on-disk detail → **CCSchema**, **CodexSchema**, **CursorSchema**.
 
-**`walk` vs scan**
+**Root semantics**
 
-- **`resolve_cli_roots`** returns **roots**; it does **not** call **`walk_dirs`**.
-- **`run_scan`** does **not** import **`walk.py`**. Discovery stays **index-led**.
-- **`walk.walk_dirs`:** Implemented and tested; **no production caller** yet. Walk-first and unified traversal are backlog items.
-
-**Backlog**
-
-- **Walk-first:** Traverse trees under shared **`walk`** rules to find artifacts; not implemented.
-- **Scan prune:** Stop descending after a hit rule; not implemented. Unlike **`canonicalize`**, which prefers **leaf** paths over parents.
+- **`resolve_cli_roots`** validates and returns path filters.
+- **`run_scan`** maps vendor-owned records into those roots; it does not crawl project trees.
+- **`canonicalize`** prefers leaf project paths and removes configured aggregator parents.
 
 **Other**
 
 - **`_is_agg`:** One segment below **`work_root`** in **`AGGREGATORS`** → drop as aggregator parent, not a leaf project.
 - **Scan vs ingest shape:** Scan = one CSV row, **multiple** vendors possible. Ingest = **`_ingest_cc` / `_ingest_codex` / `_ingest_cursor`** per vendor, one **`--source`** selection — shared project loop, **separate** DB files and parsers.
 
-**Long-term:** One validated **project list** from scan for ingest/query — see consolidated gap themes at end of this document.
+**Long-term:** A scan-produced project list can feed batch ingest/query through `--dirs`; no separate crawler is required.
 
 #### Ingest
 
@@ -223,19 +209,18 @@ Under each **project directory**, **`STORE_DIR`** (`.codess/`) holds:
 
 ### 3.5 Implementation vs Validation
 
-Last full run: **212** tests passed — re-run **`pytest tests/`** after substantive changes. **Validated** here means representative automated coverage, not every edge case.
+Verification baseline is the full **`pytest tests/`** suite. **Validated** here means representative automated coverage, not every edge case.
 
 | Area | Implemented | Validated | Gaps |
 |------|-------------|-----------|------|
-| Scan (index-led) | Yes | CLI + `test_scan*`, metrics | **`--norec`** / **`CODESS_NOREC`** merged into **`ScanRunOptions`** but **`scan_cmd` never reads `opts.norec`** and **`run_scan`** has no such parameter; root existence unchecked |
-| Ingest | Yes | Adapters, `test_integration`, CLI | `validate_config` scan-only; partial-failure semantics thin; nested CC — **CCSchema** |
-| Query | Yes | CLI, store | **`roots[0]`** only; mode UX |
-| **`walk.walk_dirs`** | Yes | `test_walk` | No production caller; not unified with scan/ingest |
-| **`validate_config()`** | Yes | `test_config` default | Bad env ranges under-tested; not on ingest/query |
+| Scan (index-led) | Yes | CLI + `test_scan*`, metrics | Cursor time range covers header-indexed sessions only |
+| Ingest | Yes | Adapters, `test_integration`, CLI | Malformed/ignored/failed-source diagnostics are aggregated; continue and fail-fast source handling are covered; unmapped global Cursor sessions are excluded |
+| Query | Yes | CLI, store | Read-only aggregation across projects and vendor stores; report-format polish remains open |
+| **`validate_config()`** | Yes | Unit and subprocess CLI tests | Applied consistently to scan, ingest, and query |
 | Store / DDL | Yes | `test_store` | — |
-| Sanitize | Yes | `test_sanitize` | Policy gaps — Content and Sanitize Policy in Improvement Backlog |
+| Sanitize | Yes | Sanitizer, adapter, helper, and CLI tests | Regex redaction is intentionally limited; enterprise PII detection remains open |
 
-**Completeness:** Main workflows work; depth, validation, Cursor, query polish, walk integration remain **incomplete** — see **§15 Consolidated Engineering Gaps**.
+**Completeness:** Main workflows and configuration validation work; adapter resilience, processing depth, Cursor edge cases, and query polish remain **incomplete** — see **§15 Consolidated Engineering Gaps**.
 
 ### 3.6 Verified wiring
 
@@ -243,11 +228,9 @@ Cross-checked against **`src/`** and **`tests/`** so this plan does not drift fr
 
 - **`main.py`:** prepends **`src/`**, calls **`codess.project.main()`** → **`parse_and_run()`**.
 - **Dispatch:** **`parse_and_run`** lazy-imports **`cli.scan_cmd` / `cli.ingest_cmd` / `cli.query_cmd`** then branches on **`args.command`**.
-- **`run_scan(work_root, …)`:** parameters are **`vendor_filter`**, **`recent_days`**, **`debug`**, **`subagent`** only — **no** **`norec`**.
-- **`scan_cmd`:** builds **`opts`** via **`build_scan_run_options`** but **never references `opts.norec`**; calls **`run_scan`** without recursion flags.
-- **`validate_config()`:** invoked only from **`scan_cmd.run`** (stderr messages; non-fatal).
-- **`query_cmd`:** resolves **`roots`** then uses **`roots[0]`** only; imports **`store`** + **`get_project_stores`**, **no** **`adapters/*`**.
-- **`walk_dirs`:** **no** caller under **`src/`**; **`tests/test_walk.py`** only.
+- **`run_scan(work_root, …)`:** parameters are **`vendor_filter`**, **`recent_days`**, **`debug`**, and **`subagent`**. Scan is index-led and exposes no recursion option.
+- **`validate_config()`:** invoked before work by scan, ingest, and query; errors are printed to stderr and return exit 1.
+- **`query_cmd`:** opens every selected project store read-only and aggregates report rows in Python, avoiding SQLite's attached-database limit and preserving duplicate vendor session IDs internally. It imports **`get_project_stores`**, **no** **`adapters/*`**.
 - **`scan.py`:** imports **`adapters.cursor.get_db_metrics`**; **does not** import **`walk`**.
 - **`project.py` module imports:** **`codess.config`** only at top level for the public CLI surface.
 - **`adapters/*`:** **no** imports of **`scan`**, **`scan_cmd`**, or **`ingest_cmd`**.
@@ -261,15 +244,17 @@ Cross-checked against **`src/`** and **`tests/`** so this plan does not drift fr
 
 ### 4.1 What Is Configurable, Why, and How
 
-**What:** (1) **Locations** of vendor data on this machine (`CODESS_CC_PROJECTS`, …). (2) **Behavior defaults**: scan window (`CODESS_DAYS`), min ingest size (`CODESS_MIN_SIZE`), CC sidechain counts (`CODESS_SUBAGENT`), debug/redact/force/stop/verbose/norec flags (`CODESS_*` — see §4.3). (3) **Output/registry**: `CODESS_REGISTRY` for central **`ingested_projects.json`**. (4) **Walk exclusions** and truncation limits are **code constants** in **`config.py`** (not ENV) unless noted.
+**What:** (1) **Locations** of vendor data on this machine (`CODESS_CC_PROJECTS`, …). (2) **Behavior defaults**: scan window (`CODESS_DAYS`), min ingest size (`CODESS_MIN_SIZE`), CC sidechain counts (`CODESS_SUBAGENT`), and debug/redact/force/stop/verbose flags (`CODESS_*` — see §4.3). (3) **Output/registry**: `CODESS_REGISTRY` for central **`ingested_projects.json`**. (4) Truncation limits are **code constants** in **`config.py`**.
 
 **Why:** Same codebase runs on **different OS paths**, **CI sandboxes**, and **user preferences** without editing Python.
 
 **How:** **`config.py`** reads **environment variables at import time** into module-level `Path` / `int` / `bool`. **CLI** arguments are defined in **`codess.project.build_parser()`** and parsed by **`parse_and_run()`**; they may **override** scan/ingest behavior per invocation (e.g. `--days` overrides default recent window). **Precedence:** where a flag exists (e.g. `--days`, `--min-size`), it **wins** for that run; otherwise **ENV** default from **`config`** applies.
 
-**`CODESS_MIN_SIZE` / `--min-size`:** Ingest skips a source file when **`st_size < min_size`**. **`min_size == 0`** means **no size floor** (every non-empty file passes the size check). That is **not** the same as omitting **`--min-size`**: omission uses the **`config.MIN_SIZE`** default (20 KiB unless overridden by **`CODESS_MIN_SIZE`** at import). **`validate_config`** rejects **`MIN_SIZE < 0`** only.
+**`CODESS_MIN_SIZE` / `--min-size`:** Ingest skips a source file when **`st_size < min_size`**. **`min_size == 0`** means **no size floor** (including empty files). That is **not** the same as omitting **`--min-size`**: omission uses the **`config.MIN_SIZE`** default (20 KiB unless overridden by **`CODESS_MIN_SIZE`** at import). **`validate_config`** rejects **`MIN_SIZE < 0`**.
 
-**`CODESS_CC_PROJECTS` must be absolute:** **`validate_config()`** requires **`CC_PROJECTS.is_absolute()`**. A relative path would be resolved from the **process cwd at import time**, which is fragile for scan/CI/daemons and can silently point at the wrong tree. Other vendor roots are also normalized to **`Path`**; treat **absolute** CC projects as the supported contract.
+**Vendor roots must be absolute:** **`validate_config()`** rejects relative
+Claude, Codex active/archive, and Cursor roots. Resolving a vendor root from the
+process cwd is fragile for scan, CI, and daemons.
 
 **`main.py` vs commands:** **`main.py`** only extends **`sys.path`** and calls **`codess.project.main()`**. **`project.build_parser()`** defines **one** **`ArgumentParser`** (no subparsers): positional **`CMD`** ∈ {**`scan`**, **`ingest`**, **`query`**} plus **all** flags. **`parse_and_run()`** parses **once**, sets logging from **`-v` / `CODESS_VERBOSE`**, then dispatches to **`scan_cmd.run` / `ingest_cmd.run` / `query_cmd.run`**. Unused flags for a given CMD are simply ignored by that command’s implementation.
 
@@ -277,7 +262,9 @@ Cross-checked against **`src/`** and **`tests/`** so this plan does not drift fr
 
 **Why global args/ENV, not per-vendor sections:**
 
-- **Vendor-specific *paths* already exist:** `CODESS_CC_PROJECTS`, `CODESS_CODEX_SESSIONS`, `CODESS_CURSOR_DATA` — each points at that tool’s install layout on this machine.
+- **Vendor-specific *paths* already exist:** `CODESS_CC_PROJECTS`,
+  `CODESS_CODEX_SESSIONS`, `CODESS_CODEX_ARCHIVED_SESSIONS`, and
+  `CODESS_CURSOR_DATA` point at tool-owned storage on this machine.
 - **Behavior knobs are intentionally *run-wide*:** One **`scan`** / **`ingest`** applies a **single policy** to every vendor selected by **`--source`** (`CODESS_DAYS`, `CODESS_MIN_SIZE`, `CODESS_DEBUG`, `CODESS_FORCE`, …). That keeps **one argv surface**, **one import-time config**, and shared loops in **`scan_cmd` / `ingest_cmd`** without a combinatorial matrix (`--min-size-cc`, `CODESS_DEBUG_CODEX`, …).
 - **Vendor-only semantics** stay in **code + Schema**, not parallel ENV trees: e.g. **`CODESS_SUBAGENT`** affects **CC** scan metrics only; Cursor/Codex ignore it. Per-vendor *behavior* differences that need toggles belong in ***Schema.md** + adapter options first; new **`CODESS_*`** or flags would follow a proven need.
 
@@ -289,8 +276,7 @@ Cross-checked against **`src/`** and **`tests/`** so this plan does not drift fr
 4. Each **`--dir PATH`** is **appended** in argv order.
 5. **Duplicates** (same resolved path) are **skipped**.
 6. **User root strings** (`--dir` lines, **`--dirs`** file): **`..`** in any path **component** is **disallowed** (skipped + warning). **Relative** paths: any segment **starting with `.`** except the lone segments **`.`** and **`..`** is **disallowed** — this blocks **hidden-style** relative segments (e.g. **`.venv`**, **`.private`**) while still allowing **`.`** (cwd) and paths like **`./repo`** (the **`.`** segment is explicitly allowed). **Absolute** paths may contain segments such as **`.config`** under the home tree. **Empty** lines / empty **`--dir`** arguments are skipped. **Future — name-prefix roots only (not implemented; not general globs):** only the **final** segment of a root string may end with **`*`**. The characters before **`*`** are a **literal prefix** for matching **one** filesystem component’s **name** (e.g. **`.../lib*`** expands to siblings whose **basename** starts with **`lib`**: **`lib`**, **`libs`**, …). **No** infix **`*`**, **no** `**`, **no** multi-segment pattern — it is **trailing-asterisk on the last segment** = **directory/file name prefix match**, sometimes called a **prefix glob** on that segment only. When that ships, re-check **`..`** / hidden rules **after** expansion so expansion cannot escape the intended root.
-7. **Walk recursion** (inside **`walk.walk_dirs`**): **any child directory name starting with `.`** is skipped (**`should_skip_recurse`**), independent of the root path rules above — covers **`.git`**, **`.venv`**, etc.
-8. If the result is **empty**: **`scan_cmd`** uses **`Path.cwd()`**; **`ingest_cmd`** and **`query_cmd`** use **`get_project_root()`** (`git rev-parse --show-toplevel` from cwd, else cwd — see **`project.py`**).
+7. If the result is **empty**: **`scan_cmd`** uses **`Path.cwd()`**; **`ingest_cmd`** and **`query_cmd`** use **`get_project_root()`** (`git rev-parse --show-toplevel` from cwd, else cwd — see **`project.py`**).
 
 **`DEFAULT_WORK` / `is_excluded`:** There is **no** CLI flag for **`DEFAULT_WORK`** (`~/Work`). **`is_excluded(p, work_root=None)`** uses **`DEFAULT_WORK`** only as the **`relative_to`** anchor when **`work_root`** is omitted — **`scan.run_scan`** passes the real **`work_root`** into **`canonicalize`**, so exclusion is relative to the **scan root**, not **`~/Work`** unless you omit the argument in other call sites.
 
@@ -302,6 +288,7 @@ Defaults in the table are when the variable is **unset**.
 |----------|------|---------------------|
 | `CODESS_CC_PROJECTS` | CC projects root | `~/.claude/projects` |
 | `CODESS_CODEX_SESSIONS` | Codex sessions root | `~/.codex/sessions` |
+| `CODESS_CODEX_ARCHIVED_SESSIONS` | Codex archive root; set explicitly with an overridden active root | `~/.codex/archived_sessions` when the active root is default |
 | `CODESS_CURSOR_DATA` | Cursor User dir | OS-specific under `Cursor/User` (see `config._cursor_data`) |
 | `CODESS_DAYS` | Scan default recent days | `90` |
 | `CODESS_MIN_SIZE` | Ingest skip small sources (bytes) | `20480` |
@@ -311,10 +298,9 @@ Defaults in the table are when the variable is **unset**.
 | `CODESS_SUBAGENT` | CC scan include sidechains | `0` → false (see **boolean ENV** below) |
 | `CODESS_STOP` | Fail-fast: stop whole command on first error | `0` → false; combine with **`--stop`** |
 | `CODESS_VERBOSE` | Python logging **DEBUG** for the process (`-v` equivalent) | `0` → false |
-| `CODESS_NOREC` | Scan: merged into **`ScanRunOptions.norec`** via **`build_scan_run_options`**; **`scan_cmd` does not use the field**; **`run_scan`** has no matching parameter — **§3.6** | `0` → false |
 | `CODESS_REDACT` | Ingest: enable redaction default (same patterns as **`--redact`**) | `0` → false |
 
-**Boolean ENV (`CODESS_DEBUG`, `CODESS_FORCE`, `CODESS_SUBAGENT`, `CODESS_STOP`, `CODESS_VERBOSE`, `CODESS_NOREC`, `CODESS_REDACT`):** Implemented in **`config.py`** via **`env_bool()`**: **true** only if, after **`.lower()`**, the value is exactly **`1`**, **`true`**, or **`yes`**. **Unset** uses default **`0`** → false. Values like **`y`**, **`Y`**, **`on`**, **`2`** are **false** (not generic shell truthiness). Export e.g. `CODESS_DEBUG=1` or `CODESS_DEBUG=yes`.
+**Boolean ENV (`CODESS_DEBUG`, `CODESS_FORCE`, `CODESS_SUBAGENT`, `CODESS_STOP`, `CODESS_VERBOSE`, `CODESS_REDACT`):** Implemented in **`config.py`** via **`env_bool()`**: **true** only if, after **`.lower()`**, the value is exactly **`1`**, **`true`**, or **`yes`**. **Unset** uses default **`0`** → false. Values like **`y`**, **`Y`**, **`on`**, **`2`** are **false** (not generic shell truthiness). Export e.g. `CODESS_DEBUG=1` or `CODESS_DEBUG=yes`.
 
 **Why `CODESS_*` vs `DEBUG` / `FORCE` / `SUBAGENT`:** Shell and CI need **prefixed** names (`CODESS_DEBUG`, …) to avoid collisions with unrelated tools. **`config.py`** exposes short **Python** names (`DEBUG`, `FORCE`, `SUBAGENT`) as **bools read once at import** from those variables. Docs refer to **ENV** with the `CODESS_` name; code samples may show **`config.DEBUG`** meaning “the bool parsed from **`CODESS_DEBUG`**.”
 
@@ -327,11 +313,11 @@ Defaults in the table are when the variable is **unset**.
 **Boolean and pseudo-boolean flags — by command**
 
 - **Top-level `-v` / `--verbose`:** true when **`args.verbose or VERBOSE`** from **`CODESS_VERBOSE`**; **`parse_and_run`** sets **`logging.basicConfig(DEBUG)`**. Not the same as **`CODESS_DEBUG`** (vendor/session trace).
-- **Scan `--debug`:** **`args.debug or DEBUG`**. **`--subagent`:** **`args.subagent or SUBAGENT`**. **`--norec`:** **`args.norec or NOREC`** in **`build_scan_run_options`** → **`ScanRunOptions.norec`**, but **`scan_cmd` never reads it** and **`run_scan`** has no **`norec`** argument — **§3.6**.
+- **Scan `--debug`:** **`args.debug or DEBUG`**. **`--subagent`:** **`args.subagent or SUBAGENT`**.
 - **Ingest `--debug` / `--force` / `--redact`:** each **`args.* or`** matching **`CODESS_*`**; **`--force`** argparse default stays **`False`** so omission does not imply force.
 - **Query:** mode flags only; **no** **`CODESS_*`** booleans for **`--stats`**, **`--tool`**, etc.
 
-**Validation:** **`validate_config()`** (invoked from **`scan_cmd` only** today) checks **`CODESS_DAYS`** in **[1, 3650]**, **`MIN_SIZE` ≥ 0**, **`CC_PROJECTS`** absolute; violations → **stderr** messages (non-fatal). **Ingest** / **query** do not call it yet — **Ingest and Store** backlog rows.
+**Validation:** **`validate_config()`** checks **`CODESS_DAYS`** in **[0, 3650]**, **`MIN_SIZE` ≥ 0**, and **`CC_PROJECTS`** absolute. Malformed integer environment values are reported without an import traceback. Scan, ingest, and query print errors to stderr and exit 1 before doing work.
 
 ---
 
@@ -351,16 +337,15 @@ Defaults in the table are when the variable is **unset**.
 | `--source cc,codex,cursor` | — | all three | Comma-separated vendor subset; **order does not matter**. Tokens are compared case-insensitively after trim. **`all`** clears the filter (same as omitting **`--source`**). **Invalid token** (anything other than **`cc`**, **`codex`**, **`cursor`**, or the whole value **`all`**) is a **global** error: **stderr** message listing bad tokens and **exit 1** — no partial vendor set (**§11.6**). |
 | `--out PATH` | — | `codess_walk.csv` | CSV path; **`write_csv`** creates **parent directories**. |
 | `--out -` | — | — | CSV to **stdout** (not **`write_csv`**). |
-| `--norec` | `CODESS_NOREC` | off | Stored on **`ScanRunOptions`**; **`scan_cmd` ignores `opts.norec`**; **`run_scan`** has no parameter. **`walk_dirs`** is not used on the scan path — **§3.0**, **§3.6**, **§5.4**. |
 | `--days N` | `CODESS_DAYS` | **`90`** | Recent window; omitted → **`CODESS_DAYS`**. |
 | `--debug` | `CODESS_DEBUG` | off if flag omitted **and** unset ENV | Discovery trace + CSV **`dir_path`**; **`args.debug or DEBUG`** — see **§4.3**. |
 | `--subagent` | `CODESS_SUBAGENT` | **`SUBAGENT`** from ENV | **`args.subagent or SUBAGENT`** — see **§4.3**. |
 | `--registry PATH` | `CODESS_REGISTRY` | — | **Directory** for **`ingested_projects.json`**: default **`CODESS_REGISTRY`** (`~/.codess`); **`PATH`** overrides for this invocation. **Scan:** always **writes** merged index metrics to that directory; when **`--registry`** is **passed**, **also** restricts CSV to paths already listed **before** this run and adds **`reg_*`** columns. **Argparse requires a path** — no bare **`--registry`**. |
 | `-v` / `--verbose` | `CODESS_VERBOSE` | off | Python **`logging`** level **DEBUG** (process-wide); not **`CODESS_DEBUG`**. |
 
-**Precedence (scan):** **`--days` omitted** → **`CODESS_DAYS`**. **`--subagent`:** **`args.subagent or SUBAGENT`**. **`Registry`:** **`project.resolve_registry_directory(args)`** selects the registry **root** for **both** scan upserts and (when **`--registry PATH`** is set) filter + join columns. **Walk (`walk_dirs`):** not on the production path yet; **`registry_store.upsert_walk_seen`** exists for future wiring when walk lists projects (**§5.4**).
+**Precedence (scan):** **`--days` omitted** → **`CODESS_DAYS`**. **`--subagent`:** **`args.subagent or SUBAGENT`**. **`Registry`:** **`project.resolve_registry_directory(args)`** selects the registry **root** for **both** scan upserts and (when **`--registry PATH`** is set) filter + join columns.
 
-**Output columns:** `path,vendor,sess,mb,span_weeks` (with `dir_path` when `--debug`). With **`--registry`**, append **`reg_path`**, **`reg_updated`**, **`reg_sources`** — **§5.1** table. Metric definitions: **CCSchema** §7, **CodexSchema** §6, **CursorSchema** §6. Rows with **`path=(global)`** are **Cursor central DB** aggregates in scan output only — **ingest** / **query** stay project-root-centric until **CursorSchema** defines a first-class global project (**§14** Q3).
+**Output columns:** `path,vendor,sess,mb,span_weeks` (with `dir_path` when `--debug`). With **`--registry`**, append **`reg_path`**, **`reg_updated`**, **`reg_sources`** — **§5.1** table. Metric definitions: **CCSchema** §7, **CodexSchema** §6, **CursorSchema** §5. Rows with **`path=(global)`** are unscoped Cursor central-DB scan aggregates. Project ingest imports only global composers whose header workspace maps to that project.
 
 ### 5.2 `codess ingest`
 
@@ -379,15 +364,15 @@ Defaults in the table are when the variable is **unset**.
 | Flag | ENV | Default | Explanation |
 |------|-----|---------|-------------|
 | `--dirs` / `--dir` | — | **`get_project_root()`** | Same merge as §4.2; empty → git root or cwd. |
-| *(multi-root)* | — | first only | **Only `roots[0]`** is queried; rest ignored until multi-query exists. |
+| *(multiple roots)* | — | aggregated | Sessions are globally ordered across selected projects. Roots without stores warn and contribute zero; all roots without stores exit 1. |
+| *(multiple vendor DBs)* | — | aggregated | Every existing legacy or per-vendor store returned by `get_project_stores` participates in one logical report. |
 
-**Modes:** **`--stats`**, **`--sessions`**, **`--tool`**, **`-sess`**, **`--show`**, **`--permissions`**, **`--task-review`**, **`--taxonomy`**, … — full list in **`python -m main query --help`**. **`--stats`** also **merges** session/event counts into **`ingested_projects.json`** at **`resolve_registry_directory(args)`** (same **`--registry PATH`** / **`CODESS_REGISTRY`** rule as ingest). **No other `CODESS_*`** wiring for query modes. Omitting all mode flags → **no report**, exit **1**.
+**Modes:** **`--stats`**, **`--sessions`**, **`--tool`**, **`-sess`**, **`--show`**, **`--permissions`**, **`--task-review`**, **`--taxonomy`**, … — full list in **`python -m main query --help`**. Session numbers form one global recency order with deterministic project/source/id tie-breakers; duplicate original IDs remain distinct internally. **`--tool N`** uses the same global order. **`--stats`** prints aggregate totals and merges each project's own counts into **`ingested_projects.json`**. **No other `CODESS_*`** wiring applies to query modes. Omitting all mode flags → **no report**, exit **1**.
 
-### 5.4 `walk_dirs` and `--dirs` File Format
+### 5.4 `--dirs` File Format
 
 - **`--dirs` file:** one path per line; **`#`** starts a comment; if **`--dirs`** is passed, the file **must** have ≥1 path line — **§4.2**.
-- **`walk.walk_dirs`:** When called, applies **`should_skip_recurse`**, **`.codessignore`**, **`MAX_DEPTH`**, **`MAX_TIME_MIN`**, no symlink follow — **`walk.py`**, **`config.EXCLUDE_RECURSE`**. **`cli/*`** and **`scan.py`** do **not** call it today — Improvement Backlog. When integrated, call **`registry_store.upsert_walk_seen`** with discovered project paths so the registry reflects walk output (**§11.1**).
-- **`--norec`:** Intended: no directory descent where walk applies. **Today:** flag and **`CODESS_NOREC`** populate **`ScanRunOptions`** but **`scan_cmd` does not read them** — **§3.6**; Improvement Backlog.
+- Paths are validated directories and act as exact project roots or scan path filters; they are not recursively expanded.
 
 ### 5.5 Filter Wiring
 
@@ -402,7 +387,7 @@ Vendor-specific **meaning** of timestamps, sidechains, and sizes lives in **\*Sc
 
 `python -m main scan --dir . --out -`
 
-**Batch errors:** By default, **scan** (per work root) and **ingest** (per file / DB / project) **log** failures and **continue**; exit code **1** if **any** part failed. **`--stop`** or **`CODESS_STOP`** → **fail-fast** (first error aborts the command).
+**Batch errors:** By default, **scan** (per work root) and **ingest** (per file / DB / project) **log** failures and **continue**; exit code **1** if **any** source failed. Scan summarizes **`malformed`**, **`invalid_keys`**, **`failed_sources`**, and **`failed_roots`**; malformed indexes and invalid keys are non-fatal. Ingest summarizes **`malformed`**, **`ignored`**, and **`failed_sources`**; malformed and intentionally ignored records are non-fatal. **`--stop`** or **`CODESS_STOP`** makes source failures fail fast.
 
 Further CLI semantics → **Improvement Backlog**.
 
@@ -422,8 +407,7 @@ Further CLI semantics → **Improvement Backlog**.
 | Incremental ingest | `store.should_ingest`, state JSON | mtime keys |
 | Idempotent upsert | `store.upsert_*` | unique (session_id, event_id) |
 | Redaction | `sanitize`, adapter opts | regex list in **config** |
-| Walk safeguards | `walk.walk_dirs` | depth / time; **no** `cli` / `scan` caller — **§3.0** |
-| Central registry JSON | **`registry_store`**, **`ingest_cmd._save_stats`**, **`scan_cmd`**, **`query_cmd._stats`**, **`config.get_stats_path`**, **`project.resolve_registry_directory`** | **`ingested_projects.json`** is a **merged** project registry: **scan** (index metrics), **ingest** (store **`sources`**), **query `--stats`** (counts), future **walk** (**`upsert_walk_seen`**). **`--registry PATH`** overrides **`CODESS_REGISTRY`**; **no** bare **`--registry`**. |
+| Central registry JSON | **`registry_store`**, **`ingest_cmd._save_stats`**, **`scan_cmd`**, **`query_cmd._stats`**, **`config.get_stats_path`**, **`project.resolve_registry_directory`** | **`ingested_projects.json`** is a **merged** project registry: **scan** (index metrics), **ingest** (store **`sources`**), and **query `--stats`** (counts). **`--registry PATH`** overrides **`CODESS_REGISTRY`**; **no** bare **`--registry`**. |
 
 ---
 
@@ -460,31 +444,29 @@ This section sits **after** coding practices (**§7**) because tests validate th
 - **`test_store.py`** — **`store`**, **`sql/CoSchema.sql`**
 - **`test_scan.py`**, **`test_candidate.py`**, **`test_subagent_detail.py`** — **`scan`**, scan CLI subprocess
 - **`test_registry_store.py`** — **`registry_store`** merges
-- **`test_walk.py`** — **`walk`** (**only** caller of **`walk_dirs`** in repo today)
 - **`test_*_adapter.py`** — **`adapters/*`**
 - **`test_sanitize.py`** — **`sanitize`**
 - **`test_cli.py`**, **`test_integration.py`** — **`cli/*`**, **`parse_and_run`**, end-to-end
 
-**Coverage emphasis:** **`parse_dir_list`** and **`--dirs`**, scan CSV shape, walk depth/excludes, adapter edge cases, **`validate_config`** default path.
+**Coverage emphasis:** **`parse_dir_list`** and **`--dirs`**, scan CSV shape, adapter edge cases, and configuration validation.
 
 **When adding a feature:** extend tests in the **same PR**.
 
 ---
 
-## 9. Delivery Phases
+## 9. Delivery Sequence
 
-Phases are **historical ordering** and a **routing index** into **§11** / **§10** so nothing is “floating” without backlog rows.
+Order work by risk and dependency.
 
-| Phase | Scope | Tracked / owned in |
-|-------|--------|---------------------|
-| **1** | CC + Codex scan, ingest, store, CLI | **Largely complete**; regressions → **§8**, **§11** as filed |
-| **2** | Walk, multi-root, walk-first, scan prune, **`norec` → `run_scan` / walk** | **§11.1** (all rows); **§3.0**, **§3.3** |
-| **3** | Cursor adapter, global/workspace, scan timestamps | **§10**; **CursorSchema**; **§11.2** (Cursor timestamps); **§11.3** (`--no-central`); **§15** Cursor row |
-| **4** | Query UX, optional **`queries.sql`**, multi-root query | **§11.7**; **§14** Q4; **§15** Query row; **§14.2** multi-root; **§11.3** **`validate_config`** where relevant |
+| Order | Outcome | Main work |
+|---|---|---|
+| **1. Correctness** | Stored data and CLI inputs are trustworthy | Broaden Cursor live-database resilience |
+| **2. Scope** | Project boundaries are explicit | Decide behavior for Cursor sessions without usable headers |
+| **3. Discovery** | Vendor indexes map sessions to projects | Maintain aggregate diagnostics without filesystem traversal |
+| **4. Depth** | More source content is represented | Selected Claude product-state events and tool-call lineage |
+| **5. Reporting** | Query behavior scales beyond one project | Empty-store UX and report formats driven by demonstrated needs |
 
-**Notes:** **`scan --registry`** is **§14** Q2 (**done**) — **not** part of phase 2. Phase 2 is **discovery pipeline** only.
-
-Keep **`sql/CoSchema.sql`** aligned with **CoSchema.md** as event shapes stabilize.
+Keep **`sql/CoSchema.sql`** aligned with **CoSchema.md** whenever normalized event shapes change.
 
 ---
 
@@ -493,45 +475,38 @@ Keep **`sql/CoSchema.sql`** aligned with **CoSchema.md** as event shapes stabili
 Vendor-specific **known holes** are documented in schema files, not duplicated here.
 
 - **CC slug / path ambiguity** — **CCSchema.md** §8–§9.
-- **CC subagent ingest** — **CCSchema.md** §9.
-- **Cursor global `project_path`** — **CursorSchema.md** §7–§8.1.
-- **Cursor scan time range** — **CursorSchema.md** §8.1.
+- **Cursor event and scan time range** — **CursorSchema.md** §3, §5, and §7.
 
 ---
 
 ## 11. Improvement Backlog
 
-**Execution order (recommended):** (1) **Spec / product** — close open themes in **§15** and schema docs where they gate behavior. (2) **Code** — implement with **§5** + parser updates in lockstep. (3) **Validation** — extend **§8** / **§11.6** in the same change set when behavior moves.
+**Immediate order:** (1) select only Claude product-state records with a
+concrete audit/query use case; (2) strengthen the remaining CLI validation
+cases in §11.6; (3) evaluate optional ingest validation only if it improves an
+actual workflow.
 
-**Dependencies (high level):** **Walk-first / scan prune** depend on **§3.3** pipeline agreement and **`walk_dirs`** integration. **Nested CC / subagent ingest** depends on **CCSchema** + adapter contracts. **Content / sanitize policy** (**§11.5**) can proceed in parallel but should land before broad export/query hardening. **`validate_config` everywhere** is independent but touches all **`*_cmd`**.
+For each item: settle any product contract, change code and schema docs together,
+then add representative tests in the same change set.
 
 Work items stay grouped by theme below. **Codess.md §4.0** requires **all** tickets to live here or in **§8** / **§14** / **§15** as specified there.
 
-### 11.1 Scan / discovery and walk
+### 11.1 Scan and discovery
 
 | Item | P | Depends on | Notes |
 |------|---|------------|--------|
-| Validate roots exist | 1 | — | Missing **`--dir`** / path errors |
-| Wire **`norec` → `run_scan` / walk** | 2 | Walk integration | **`§3.6`** — flag unused today |
-| Walk-first discovery | 2 | **`walk_dirs` on CLI path** | Today index-led |
-| Scan prune | 2 | Walk-first | Skip deeper traversal once hit rule — **§3.3** |
 | CSV type tests | 2 | — | Partial coverage |
 
 ### 11.2 Filters, CLI, and vendors
 
 | Item | P | Depends on | Notes |
 |------|---|------------|--------|
-| **`--days 0`** (all-time) | 1 | — | Scan window |
-| Cursor timestamps in scan | 2 | **CursorSchema** | Aggregate bubbles / global row semantics |
 | **Name-prefix roots** (final segment only: **`name*`** → basename **string-prefix** match; **§4.2**) | 3 | Spec + **`parse_dir_list`** | **Not** implemented; **not** general globs / infix **`*` |
 
 ### 11.3 Ingest and store
 
 | Item | P | Depends on | Notes |
 |------|---|------------|--------|
-| Nested CC / subagent files | 2 | **CCSchema** | Ingest depth |
-| **`--no-central`** | 2 | **CursorSchema** | Cursor paths |
-| **`validate_config` everywhere** | 2 | — | Today scan-only |
 | **`--validate`** dry run | 2 | — | Optional ingest |
 
 ### 11.4 Platform
@@ -541,50 +516,41 @@ Work items stay grouped by theme below. **Codess.md §4.0** requires **all** tic
 | Store | SQLite |
 | Location | `<project>/.codess/` |
 
-### 11.5 Content and sanitize policy (research → spec → build)
+### 11.5 Content and sanitize policy
 
-**Purpose:** Separate **ingest storage** safety from **export / display** policy. **Today:** **`sanitize.py`** strips control chars (except tab/newline), ANSI, normalizes newlines; optional regex **redact** from **`config.REDACT_PATTERNS`**. **No** HTML strip; **no** SQL-display-specific rules.
+The policy separates normalized storage from output formatting. Vendor text may
+contain Markdown, HTML-like tags, source code, or SQL. Codess preserves those
+strings as content; it does not guess that markup is executable or strip it.
 
-**Research (online / prior art) — do before locking policy:**
+| Surface | Current contract |
+|---------|------------------|
+| Ingested text | Normalize CR/LF, remove ANSI escapes and C0/C1 terminal controls except tab/newline, then apply optional configured regex redaction. |
+| Claude tool input | Apply the same policy recursively to retained JSON-like values before serialization. |
+| Debug raw bytes | Retain the bounded raw line only when debug is enabled **and redaction is disabled**. |
+| Structured query output | Preserve useful line breaks in prompts/responses; sanitize and bound individual tool-result and tool-input displays. |
+| Tabular terminal output | Remove controls and replace tabs/newlines with spaces so a stored value cannot add rows or columns. |
+| CSV | Use Python's `csv.writer` for quoting/newlines and prefix risky **string** cells with a tab when the first character could trigger a spreadsheet formula (`= + - @`, full-width variants, tab, CR, or LF). Numeric values retain their type. |
 
-- **Use case A — CSV / TSV export:** escaping, quoting, multiline fields, cell size limits; spreadsheet and SIEM ingest expectations.
-- **Use case B — terminal / query human output:** wrapping, truncation, and whether to strip HTML-like tags from vendor payloads.
-- **Use case C — retained archives:** what must never leave disk raw (secrets, tokens) vs what can stay lossless for forensics.
+The CSV prefix changes the exported string intentionally for human spreadsheet
+safety; consumers needing lossless normalized values should query SQLite.
+The implementation follows the threat categories in
+[OWASP CSV Injection](https://owasp.org/www-community/attacks/CSV_Injection)
+and the serialization behavior in the
+[Python `csv` documentation](https://docs.python.org/3/library/csv.html).
 
-**Lift vs build (initial lean):**
-
-| Area | Lift (deps) | Build (custom) |
-|------|-------------|----------------|
-| HTML-like tag stripping | Established HTML/text libs **if** we commit to HTML semantics | Thin tag-strip or vendor-specific rules **if** payloads are mostly markdown-like |
-| Redaction | Regex lists (**today**) + optional dedicated PII scanners for enterprise | Codess-specific patterns and **adapter** hooks |
-| CSV safety | **`csv` module** (**today**) + documented limits | Policy for max field length / row count |
-
-**Spec outline:** (1) Threat model one-pager (who reads exports). (2) Normative table per **output surface** (ingest, query, CSV). (3) Test vectors in **§11.6**. (4) Implement in **`sanitize.py`** + **`query_cmd`** + docs.
-
-**Backlog rows (unchanged intent):**
-
-| Item | P | Notes |
-|------|---|--------|
-| HTML / SQL-like display | 2 | Policy + implementation after **§11.5** spec |
-| Multiline / whitespace | 2 | Trim, internal newline limits |
-| Docs + tests | 2 | Same PR as policy |
+The remaining open policy choice is whether enterprise deployments need a
+dedicated PII/secret scanner beyond the configured regex list. That is a product
+decision, not a missing baseline sanitizer.
 
 ### 11.6 Testing and validation work
 
-Concrete test and validation follow-ups. **`--min-size 0`** is already covered in **`test_cli`** / **`test_integration`**; add a **`build_ingest_run_options`** unit assert only if subprocess coverage is insufficient.
-
 **Contract:** **Scan `--source`** invalid tokens and **ingest `--source`** invalid token are both **global** errors (**stderr + exit 1** for that invocation) — not per-root or per-session partial apply (**§14**).
 
-- **`validate_config`** with monkeypatched bad **`CODESS_DAYS`** / **`CODESS_MIN_SIZE`**
-- Subprocess **non-numeric `--days`**
-- Ingest **invalid `--source`** — tighten stderr assertions
-- **`scan --registry`** corrupt JSON, empty registry warning, path mismatch filter
-- **`registry_store`** merge regressions — **`test_registry_store`**, **`test_cli.test_query_stats`**
-- **`--dirs`** missing file, empty after validation, all-invalid lines
-- **`--stop`** vs continue exit semantics
-- **Query multi-root** “first only” contract documented in tests
-- **`env_bool`** falsy strings (**`on`**, **`2`**, empty)
-- Symlink roots; corrupt JSONL adapter resilience
+Current regression coverage includes numeric/day validation, global source
+validation, registry corruption/empty/filter behavior, registry merges,
+missing/empty/all-invalid directory lists, environment boolean parsing,
+symlink-root resolution, and Cursor header-time coverage. Add new rows here only
+for a specific uncovered contract or reproduced defect.
 
 ### 11.7 Deferred until CoSchema.md revisit
 
@@ -594,11 +560,11 @@ Concrete test and validation follow-ups. **`--min-size 0`** is already covered i
 
 ---
 
-## 12. Documentation and Change Rules
+## 12. Change Routing
 
-**Why these rules live in two places:** **Codess.md §4.0** is the **normative** list contributors see from the product index. **This section** repeats the **commitment** so CoPlan editors do not have to jump away while editing. **Rationale:** a single **CoPlan** + **Codess** loop is easier to enforce in review than rules scattered across README or wiki.
+Use **Codess.md §4.0** for documentation rules. Code changes follow these
+artifact boundaries:
 
-- **Codess.md §4.0** — full rule set: boundaries, ToC, headings, prose/list/table balance, sparse cross-links, work-item placement, gap/question writeups.
 - Vendor format change → ***Schema.md** first → adapters → tests.
 - New CLI flag → **`codess/project.py`** (`build_parser`), **`_*_cmd.py`**, **§5** here, **Codess.md** if user-visible.
 - New DB column → **CoSchema.md** + **`sql/CoSchema.sql`** + **`store.py`**.
@@ -607,32 +573,33 @@ Concrete test and validation follow-ups. **`--min-size 0`** is already covered i
 
 ## 13. Optional Splits
 
-Large future: **`CoPlan-cli.md`** (§5 only) or phase files; keep **Codess.md §4** pointers current.
+If this guide becomes hard to navigate, split the CLI contract into
+**`CoPlan-cli.md`** and keep **Codess.md §4** pointers current.
 
 ---
 
-## 14. Open questions and resolved decisions
+## 14. Decisions
 
-**Format:** Resolved items keep a short audit trail here; **open** items use **context → options (pro/con) → recommendation + justification** for review.
+Implemented decisions state the current contract. Open decisions include
+context, viable options, and a recommendation when one is available.
 
-### 14.1 Resolved (former Q1–Q5)
+### 14.1 Current decisions
 
-| ID | Decision | Implementation / doc |
-|----|----------|------------------------|
-| **Q1** | **Scan unknown `--source` tokens** → **stderr + exit 1** (fail loud; no silent empty CSV). | **Implemented:** **`validate_scan_source_for_cli`** (**`project.py`**); **`scan_cmd`** before roots; **§5.1**, **§11.6**. |
-| **Q2** | Central registry: **scan** upserts index metrics **every** run; **`--registry PATH`** adds CSV filter + **`reg_*`** cols (file must exist when filtering). **Ingest** merges **`sources`**; **query `--stats`** merges **`query`**. **`PATH`** overrides **`CODESS_REGISTRY`**. **No** bare **`--registry`**. | **Done:** **`registry_store`**, **`scan_cmd`**, **`ingest_cmd`**, **`query_cmd`**, **`resolve_registry_directory`**; tests **`test_scan.py`**, **`test_registry_store.py`**, **`test_cli.py`**, **`test_config.py`**. |
-| **Q3** | **Global Cursor row** (`path=(global)`): treat as **scan-only aggregate** of central/workspace DB metrics — **document** clearly; do **not** require ingest/query symmetry until **CursorSchema** defines a first-class global project. **Why:** ingest and query are **project-root-centric** by design; forcing global rows into **`.codess/`** without schema and UX agreement would fork the mental model. **Revisit** optional ingest of global history when **CursorSchema** §7–8 and store layout are updated. | **Doc stance:** **§5.1** output note; **§15** Cursor theme; **explain.md** Mail 5. |
-| **Q4** | **`queries.sql` companion** → **postponed** until **CoSchema.md** (and query surface) are revisited; SQL stays embedded in **`query_cmd`** until then. | **Deferred:** **§11.7**; **§9** delivery note. |
-| **Q5** | **Name-prefix roots:** **none** today. **Planned:** only the **last** segment may end with **`*`** → **basename string-prefix** match (**§4.2**). | **Verified (code):** **`helpers.parse_dir_list`** / **`user_root_string_disallowed`** have **no** `*` expansion — only **§4.2** prose. **§11.2** tracks implementation. **Independent of Q2** (registry shipped separately). |
+| Topic | Current decision | Implementation / owner |
+|---|---|---|
+| Scan source validation | Unknown `--source` tokens fail the invocation with stderr and exit 1. | `validate_scan_source_for_cli`, `scan_cmd`, §5.1, §11.6 |
+| Central registry | Scan always upserts index metrics. Explicit `--registry PATH` also filters output to paths already present and adds `reg_*` columns. Ingest merges sources; query stats merges query data. | `registry_store`, command modules, registry tests |
+| Query SQL | Keep SQL embedded in `query_cmd` until CoSchema and the query surface are redesigned. | §11.7 |
+| Name-prefix roots | Unsupported. If added, only the final path segment may use a trailing `*` as a literal basename-prefix match. | §4.2 and §11.2 |
+| Global Cursor ingest | Import only composers whose `composerHeaders.workspaceId` maps to the selected project. Preserve archived and subagent flags as metadata. Exclude unmapped composers. | Cursor adapter, project helpers, ingest integration tests |
+| Cursor scan timestamps | Use header timestamps and report header/time coverage in debug output. Do not decode large bubble payloads during index-led scan merely to fill missing dates. | Cursor adapter, scan debug output, CursorSchema §5–§7 |
+| Discovery | Keep scan index-led. `--dir` / `--dirs` are path filters, not traversal requests; there is no recursion CLI. | `scan`, root resolution, §3.0–§3.3 |
+| Query aggregation | Open each store read-only; merge report rows in Python. Session numbering is globally recency-ordered; stats are aggregate on stdout and project-local in the registry. | `query_cmd`, CLI aggregation tests |
 
-**Q1–Q5 status:** **Q1** / **Q2** implemented in **`src/`**. **Q3** / **Q4** doc or defer. **Q5** specified only (**grep** / tests confirm **no** prefix-root code). **Follow-through:** **§11.2** when prioritized.
+### 14.2 Open decisions
 
-### 14.2 Open (for future decision rows)
+These choices remain open:
 
-Items below are **not** the former Q1–Q5; they remain genuinely open or multi-option:
-
-- **Multi-root query:** keep **first root only** vs explicit multi-project report — needs UX + **§8** tests when chosen.
-- **`--norec` / walk:** behavior once **`walk_dirs`** is on the production path (**§11.1**).
 - **Enterprise redaction / PII:** whether to integrate third-party scanners vs regex-only (**§11.5**).
 
 ---
@@ -643,12 +610,7 @@ Items below are **not** the former Q1–Q5; they remain genuinely open or multi-
 
 | Theme | Open questions | Recommendation (lean) | Justification |
 |-------|----------------|----------------------|---------------|
-| **Discovery / walk** | When to switch from index-led scan to walk-first? How does **`--norec`** interact with **`walk_dirs`**? | Spec **§3.3** pipeline first, then one **`walk`** entry point shared by scan/ingest. | Avoids divergent discovery logic and duplicate exclusion rules. |
-| **Validation** | Should **`validate_config`** run for ingest/query? | Yes for **ingest** in a later PR once messages are non-noisy; query optional. | Same **CODESS_*** mistakes hurt ingest as much as scan. |
-| **Cursor** | Global row vs project rows; **`--no-central`**; scan timestamps. | Follow **CursorSchema** §7–8; keep **Q3** stance until schema changes. | Prevents ad hoc store shapes. |
-| **Query** | Multi-root; empty-store UX; optional **`queries.sql`**. | Defer **SQL file** (**Q4**); improve empty-store messages before multi-root. | Reduces surface area while UX is still moving. |
-| **Errors / resilience** | **`--stop`** matrix; adapter partial failure visibility. | Document matrix in **§5** + tests (**§11.6**). | Operators need predictable exit codes. |
-| **Processing depth** | Nested CC / subagent ingest vs strict fail. | Schema-led (**CCSchema**), tolerant parse + counters in debug. | Matches current adapter philosophy (**explain.md**). |
-| **Content policy** | HTML, display SQL-like strings, CSV limits. | Complete **§11.5** research → normative table → code. | Export safety is cross-cutting. |
-
-**Bulleted mirror (themes only):** Discovery and walk; validation parity; Cursor global/workspace; query UX and scope; errors and **`--stop`**; nested CC / subagent; content policy (**§11.5**).
+| **Cursor** | Whether incomplete header timestamps justify reading bubble payloads during scan. Unmapped global sessions are already excluded by contract. | Keep project-scoped header mapping and debug coverage; add bubble reads only if date filtering accuracy proves more valuable than scan cost. | Event timestamps and mapped project scoping are correct without scanning every large bubble value. |
+| **Query** | Whether large cross-project reports need grouping, paging, or structured output; optional **`queries.sql`**. | Keep SQL embedded (§11.7); add formatting only from demonstrated report needs. | The current row-merge design is correct and scalable without copying event stores. |
+| **Processing depth** | Which remaining Claude product-state records and lineage are useful? | Add only queryable audit use cases; keep tolerant parsing and counters. | Avoids storing internal state without a reporting purpose. |
+| **Content policy** | Whether regex redaction is sufficient for enterprise PII/secrets. | Keep the current explicit policy; add a scanner only for a defined deployment requirement. | Avoids silent content loss and a heavy dependency without a concrete threat model. |

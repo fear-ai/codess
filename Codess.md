@@ -14,7 +14,7 @@
 
 ## 2. Product framing (strategy → requirements)
 
-**Re-partitioning (former §2–§5):** Material is ordered **outcomes → capabilities → audiences → traceable requirements** so each layer adds detail without repeating the prior one. Criteria and filters appear once under **2.1**; the feature table **2.2** states *what* we ship; **2.3** states *who cares*; **2.4** links needs to **vendor schema docs** and **CoSchema** instead of restating file layouts here.
+Material is ordered **outcomes → capabilities → audiences → traceable requirements** so each layer adds detail without repeating the prior one. Criteria and filters appear under **2.1**; the feature table states what ships; the remaining sections link needs to vendor schemas and **CoSchema** instead of copying file layouts.
 
 ### 2.1 Outcomes and constraints
 
@@ -22,7 +22,7 @@
 - **Exclusion:** Invalid paths; slug-decode ambiguity; backup trees (`OLD`, `Save`); review dirs (CodingTools, MCPs, etc.).
 - **Filters:** `min_size`, optional future `min_events` / `min_duration` (CC/Codex); Cursor-specific filters TBD — see **CoPlan** backlog.
 
-*Operational criteria imply CLI, walk, and configuration behavior in **CoPlan.md** (configuration §4, CLI §5).*
+*Operational criteria imply CLI scan and configuration behavior in **CoPlan.md** (configuration §4, CLI §5).*
 
 ### 2.2 Capabilities and priorities
 
@@ -35,7 +35,8 @@
 | Per-source filters (`--source`) | P1 |
 | Redaction | P1 |
 
-**Postponed (no schedule):** full-text (FTS5) search; Markdown export. Do not track these as near-term phases in **CoPlan.md** until the product explicitly revives them.
+**Out of scope:** full-text (FTS5) search and Markdown export. Add them to the
+active backlog only if the product revives them.
 
 ### 2.3 People and scenarios
 
@@ -53,7 +54,7 @@
 | Multi-vendor inputs | CC projects dir, Codex `sessions`, Cursor `state.vscdb` | **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md** |
 | Normalized store | SQLite under `<project>/.codess/` | **CoSchema.md**, `sql/CoSchema.sql` |
 | Incremental ingest | mtime + state file; idempotent upsert | **CoPlan.md** §3.4, §5.2; **store** / adapters |
-| CLI & configuration | Flags, ENV, defaults, walk rules | **CoPlan.md** §4–§5 |
+| CLI & configuration | Flags, ENV, defaults, and root resolution | **CoPlan.md** §4–§5 |
 
 ---
 
@@ -67,9 +68,9 @@
 └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
-- **Directory discovery** (walk, excludes, `.codessignore`) is separate from vendor adapters.
+- **Project discovery** is index-led and separate from event normalization in vendor adapters.
 - **Vendors:** CC, Codex, Cursor — filter with `--source` (scan vs ingest semantics differ; **CoPlan.md** §5).
-- **Layers, pipelines, and long-term direction** (shared walk, project list): **CoPlan.md** §3. **Code-vs-doc facts** checked against the repo: **CoPlan.md** §3.5–§3.6.
+- **Layers, pipelines, and index-led discovery:** **CoPlan.md** §3. **Code-vs-doc facts** checked against the repo: **CoPlan.md** §3.5–§3.6.
 
 ---
 
@@ -95,7 +96,7 @@
 
 8. **Cross-links:** Link to another section **only** when the reader would otherwise miss a dependency or duplicate content. Do **not** sprinkle “see §x” for every related topic.
 
-9. **Work items:** **All** actionable tasks, test work, and tracked issues belong in **CoPlan.md**: **§11** themed backlog tables (including **§11.6** testing), **§8** for strategy and module↔test map, **§14** for resolved decisions + remaining open questions, **§15** for consolidated gap themes (discussion table). **Why:** one queue for triage; **Codess** and **\*Schema** stay spec-only. Ordering and blockers: **§11** intro + row **Notes**, or **§14.2**.
+9. **Work items:** **All** actionable tasks, test work, and tracked issues belong in **CoPlan.md**: **§11** themed backlog tables (including **§11.6** testing), **§8** for strategy and module↔test map, **§14** for current and open decisions, **§15** for consolidated gap themes. **Why:** one queue for triage; **Codess** and **\*Schema** stay spec-only. Ordering and blockers: **§11** intro + row **Notes**, or **§14.2**.
 
 10. **Gaps and open items:** When listing an open question or gap, add enough for discussion: **background** (what broke or what we deferred), **options** with **pro/con**, and a **recommended direction** when the author has one. If undecided, say so explicitly.
 
@@ -108,7 +109,7 @@ Use this table to decide **where a change belongs** before editing.
 | Topic | Document |
 |-------|----------|
 | Why the product exists; audience; this index | **Codess.md** |
-| Repository layout, layers, data flows, configuration, **CLI tables**, coding, **§8 Tests**, **§3.5–§3.6** status and verified wiring, phases, backlog **§11**, open questions **§14**, gap themes **§15** | **CoPlan.md** |
+| Repository layout, layers, data flows, configuration, **CLI tables**, coding, **§8 Tests**, **§3.5–§3.6** status and verified wiring, delivery sequence, backlog **§11**, decisions **§14**, gap themes **§15** | **CoPlan.md** |
 | Claude Code paths, index, JSONL fields, scan metrics | **CCSchema.md** |
 | Codex session files | **CodexSchema.md** |
 | Cursor `state.vscdb` keys and values | **CursorSchema.md** |
@@ -120,7 +121,7 @@ Use this table to decide **where a change belongs** before editing.
 | Document | Goal | Include | Exclude |
 |----------|------|---------|---------|
 | **Codess.md** (this file) | *What* and *why*; product narrative; **§4 doc index** | Goals, framing, high-level architecture diagram, glossary, references, §4.0 rules, boundary table §4.1 | Vendor field catalogs; DDL; CLI flag tables (→ **CoPlan** §5) |
-| **CoPlan.md** | *How* the repo implements and validates behavior | Tree, layered architecture, persistence notes, **§3.5–§3.6** status and verified wiring, **§4 configuration**, **§5 CLI**, features→modules, coding, **§8 Tests**, phases, backlog **§11**, **§14–§15** | Vendor on-disk truth (→ *Schema.md) |
+| **CoPlan.md** | *How* the repo implements and validates behavior | Tree, layered architecture, persistence notes, **§3.5–§3.6** status and verified wiring, **§4 configuration**, **§5 CLI**, features→modules, coding, **§8 Tests**, delivery sequence, backlog **§11**, **§14–§15** | Vendor on-disk truth (→ *Schema.md) |
 | **CoSchema.md** | Normalized SQLite semantics | Tables, columns, store layout story | Vendor sources |
 | **sql/CoSchema.sql** | Single executable DDL (avoids duplicated `CREATE` in code) | `CREATE`, indexes; executed by **`store.init_db()`** | Prose; column definitions → **CoSchema.md**; vendor sources |
 | **CCSchema.md** | CC storage truth | Layout, metrics, quirks, gaps | Other vendors |

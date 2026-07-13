@@ -1,6 +1,8 @@
 """Project/slug corner cases and edge cases."""
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,9 +12,52 @@ from codess.project import (
     get_codex_session_files,
     get_cursor_global_db,
     get_cursor_workspace_dbs,
+    get_cursor_workspace_ids,
     path_to_slug,
+    resolve_cli_roots,
     slug_to_path,
+    RootsWhenEmpty,
 )
+
+
+class TestResolveCliRoots:
+    def test_explicit_missing_root_is_error(self, tmp_path):
+        missing = tmp_path / "missing"
+        args = SimpleNamespace(dirs=None, dir_list=[str(missing)])
+        roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.CWD)
+        assert roots is None
+        assert err and "does not exist" in err
+
+    def test_explicit_file_root_is_error(self, tmp_path):
+        file_path = tmp_path / "not-a-directory"
+        file_path.write_text("x")
+        args = SimpleNamespace(dirs=None, dir_list=[str(file_path)])
+        roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.CWD)
+        assert roots is None
+        assert err and "not a directory" in err
+
+    def test_all_disallowed_roots_do_not_fall_back_to_cwd(self):
+        args = SimpleNamespace(dirs=None, dir_list=["../outside"])
+        roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.CWD)
+        assert roots is None
+        assert err and "no valid directory roots" in err
+
+    def test_no_explicit_roots_uses_existing_cwd(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        args = SimpleNamespace(dirs=None, dir_list=None)
+        roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.CWD)
+        assert err is None
+        assert roots == [tmp_path]
+
+    def test_symlink_root_resolves_to_target(self, tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(target, target_is_directory=True)
+        args = SimpleNamespace(dirs=None, dir_list=[str(link)])
+        roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.CWD)
+        assert err is None
+        assert roots == [target.resolve()]
 
 
 class TestPathToSlug:
@@ -94,12 +139,14 @@ class TestGetCodexSessionFiles:
 
     def test_empty_when_no_dir(self, tmp_path, monkeypatch):
         monkeypatch.setattr("codess.project.CODEX_SESSIONS", tmp_path / "nonexistent")
+        monkeypatch.setattr("codess.project.CODEX_ARCHIVED_SESSIONS", None)
         proj = tmp_path / "proj"
         proj.mkdir()
         assert get_codex_session_files(proj) == []
 
     def test_matches_cwd(self, tmp_path, monkeypatch):
         monkeypatch.setattr("codess.project.CODEX_SESSIONS", tmp_path / "codex")
+        monkeypatch.setattr("codess.project.CODEX_ARCHIVED_SESSIONS", None)
         (tmp_path / "codex").mkdir()
         proj = tmp_path / "myproj"
         proj.mkdir()
@@ -110,6 +157,28 @@ class TestGetCodexSessionFiles:
         files = get_codex_session_files(proj)
         assert len(files) == 1
         assert files[0].name == "rollout-abc.jsonl"
+
+    def test_includes_archived_sessions(self, tmp_path, monkeypatch):
+        active = tmp_path / "sessions"
+        archived = tmp_path / "archived_sessions"
+        active.mkdir()
+        archived.mkdir()
+        project = tmp_path / "project"
+        project.mkdir()
+        transcript = archived / "rollout-archived.jsonl"
+        transcript.write_text(
+            "\nnot json\n"
+            + json.dumps({
+                "type": "session_meta",
+                "payload": {"id": "archived", "cwd": str(project)},
+            })
+            + "\n"
+        )
+        monkeypatch.setattr("codess.project.CODEX_SESSIONS", active)
+        monkeypatch.setattr(
+            "codess.project.CODEX_ARCHIVED_SESSIONS", archived
+        )
+        assert get_codex_session_files(project) == [transcript]
 
 
 class TestGetCursorPaths:
@@ -150,3 +219,4 @@ class TestGetCursorPaths:
         dbs = get_cursor_workspace_dbs(proj)
         assert len(dbs) == 1
         assert dbs[0].name == "state.vscdb"
+        assert get_cursor_workspace_ids(proj) == ["abc123"]

@@ -1,5 +1,6 @@
 """CC adapter corner cases: record variants, bad input, tool extraction."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -144,14 +145,22 @@ class TestNormalizeUser:
         assert evs[0]["subtype"] == "permission_denied" and evs[0]["tool_name"] == "Edit"
 
     def test_tool_result_content_as_list(self):
-        rec = {"message": {"role": "user", "content": [
+        rec = {"uuid": "result-record", "parentUuid": "call-record",
+               "message": {"role": "user", "content": [
+            {"type": "text", "text": "context"},
             {"type": "tool_result", "tool_use_id": "t1", "content": [
                 {"type": "text", "text": "line1"},
                 {"type": "text", "text": "line2"},
             ], "is_error": False}
         ]}}
         evs = normalize_user(rec, 1, "s1", "/f", {"t1": "Read"}, {"redact": False})
-        assert "line1" in evs[0]["content"] and "line2" in evs[0]["content"]
+        assert [event["event_id"] for event in evs] == ["1", "1:1"]
+        assert "line1" in evs[1]["content"] and "line2" in evs[1]["content"]
+        assert json.loads(evs[1]["metadata"]) == {
+            "record_uuid": "result-record",
+            "parent_uuid": "call-record",
+            "tool_use_id": "t1",
+        }
 
     def test_tool_result_no_pairing(self):
         rec = {"message": {"role": "user", "content": [
@@ -170,7 +179,8 @@ class TestNormalizeAssistant:
         assert len(evs) == 1 and evs[0]["subtype"] == "response"
 
     def test_dialog_tool_use_follows(self):
-        rec = {"message": {"role": "assistant", "content": [
+        rec = {"uuid": "assistant-record", "parentUuid": "prior-record",
+               "message": {"role": "assistant", "content": [
             {"type": "text", "text": "I'll run it."},
             {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
         ]}}
@@ -178,6 +188,12 @@ class TestNormalizeAssistant:
         assert len(evs) == 2
         assert evs[0]["subtype"] == "dialog"
         assert evs[1]["event_type"] == "tool_call" and evs[1]["tool_name"] == "Bash"
+        assert [event["event_id"] for event in evs] == ["1", "1:1"]
+        assert json.loads(evs[1]["metadata"]) == {
+            "record_uuid": "assistant-record",
+            "parent_uuid": "prior-record",
+            "tool_use_id": "t1",
+        }
         assert tm == {"t1": "Bash"}
 
     def test_truncated_stop_reason(self):
@@ -193,6 +209,17 @@ class TestNormalizeAssistant:
         ]}}
         evs, _ = normalize_assistant(rec, 1, "s1", "/f", {"redact": False})
         assert len(evs) == 1 and evs[0]["event_type"] == "tool_call"
+
+    def test_tool_input_is_recursively_sanitized_and_redacted(self):
+        rec = {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "UnknownTool",
+             "input": {"nested": ["safe\u0000", "sk-abcdefghij1234567890xyz"]}}
+        ]}}
+        evs, _ = normalize_assistant(rec, 1, "s1", "/f", {"redact": True})
+        tool_input = evs[0]["tool_input"]
+        assert "\\u0000" not in tool_input
+        assert "sk-" not in tool_input
+        assert "[REDACTED]" in tool_input
 
 
 class TestIterCcRecords:
@@ -258,3 +285,35 @@ class TestProcessFile:
             pytest.skip("fixture missing")
         evs = list(process_file(fixtures, "s1", {"redact": False}))
         assert any(e.get("subtype") == "slash_command" for e in evs)
+
+    def test_redaction_disables_raw_debug_capture(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        path.write_text(
+            '{"type":"user","message":{"role":"user","content":'
+            '[{"type":"text","text":"secret"}]}}\n'
+        )
+        events = list(process_file(path, "s1", {"debug": True, "redact": True}))
+        assert events
+        assert all(event["source_raw"] is None for event in events)
+
+    def test_multiple_blocks_on_one_line_have_unique_stable_ids(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        path.write_text(json.dumps({
+            "type": "assistant",
+            "uuid": "record-1",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Running."},
+                    {
+                        "type": "tool_use",
+                        "id": "tool-1",
+                        "name": "Bash",
+                        "input": {"command": "true"},
+                    },
+                ],
+            },
+        }) + "\n")
+        events = list(process_file(path, "s1", {"redact": False}))
+        assert [event["event_id"] for event in events] == ["1", "1:1"]
+        assert len({event["event_id"] for event in events}) == len(events)

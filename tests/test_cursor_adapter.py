@@ -6,7 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from codess.adapters.cursor import _bubble_to_events, _iter_bubbles, get_composer_data, get_db_metrics, process_db
+from codess.adapters.cursor import (
+    _bubble_timestamp,
+    _bubble_to_events,
+    _iter_bubbles,
+    _parse_timestamp,
+    get_composer_headers,
+    get_composer_data,
+    get_db_metrics,
+    process_db,
+)
 
 
 def _make_cursor_db(tmp_path: Path, bubbles: list[tuple[str, str, dict]]) -> Path:
@@ -67,6 +76,61 @@ class TestGetComposerData:
         assert c2["value_null"] is True
 
 
+class TestGetComposerHeaders:
+    def test_filters_by_workspace(self, tmp_path):
+        db = tmp_path / "state.vscdb"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE composerHeaders ("
+            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+        )
+        conn.executemany(
+            "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("c1", "ws1", 1, 2, 0, 0),
+                ("c2", "ws2", 3, 4, 1, 1),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        headers = get_composer_headers(db, {"ws1"})
+        assert set(headers) == {"c1"}
+        assert headers["c1"]["workspace_id"] == "ws1"
+        assert headers["c1"]["is_archived"] is False
+
+    def test_missing_table_is_visible_and_safe(self, tmp_path, caplog):
+        db = tmp_path / "state.vscdb"
+        sqlite3.connect(db).close()
+        assert get_composer_headers(db, {"ws1"}) == {}
+        assert "Cannot read Cursor composer headers" in caplog.text
+
+    def test_tolerates_missing_optional_columns_and_new_columns(self, tmp_path):
+        db = tmp_path / "state.vscdb"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE composerHeaders ("
+            "composerId TEXT PRIMARY KEY, workspaceId TEXT, futureField TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO composerHeaders VALUES (?, ?, ?)",
+            ("c1", "ws1", "ignored"),
+        )
+        conn.commit()
+        conn.close()
+
+        headers = get_composer_headers(db, {"ws1"})
+        assert headers == {
+            "c1": {
+                "workspace_id": "ws1",
+                "created_at": None,
+                "last_updated_at": None,
+                "is_archived": False,
+                "is_subagent": False,
+            }
+        }
+
+
 class TestGetDbMetrics:
     """get_db_metrics unit tests."""
 
@@ -86,6 +150,7 @@ class TestGetDbMetrics:
         assert m["count"] == 0
         assert m["events"] == 0
         assert m["size_bytes"] > 0
+        assert m["error"] is None
 
     def test_counts_composers_and_bubbles(self, tmp_path):
         bubbles = [
@@ -99,17 +164,68 @@ class TestGetDbMetrics:
         assert m["events"] == 3
         assert m["size_bytes"] > 0
 
+    def test_uses_composer_header_time_range(self, tmp_path):
+        db = _make_cursor_db(tmp_path, [("c1", "b1", {"type": 1, "text": "hi"})])
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE composerHeaders ("
+            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+        )
+        conn.executemany(
+            "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("c1", "ws", 1_700_000_000_000, 1_700_000_100_000, 0, 0),
+                ("c2", "ws", 1_600_000_000_000, 1_800_000_000_000, 0, 0),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        metrics = get_db_metrics(db)
+        assert metrics["min_ts"] == 1_700_000_000_000
+        assert metrics["max_ts"] == 1_700_000_100_000
+        assert metrics["header_count"] == 1
+        assert metrics["timed_header_count"] == 1
+
+    def test_header_coverage_survives_missing_time_columns(self, tmp_path):
+        db = _make_cursor_db(
+            tmp_path, [("c1", "b1", {"type": 1, "text": "hi"})]
+        )
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE composerHeaders (composerId TEXT, workspaceId TEXT)"
+        )
+        conn.execute("INSERT INTO composerHeaders VALUES ('c1', 'ws1')")
+        conn.commit()
+        conn.close()
+
+        metrics = get_db_metrics(db)
+        assert metrics["header_count"] == 1
+        assert metrics["timed_header_count"] == 0
+        assert metrics["min_ts"] is None
+        assert metrics["max_ts"] is None
+
+    def test_metrics_reports_missing_table(self, tmp_path, caplog):
+        db = tmp_path / "state.vscdb"
+        sqlite3.connect(db).close()
+        m = get_db_metrics(db)
+        assert m["count"] == 0
+        assert m["error"]
+        assert "cursorDiskKV" in m["error"]
+        assert "Cannot read Cursor metrics" in caplog.text
+
 
 class TestBubbleToEvents:
     """_bubble_to_events unit tests."""
 
     def test_user_prompt(self):
-        data = {"type": 1, "text": "Hello", "timingInfo": {"clientStartTime": 1000}}
+        data = {"type": 1, "text": "Hello", "createdAt": "2026-07-10T12:34:56.789Z"}
         evs = list(_bubble_to_events("c1", "b1", data, "/db", False))
         assert len(evs) == 1
         assert evs[0]["event_type"] == "user_message"
         assert evs[0]["subtype"] == "prompt"
         assert evs[0]["content"] == "Hello"
+        assert evs[0]["timestamp"] == pytest.approx(1783686896789.0)
 
     def test_user_slash_command(self):
         data = {"type": 1, "text": "/fix bug", "timingInfo": {}}
@@ -117,12 +233,21 @@ class TestBubbleToEvents:
         assert evs[0]["subtype"] == "slash_command"
 
     def test_assistant_response(self):
-        data = {"type": 2, "text": "Here is the fix.", "timingInfo": {"clientStartTime": 2000}}
+        data = {"type": 2, "text": "Here is the fix.", "createdAt": 1783686896789}
         evs = list(_bubble_to_events("c1", "b1", data, "/db", False))
         assert len(evs) == 1
         assert evs[0]["event_type"] == "assistant_message"
         assert evs[0]["subtype"] == "response"
         assert evs[0]["content"] == "Here is the fix."
+
+    def test_relative_client_start_time_is_not_epoch(self):
+        data = {
+            "type": 1,
+            "text": "Hello",
+            "timingInfo": {"clientStartTime": 127196698.1},
+        }
+        evs = list(_bubble_to_events("c1", "b1", data, "/db", False))
+        assert evs[0]["timestamp"] is None
 
     def test_assistant_dialog_empty_text(self):
         data = {"type": 2, "text": "", "timingInfo": {}}
@@ -169,6 +294,35 @@ class TestIterBubbles:
         assert out[0] == ("composer1", "b1", {"type": 1, "text": "hi", "timingInfo": {}})
         assert out[1] == ("composer1", "b2", {"type": 2, "text": "ok", "timingInfo": {}})
 
+    def test_reads_uncheckpointed_wal_rows(self, tmp_path):
+        db = tmp_path / "state.vscdb"
+        writer = sqlite3.connect(db)
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        writer.execute(
+            "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        writer.commit()
+        writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        writer.execute(
+            "INSERT INTO cursorDiskKV VALUES (?, ?)",
+            ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "from wal"})),
+        )
+        writer.commit()
+        try:
+            assert (tmp_path / "state.vscdb-wal").stat().st_size > 0
+            rows = list(_iter_bubbles(db))
+        finally:
+            writer.close()
+        assert rows[0][2]["text"] == "from wal"
+
+    def test_uri_special_characters_in_database_path(self, tmp_path):
+        special = tmp_path / "with ? and #"
+        special.mkdir()
+        db = _make_cursor_db(
+            special, [("c1", "b1", {"type": 1, "text": "safe uri"})]
+        )
+        assert list(_iter_bubbles(db))[0][2]["text"] == "safe uri"
+
     def test_skips_non_bubble_keys(self, tmp_path):
         db = _make_cursor_db(tmp_path, [])
         conn = sqlite3.connect(db)
@@ -198,6 +352,26 @@ class TestIterBubbles:
         out = list(_iter_bubbles(db))
         assert len(out) == 0
 
+    def test_process_db_reports_skipped_rows(self, tmp_path, caplog):
+        db = _make_cursor_db(tmp_path, [])
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+            ("bubbleId:c1:null", None),
+        )
+        conn.execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+            ("bubbleId:c1:bad", "not json"),
+        )
+        conn.commit()
+        conn.close()
+        diagnostics = {}
+        assert list(process_db(db, "/proj", {"diagnostics": diagnostics})) == []
+        assert diagnostics == {"malformed_records": 2}
+        assert "skipped 2/2 bubble rows" in caplog.text
+        assert "null=1" in caplog.text
+        assert "decode=1" in caplog.text
+
 
 class TestProcessDb:
     """process_db full flow."""
@@ -217,10 +391,50 @@ class TestProcessDb:
 
     def test_process_db_sorts_by_timing(self, tmp_path):
         bubbles = [
-            ("c1", "b2", {"type": 1, "text": "second", "timingInfo": {"clientStartTime": 2}}),
-            ("c1", "b1", {"type": 1, "text": "first", "timingInfo": {"clientStartTime": 1}}),
+            ("c1", "b2", {"type": 1, "text": "second", "createdAt": "2026-07-10T00:00:02Z"}),
+            ("c1", "b1", {"type": 1, "text": "first", "createdAt": "2026-07-10T00:00:01Z"}),
         ]
         db = _make_cursor_db(tmp_path, bubbles)
         out = list(process_db(db, "/proj", {}))
         assert out[0][1]["content"] == "first"
         assert out[1][1]["content"] == "second"
+
+    def test_process_db_places_missing_timestamps_last(self, tmp_path):
+        bubbles = [
+            ("c1", "b2", {"type": 1, "text": "missing", "timingInfo": {"clientStartTime": 2}}),
+            ("c1", "b1", {"type": 1, "text": "dated", "createdAt": "2026-07-10T00:00:01Z"}),
+        ]
+        db = _make_cursor_db(tmp_path, bubbles)
+        out = list(process_db(db, "/proj", {}))
+        assert [event[1]["content"] for event in out] == ["dated", "missing"]
+
+    def test_process_db_filters_composers(self, tmp_path):
+        bubbles = [
+            ("c1", "b1", {"type": 1, "text": "keep"}),
+            ("c2", "b1", {"type": 1, "text": "drop"}),
+        ]
+        db = _make_cursor_db(tmp_path, bubbles)
+        stats = {}
+        out = list(
+            _iter_bubbles(db, stats=stats, composer_ids={"c1"})
+        )
+        assert [event[0] for event in out] == ["c1"]
+        assert stats["rows"] == 1
+
+
+class TestCursorTimestamps:
+    def test_iso_and_numeric_epoch_values(self):
+        assert _parse_timestamp("2026-07-10T12:34:56.789Z") == pytest.approx(1783686896789.0)
+        assert _parse_timestamp(1783686896789) == 1783686896789.0
+        assert _parse_timestamp(1783686896.789) == pytest.approx(1783686896789.0)
+
+    @pytest.mark.parametrize("value", [None, "", "not-a-time", 0, 5208.8, 127196698.1, True])
+    def test_invalid_or_relative_values(self, value):
+        assert _parse_timestamp(value) is None
+
+    def test_created_at_precedes_legacy_epoch_fallback(self):
+        data = {
+            "createdAt": "2026-07-10T00:00:01Z",
+            "timingInfo": {"clientStartTime": 1780000000000},
+        }
+        assert _bubble_timestamp(data) == pytest.approx(1783641601000.0)

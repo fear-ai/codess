@@ -2,7 +2,10 @@
 
 Vendor-specific structure for **Codex CLI** sessions. Normalized ingest: `src/codess/adapters/codex.py`. Scan: `src/codess/scan.py` (`_session_metrics_codex`).
 
-**Version note:** Codex evolves; first-line `session_meta` and `response_item` shapes are assumed as below.
+**Stability note:** Codex documents the transcript path, but the transcript
+format is not a stable public interface and may change. The shapes below
+describe the current tolerant Codess adapter and verified local fixtures, not a
+compatibility guarantee from Codex.
 
 ---
 
@@ -11,7 +14,7 @@ Vendor-specific structure for **Codex CLI** sessions. Normalized ingest: `src/co
 | Field | Value |
 |-------|--------|
 | **Vendor** | OpenAI Codex CLI |
-| **Primary paths** | `~/.codex/sessions/**/*.jsonl` (override: `CODESS_CODEX_SESSIONS`) |
+| **Primary paths** | Active: `~/.codex/sessions/**/*.jsonl`; archived: `~/.codex/archived_sessions/**/*.jsonl` |
 | **Encoding** | UTF-8 JSONL |
 | **Time basis** | `timestamp` on lines: numeric (s or ms) or ISO 8601 string |
 
@@ -21,10 +24,14 @@ Vendor-specific structure for **Codex CLI** sessions. Normalized ingest: `src/co
 
 | Pattern | Role |
 |---------|------|
-| Flat or shallow tree of `*.jsonl` | **One file = one session** |
-| First non-empty line | Must be `{"type":"session_meta",...}` for scan matching |
+| Date-partitioned or flat tree of `*.jsonl` | **One file = one session** |
+| `session_meta` record | Session identity, working directory, source, originator, provider, and CLI version |
 
-There is **no** subagent / sidechain concept in this layout (unlike CC).
+Codess searches past blank or malformed prefix lines for `session_meta`.
+Active and archived roots are both read by default. Setting
+`CODESS_CODEX_SESSIONS` isolates active input and disables the default archive
+root; set `CODESS_CODEX_ARCHIVED_SESSIONS` explicitly to add an archive root.
+Codess does not currently infer Codex subagent parentage from transcripts.
 
 ---
 
@@ -34,7 +41,7 @@ There is **no** subagent / sidechain concept in this layout (unlike CC).
 |--------|-----|
 | **Codess scan** | `codess scan --dir <work>`; matches `session_meta.payload.cwd` to project |
 | **Codess ingest** | `codess ingest --dir <project>`; collects files whose `cwd` resolves to project root |
-| **Direct read** | Open file; read first line for `session_meta`, then stream lines |
+| **Direct read** | Open file; locate `session_meta`, then stream records tolerantly |
 
 ---
 
@@ -45,6 +52,8 @@ There is **no** subagent / sidechain concept in this layout (unlike CC).
 | `type` | string | Must be `session_meta` |
 | `payload.id` | string | Session id fallback |
 | `payload.cwd` | string | Project directory; resolved and compared to scan path |
+| `payload.cli_version` | string | Stored as normalized session release and metadata |
+| `payload.model_provider`, `originator`, `source` | string | Retained as bounded session metadata |
 | `timestamp` | number or string | Session time for `--days` filter |
 
 ---
@@ -55,11 +64,16 @@ Ingest adapter primarily uses:
 
 | `type` | Role |
 |--------|------|
-| `session_meta` | Skipped after first line |
-| `response_item` | When `payload.type == "message"`, maps to user/developer messages |
-| `event_msg` | Partially normalized (e.g. dialog-style assistant events) |
+| `session_meta` | Supplies session identity/metadata; not emitted as an event |
+| `response_item.message` | Canonical user and assistant messages |
+| `response_item.function_call` / `custom_tool_call` | Tool calls with sanitized JSON input and call-id metadata |
+| `response_item.web_search_call` | `web_search` tool call with sanitized action metadata |
+| Matching call-output records | Tool results; call id restores the tool name |
+| `event_msg.turn_aborted` | Retained as a truncated/aborted assistant event |
+| Other notifications, reasoning, token counts, snapshots, and turn context | Counted as ignored diagnostics, not duplicated as conversation events |
 
-**Observed ranges:** Line counts per file vary widely (10–10⁵+); non-empty lines ≈ “event” count for scan.
+Record timestamps accept Unix seconds, Unix milliseconds, and ISO 8601. Tool
+call/result lineage is stored in event metadata through `call_id`.
 
 ---
 
@@ -80,6 +94,11 @@ Ingest adapter primarily uses:
 - Timestamp formats mixed (Unix s, Unix ms, ISO); parser normalizes to ms where possible.
 - “Events” in scan ≠ only chat messages; includes structural lines.
 - History file `~/.codex/history.jsonl` (if present) is **not** the same as session store; CodexSchema applies to `sessions/`.
+- Reasoning bodies, token accounting, snapshots, and turn context are
+  deliberately not normalized until they have a concrete query/audit use case.
+- Transcript compatibility must be maintained with fixtures because the
+  [official hook guidance](https://developers.openai.com/codex/config-advanced#hooks)
+  says the transcript format may change.
 
 ---
 

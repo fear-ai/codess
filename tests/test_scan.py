@@ -67,6 +67,13 @@ def test_scan_help():
     assert r.returncode == 0
     assert "scan" in r.stdout
     assert "--dir" in r.stdout or "dirs" in r.stdout
+    assert "--norec" not in r.stdout
+
+
+def test_scan_rejects_removed_norec_option():
+    result = _run(["scan", "--norec"])
+    assert result.returncode == 2
+    assert "unrecognized arguments" in result.stderr
 
 
 def test_scan_stdout_empty_work():
@@ -90,6 +97,221 @@ def test_scan_stdout_empty_work():
         lines = r.stdout.strip().split("\n")
         assert lines[0] == "path,vendor,sess,mb,span_weeks"
         assert len(lines) == 1  # header only, no projects
+
+
+def test_scan_missing_root_is_error(tmp_path):
+    env = _scan_env(tmp_path)
+    missing = tmp_path / "missing"
+    r = _run(["scan", "--dir", str(missing), "--out", "-"], env=env)
+    assert r.returncode == 1
+    assert "does not exist" in r.stderr
+
+
+def test_scan_days_zero_means_all_time(tmp_path):
+    work = tmp_path / "work"
+    proj = work / "proj"
+    proj.mkdir(parents=True)
+    cc = tmp_path / "cc"
+    slug = "-" + str(proj.resolve()).lstrip("/").replace("/", "-")
+    (cc / slug).mkdir(parents=True)
+    (cc / slug / "sessions-index.json").write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "projectPath": str(proj),
+                        "sessionId": "old",
+                        "fileMtime": 1_000_000_000_000,
+                        "messageCount": 1,
+                        "isSidechain": False,
+                    }
+                ]
+            }
+        )
+    )
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    cursor = tmp_path / "cursor" / "User"
+    cursor.mkdir(parents=True)
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(cc),
+        CODESS_CODEX_SESSIONS=str(codex),
+        CODESS_CURSOR_DATA=str(cursor),
+    )
+    result = _run(
+        ["scan", "--dir", str(work), "--days", "0", "--out", "-"],
+        env=env,
+    )
+    assert result.returncode == 0
+    assert len(result.stdout.strip().splitlines()) == 2
+
+
+def test_scan_negative_days_is_error(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    result = _run(
+        ["scan", "--dir", str(work), "--days", "-1", "--out", "-"],
+        env=_scan_env(tmp_path),
+    )
+    assert result.returncode == 1
+    assert "must be >= 0" in result.stderr
+
+
+def test_scan_non_numeric_days_is_argparse_error(tmp_path):
+    result = _run(
+        ["scan", "--days", "recent", "--out", "-"],
+        env=_scan_env(tmp_path),
+    )
+    assert result.returncode == 2
+    assert "--days" in result.stderr
+    assert "invalid int value" in result.stderr
+
+
+def test_scan_reports_malformed_index_as_nonfatal(tmp_path):
+    """A malformed CC index is visible without crashing the scan."""
+    work = tmp_path / "work"
+    proj = work / "proj"
+    proj.mkdir(parents=True)
+    cc = tmp_path / "cc"
+    slug = "-" + str(proj.resolve()).lstrip("/").replace("/", "-")
+    source = cc / slug
+    source.mkdir(parents=True)
+    (source / "sessions-index.json").write_text("not json")
+    (source / "s1.jsonl").write_text('{"type":"user"}\n')
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(cc),
+        CODESS_CODEX_SESSIONS=str(tmp_path / "codex"),
+        CODESS_CURSOR_DATA=str(tmp_path / "cursor" / "User"),
+    )
+
+    result = _run(
+        ["scan", "--dir", str(work), "--source", "cc", "--days", "0", "--out", "-"],
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert "malformed=1" in result.stderr
+    assert result.stdout.startswith("path,vendor")
+
+
+def test_scan_source_filter_ignores_other_vendor_corruption(tmp_path):
+    """Diagnostics cover only vendors selected by --source."""
+    work = tmp_path / "work"
+    work.mkdir()
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    (codex / "bad.jsonl").write_text("not json")
+    cc = tmp_path / "cc"
+    cc.mkdir()
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(cc),
+        CODESS_CODEX_SESSIONS=str(codex),
+        CODESS_CURSOR_DATA=str(tmp_path / "cursor" / "User"),
+    )
+
+    result = _run(
+        ["scan", "--dir", str(work), "--source", "cc", "--out", "-"],
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert "scan diagnostics" not in result.stderr
+
+
+def test_scan_cursor_metric_failure_exits_1_and_stop_suppresses_csv(tmp_path):
+    """Missing Cursor tables are source failures; --stop aborts before output."""
+    import sqlite3
+
+    work = tmp_path / "work"
+    proj = work / "proj"
+    proj.mkdir(parents=True)
+    cursor_base = tmp_path / "cursor" / "User"
+    ws = cursor_base / "workspaceStorage" / "ws1"
+    ws.mkdir(parents=True)
+    (ws / "workspace.json").write_text(json.dumps({"folder": str(proj)}))
+    conn = sqlite3.connect(ws / "state.vscdb")
+    conn.execute("CREATE TABLE unrelated (value TEXT)")
+    conn.commit()
+    conn.close()
+    env = _scan_env(tmp_path, CODESS_CURSOR_DATA=str(cursor_base))
+
+    continued = _run(
+        ["scan", "--dir", str(work), "--source", "cursor", "--out", "-"],
+        env=env,
+    )
+    stopped = _run(
+        [
+            "scan",
+            "--dir",
+            str(work),
+            "--source",
+            "cursor",
+            "--stop",
+            "--out",
+            "-",
+        ],
+        env=env,
+    )
+
+    assert continued.returncode == 1
+    assert "failed_sources=1" in continued.stderr
+    assert continued.stdout.startswith("path,vendor")
+    assert stopped.returncode == 1
+    assert "failed_sources=1" in stopped.stderr
+    assert stopped.stdout == ""
+
+
+def test_scan_cursor_invalid_key_is_reported_but_nonfatal(tmp_path):
+    """Malformed Cursor keys affect diagnostics, not command success."""
+    import sqlite3
+
+    work = tmp_path / "work"
+    proj = work / "proj"
+    proj.mkdir(parents=True)
+    cursor_base = tmp_path / "cursor" / "User"
+    ws = cursor_base / "workspaceStorage" / "ws1"
+    ws.mkdir(parents=True)
+    (ws / "workspace.json").write_text(json.dumps({"folder": str(proj)}))
+    conn = sqlite3.connect(ws / "state.vscdb")
+    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute("INSERT INTO cursorDiskKV VALUES ('bubbleId:broken', '{}')")
+    conn.commit()
+    conn.close()
+    env = _scan_env(tmp_path, CODESS_CURSOR_DATA=str(cursor_base))
+
+    result = _run(
+        ["scan", "--dir", str(work), "--source", "cursor", "--out", "-"],
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert "invalid_keys=1" in result.stderr
+
+
+def test_scan_path_filter_uses_component_boundary(tmp_path):
+    """A sibling such as work-other is not considered inside work."""
+    work = tmp_path / "work"
+    sibling_project = tmp_path / "work-other" / "proj"
+    work.mkdir()
+    sibling_project.mkdir(parents=True)
+    cc = tmp_path / "cc"
+    source = cc / "project-index"
+    source.mkdir(parents=True)
+    (source / "sessions-index.json").write_text(
+        json.dumps({"entries": [{"projectPath": str(sibling_project)}]})
+    )
+    env = _scan_env(tmp_path, CODESS_CC_PROJECTS=str(cc))
+
+    result = _run(
+        ["scan", "--dir", str(work), "--source", "cc", "--out", "-"],
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip().splitlines() == ["path,vendor,sess,mb,span_weeks"]
 
 
 def test_scan_csv_format(tmp_path):
@@ -260,6 +482,53 @@ def test_scan_cursor_central_db():
         assert "1," in row or ",1," in row  # sess=1
 
 
+def test_scan_days_filters_cursor_global_with_header_timestamps(tmp_path):
+    """Cursor global rows with a known old header range respect --days."""
+    import sqlite3
+
+    work = tmp_path / "work"
+    work.mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    global_dir = cursor_base / "globalStorage"
+    global_dir.mkdir(parents=True)
+    db = global_dir / "state.vscdb"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute(
+        "CREATE TABLE composerHeaders ("
+        "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+        "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO cursorDiskKV VALUES (?, ?)",
+        ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "old"})),
+    )
+    conn.execute(
+        "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+        ("c1", "ws", 1_000_000_000_000, 1_000_000_001_000, 0, 0),
+    )
+    conn.commit()
+    conn.close()
+    cc = tmp_path / "cc"
+    codex = tmp_path / "codex"
+    cc.mkdir()
+    codex.mkdir()
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(cc),
+        CODESS_CODEX_SESSIONS=str(codex),
+        CODESS_CURSOR_DATA=str(cursor_base),
+    )
+    result = _run(
+        ["scan", "--dir", str(work), "--days", "1", "--out", "-"],
+        env=env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip().splitlines() == [
+        "path,vendor,sess,mb,span_weeks"
+    ]
+
+
 def test_scan_days_ago_in_debug():
     """Scan --debug includes days_ago in CC/Codex output."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -320,6 +589,47 @@ def test_scan_registry_missing_file_exit(tmp_path):
     )
     assert r.returncode == 1
     assert "not found" in r.stderr.lower()
+
+
+def test_scan_registry_corrupt_json_exit(tmp_path):
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    (reg / "ingested_projects.json").write_text("{broken")
+    work = tmp_path / "work"
+    work.mkdir()
+    r = _run(
+        ["scan", "--dir", str(work), "--registry", str(reg), "--out", "-"],
+        env=_scan_env(tmp_path),
+    )
+    assert r.returncode == 1
+    assert "cannot read registry" in r.stderr.lower()
+
+
+def test_scan_empty_registry_warns_and_outputs_only_header(tmp_path):
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    (reg / "ingested_projects.json").write_text('{"projects":[]}')
+    work = tmp_path / "work"
+    work.mkdir()
+    r = _run(
+        ["scan", "--dir", str(work), "--registry", str(reg), "--out", "-"],
+        env=_scan_env(tmp_path),
+    )
+    assert r.returncode == 0
+    assert "registry has no projects" in r.stderr.lower()
+    assert len(r.stdout.strip().splitlines()) == 1
+
+
+@pytest.mark.parametrize("contents", ["", "# comments only\n", "../outside\n"])
+def test_scan_dirs_file_without_usable_roots_is_error(tmp_path, contents):
+    dirs = tmp_path / "dirs.txt"
+    dirs.write_text(contents)
+    result = _run(
+        ["scan", "--dirs", str(dirs), "--out", "-"],
+        env=_scan_env(tmp_path),
+    )
+    assert result.returncode == 1
+    assert "codess:" in result.stderr.lower()
 
 
 def test_scan_merges_registry_without_registry_flag(tmp_path):

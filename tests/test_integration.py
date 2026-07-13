@@ -1,7 +1,9 @@
 """Integration tests for ingest and query."""
 
+import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -18,6 +20,30 @@ def test_path_to_slug_roundtrip():
     assert slug == "-Users-walter-Work-Spank-spankpy"
     back = slug_to_path(slug)
     assert back == path
+
+
+def test_ingest_invalid_source_is_global_error(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "main",
+            "ingest",
+            "--dir",
+            str(project),
+            "--source",
+            "bogus",
+        ],
+        cwd=str(Path(__file__).parent.parent),
+        env={**os.environ, "CODESS_REGISTRY": str(tmp_path / "registry")},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "invalid ingest --source" in result.stderr
+    assert not (project / ".codess").exists()
 
 
 def test_sanitize_control_chars():
@@ -115,6 +141,65 @@ def test_full_ingest_and_query():
         assert "test-session" in result.stdout or "Claude" in result.stdout
 
 
+def test_cc_ingest_includes_nested_subagent_with_parent_metadata():
+    """Nested subagent transcripts become sessions linked to their main session."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        project_root = tmp / "myproj"
+        project_root.mkdir()
+        projects_dir = tmp / "cc_projects"
+        slug_dir = projects_dir / path_to_slug(project_root.resolve())
+        nested_dir = slug_dir / "parent-session" / "subagents"
+        nested_dir.mkdir(parents=True)
+        fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
+        shutil.copy(fixture, slug_dir / "parent-session.jsonl")
+        shutil.copy(fixture, nested_dir / "child-session.jsonl")
+
+        env = os.environ.copy()
+        env["CODESS_CC_PROJECTS"] = str(projects_dir)
+        env["CODESS_REGISTRY"] = str(tmp / "registry")
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "main",
+                "ingest",
+                "--dir",
+                str(project_root),
+                "--source",
+                "cc",
+                "--force",
+                "--min-size",
+                "0",
+            ],
+            cwd=str(Path(__file__).parent.parent),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+        conn = sqlite3.connect(project_root / ".codess" / "sessions_cc.db")
+        try:
+            sessions = {
+                row[0]: row[1]
+                for row in conn.execute("SELECT id, metadata FROM sessions")
+            }
+            assert set(sessions) == {"parent-session", "child-session"}
+            assert sessions["parent-session"] is None
+            child_metadata = json.loads(sessions["child-session"])
+            assert child_metadata == {
+                "is_sidechain": True,
+                "parent_session_id": "parent-session",
+                "source_relpath": "parent-session/subagents/child-session.jsonl",
+            }
+            assert conn.execute(
+                "SELECT COUNT(*) FROM events WHERE session_id = 'child-session'"
+            ).fetchone()[0] > 0
+        finally:
+            conn.close()
+
+
 def test_malformed_json_skipped():
     """Malformed JSON lines are skipped; ingest continues."""
     from codess.adapters.cc import iter_cc_records
@@ -142,7 +227,7 @@ def test_codex_ingest_and_query():
         sess_file.write_text(
             f'{{"type":"session_meta","payload":{{"id":"s1","cwd":"{proj_str}"}}}}\n'
             '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}}\n'
-            '{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"Hello"}]}}\n'
+            '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}}\n'
         )
         reg = tmp / "_central_reg"
         reg.mkdir()
@@ -189,11 +274,11 @@ def test_cursor_ingest_and_query():
         conn.execute("CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
         conn.execute(
             "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
-            ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "hi", "timingInfo": {"clientStartTime": 1}})),
+            ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "hi", "createdAt": "2026-07-10T00:00:01Z"})),
         )
         conn.execute(
             "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
-            ("bubbleId:c1:b2", json.dumps({"type": 2, "text": "ok", "timingInfo": {"clientStartTime": 2}})),
+            ("bubbleId:c1:b2", json.dumps({"type": 2, "text": "ok", "createdAt": "2026-07-10T00:00:02Z"})),
         )
         conn.commit()
         conn.close()
@@ -223,6 +308,104 @@ def test_cursor_ingest_and_query():
         )
         assert r.returncode == 0
         assert "Sessions:" in r.stdout and "Events:" in r.stdout
+
+
+def test_cursor_global_ingest_is_scoped_by_composer_headers():
+    """Global Cursor bubbles are ingested only when their header maps to the project."""
+    import json
+    import sqlite3
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        proj = tmp / "myproj"
+        proj.mkdir()
+        cursor_base = tmp / "cursor" / "User"
+        ws = cursor_base / "workspaceStorage" / "ws-project"
+        ws.mkdir(parents=True)
+        (ws / "workspace.json").write_text(f'{{"folder":"file://{proj}"}}')
+
+        global_dir = cursor_base / "globalStorage"
+        global_dir.mkdir(parents=True)
+        global_db = global_dir / "state.vscdb"
+        conn = sqlite3.connect(global_db)
+        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "CREATE TABLE composerHeaders ("
+            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+        )
+        conn.executemany(
+            "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("mapped", "ws-project", 1, 2, 0, 0),
+                ("other", "ws-other", 1, 2, 0, 0),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO cursorDiskKV VALUES (?, ?)",
+            [
+                (
+                    "bubbleId:mapped:b1",
+                    json.dumps(
+                        {
+                            "type": 1,
+                            "text": "keep",
+                            "createdAt": "2026-07-10T00:00:01Z",
+                        }
+                    ),
+                ),
+                (
+                    "bubbleId:other:b1",
+                    json.dumps(
+                        {
+                            "type": 1,
+                            "text": "drop",
+                            "createdAt": "2026-07-10T00:00:01Z",
+                        }
+                    ),
+                ),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        reg = tmp / "registry"
+        reg.mkdir()
+        env = {
+            **os.environ,
+            "CODESS_REGISTRY": str(reg),
+            "CODESS_CURSOR_DATA": str(cursor_base),
+        }
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "main",
+                "ingest",
+                "--dir",
+                str(proj),
+                "--source",
+                "cursor",
+                "--force",
+            ],
+            cwd=str(Path(__file__).parent.parent),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+        store = proj / ".codess" / "sessions_cursor.db"
+        conn = sqlite3.connect(store)
+        sessions = conn.execute(
+            "SELECT id, project_path, metadata FROM sessions ORDER BY id"
+        ).fetchall()
+        events = conn.execute("SELECT session_id FROM events ORDER BY session_id").fetchall()
+        conn.close()
+        assert [row[0] for row in sessions] == ["mapped"]
+        assert sessions[0][1] == str(proj.resolve())
+        assert json.loads(sessions[0][2])["workspace_id"] == "ws-project"
+        assert events == [("mapped",)]
 
 
 def test_incremental_skip_unchanged():
@@ -274,5 +457,3 @@ def test_incremental_skip_unchanged():
         )
         assert r3.returncode == 0
         assert "0 file(s)" in r3.stdout or "Ingested 0" in r3.stdout
-
-

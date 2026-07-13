@@ -12,7 +12,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from codess.config import CC_PROJECTS, CODEX_SESSIONS, CURSOR_DATA, VERBOSE
+from codess.config import (
+    CC_PROJECTS,
+    CODEX_ARCHIVED_SESSIONS,
+    CODEX_SESSIONS,
+    CURSOR_DATA,
+    VERBOSE,
+)
 
 log = logging.getLogger(__name__)
 
@@ -80,32 +86,49 @@ def get_cc_session_dir(project_root: Path) -> Path | None:
     return None
 
 
+def get_codex_session_roots() -> list[Path]:
+    """Return configured active and archived transcript roots, deduplicated."""
+    roots = [CODEX_SESSIONS]
+    if CODEX_ARCHIVED_SESSIONS is not None:
+        roots.append(CODEX_ARCHIVED_SESSIONS)
+    return list(dict.fromkeys(path.resolve() for path in roots))
+
+
+def read_codex_session_meta(path: Path) -> dict | None:
+    """Return the first session_meta record, tolerating blank/malformed prefixes."""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("type") == "session_meta":
+                    return record
+    except OSError:
+        return None
+    return None
+
+
 def get_codex_session_files(project_root: Path) -> list[Path]:
     """Return Codex JSONL files whose session_meta.cwd matches project. Empty if none."""
     project_root = project_root.resolve()
     project_str = str(project_root)
     files = []
-    if not CODEX_SESSIONS.exists():
-        return files
-    for path in sorted(CODEX_SESSIONS.rglob("*.jsonl")):
-        try:
-            with path.open(encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rec = json.loads(line)
-                        if rec.get("type") == "session_meta":
-                            payload = rec.get("payload") or {}
-                            cwd = payload.get("cwd") or ""
-                            if cwd and (cwd == project_str or cwd.startswith(project_str + "/")):
-                                files.append(path)
-                            break
-                    except json.JSONDecodeError:
-                        continue
-        except OSError:
-            continue
+    paths = (
+        path
+        for root in get_codex_session_roots()
+        if root.exists()
+        for path in root.rglob("*.jsonl")
+    )
+    for path in sorted(paths):
+        record = read_codex_session_meta(path)
+        payload = (record or {}).get("payload") or {}
+        cwd = payload.get("cwd") or ""
+        if cwd and (cwd == project_str or cwd.startswith(project_str + "/")):
+            files.append(path)
     return files
 
 
@@ -117,12 +140,22 @@ def get_cursor_global_db() -> Path | None:
 
 def get_cursor_workspace_dbs(project_root: Path) -> list[Path]:
     """Return Cursor state.vscdb paths for workspaces matching project. Empty if none."""
+    ws_dir = CURSOR_DATA / "workspaceStorage"
+    return [
+        ws_dir / workspace_id / "state.vscdb"
+        for workspace_id in get_cursor_workspace_ids(project_root)
+        if (ws_dir / workspace_id / "state.vscdb").exists()
+    ]
+
+
+def get_cursor_workspace_ids(project_root: Path) -> list[str]:
+    """Return Cursor workspace ids whose workspace.json maps under project_root."""
     project_root = project_root.resolve()
     project_str = str(project_root)
     ws_dir = CURSOR_DATA / "workspaceStorage"
     if not ws_dir.exists():
         return []
-    dbs = []
+    workspace_ids = []
     for hash_dir in ws_dir.iterdir():
         if not hash_dir.is_dir():
             continue
@@ -139,12 +172,10 @@ def get_cursor_workspace_dbs(project_root: Path) -> list[Path]:
                 folder = folder[7:]
             folder = str(Path(folder).resolve()) if folder else ""
             if folder and (folder == project_str or folder.startswith(project_str + "/")):
-                db = hash_dir / "state.vscdb"
-                if db.exists():
-                    dbs.append(db)
+                workspace_ids.append(hash_dir.name)
         except (json.JSONDecodeError, OSError):
             continue
-    return dbs
+    return sorted(workspace_ids)
 
 
 # --- CLI: bool merge, roots, run options (merged from former cli_options.py) ---
@@ -182,13 +213,23 @@ def resolve_cli_roots(
             return None, err
 
     dir_list = getattr(args, "dir_list", None) or []
+    supplied_roots = dirs_file is not None or any(
+        isinstance(raw, str) and raw.strip() for raw in dir_list
+    )
     roots = parse_dir_list(dirs_file, dir_list)
     if not roots:
+        if supplied_roots:
+            return None, "codess: no valid directory roots were supplied"
         roots = (
             [Path.cwd()]
             if when_empty is RootsWhenEmpty.CWD
             else [get_project_root()]
         )
+    for root in roots:
+        if not root.exists():
+            return None, f"codess: directory root does not exist: {root}"
+        if not root.is_dir():
+            return None, f"codess: directory root is not a directory: {root}"
     return roots, None
 
 
@@ -213,7 +254,6 @@ class ScanRunOptions:
     stop_on_error: bool
     debug: bool
     subagent: bool
-    norec: bool  # no recursion when walk applies (reserved; not yet passed to run_scan)
     recent_days: int | None  # None when debug bypasses day filter
     vendors: list[str] | None  # None = all vendors
 
@@ -249,12 +289,11 @@ def validate_scan_source_for_cli(source: str | None) -> str | None:
 
 
 def build_scan_run_options(args: Any) -> ScanRunOptions:
-    from codess.config import CODESS_DAYS, DEBUG, NOREC, STOP, SUBAGENT
+    from codess.config import CODESS_DAYS, DEBUG, STOP, SUBAGENT
 
     stop_on_error = flag_or_env(args, "stop", STOP)
     debug = flag_or_env(args, "debug", DEBUG)
     subagent = flag_or_env(args, "subagent", SUBAGENT)
-    norec = flag_or_env(args, "norec", NOREC)
     recent_days = None if debug else (
         args.days if getattr(args, "days", None) is not None else CODESS_DAYS
     )
@@ -270,7 +309,6 @@ def build_scan_run_options(args: Any) -> ScanRunOptions:
         stop_on_error=stop_on_error,
         debug=debug,
         subagent=subagent,
-        norec=norec,
         recent_days=recent_days,
         vendors=vendors,
     )
@@ -363,15 +401,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="[CODESS_STOP] Stop on first error (scan/ingest); default log and continue",
     )
     p.add_argument(
-        "--norec",
-        action="store_true",
-        help="scan: no directory recursion where walk applies [CODESS_NOREC]",
-    )
-    p.add_argument(
         "--days",
         type=int,
         metavar="N",
-        help="scan: [CODESS_DAYS] include sessions from last N days",
+        help="scan: [CODESS_DAYS] include sessions from last N days; 0 means all time",
     )
     p.add_argument(
         "--debug",
@@ -499,4 +532,3 @@ def parse_and_run(argv: list[str] | None = None) -> int:
 
 def main() -> int:
     return parse_and_run()
-

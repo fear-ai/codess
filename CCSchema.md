@@ -57,14 +57,34 @@ Array under `entries` (typical fields used by Codess):
 
 ---
 
-## 5. JSONL records (transcript)
+## 5. JSONL records and runtime context
 
-Line-delimited JSON. Types used by adapter include `user`, `assistant`, `system`, and skipped types (`progress`, `file-history-snapshot`, …).
+Line-delimited JSON contains both transcript content and Claude Code product
+state. Persisted records are not a verbatim copy of the model's runtime context.
+
+Runtime context can include system/project instructions, a conversation working
+set or compacted summary, a memory index, skill descriptions, loaded tool
+schemas, deferred tool names, attachments, and tool results. Exact contents are
+assembled dynamically and are not recoverable from normalized message events.
 
 | Pattern | Notes |
 |---------|--------|
 | **Main session** | `user` / `assistant` with `message.content` blocks (`text`, `tool_use`, `tool_result`) |
 | **Subagent** | Messages may carry `isSidechain: true`, `agentId`; linking to parent session not always in file (see GitHub CC issues on `parentSessionId`) |
+| **Product state** | Records can include `system`, `mode`, `permission-mode`, `attachment`, `file-history-snapshot`, `queue-operation`, `ai-title`, and `last-prompt` |
+
+Common record-envelope fields include `sessionId`, `uuid`, `parentUuid`,
+`timestamp`, `cwd`, `gitBranch`, `version`, and `isSidechain`. Field presence
+varies by record type.
+
+The current adapter emits normalized events only from `user` and `assistant`
+records. Product-state records are skipped or ignored, even when a `system`
+record contains content. Each emitted content block has a distinct stable event
+id. Event metadata retains `uuid` / `parentUuid`; tool calls and their results
+also retain the shared tool-use id, making record and call/result lineage
+queryable without copying the full envelope. Task-list metadata under
+`~/.claude/tasks/` is separate from transcript JSONL and from live background
+processes.
 
 **Timestamps:** `timestamp` on record or nested in `message`; ISO 8601 strings or numeric ms.
 
@@ -78,7 +98,8 @@ Line-delimited JSON. Types used by adapter include `user`, `assistant`, `system`
 | **Typical files** | Top-level `{sessionId}.jsonl` | Often under `{parent}/subagents/` or dedicated `sessionId` dir |
 | **Scan default** | Counted | Excluded |
 | **Scan + `--subagent`** | Counted | Counted |
-| **Ingest** | Top-level `*.jsonl` | **Not** ingested (nested paths skipped) |
+| **Ingest** | Top-level `*.jsonl` | Ingested from `{parent}/subagents/**/*.jsonl` |
+| **Stored linkage** | No extra session metadata | `is_sidechain`, `parent_session_id`, and `source_relpath` in session metadata |
 | **Size fallback** | `fullPath` or `{sessionId}/**/*.jsonl` | Fallback rglob may include subagent bytes if main path missing |
 
 ---
@@ -98,7 +119,7 @@ Line-delimited JSON. Types used by adapter include `user`, `assistant`, `system`
 ## 8. Quirks & limitations
 
 - Index may omit `fullPath` → size uses directory rglob (may mix subagent files).
-- Ingest does not recurse into `{uuid}/subagents/*.jsonl`.
+- Ingest deliberately recurses only below `{parent}/subagents/`; unrelated nested JSONL fragments are not treated as sessions.
 - CC package version not stored in these files; use your installed `claude-code` version separately.
 - **Slug decode (implementation impact):** `slug_to_path` is lossy (e.g. hyphen vs path segment). Discovery prefers `projectPath` from `sessions-index.json` when present; `project.py` / scan fall back to slug-derived paths.
 
@@ -106,8 +127,8 @@ Line-delimited JSON. Types used by adapter include `user`, `assistant`, `system`
 
 | Gap | Detail |
 |-----|--------|
-| Subagent ingest | Ingest only globs top-level `*.jsonl` under project slug; nested subagent transcripts are skipped unless future work adds recursion or index-driven paths. |
-| Parent/child linking | Upstream CC may add `parentSessionId` / tool-call ids in metadata (see CC GitHub issues); not required for current scan counts. |
+| Product-state coverage | Mode, permission, attachment, snapshot, title, queue, and system records are not normalized; decide which are required for audits before extending CoSchema. |
+| Runtime-context snapshots | Memory, skills, tool schemas, instructions, compaction, and token usage need a separate model if context analysis becomes a goal; message events cannot represent them faithfully. |
 
 ---
 
@@ -119,4 +140,3 @@ Line-delimited JSON. Types used by adapter include `user`, `assistant`, `system`
 | Cursor storage | **CursorSchema.md** |
 | Codex storage | **CodexSchema.md** |
 | Features & code plan | **CoPlan.md** |
-

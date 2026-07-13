@@ -1,5 +1,6 @@
 """Tests for helpers module."""
 
+import csv
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,6 @@ from codess.helpers import (
     is_excluded,
     parse_dir_list,
     path_to_slug,
-    should_skip_recurse,
     slug_to_path,
     user_root_string_disallowed,
     validate_dirs_file,
@@ -55,20 +55,6 @@ class TestIsExcluded:
         assert not is_excluded(p, tmp_path)
 
 
-class TestShouldSkipRecurse:
-    def test_git(self):
-        assert should_skip_recurse(".git")
-
-    def test_node_modules(self):
-        assert should_skip_recurse("node_modules")
-
-    def test_case_insensitive(self):
-        assert should_skip_recurse("NODE_MODULES")
-
-    def test_not_skipped(self):
-        assert not should_skip_recurse("src")
-
-
 class TestWriteCsv:
     def test_writes_headers_and_rows(self, tmp_path):
         out = tmp_path / "out.csv"
@@ -76,6 +62,13 @@ class TestWriteCsv:
         content = out.read_text()
         assert content.startswith("x,y\n") or content.startswith("x,y\r\n")
         assert "a,1" in content and "b,2" in content
+
+    def test_protects_string_cells_from_spreadsheet_formulas(self, tmp_path):
+        out = tmp_path / "out.csv"
+        write_csv(out, [["=cmd", -1]], headers=["name", "count"])
+        with out.open(newline="", encoding="utf-8") as stream:
+            rows = list(csv.reader(stream))
+        assert rows[1] == ["\t=cmd", "-1"]
 
 
 class TestParseDirList:

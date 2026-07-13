@@ -5,25 +5,9 @@ import logging
 from pathlib import Path
 
 from codess.config import EXCLUDE_REVIEW_DIRS
+from codess.sanitize import protect_csv_row
 
 log = logging.getLogger(__name__)
-
-
-def load_codessignore(cwd: Path | None = None) -> frozenset[str]:
-    """Load .codessignore: cwd first, else ~/.codessignore. One dir name per line. Case-insensitive."""
-    cwd = cwd or Path.cwd()
-    for p in (cwd / ".codessignore", Path.home() / ".codessignore"):
-        if p.exists():
-            try:
-                names = {
-                    ln.strip().lower()
-                    for ln in p.read_text(encoding="utf-8").splitlines()
-                    if ln.strip() and not ln.strip().startswith("#")
-                }
-                return frozenset(names)
-            except OSError:
-                pass
-    return frozenset()
 
 
 def path_to_slug(path: Path) -> str:
@@ -72,20 +56,6 @@ def is_excluded(p: Path, work_root: Path | None = None) -> bool:
         if rel == d or rel.startswith(d + "/"):
             return True
     return False
-
-
-def should_skip_recurse(dirname: str, codessignore: frozenset[str] | None = None) -> bool:
-    """True if dirname should be skipped when recursing (case-insensitive)."""
-    from codess.config import EXCLUDE_RECURSE
-    if dirname.startswith("."):
-        return True
-    if dirname in EXCLUDE_RECURSE or dirname.lower() in {d.lower() for d in EXCLUDE_RECURSE}:
-        return True
-    if codessignore and dirname.lower() in codessignore:
-        return True
-    return False
-
-
 def write_csv(path: Path, rows: list[list], headers: list[str] | None = None) -> None:
     """Write rows to CSV file. headers optional.
 
@@ -97,7 +67,7 @@ def write_csv(path: Path, rows: list[list], headers: list[str] | None = None) ->
         w = csv.writer(f)
         if headers:
             w.writerow(headers)
-        w.writerows(rows)
+        w.writerows(protect_csv_row(row) for row in rows)
 
 
 def user_root_string_disallowed(raw: str) -> bool:

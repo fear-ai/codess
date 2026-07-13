@@ -1,6 +1,6 @@
 # CoSchema — Our SQLite designs
 
-Sessions, events, indexes. DDL in `coding-sessions-schema.sql`.
+Sessions, events, indexes. Executable DDL is `sql/CoSchema.sql`.
 
 ---
 
@@ -45,8 +45,8 @@ Sessions, events, indexes. DDL in `coding-sessions-schema.sql`.
 |--------|------|----------|-------------|
 | id | INTEGER | NOT NULL | PK autoincrement |
 | session_id | TEXT | NOT NULL | FK sessions(id) |
-| event_id | TEXT | NOT NULL | UNIQUE(session_id, event_id) |
-| event_type | TEXT | NULL | user_message, assistant_message, tool_call, tool_result |
+| event_id | TEXT | NOT NULL | Stable vendor/adapter identifier; UNIQUE(session_id, event_id). Claude uses the line number for the first emitted block and `line:block` for additional blocks. |
+| event_type | TEXT | NULL | user_message, assistant_message, tool_call |
 | subtype | TEXT | NULL | prompt, slash_command, response, dialog, permission_denied |
 | role | TEXT | NULL | user, assistant, system |
 | content | TEXT | NULL | Truncated |
@@ -58,7 +58,7 @@ Sessions, events, indexes. DDL in `coding-sessions-schema.sql`.
 | timestamp | REAL | NULL | Unix ms |
 | file_path | TEXT | NULL | |
 | source_file | TEXT | NULL | Raw path |
-| metadata | TEXT | NULL | JSON |
+| metadata | TEXT | NULL | JSON; Claude events retain record UUID/parent UUID/tool-use id, Codex calls retain call id/status, and Cursor sessions retain global/header classification |
 | source_raw | BLOB | NULL | Debug only |
 
 ---

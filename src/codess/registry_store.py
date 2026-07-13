@@ -1,15 +1,15 @@
-"""Central ``ingested_projects.json``: merged updates from scan, ingest, query, (future) walk.
+"""Central ``ingested_projects.json``: merged updates from scan, ingest, and query.
 
 Each project entry is keyed by resolved ``path``. Top-level keys may include:
 ``sources`` (ingest store counts), ``scan`` (last index-led metrics), ``query``
-(last query snapshot), ``walk`` (future), and timestamps ``last_ingestion``,
+(last query snapshot), and timestamps ``last_ingestion``,
 ``last_scan``, ``last_query``.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -85,18 +85,3 @@ def merge_scan_rows(entry: dict[str, Any], scan_rows: list[dict[str, Any]]) -> N
 def merge_query_stats(entry: dict[str, Any], sessions: int, events: int) -> None:
     entry["last_query"] = _now_iso()
     entry["query"] = {"sessions": int(sessions), "events": int(events)}
-
-
-def upsert_walk_seen(registry_root: Path, project_paths: Iterable[str]) -> None:
-    """Record that walk/discovery saw these project paths (for future ``walk_dirs`` wiring)."""
-    for p in project_paths:
-        if not p:
-            continue
-        ts = _now_iso()
-
-        def mut(e: dict[str, Any], t: str = ts) -> None:
-            w = dict(e.get("walk") or {})
-            w["last_seen"] = t
-            e["walk"] = w
-
-        update_project_entry(registry_root, p, mut)

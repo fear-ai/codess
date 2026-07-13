@@ -13,7 +13,7 @@ from codess.config import (
     TRUNCATE_RESPONSE,
     TRUNCATE_TOOL_RESULT,
 )
-from codess.sanitize import apply_sanitization
+from codess.sanitize import apply_sanitization, sanitize_value
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +22,12 @@ SKIP_TYPES = frozenset({
 })
 
 
-def iter_cc_records(path: Path) -> Iterator[tuple[int, dict, str]]:
+def iter_cc_records(
+    path: Path,
+    diagnostics: dict[str, int] | None = None,
+    *,
+    warn: bool = True,
+) -> Iterator[tuple[int, dict, str]]:
     """Stream JSONL; yield (line_num, record, raw_line). Skip empty lines; on JSON error log and skip."""
     with path.open(encoding="utf-8", errors="replace") as f:
         for line_num, line in enumerate(f, 1):
@@ -34,7 +39,12 @@ def iter_cc_records(path: Path) -> Iterator[tuple[int, dict, str]]:
                 record = json.loads(line)
                 yield line_num, record, raw
             except json.JSONDecodeError as e:
-                log.warning("JSON error at %s:%d: %s", path, line_num, e)
+                if diagnostics is not None:
+                    diagnostics["malformed_records"] = (
+                        diagnostics.get("malformed_records", 0) + 1
+                    )
+                if warn:
+                    log.warning("JSON error at %s:%d: %s", path, line_num, e)
                 continue
 
 
@@ -126,7 +136,7 @@ def truncate_content(text: str, limit: int) -> tuple[str, int]:
 def _build_tool_map(path: Path) -> dict[str, str]:
     """First pass: build tool_use_id -> tool_name from assistant records."""
     tool_map = {}
-    for _line_num, record, _ in iter_cc_records(path):
+    for _line_num, record, _ in iter_cc_records(path, warn=False):
         if record.get("type") != "assistant":
             continue
         content = record.get("message", {}).get("content") or []
@@ -163,6 +173,23 @@ def _get_timestamp(record: dict) -> float | None:
     return _parse_timestamp(ts)
 
 
+def _block_event_id(line_num: int, emitted_index: int) -> str:
+    """Keep the legacy first id while making additional line events unique."""
+    return str(line_num) if emitted_index == 0 else f"{line_num}:{emitted_index}"
+
+
+def _event_metadata(record: dict, tool_use_id=None) -> str | None:
+    """Retain stable Claude lineage identifiers without copying the envelope."""
+    metadata = {}
+    if record.get("uuid") is not None:
+        metadata["record_uuid"] = record["uuid"]
+    if record.get("parentUuid") is not None:
+        metadata["parent_uuid"] = record["parentUuid"]
+    if tool_use_id is not None:
+        metadata["tool_use_id"] = tool_use_id
+    return json.dumps(metadata, separators=(",", ":")) if metadata else None
+
+
 def normalize_assistant(
     record: dict,
     line_num: int,
@@ -186,11 +213,8 @@ def normalize_assistant(
             if tid and tname:
                 tool_map[tid] = tname
 
-    # Check for tool_use in content (for dialog vs response)
-    has_tool_use = any(
-        isinstance(b, dict) and b.get("type") == "tool_use" for b in content
-    )
     stop_reason = record.get("message", {}).get("stop_reason", "")
+    emitted_index = 0
 
     for i, block in enumerate(content):
         if not isinstance(block, dict):
@@ -214,7 +238,7 @@ def normalize_assistant(
             truncated, content_len = truncate_content(text, limit)
             events.append({
                 "session_id": session_id,
-                "event_id": str(line_num),
+                "event_id": _block_event_id(line_num, emitted_index),
                 "event_type": "assistant_message",
                 "subtype": subtype,
                 "role": role,
@@ -227,17 +251,20 @@ def normalize_assistant(
                 "timestamp": ts,
                 "file_path": None,
                 "source_file": source_file,
-                "metadata": None,
+                "metadata": _event_metadata(record),
                 "source_raw": None,
             })
+            emitted_index += 1
 
         elif btype == "tool_use":
             tname = block.get("name")
             tinput = block.get("input") or {}
             tool_input = extract_tool_input(tname or "", tinput)
+            tool_input = sanitize_value(tool_input, redact_enabled)
+            tool_use_id = block.get("id")
             events.append({
                 "session_id": session_id,
-                "event_id": str(line_num),
+                "event_id": _block_event_id(line_num, emitted_index),
                 "event_type": "tool_call",
                 "subtype": None,
                 "role": role,
@@ -250,9 +277,10 @@ def normalize_assistant(
                 "timestamp": ts,
                 "file_path": tool_input.get("path") if isinstance(tool_input, dict) else None,
                 "source_file": source_file,
-                "metadata": None,
+                "metadata": _event_metadata(record, tool_use_id),
                 "source_raw": None,
             })
+            emitted_index += 1
 
     return events, tool_map
 
@@ -271,6 +299,7 @@ def normalize_user(
     role = record.get("message", {}).get("role", "user")
     ts = _get_timestamp(record)
     redact_enabled = opts.get("redact", False)
+    emitted_index = 0
 
     for block in content:
         if not isinstance(block, dict):
@@ -283,7 +312,7 @@ def normalize_user(
             subtype = "slash_command" if text.strip().startswith("/") else "prompt"
             events.append({
                 "session_id": session_id,
-                "event_id": str(line_num),
+                "event_id": _block_event_id(line_num, emitted_index),
                 "event_type": "user_message",
                 "subtype": subtype,
                 "role": role,
@@ -296,9 +325,10 @@ def normalize_user(
                 "timestamp": ts,
                 "file_path": None,
                 "source_file": source_file,
-                "metadata": None,
+                "metadata": _event_metadata(record),
                 "source_raw": None,
             })
+            emitted_index += 1
 
         elif btype == "tool_result":
             tool_use_id = block.get("tool_use_id")
@@ -318,7 +348,7 @@ def normalize_user(
             subtype = "permission_denied" if is_error else "tool_result"
             events.append({
                 "session_id": session_id,
-                "event_id": str(line_num),
+                "event_id": _block_event_id(line_num, emitted_index),
                 "event_type": "user_message",
                 "subtype": subtype,
                 "role": role,
@@ -331,9 +361,10 @@ def normalize_user(
                 "timestamp": ts,
                 "file_path": None,
                 "source_file": source_file,
-                "metadata": None,
+                "metadata": _event_metadata(record, tool_use_id),
                 "source_raw": None,
             })
+            emitted_index += 1
 
     return events
 
@@ -346,16 +377,29 @@ def process_file(
     """Stream events from CC JSONL. Two-pass: build tool_map, then emit events."""
     source_file = str(path.resolve())
     tool_map = _build_tool_map(path)
+    diagnostics = opts.get("diagnostics")
 
-    for line_num, record, raw_line in iter_cc_records(path):
+    for line_num, record, raw_line in iter_cc_records(path, diagnostics):
         if should_skip(record):
+            if diagnostics is not None:
+                diagnostics["ignored_records"] = (
+                    diagnostics.get("ignored_records", 0) + 1
+                )
             continue
         rtype = record.get("type")
         debug = opts.get("debug", False)
-        source_raw = raw_line.encode("utf-8", errors="replace")[:512] if debug else None
+        source_raw = (
+            raw_line.encode("utf-8", errors="replace")[:512]
+            if debug and not opts.get("redact", False)
+            else None
+        )
 
         if rtype == "assistant":
             evs, _ = normalize_assistant(record, line_num, session_id, source_file, opts)
+            if not evs and diagnostics is not None:
+                diagnostics["ignored_records"] = (
+                    diagnostics.get("ignored_records", 0) + 1
+                )
             for ev in evs:
                 if source_raw is not None:
                     ev["source_raw"] = source_raw
@@ -364,7 +408,15 @@ def process_file(
             evs = normalize_user(
                 record, line_num, session_id, source_file, tool_map, opts
             )
+            if not evs and diagnostics is not None:
+                diagnostics["ignored_records"] = (
+                    diagnostics.get("ignored_records", 0) + 1
+                )
             for ev in evs:
                 if source_raw is not None:
                     ev["source_raw"] = source_raw
                 yield ev
+        elif diagnostics is not None:
+            diagnostics["ignored_records"] = (
+                diagnostics.get("ignored_records", 0) + 1
+            )

@@ -3,14 +3,14 @@
 import json
 import logging
 import re
+import sqlite3
 import sys
 from pathlib import Path
 
-from codess.config import get_project_stores
+from codess.config import get_project_stores, validate_config
 from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
 from codess.registry_store import merge_query_stats, update_project_entry
-from codess.store import connect, init_db
-
+from codess.sanitize import sanitize_for_display, sanitize_tabular, sanitize_text
 log = logging.getLogger(__name__)
 
 # Standard (built-in) tools for grouping; others are "loaded"
@@ -21,86 +21,188 @@ STANDARD_TOOLS = frozenset({
 })
 
 
-def _get_sessions_ordered(conn, limit: int | None = None) -> list:
-    """Sessions by ended_at DESC (most recent first). limit=None = all."""
-    sql = """
-        SELECT id, source, started_at, ended_at, project_path
-        FROM sessions
-        ORDER BY COALESCE(ended_at, started_at) DESC
-    """
+class QueryScope:
+    """Read-only stores selected for one logical query."""
+
+    def __init__(self) -> None:
+        self.stores: list[dict] = []
+
+    def close(self) -> None:
+        for store in self.stores:
+            store["conn"].close()
+
+
+def _open_query_scope(roots: list[Path]) -> tuple[QueryScope, list[Path]]:
+    """Open every existing project store read-only without an attachment limit."""
+    scope = QueryScope()
+    roots_without_stores = []
+    try:
+        for root in roots:
+            resolved_root = root.resolve()
+            stores = get_project_stores(resolved_root)
+            if not stores:
+                roots_without_stores.append(resolved_root)
+                continue
+            for path in stores:
+                conn = None
+                try:
+                    conn = sqlite3.connect(
+                        f"file:{path.resolve()}?mode=ro", uri=True
+                    )
+                    conn.row_factory = sqlite3.Row
+                    conn.execute("SELECT 1 FROM sessions LIMIT 1")
+                    conn.execute("SELECT 1 FROM events LIMIT 1")
+                except Exception:
+                    if conn is not None:
+                        conn.close()
+                    raise
+                scope.stores.append(
+                    {"conn": conn, "path": path, "project_root": resolved_root}
+                )
+        return scope, roots_without_stores
+    except Exception:
+        scope.close()
+        raise
+
+
+def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[dict]:
+    """Return sessions across stores, globally ordered by recency."""
+    sessions = []
+    for store_index, store in enumerate(scope.stores):
+        rows = store["conn"].execute(
+            """
+            SELECT id, source, started_at, ended_at, project_path
+            FROM sessions
+            """
+        )
+        for row in rows:
+            sessions.append(
+                {
+                    "id": row["id"],
+                    "query_id": (store_index, row["id"]),
+                    "source": row["source"],
+                    "started_at": row["started_at"],
+                    "ended_at": row["ended_at"],
+                    "project_path": row["project_path"],
+                    "query_project": str(store["project_root"]),
+                    "conn": store["conn"],
+                }
+            )
+
+    def sort_key(session: dict) -> tuple:
+        timestamp = session["ended_at"]
+        if timestamp is None:
+            timestamp = session["started_at"]
+        try:
+            recency = float(timestamp) if timestamp is not None else float("-inf")
+        except (TypeError, ValueError):
+            recency = float("-inf")
+        return (
+            -recency,
+            session["query_project"],
+            session["source"],
+            session["id"],
+        )
+
+    sessions.sort(key=sort_key)
     if limit is not None and limit > 0:
-        sql += " LIMIT ?"
-        return conn.execute(sql, (limit,)).fetchall()
-    return conn.execute(sql).fetchall()
+        return sessions[:limit]
+    return sessions
 
 
-def _session_id_by_number(conn, n: int) -> str | None:
-    """Return session id for 1-based number (1=most recent)."""
-    rows = _get_sessions_ordered(conn, limit=n)
+def _session_by_number(scope: QueryScope, n: int) -> dict | None:
+    """Return the 1-based globally ordered session reference."""
+    rows = _get_sessions_ordered(scope, limit=n)
     if n < 1 or n > len(rows):
         return None
-    return rows[n - 1]["id"]
+    return rows[n - 1]
 
 
 def run(args) -> int:
     """Run session-query. Returns exit code."""
+    config_errors = validate_config()
+    for msg in config_errors:
+        print(f"codess: {msg}", file=sys.stderr)
+    if config_errors:
+        return 1
+
     roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.PROJECT_ROOT)
     if err:
         print(err, file=sys.stderr)
         return 1
-
-    project_root = roots[0].resolve()
-    stores = get_project_stores(project_root)
-    if not stores:
+    resolved_roots = [root.resolve() for root in roots]
+    try:
+        scope, missing_roots = _open_query_scope(resolved_roots)
+    except sqlite3.Error as exc:
+        print(f"codess: cannot open query stores: {exc}", file=sys.stderr)
+        return 1
+    if not scope.stores:
         print("No store found. Run session-ingest first.", file=sys.stderr)
         return 1
-    store_path = stores[0]
-    init_db(store_path)
-    conn = connect(store_path)
+    for root in missing_roots:
+        print(
+            f"codess: warning: no store found for {sanitize_tabular(root)}",
+            file=sys.stderr,
+        )
 
     try:
         if getattr(args, "stats", False):
-            return _stats(conn, project_root, resolve_registry_directory(args))
+            return _stats(scope, resolved_roots, resolve_registry_directory(args))
         if getattr(args, "taxonomy", False):
-            return _taxonomy(conn)
+            return _taxonomy(scope)
         if getattr(args, "tool", None) is not None:
-            return _tool_table(conn, args.tool)
+            return _tool_table(scope, args.tool)
         if args.sessions:
-            return _sessions(conn, getattr(args, "sess_id", False))
+            return _sessions(scope, getattr(args, "sess_id", False))
         if getattr(args, "sess", None) is not None:
-            return _show_session(conn, args.sess, getattr(args, "show", None))
+            return _show_session(scope, args.sess, getattr(args, "show", None))
         if args.permissions:
-            return _permissions(conn)
+            return _permissions(scope)
         if args.task_review:
-            return _task_review(conn)
+            return _task_review(scope)
         print(
             "Specify --tool, --sessions, -sess, --permissions, --task-review, --stats, or --taxonomy",
             file=sys.stderr,
         )
         return 1
     finally:
-        conn.close()
+        scope.close()
 
 
-def _stats(conn, project_root: Path, registry_root: Path) -> int:
-    """DB stats: sessions, events; merge counts into registry at ``registry_root``."""
-    sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-    events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+def _stats(scope: QueryScope, project_roots: list[Path], registry_root: Path) -> int:
+    """Print aggregate stats and merge per-project counts into the registry."""
+    counts = {
+        str(root.resolve()): {"sessions": 0, "events": 0}
+        for root in project_roots
+    }
+    for store in scope.stores:
+        project = str(store["project_root"])
+        counts[project]["sessions"] += store["conn"].execute(
+            "SELECT COUNT(*) FROM sessions"
+        ).fetchone()[0]
+        counts[project]["events"] += store["conn"].execute(
+            "SELECT COUNT(*) FROM events"
+        ).fetchone()[0]
+    sessions = sum(item["sessions"] for item in counts.values())
+    events = sum(item["events"] for item in counts.values())
     print(f"Sessions: {sessions}")
     print(f"Events: {events}")
-    proj_str = str(project_root.resolve())
+    for project_root in project_roots:
+        proj_str = str(project_root.resolve())
+        project_sessions = counts[proj_str]["sessions"]
+        project_events = counts[proj_str]["events"]
 
-    def mut(e: dict, s: int = sessions, ev: int = events) -> None:
-        merge_query_stats(e, s, ev)
+        def mut(e: dict, s: int = project_sessions, ev: int = project_events) -> None:
+            merge_query_stats(e, s, ev)
 
-    try:
-        update_project_entry(registry_root, proj_str, mut)
-    except OSError as ex:
-        log.warning("Registry update failed for %s: %s", proj_str, ex)
+        try:
+            update_project_entry(registry_root, proj_str, mut)
+        except OSError as ex:
+            log.warning("Registry update failed for %s: %s", proj_str, ex)
     return 0
 
 
-def _taxonomy(conn) -> int:
+def _taxonomy(_scope: QueryScope) -> int:
     """Event types and subtypes, vertical list."""
     print("tool_call")
     print("user_message")
@@ -115,25 +217,26 @@ def _taxonomy(conn) -> int:
     return 0
 
 
-def _tool_table(conn, recent: int) -> int:
+def _tool_table(scope: QueryScope, recent: int) -> int:
     """Tool histogram: rows=tools (standard first, then loaded), cols=sessions. recent=0 all, 1=most recent."""
     limit = None if recent == 0 else recent
-    sessions = _get_sessions_ordered(conn, limit=limit)
+    sessions = _get_sessions_ordered(scope, limit=limit)
     if not sessions:
         return 0
 
     # Per-session tool counts: {session_id: {tool_name: count}}
-    sess_ids = [r["id"] for r in sessions]
+    sess_ids = [r["query_id"] for r in sessions]
     sess_counts = {}
-    for sid in sess_ids:
-        cur = conn.execute(
+    for session in sessions:
+        sid = session["query_id"]
+        cur = session["conn"].execute(
             """
             SELECT tool_name, COUNT(*) as cnt
             FROM events
             WHERE event_type = 'tool_call' AND tool_name IS NOT NULL AND session_id = ?
             GROUP BY tool_name
             """,
-            (sid,),
+            (session["id"],),
         )
         sess_counts[sid] = {row["tool_name"]: row["cnt"] for row in cur}
 
@@ -160,7 +263,7 @@ def _tool_table(conn, recent: int) -> int:
         for i, sid in enumerate(sess_ids):
             row.append(str(sess_counts[sid].get(tool, 0)))
         row.append(str(all_tools[tool]))
-        print("  ".join([row[0].ljust(max_w)] + row[1:]))
+        print("  ".join([sanitize_tabular(row[0]).ljust(max_w)] + row[1:]))
     return 0
 
 
@@ -168,6 +271,7 @@ def _normalize_prompt(s: str) -> str:
     """Code fence, collapse whitespace."""
     if not s:
         return ""
+    s = sanitize_text(s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     s = re.sub(r"[ \t]+", " ", s)
     return s.strip()
@@ -177,14 +281,14 @@ def _normalize_response(s: str) -> str:
     """Remove empty lines, trailing whitespace."""
     if not s:
         return ""
-    lines = [ln.rstrip() for ln in s.splitlines() if ln.strip()]
+    lines = [ln.rstrip() for ln in sanitize_text(s).splitlines() if ln.strip()]
     return "\n".join(lines)
 
 
-def _show_session(conn, sess_num: int, show_modes: list | None) -> int:
+def _show_session(scope: QueryScope, sess_num: int, show_modes: list | None) -> int:
     """Show session content by number. show_modes: prompt, pr, agent, tool, perm; None/empty=all."""
-    sid = _session_id_by_number(conn, sess_num)
-    if not sid:
+    session = _session_by_number(scope, sess_num)
+    if not session:
         print(f"No session {sess_num}", file=sys.stderr)
         return 1
 
@@ -195,14 +299,14 @@ def _show_session(conn, sess_num: int, show_modes: list | None) -> int:
     show_tool = "tool" in modes
     show_perm = "perm" in modes
 
-    cur = conn.execute(
+    cur = session["conn"].execute(
         """
         SELECT event_type, subtype, role, content, tool_name, tool_input
         FROM events
         WHERE session_id = ?
         ORDER BY timestamp, id
         """,
-        (sid,),
+        (session["id"],),
     )
     for row in cur:
         etype, subtype, role, content, tool_name, tool_input = (
@@ -220,12 +324,12 @@ def _show_session(conn, sess_num: int, show_modes: list | None) -> int:
                     print()
             elif subtype == "tool_result":
                 if show_tool:
-                    print(f"[tool_result] {tool_name or ''}")
-                    print((content or "")[:500])
+                    print(f"[tool_result] {sanitize_tabular(tool_name)}")
+                    print(sanitize_for_display(content or "", 500))
                     print()
             elif subtype == "permission_denied":
                 if show_perm:
-                    print(f"[permission_denied] {tool_name or ''}")
+                    print(f"[permission_denied] {sanitize_tabular(tool_name)}")
                     print()
         elif etype == "assistant_message":
             # Skip dialog (short pre-tool chatter); keep response and truncated only
@@ -244,74 +348,95 @@ def _show_session(conn, sess_num: int, show_modes: list | None) -> int:
                         inp = json.loads(tool_input)
                     except json.JSONDecodeError:
                         pass
-                print(f"[agent] {tool_name}")
-                print(f"  desc: {inp.get('description', '')[:80]}")
-                print(f"  prompt: {inp.get('prompt', '')[:80]}")
+                print(f"[agent] {sanitize_tabular(tool_name)}")
+                print(f"  desc: {sanitize_for_display(inp.get('description', ''), 80)}")
+                print(f"  prompt: {sanitize_for_display(inp.get('prompt', ''), 80)}")
                 print()
             elif show_tool and not is_agent:
-                print(f"[tool] {tool_name}")
+                print(f"[tool] {sanitize_tabular(tool_name)}")
                 if tool_input:
-                    print(f"  {str(tool_input)[:120]}")
+                    print(f"  {sanitize_for_display(str(tool_input), 120)}")
                 print()
     return 0
 
 
-def _sessions(conn, with_id: bool) -> int:
+def _sessions(scope: QueryScope, with_id: bool) -> int:
     """List sessions. with_id: number them (1=most recent)."""
-    rows = _get_sessions_ordered(conn)
+    rows = _get_sessions_ordered(scope)
     if not rows:
         return 0
     if with_id:
         print("id\tnum\tsource\tstarted_at\tended_at\tproject_path")
         for i, row in enumerate(rows, 1):
-            print(f"{row['id']}\t{i}\t{row['source']}\t{row['started_at']}\t{row['ended_at']}\t{row['project_path'] or ''}")
+            project = row["project_path"] or row["query_project"]
+            print(
+                f"{sanitize_tabular(row['id'])}\t{i}\t"
+                f"{sanitize_tabular(row['source'])}\t{row['started_at']}\t"
+                f"{row['ended_at']}\t{sanitize_tabular(project)}"
+            )
     else:
         print("id\tsource\tstarted_at\tended_at\tproject_path")
         for row in rows:
-            print(f"{row['id']}\t{row['source']}\t{row['started_at']}\t{row['ended_at']}\t{row['project_path'] or ''}")
+            project = row["project_path"] or row["query_project"]
+            print(
+                f"{sanitize_tabular(row['id'])}\t{sanitize_tabular(row['source'])}\t"
+                f"{row['started_at']}\t{row['ended_at']}\t{sanitize_tabular(project)}"
+            )
     return 0
 
 
-def _task_review(conn) -> int:
+def _task_review(scope: QueryScope) -> int:
     """Review Task and Web* tool invocations: counts, descriptions, outcomes."""
     # Tool counts by category
-    cur = conn.execute(
-        """
-        SELECT tool_name, COUNT(*) as cnt
-        FROM events
-        WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
-        GROUP BY tool_name
-        ORDER BY cnt DESC
-        """
-    )
-    all_tools = {row["tool_name"]: row["cnt"] for row in cur}
+    all_tools = {}
+    for store in scope.stores:
+        cur = store["conn"].execute(
+            """
+            SELECT tool_name, COUNT(*) as cnt
+            FROM events
+            WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
+            GROUP BY tool_name
+            """
+        )
+        for row in cur:
+            all_tools[row["tool_name"]] = (
+                all_tools.get(row["tool_name"], 0) + row["cnt"]
+            )
 
     task_tools = {k: v for k, v in all_tools.items() if k and ("Task" in k or k in ("mcp_task", "Task"))}
     web_tools = {k: v for k, v in all_tools.items() if k and ("Web" in k or "web" in k.lower())}
 
     print("=== Tool counts ===")
     for name, cnt in sorted(all_tools.items(), key=lambda x: -x[1]):
-        print(f"  {name}\t{cnt}")
+        print(f"  {sanitize_tabular(name)}\t{cnt}")
 
     print("\n=== Task tools ===")
     for name, cnt in sorted(task_tools.items(), key=lambda x: -x[1]):
-        print(f"  {name}\t{cnt}")
+        print(f"  {sanitize_tabular(name)}\t{cnt}")
 
     print("\n=== Web* tools ===")
     for name, cnt in sorted(web_tools.items(), key=lambda x: -x[1]):
-        print(f"  {name}\t{cnt}")
+        print(f"  {sanitize_tabular(name)}\t{cnt}")
 
     # Task/Agent invocations: description, prompt, outcome
-    cur = conn.execute(
-        """
-        SELECT session_id, event_id, tool_name, tool_input, timestamp
-        FROM events
-        WHERE event_type = 'tool_call'
-          AND (tool_name LIKE '%Task%' OR tool_name IN ('mcp_task', 'Task'))
-        ORDER BY timestamp
-        """
+    task_calls = []
+    for store in scope.stores:
+        cur = store["conn"].execute(
+            """
+            SELECT session_id, event_id, tool_name, tool_input, timestamp
+            FROM events
+            WHERE event_type = 'tool_call'
+              AND (tool_name LIKE '%Task%' OR tool_name IN ('mcp_task', 'Task'))
+            """
+        )
+        task_calls.extend(dict(row) for row in cur)
+    task_calls.sort(
+        key=lambda row: (
+            float(row["timestamp"]) if row["timestamp"] is not None else float("inf"),
+            row["session_id"],
+            row["event_id"],
+        )
     )
-    task_calls = cur.fetchall()
 
     if task_calls:
         print("\n=== Task/Agent invocations (description, prompt) ===")
@@ -322,29 +447,32 @@ def _task_review(conn) -> int:
                     inp = json.loads(row["tool_input"])
                 except json.JSONDecodeError:
                     pass
-            desc = inp.get("description", "")[:80]
-            prompt = inp.get("prompt", "")[:80]
-            sub = inp.get("subagent_type", "")
-            parts = [f"[{row['tool_name']}]"]
+            desc = sanitize_for_display(inp.get("description", ""), 80)
+            prompt = sanitize_for_display(inp.get("prompt", ""), 80)
+            sub = sanitize_tabular(inp.get("subagent_type", ""))
+            parts = [f"[{sanitize_tabular(row['tool_name'])}]"]
             if desc:
-                parts.append(f"desc: {desc}…" if len(str(inp.get("description", ""))) > 80 else f"desc: {desc}")
+                parts.append(f"desc: {sanitize_tabular(desc)}")
             if prompt:
-                parts.append(f"prompt: {prompt}…" if len(str(inp.get("prompt", ""))) > 80 else f"prompt: {prompt}")
+                parts.append(f"prompt: {sanitize_tabular(prompt)}")
             if sub:
                 parts.append(f"subagent: {sub}")
             print("  " + " | ".join(parts))
 
     # Tool results (outcomes): match by session + tool_name, infer outcome from content
-    cur = conn.execute(
-        """
-        SELECT session_id, tool_name, content, content_len
-        FROM events
-        WHERE event_type = 'user_message' AND subtype = 'tool_result' AND tool_name IS NOT NULL
-          AND (tool_name LIKE '%Task%' OR tool_name IN ('mcp_task', 'Task'))
-        ORDER BY session_id, id
-        """
-    )
-    results = cur.fetchall()
+    results = []
+    for store in scope.stores:
+        cur = store["conn"].execute(
+            """
+            SELECT session_id, tool_name, content, content_len
+            FROM events
+            WHERE event_type = 'user_message' AND subtype = 'tool_result'
+              AND tool_name IS NOT NULL
+              AND (tool_name LIKE '%Task%' OR tool_name IN ('mcp_task', 'Task'))
+            ORDER BY session_id, id
+            """
+        )
+        results.extend(dict(row) for row in cur)
     if results:
         outcomes = {}
         for row in results:
@@ -364,20 +492,34 @@ def _task_review(conn) -> int:
     return 0
 
 
-def _permissions(conn) -> int:
+def _permissions(scope: QueryScope) -> int:
     """Print permission_denied events."""
-    cur = conn.execute(
-        """
-        SELECT session_id, timestamp, tool_name
-        FROM events
-        WHERE subtype = 'permission_denied'
-        ORDER BY timestamp
-        """
+    rows = []
+    for store in scope.stores:
+        cur = store["conn"].execute(
+            """
+            SELECT session_id, timestamp, tool_name
+            FROM events
+            WHERE subtype = 'permission_denied'
+            """
+        )
+        for row in cur:
+            item = dict(row)
+            item["project_path"] = str(store["project_root"])
+            rows.append(item)
+    rows.sort(
+        key=lambda row: (
+            float(row["timestamp"]) if row["timestamp"] is not None else float("inf"),
+            row["session_id"],
+        )
     )
-    rows = cur.fetchall()
     if not rows:
         return 0
-    print("session_id\ttimestamp\ttool_name")
+    print("session_id\tproject_path\ttimestamp\ttool_name")
     for row in rows:
-        print(f"{row['session_id']}\t{row['timestamp']}\t{row['tool_name'] or ''}")
+        print(
+            f"{sanitize_tabular(row['session_id'])}\t"
+            f"{sanitize_tabular(row['project_path'])}\t"
+            f"{row['timestamp']}\t{sanitize_tabular(row['tool_name'])}"
+        )
     return 0
