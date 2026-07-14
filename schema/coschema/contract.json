@@ -1,0 +1,184 @@
+{
+  "format_id": "codess.coschema",
+  "format_version": 2,
+  "application_id": 1129268293,
+  "compatibility_policy": {
+    "unknown_change": "manual_review",
+    "derived_data_upgrade": "rebuild",
+    "released_package": "immutable",
+    "extension_policy": "namespaced_open_core_strict"
+  },
+  "entities": {
+    "projects": {
+      "identity": ["id"],
+      "fields": {
+        "id": {"type": "text", "nullable": false},
+        "logical_name": {"type": "text", "nullable": true},
+        "root_path": {"type": "text", "nullable": true},
+        "source_cwd": {"type": "text", "nullable": true},
+        "ownership": {"type": "taxonomy", "nullable": true, "vocabulary": "ownership"},
+        "activity_state": {"type": "taxonomy", "nullable": true, "vocabulary": "activity_state"},
+        "selection_state": {"type": "taxonomy", "nullable": true, "vocabulary": "selection_state"},
+        "metadata": {"type": "json_extension", "nullable": true}
+      }
+    },
+    "sources": {
+      "identity": ["source_system_id", "source_uri", "source_revision"],
+      "fields": {
+        "source_system_id": {"type": "text", "nullable": false},
+        "source_uri": {"type": "text", "nullable": false},
+        "storage_format": {"type": "text", "nullable": false},
+        "source_revision": {"type": "text", "nullable": false},
+        "source_mtime": {"type": "unix_ms", "nullable": true},
+        "source_size": {"type": "integer", "nullable": true, "minimum": 0},
+        "observed_at": {"type": "rfc3339", "nullable": false},
+        "ingested_at": {"type": "rfc3339", "nullable": false},
+        "availability": {"type": "taxonomy", "nullable": false, "vocabulary": "availability"},
+        "content_sha256": {"type": "sha256", "nullable": true},
+        "metadata": {"type": "json_extension", "nullable": true}
+      }
+    },
+    "sessions": {
+      "identity": ["source_system_id", "vendor_session_id"],
+      "fields": {
+        "source_system_id": {"type": "text", "nullable": false},
+        "vendor_session_id": {"type": "text", "nullable": true},
+        "vendor_name": {"type": "text", "nullable": true},
+        "product_name": {"type": "text", "nullable": true},
+        "harness_name": {"type": "text", "nullable": true},
+        "storage_format": {"type": "text", "nullable": true},
+        "surface_kind": {"type": "taxonomy", "nullable": true, "vocabulary": "surface_kind"},
+        "session_purpose": {"type": "open_vocabulary", "nullable": true},
+        "harness_version": {"type": "text", "nullable": true},
+        "started_at": {"type": "unix_ms", "nullable": true},
+        "ended_at": {"type": "unix_ms", "nullable": true},
+        "source_mtime": {"type": "unix_ms", "nullable": true},
+        "time_basis": {"type": "taxonomy", "nullable": true, "vocabulary": "time_basis"},
+        "parent_session_id": {"type": "text", "nullable": true},
+        "session_relation_kind": {"type": "taxonomy", "nullable": true, "vocabulary": "session_relation_kind"},
+        "archive_state": {"type": "taxonomy", "nullable": true, "vocabulary": "archive_state"},
+        "metadata": {"type": "json_extension", "nullable": true}
+      }
+    },
+    "interactions": {
+      "identity": ["id"],
+      "order": ["session_id", "sequence_no"],
+      "fields": {
+        "session_id": {"type": "reference", "nullable": false, "target": "sessions"},
+        "sequence_no": {"type": "integer", "nullable": false, "minimum": 1},
+        "initiating_event_id": {"type": "text", "nullable": true},
+        "boundary_source": {"type": "taxonomy", "nullable": false, "vocabulary": "boundary_source"},
+        "confidence": {"type": "number", "nullable": true, "minimum": 0, "maximum": 1}
+      }
+    },
+    "model_turns": {
+      "identity": ["id"],
+      "order": ["session_id", "sequence_no"],
+      "fields": {
+        "session_id": {"type": "reference", "nullable": false, "target": "sessions"},
+        "interaction_id": {"type": "reference", "nullable": true, "target": "interactions"},
+        "sequence_no": {"type": "integer", "nullable": false, "minimum": 1},
+        "source_turn_id": {"type": "text", "nullable": true},
+        "boundary_source": {"type": "taxonomy", "nullable": false, "vocabulary": "turn_boundary_source"}
+      }
+    },
+    "events": {
+      "identity": ["session_id", "event_id"],
+      "order": ["session_id", "sequence_no"],
+      "fields": {
+        "session_id": {"type": "reference", "nullable": false, "target": "sessions"},
+        "source_id": {"type": "reference", "nullable": true, "target": "sources"},
+        "event_id": {"type": "text", "nullable": false},
+        "sequence_no": {"type": "integer", "nullable": true, "minimum": 1},
+        "source_record_locator": {"type": "text", "nullable": true},
+        "source_record_type": {"type": "text", "nullable": true},
+        "source_record_subtype": {"type": "text", "nullable": true},
+        "event_kind": {"type": "open_vocabulary", "nullable": true},
+        "actor_kind": {"type": "open_vocabulary", "nullable": true},
+        "content_role": {"type": "open_vocabulary", "nullable": true},
+        "origin_kind": {"type": "open_vocabulary", "nullable": true},
+        "interaction_id": {"type": "reference", "nullable": true, "target": "interactions"},
+        "model_turn_id": {"type": "reference", "nullable": true, "target": "model_turns"},
+        "content": {"type": "text", "nullable": true},
+        "content_len": {"type": "integer", "nullable": true, "minimum": 0},
+        "tool_name": {"type": "text", "nullable": true},
+        "tool_input": {"type": "json", "nullable": true},
+        "event_at": {"type": "unix_ms", "nullable": true},
+        "source_status": {"type": "text", "nullable": true},
+        "normalized_status": {"type": "taxonomy", "nullable": true, "vocabulary": "normalized_status"},
+        "mapping_rule": {"type": "text", "nullable": true},
+        "mapping_trace": {"type": "json", "nullable": true},
+        "metadata": {"type": "json_extension", "nullable": true}
+      }
+    },
+    "tool_invocations": {
+      "identity": ["id"],
+      "fields": {
+        "session_id": {"type": "reference", "nullable": false, "target": "sessions"},
+        "source_call_id": {"type": "text", "nullable": true},
+        "source_tool_name": {"type": "text", "nullable": true},
+        "canonical_tool_name": {"type": "text", "nullable": true},
+        "input_json": {"type": "json", "nullable": true},
+        "source_status": {"type": "text", "nullable": true},
+        "normalized_status": {"type": "taxonomy", "nullable": true, "vocabulary": "normalized_status"}
+      }
+    },
+    "tool_results": {
+      "identity": ["id"],
+      "order": ["invocation_id", "sequence_no"],
+      "fields": {
+        "invocation_id": {"type": "reference", "nullable": true, "target": "tool_invocations"},
+        "sequence_no": {"type": "integer", "nullable": false, "minimum": 1},
+        "output_text": {"type": "text", "nullable": true},
+        "output_json": {"type": "json", "nullable": true},
+        "is_error": {"type": "boolean", "nullable": true}
+      }
+    },
+    "artifacts": {
+      "identity": ["project_id", "artifact_kind", "relative_path", "uri", "repository_object_id", "content_sha256"],
+      "fields": {
+        "artifact_kind": {"type": "open_vocabulary", "nullable": false},
+        "relative_path": {"type": "text", "nullable": true},
+        "observed_absolute_path": {"type": "text", "nullable": true},
+        "uri": {"type": "text", "nullable": true},
+        "content_sha256": {"type": "sha256", "nullable": true}
+      }
+    },
+    "mapping_diagnostics": {
+      "identity": ["id"],
+      "fields": {
+        "level": {"type": "taxonomy", "nullable": false, "vocabulary": "diagnostic_level"},
+        "reason_code": {"type": "text", "nullable": false},
+        "source_field": {"type": "text", "nullable": true},
+        "source_value": {"type": "text", "nullable": true},
+        "mapping_rule": {"type": "text", "nullable": true}
+      }
+    },
+    "correlation_assertions": {
+      "identity": ["id"],
+      "fields": {
+        "subject_kind": {"type": "text", "nullable": false},
+        "subject_id": {"type": "text", "nullable": false},
+        "object_kind": {"type": "text", "nullable": false},
+        "object_id": {"type": "text", "nullable": false},
+        "relation_kind": {"type": "text", "nullable": false},
+        "method": {"type": "text", "nullable": false},
+        "confidence": {"type": "number", "nullable": true, "minimum": 0, "maximum": 1}
+      }
+    }
+  },
+  "vocabularies": {
+    "ownership": ["own", "reference", "external", "mixed", "unknown"],
+    "activity_state": ["active", "dormant", "archived", "unknown"],
+    "selection_state": ["priority", "candidate", "fixture", "deferred", "excluded", "needs_review"],
+    "availability": ["captured", "reference", "not_retained", "unavailable"],
+    "surface_kind": ["cli", "ide", "desktop", "api", "agent", "unknown"],
+    "time_basis": ["event", "session", "source_mtime", "ingested", "unknown"],
+    "session_relation_kind": ["subagent", "fork", "resume", "continuation", "unknown"],
+    "archive_state": ["active", "archived", "unknown"],
+    "boundary_source": ["vendor", "mapping", "inferred", "manual"],
+    "turn_boundary_source": ["vendor", "mapping", "inferred"],
+    "normalized_status": ["pending", "running", "succeeded", "failed", "denied", "cancelled", "incomplete", "unknown"],
+    "diagnostic_level": ["source", "record", "field"]
+  }
+}

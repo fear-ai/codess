@@ -1,0 +1,57 @@
+{
+  "format_id": "codess.coschema",
+  "format_version": 2,
+  "application_id": 1129268293,
+  "state": "released",
+  "files": {
+    "contract": {
+      "path": "schema/coschema/contract.json",
+      "sha256": "66bdcf8b9be65a449cdc6cc7e3dbebac4569fdefa8197fba929cfd705838cbcf"
+    },
+    "mapping_contract": {
+      "path": "schema/coschema/mapping-contract.json",
+      "sha256": "4b00255e0c2fb631919a1889733397d845543be0eb4d851efe20fbdc66caa302"
+    },
+    "sqlite_schema": {
+      "path": "schema/coschema/sqlite/schema.sql",
+      "sha256": "eb85428cde2d6b0e0911c73538fd6d63aa119f8681e65698a8d09a978c850e28"
+    },
+    "mapping_claude": {
+      "path": "schema/mappings/claude.json",
+      "sha256": "17defdea089221b4dd796728dfbc7f30b6506bc6a999324b0ec4c0297a4114f2"
+    },
+    "mapping_codex": {
+      "path": "schema/mappings/codex.json",
+      "sha256": "2da0c2e4d628c0a04a5a6dd8f84692b0c0f51d3a8c51d3ac9532a8f2cc12ff1b"
+    },
+    "mapping_cursor": {
+      "path": "schema/mappings/cursor.json",
+      "sha256": "5772cdf8d9b97779eb92c2d39e2811eae07baf74cd0d4c2b8e704098070af0bc"
+    },
+    "fixture_compatibility_store_meta_v2": {
+      "path": "schema/coschema/fixtures/compatibility/store-meta-v2.json",
+      "sha256": "35ee5178443f2abd1b1c1d5f1f220af8720ceede674822ed20ab9fbed58003f4"
+    },
+    "fixture_edge_null_session_times": {
+      "path": "schema/coschema/fixtures/edge/null-session-times.json",
+      "sha256": "39c2a84e683860d3f8e5ff01795bd0144d3f0bda752d38d1e215dbad577633a1"
+    },
+    "fixture_maximal_event": {
+      "path": "schema/coschema/fixtures/maximal/event.json",
+      "sha256": "b6861b0624d79c41ddb613df7ab512850fbb8bfb2e637cd56110c0ab7498ee2d"
+    },
+    "fixture_minimal_session": {
+      "path": "schema/coschema/fixtures/minimal/session.json",
+      "sha256": "e643cb0c162386b56ec0627d065e17519feae71b5360ebc32d2567f814863014"
+    },
+    "fixture_negative_event_sequence_zero": {
+      "path": "schema/coschema/fixtures/negative/event-sequence-zero.json",
+      "sha256": "d123c812edcd665eacf7e85dcbca06d2ea3b0d52598c59cded4df5e5e42e7433"
+    }
+  },
+  "reader_compatibility": {
+    "read": [2],
+    "write": [2],
+    "legacy_read": [1]
+  }
+}

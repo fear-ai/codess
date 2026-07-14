@@ -1,0 +1,7 @@
+{
+  "required": ["mapping_id", "vendor", "product", "source_system_id", "storage_formats", "rules", "hazards"],
+  "rule_required": ["id", "source", "target", "retention"],
+  "retention_values": ["core", "specialized", "extension", "raw_only", "discard"],
+  "diagnostic_levels": ["source", "record", "field"],
+  "allowed_operations": ["from", "from_any", "from_each", "const"]
+}

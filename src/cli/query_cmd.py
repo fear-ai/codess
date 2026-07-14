@@ -11,6 +11,9 @@ from codess.config import get_project_stores, validate_config
 from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
 from codess.registry_store import merge_query_stats, update_project_entry
 from codess.sanitize import sanitize_for_display, sanitize_tabular, sanitize_text
+from codess.schema_contract import SchemaContractError
+from codess.snapshot import SnapshotError
+from codess.store import connect as connect_store
 log = logging.getLogger(__name__)
 
 # Standard (built-in) tools for grouping; others are "loaded"
@@ -46,10 +49,7 @@ def _open_query_scope(roots: list[Path]) -> tuple[QueryScope, list[Path]]:
             for path in stores:
                 conn = None
                 try:
-                    conn = sqlite3.connect(
-                        path.resolve().as_uri() + "?mode=ro", uri=True
-                    )
-                    conn.row_factory = sqlite3.Row
+                    conn = connect_store(path, read_only=True)
                     conn.execute("SELECT 1 FROM sessions LIMIT 1")
                     conn.execute("SELECT 1 FROM events LIMIT 1")
                 except Exception:
@@ -145,7 +145,7 @@ def run(args) -> int:
     resolved_roots = [root.resolve() for root in roots]
     try:
         scope, missing_roots = _open_query_scope(resolved_roots)
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, SchemaContractError, SnapshotError) as exc:
         print(f"codess: cannot open query stores: {exc}", file=sys.stderr)
         return 1
     if not scope.stores:
@@ -176,9 +176,13 @@ def run(args) -> int:
             return _lineage(scope, limit)
         if getattr(args, "audit", False):
             return _audit(scope, limit)
+        if getattr(args, "diagnostics", False):
+            return _diagnostics(scope, limit)
+        if getattr(args, "artifacts", False):
+            return _artifacts(scope, limit)
         print(
             "Specify --tool, --sessions, -sess, --permissions, --task-review, "
-            "--lineage, --audit, --stats, or --taxonomy",
+            "--lineage, --audit, --diagnostics, --artifacts, --stats, or --taxonomy",
             file=sys.stderr,
         )
         return 1
@@ -216,6 +220,99 @@ def _stats(scope: QueryScope, project_roots: list[Path], registry_root: Path) ->
             update_project_entry(registry_root, proj_str, mut)
         except OSError as ex:
             log.warning("Registry update failed for %s: %s", proj_str, ex)
+    return 0
+
+
+def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
+
+
+def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
+    """Print structured mapping loss/ambiguity without hiding source values."""
+    rows: list[dict] = []
+    for store_index, store in enumerate(scope.stores):
+        conn = store["conn"]
+        if not _has_table(conn, "mapping_diagnostics"):
+            continue
+        for row in conn.execute(
+            """
+            SELECT d.level, d.reason_code, d.source_field, d.source_value,
+                   d.mapping_rule, d.detail, d.created_at, d.session_id,
+                   e.event_id
+            FROM mapping_diagnostics d
+            LEFT JOIN events e ON e.id = d.event_id
+            """
+        ):
+            item = dict(row)
+            item["project"] = str(store["project_root"])
+            item["store_index"] = store_index
+            rows.append(item)
+    rows.sort(key=lambda row: (
+        row["created_at"], row["project"], row["store_index"],
+        row["session_id"] or "", row["event_id"] or "",
+    ))
+    rows = _limited(rows, limit)
+    if not rows:
+        return 0
+    print("project_path\tsession_id\tevent_id\tlevel\treason_code\tsource_field\tsource_value\tmapping_rule\tdetail")
+    for row in rows:
+        print("\t".join(sanitize_tabular(row.get(key)) for key in (
+            "project", "session_id", "event_id", "level", "reason_code",
+            "source_field", "source_value", "mapping_rule", "detail",
+        )))
+    return 0
+
+
+def _artifacts(scope: QueryScope, limit: int | None = None) -> int:
+    """Aggregate evidence for artifacts touched by one or more coding systems."""
+    grouped: dict[tuple[str, str, str], dict] = {}
+    for store in scope.stores:
+        conn = store["conn"]
+        if not _has_table(conn, "artifacts") or not _has_table(conn, "event_artifacts"):
+            continue
+        rows = conn.execute(
+            """
+            SELECT a.artifact_kind,
+                   COALESCE(a.relative_path, a.uri, a.observed_absolute_path) AS locator,
+                   ea.operation, s.source, e.session_id
+            FROM artifacts a
+            JOIN event_artifacts ea ON ea.artifact_id = a.id
+            JOIN events e ON e.id = ea.event_id
+            JOIN sessions s ON s.id = e.session_id
+            WHERE COALESCE(a.relative_path, a.uri, a.observed_absolute_path) IS NOT NULL
+            """
+        )
+        project = str(store["project_root"])
+        for row in rows:
+            key = (project, row["artifact_kind"], row["locator"])
+            item = grouped.setdefault(key, {"sources": set(), "operations": set(), "sessions": set(), "evidence": 0})
+            item["sources"].add(row["source"])
+            item["operations"].add(row["operation"])
+            item["sessions"].add(row["session_id"])
+            item["evidence"] += 1
+    rows = []
+    for (project, kind, locator), item in grouped.items():
+        rows.append({
+            "project": project, "kind": kind, "locator": locator,
+            "sources": ",".join(sorted(item["sources"])),
+            "source_count": len(item["sources"]),
+            "operations": ",".join(sorted(item["operations"])),
+            "session_count": len(item["sessions"]), "evidence": item["evidence"],
+        })
+    rows.sort(key=lambda row: (-row["source_count"], -row["evidence"], row["project"], row["locator"]))
+    rows = _limited(rows, limit)
+    if not rows:
+        return 0
+    print("project_path\tartifact_kind\tlocator\tsources\tsource_count\toperations\tsession_count\tevidence_count")
+    for row in rows:
+        print(
+            f"{sanitize_tabular(row['project'])}\t{sanitize_tabular(row['kind'])}\t"
+            f"{sanitize_tabular(row['locator'])}\t{sanitize_tabular(row['sources'])}\t"
+            f"{row['source_count']}\t{sanitize_tabular(row['operations'])}\t"
+            f"{row['session_count']}\t{row['evidence']}"
+        )
     return 0
 
 

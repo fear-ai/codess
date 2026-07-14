@@ -23,6 +23,7 @@ from codess.project import (
     get_cursor_workspace_ids,
 )
 from codess.store import (
+    SOURCE_PROFILES,
     connect,
     init_db,
     load_ingest_state,
@@ -31,8 +32,49 @@ from codess.store import (
     save_ingest_state,
     should_ingest,
 )
+from codess.raw_store import RawStore
+from codess.snapshot import create_snapshot
 
 log = logging.getLogger(__name__)
+
+
+def _record_raw(opts: dict, path: Path, source: str, conn=None) -> None:
+    """Observe/capture one successfully parsed source for the pending snapshot."""
+    recorder = opts.get("raw_store")
+    records = opts.get("raw_records")
+    if recorder is None or records is None:
+        return
+    profile = SOURCE_PROFILES[source]
+    record = recorder.observe(
+        path,
+        source_system_id=profile["source_system_id"],
+        storage_format=profile["storage_format"],
+        mode=opts.get("raw_mode", "reference"),
+    )
+    records.append(record)
+    if conn is not None:
+        object_id = record.get("object_id")
+        content_hash = (
+            object_id.removeprefix("sha256:")
+            if isinstance(object_id, str) and object_id.startswith("sha256:")
+            else None
+        )
+        conn.execute(
+            """
+            UPDATE sources
+            SET availability=?, capture_method=?, consistency=?, content_sha256=?
+            WHERE id=(
+              SELECT id FROM sources
+              WHERE source_system_id=? AND source_uri=?
+              ORDER BY id DESC LIMIT 1
+            )
+            """,
+            (
+                record["availability"], record["capture_method"],
+                record["consistency"], content_hash,
+                profile["source_system_id"], str(path),
+            ),
+        )
 
 
 def _cc_session_files(cc_dir: Path) -> list[tuple[Path, str | None]]:
@@ -80,16 +122,17 @@ def _ingest_cc(
             session = None
             if events_list:
                 timestamps = [e["timestamp"] for e in events_list if e.get("timestamp") is not None]
-                started_at = min(timestamps) if timestamps else mtime * 1000
-                ended_at = max(timestamps) if timestamps else mtime * 1000
+                started_at = min(timestamps) if timestamps else None
+                ended_at = max(timestamps) if timestamps else None
                 session = {
                     "id": session_id,
                     "source": "Claude",
                     "type": "Code",
                     "release": None,
-                    "release_value": None,
                     "started_at": started_at,
                     "ended_at": ended_at,
+                    "source_mtime": mtime * 1000,
+                    "time_basis": "event" if timestamps else "unknown",
                     "project_path": str(project_root),
                     "metadata": (
                         json.dumps(
@@ -112,6 +155,7 @@ def _ingest_cc(
             replace_session_events(
                 conn, session, events_list, session_id=session_id
             )
+            _record_raw(opts, path, "Claude", conn)
             conn.commit()
             total_events += len(events_list)
         except Exception as e:
@@ -165,16 +209,17 @@ def _ingest_codex(
             session = None
             if events_list:
                 timestamps = [e["timestamp"] for e in events_list if e.get("timestamp") is not None]
-                started_at = min(timestamps) if timestamps else mtime * 1000
-                ended_at = max(timestamps) if timestamps else mtime * 1000
+                started_at = min(timestamps) if timestamps else None
+                ended_at = max(timestamps) if timestamps else None
                 session = {
                     "id": session_id,
                     "source": "Codex",
                     "type": "Code",
                     "release": session_metadata.get("cli_version"),
-                    "release_value": None,
                     "started_at": started_at,
                     "ended_at": ended_at,
+                    "source_mtime": mtime * 1000,
+                    "time_basis": "event" if timestamps else "unknown",
                     "project_path": proj_path if proj_path != "." else str(project_root),
                     "metadata": (
                         json.dumps(session_metadata, separators=(",", ":"))
@@ -191,6 +236,7 @@ def _ingest_codex(
             replace_session_events(
                 conn, session, events_list, session_id=session_id
             )
+            _record_raw(opts, path, "Codex", conn)
             conn.commit()
             total_events += len(events_list)
         except Exception as e:
@@ -243,16 +289,17 @@ def _ingest_cursor(
             sessions = {}
             for session_id, evs in sessions_events.items():
                 timestamps = [e["timestamp"] for e in evs if e.get("timestamp") is not None]
-                ts = min(timestamps) if timestamps else mtime * 1000
-                ts_end = max(timestamps) if timestamps else mtime * 1000
+                ts = min(timestamps) if timestamps else None
+                ts_end = max(timestamps) if timestamps else None
                 sessions[session_id] = {
                     "id": session_id,
                     "source": "Cursor",
                     "type": "IDE",
                     "release": None,
-                    "release_value": None,
                     "started_at": ts,
                     "ended_at": ts_end,
+                    "source_mtime": mtime * 1000,
+                    "time_basis": "event" if timestamps else "unknown",
                     "project_path": proj_str,
                     "metadata": None,
                 }
@@ -266,6 +313,7 @@ def _ingest_cursor(
                     for event in session_events
                 ],
             )
+            _record_raw(opts, db_path, "Cursor", conn)
             conn.commit()
             total_events += sum(len(events) for events in sessions_events.values())
         except Exception as e:
@@ -321,16 +369,17 @@ def _ingest_cursor(
                             for e in evs
                             if e.get("timestamp") is not None
                         ]
-                        ts = min(timestamps) if timestamps else mtime * 1000
-                        ts_end = max(timestamps) if timestamps else mtime * 1000
+                        ts = min(timestamps) if timestamps else None
+                        ts_end = max(timestamps) if timestamps else None
                         sessions[session_id] = {
                             "id": session_id,
                             "source": "Cursor",
                             "type": "IDE",
                             "release": None,
-                            "release_value": None,
                             "started_at": ts,
                             "ended_at": ts_end,
+                            "source_mtime": mtime * 1000,
+                            "time_basis": "event" if timestamps else "unknown",
                             "project_path": proj_str,
                             "metadata": json.dumps(
                                 {
@@ -349,6 +398,7 @@ def _ingest_cursor(
                             for event in session_events
                         ],
                     )
+                    _record_raw(opts, global_db, "Cursor", conn)
                     conn.commit()
                     total_events += sum(
                         len(events) for events in sessions_events.values()
@@ -427,6 +477,7 @@ def run(args) -> int:
         "debug": iopt.debug,
         "redact": iopt.redact,
         "diagnostics": diagnostics,
+        "raw_mode": iopt.raw_mode,
     }
     force = iopt.force
     min_size = iopt.min_size
@@ -444,6 +495,10 @@ def run(args) -> int:
             project_root = project_root.resolve()
             state_path = get_state_path(project_root)
             proj_stats = {}
+            project_raw_records: list[dict] = []
+            raw_store = RawStore(registry_root / "raw")
+            opts["raw_records"] = project_raw_records
+            opts["raw_store"] = raw_store
 
             if "cc" in sources:
                 store_path = _store_path(project_root, "cc")
@@ -548,6 +603,24 @@ def run(args) -> int:
                         conn.close()
 
             if proj_stats:
+                if project_raw_records:
+                    working_stores = [
+                        get_store_path(project_root, vendor)
+                        for vendor in ("Claude", "Codex", "Cursor")
+                    ]
+                    create_snapshot(
+                        project_root,
+                        [path for path in working_stores if path.exists()],
+                        project_raw_records,
+                        raw_store=raw_store,
+                        seal=iopt.raw_mode == "seal",
+                        build_policy={
+                            "raw_mode": iopt.raw_mode,
+                            "selected_sources": list(sources),
+                            "minimum_source_size": min_size,
+                            "redaction_enabled": iopt.redact,
+                        },
+                    )
                 _save_stats(project_root, registry_root, proj_stats)
                 for k, v in proj_stats.items():
                     if k not in source_stats:

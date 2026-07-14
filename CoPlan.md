@@ -41,7 +41,7 @@ Per **Codess.md §4.1** (verbatim):
 | Codex session files | **CodexSchema.md** |
 | Cursor `state.vscdb` keys and values | **CursorSchema.md** |
 | Our normalized `sessions` / `events` columns | **CoSchema.md** |
-| Executable DDL | **sql/CoSchema.sql** |
+| Executable DDL | **schema/coschema/sqlite/schema.sql** |
 
 Per **Codess.md §4.2**, the **CoPlan.md** row (verbatim):
 
@@ -249,7 +249,7 @@ Cross-checked against **`src/`** and **`tests/`** so this plan does not drift fr
 - **`adapters/*`:** **no** imports of **`scan`**, **`scan_cmd`**, or **`ingest_cmd`**.
 - **Central registry (`ingested_projects.json`):** **`codess.registry_store`** merges per-project records. **Scan** always upserts **`scan`** / **`last_scan`** for every discovered project path into **`resolve_registry_directory(args)`** (default **`CODESS_REGISTRY`**). **`--registry PATH`** overrides that root and, when set, **also** filters CSV to paths present in the file **before** this run + appends **`reg_*`** columns — **no** sidecar. **Ingest** merges **`sources`** / **`last_ingestion`**. **Query `--stats`** merges **`query`** / **`last_query`** into the same file (**§5**).
 - **`validate_scan_source_for_cli` / scan `--source`:** invalid tokens → **stderr + exit 1** before any scan work (**global** invocation policy — **§11.5**, **§14**).
-- **`store.init_db`:** executes **`sql/CoSchema.sql`** when that file exists (path resolved from **`store.py`** location).
+- **`store.init_db`:** executes **`schema/coschema/sqlite/schema.sql`** when that file exists (path resolved from **`store.py`** location).
 
 ---
 
@@ -312,6 +312,7 @@ Defaults in the table are when the variable is **unset**.
 | `CODESS_STOP` | Fail-fast: stop whole command on first error | `0` → false; combine with **`--stop`** |
 | `CODESS_VERBOSE` | Python logging **DEBUG** for the process (`-v` equivalent) | `0` → false |
 | `CODESS_REDACT` | Ingest: enable redaction default (same patterns as **`--redact`**) | `0` → false |
+| `CODESS_RAW_MODE` | Ingest raw evidence policy: `none`, `reference`, `capture`, or `seal` | `reference` |
 
 **Boolean ENV (`CODESS_DEBUG`, `CODESS_FORCE`, `CODESS_SUBAGENT`, `CODESS_STOP`, `CODESS_VERBOSE`, `CODESS_REDACT`):** Implemented in **`config.py`** via **`env_bool()`**: **true** only if, after **`.lower()`**, the value is exactly **`1`**, **`true`**, or **`yes`**. **Unset** uses default **`0`** → false. Values like **`y`**, **`Y`**, **`on`**, **`2`** are **false** (not generic shell truthiness). Export e.g. `CODESS_DEBUG=1` or `CODESS_DEBUG=yes`.
 
@@ -319,7 +320,7 @@ Defaults in the table are when the variable is **unset**.
 
 **Boolean policy (flags + ENV):** Default is **false** unless the **CLI flag** is passed or the **`CODESS_*`** env parses **true** (see above). **`store_true`** flags: presence → **true**; omission → **false** at argparse, then OR with env where the table says so.
 
-**Note on scan vs ingest `--debug`:** Both use **`CODESS_DEBUG` → `DEBUG`** via **`args.debug or DEBUG`**, but **effects differ**: **scan** uses it only for **discovery trace** + CSV shape; **ingest** uses it for **`source_raw`** / adapter verbosity. Same switch, different subsystems.
+**Note on scan vs ingest `--debug`:** Both use **`CODESS_DEBUG` → `DEBUG`** via **`args.debug or DEBUG`**, but **effects differ**: **scan** uses it only for **discovery trace** + CSV shape; **ingest** uses it for adapter diagnostics/verbosity. Raw retention is controlled independently by **`--raw-mode` / `CODESS_RAW_MODE`**.
 
 **CLI `store_true`:** There is **no** `-y` shorthand.
 
@@ -463,7 +464,7 @@ transactionally; query reads **`store`** only.
   are skipped intentionally. Keep diagnostics and representative vendor
   fixtures current whenever a supported format changes.
 - **CSV output:** **`helpers.write_csv`** for paths; **`scan_cmd`** writes stdout with **`csv.writer`** when **`--out -`** because stdout is not a path.
-- **DDL:** only **`sql/CoSchema.sql`** via **`store.init_db()`** so schema is not duplicated in Python.
+- **DDL:** only **`schema/coschema/sqlite/schema.sql`** via **`store.init_db()`** so schema is not duplicated in Python.
 
 **Refactor candidates:** **`_ingest_codex`** and **`_ingest_cc`** share
 **stat → should_ingest → normalize → replace → commit → state** and could share
@@ -487,7 +488,7 @@ work items.
 - **`test_config.py`** — **`config`**, **`build_*_run_options`** in **`project`**
 - **`test_helpers.py`** — **`helpers`**
 - **`test_project.py`** — **`project`** paths and roots
-- **`test_store.py`** — **`store`**, **`sql/CoSchema.sql`**
+- **`test_store.py`** — **`store`**, **`schema/coschema/sqlite/schema.sql`**
 - **`test_scan.py`**, **`test_candidate.py`**, **`test_subagent_detail.py`** — **`scan`**, scan CLI subprocess
 - **`test_registry_store.py`** — **`registry_store`** merges
 - **`test_*_adapter.py`** — **`adapters/*`**
@@ -507,12 +508,13 @@ Order work by risk and dependency.
 
 | Order | Outcome | Main work |
 |---|---|---|
-| **1. Audit and bounded reports — complete** | Evidence-backed audit rows and predictable output | Maintain the CoSchema support matrix, vendor fixtures, `query --audit`, and global `--limit` tests |
-| **2. Codex parentage investigation — next** | Parent links are trustworthy or explicitly unsupported | Follow the evidence and acceptance steps in §11.1; do not infer relationships |
-| **3. Compatibility maintenance** | Vendor drift is detected early | Refresh the smallest real-shape fixture when an upstream format changes |
-| **4. Postponed work** | Speculative surfaces stay out of the active queue | Restart validation, machine output, or PII scanning only on the triggers in §11.2 |
+| **1. CoSchema v2 foundation — complete** | Versioned contract, mappings, DDL, strict readers/writers, raw capture, snapshots, diagnostics, and initial mixed queries | Maintain package hashes, fixtures, and compatibility-gate tests |
+| **2. Compatibility corpus — next** | A bounded, manually inspectable Claude/Codex/Cursor corpus proves mappings and mixed behavior | Curate from `catalog/active-work-review.json`; add hazard/golden fixtures and acceptance results |
+| **3. Reviewed v2 baseline** | The selected corpus rebuilds reproducibly into one retained immutable snapshot | Validate ordering, tool lineage, diagnostics, model settings, artifacts, hashes, and old-reader policy |
+| **4. Compatibility maintenance** | Vendor drift is detected early | Refresh the smallest real-shape fixture when an upstream format changes; rebuild rather than mutate derived data |
+| **5. Postponed work** | Speculative surfaces stay out of the active queue | Restart preflight, machine output, or PII scanning only on the triggers in §11.2 |
 
-Keep **`sql/CoSchema.sql`** aligned with **CoSchema.md** whenever normalized event shapes change.
+Keep **`schema/coschema/sqlite/schema.sql`** aligned with **CoSchema.md** whenever normalized event shapes change.
 
 ---
 
@@ -527,15 +529,31 @@ Vendor-specific **known holes** are documented in schema files, not duplicated h
 
 ## 11. Improvement Backlog
 
-**Immediate order:** perform the bounded Codex parent-session evidence
-investigation in §11.1, then either implement a direct identifier or record the
-feature as unsupported. Audit normalization/reporting and global query limits
-are implemented. The items in §11.2 are intentionally postponed.
+**Immediate order:** complete the bounded compatibility corpus and reviewed v2
+baseline in §11.0. Run the Codex parent-session investigation in §11.1 as one
+corpus evidence question; either retain a direct identifier or record the
+feature as unsupported. The items in §11.2 remain intentionally postponed.
 
 For each item: settle any product contract, change code and schema docs together,
 then add representative tests in the same change set.
 
 Work items stay grouped by theme below. **Codess.md §4.0** requires **all** tickets to live here or in **§8** / **§14** / **§15** as specified there.
+
+### 11.0 CoSchema v2 completion — next
+
+1. Refresh vendor observations for the 13 seeded candidates without trusting
+   configured remotes as current facts; add explicit priority/deferred review
+   decisions separately from observations.
+2. Select a small corpus covering all three vendors, tool call/results,
+   compaction/lifecycle records, subagents where evidenced, unknown records,
+   missing timestamps, and at least one same-artifact multi-vendor case.
+3. Add hazard and golden vendor fixtures plus deterministic re-ingestion tests;
+   compare mapping diagnostics and logical content, not SQLite byte identity.
+4. Rebuild with the released CoSchema package. Validate package/store/raw
+   hashes, logical counts, deterministic ordering, source/normalized status,
+   model configuration, tool lineage, and `--artifacts` correlation.
+5. Manually review the bounded output, record acceptance results, and retain the
+   promoted snapshot as the first v2 baseline before broad historical ingest.
 
 ### 11.1 Codex parent-session evidence — next
 
@@ -584,7 +602,7 @@ strings as content; it does not guess that markup is executable or strip it.
 |---------|------------------|
 | Ingested text | Normalize CR/LF, remove ANSI escapes and C0/C1 terminal controls except tab/newline, then apply optional configured regex redaction. |
 | Claude tool input | Apply the same policy recursively to retained JSON-like values before serialization. |
-| Debug raw bytes | Retain the bounded raw line only when debug is enabled **and redaction is disabled**. |
+| Raw source evidence | Never embed raw records in normalized SQLite. `--raw-mode` records no retention, a reference, a content-addressed exact capture, or a sealed snapshot; redacted derivatives are distinct objects. |
 | Multi-line query display | Preserve useful line breaks in prompts/responses; sanitize and bound individual tool-result and tool-input displays. |
 | Tabular terminal output | Remove controls and replace tabs/newlines with spaces so a stored value cannot add rows or columns. |
 | CSV | Use Python's `csv.writer` for quoting/newlines and prefix risky **string** cells with a tab when the first character could trigger a spreadsheet formula (`= + - @`, full-width variants, tab, CR, or LF). Numeric values retain their type. |
@@ -610,11 +628,11 @@ missing/empty/all-invalid directory lists, environment boolean parsing,
 symlink-root resolution, and Cursor header-time coverage. Add new rows here only
 for a specific uncovered contract or reproduced defect.
 
-### 11.6 Deferred until CoSchema.md revisit
+### 11.6 Optional query companion
 
 | Item | Notes |
 |------|--------|
-| Optional **`queries.sql`** companion | **§14** — no file until schema/query library is redesigned |
+| Optional **`queries.sql`** companion | Add only when repeated external consumers need a stable SQL library; current version-aware reads remain in `query_cmd`. |
 
 ---
 
@@ -625,7 +643,7 @@ artifact boundaries:
 
 - Vendor format change → ***Schema.md** first → adapters → tests.
 - New CLI flag → **`codess/project.py`** (`build_parser`), **`_*_cmd.py`**, **§5** here, **Codess.md** if user-visible.
-- New DB column → **CoSchema.md** + **`sql/CoSchema.sql`** + **`store.py`**.
+- New DB column → **CoSchema.md** + **`schema/coschema/sqlite/schema.sql`** + **`store.py`**.
 
 ---
 
@@ -647,7 +665,7 @@ context, viable options, and a recommendation when one is available.
 |---|---|---|
 | Scan source validation | Unknown `--source` tokens fail the invocation with stderr and exit 1. | `validate_scan_source_for_cli`, `scan_cmd`, §5.1, §11.5 |
 | Central registry | Scan always upserts index metrics. Explicit `--registry PATH` also filters output to paths already present and adds `reg_*` columns. Ingest merges sources; query stats merges query data. | `registry_store`, command modules, registry tests |
-| Query SQL | Keep SQL embedded in `query_cmd` until CoSchema and the query surface are redesigned. | §11.6 |
+| Query SQL | Keep version-aware SQL embedded in `query_cmd` until repeated external consumers justify a stable companion library. | §11.6 |
 | Global Cursor ingest | Import only composers whose `composerHeaders.workspaceId` maps to the selected project. Preserve archived and subagent flags as metadata. Exclude unmapped composers. | Cursor adapter, project helpers, ingest integration tests |
 | Cursor scan timestamps | Use header timestamps and report header/time coverage in debug output. Do not decode large bubble payloads during index-led scan merely to fill missing dates. | Cursor adapter, scan debug output, CursorSchema §5–§7 |
 | Discovery | Keep scan index-led. `--dir` / `--dirs` are path filters, not traversal requests; there is no recursion CLI. | `scan`, root resolution, §3.0–§3.3 |
@@ -662,9 +680,10 @@ context, viable options, and a recommendation when one is available.
 
 ### 14.2 Open decisions
 
-The only active evidence decision is Codex parent-session support (**§11.1**).
-Validation, machine-readable output, and enterprise PII scanning are postponed
-with explicit restart triggers in **§11.2**.
+Active evidence decisions are compatibility-corpus membership/acceptance
+(**§11.0**) and Codex parent-session support (**§11.1**). Preflight validation,
+machine-readable output, and enterprise PII scanning are postponed with
+explicit restart triggers in **§11.2**.
 
 ---
 
@@ -674,5 +693,6 @@ with explicit restart triggers in **§11.2**.
 
 | Theme | Open questions | Recommendation (lean) | Justification |
 |-------|----------------|----------------------|---------------|
+| **Compatibility corpus** | Which smallest inspected set covers all three vendors, mapping hazards, and real cross-vendor artifact evidence? | Curate the seeded catalog, add explicit decisions, and retain the first reviewed v2 snapshot before expanding. | Makes compatibility and mapping quality measurable without turning historical discovery into the critical path. |
 | **Codex parentage** | Does a modern transcript expose a direct, referential parent-session id across releases and active/archive storage? | Run the bounded §11.1 inventory; implement only if every acceptance check passes. | Prevents plausible-looking but false parent links based on time, path, or content. |
 | **Postponed surfaces** | Has a named operator, automation consumer, or deployment threat model triggered validation, JSON Lines, or PII scanning? | Keep all three postponed until their documented trigger exists. | Avoids speculative CLI/schema/dependency commitments. |

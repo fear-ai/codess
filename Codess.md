@@ -54,7 +54,7 @@ active backlog only if the product revives them.
 | Need | Detail | Where specified |
 |------|--------|-----------------|
 | Multi-vendor inputs | CC projects dir, Codex `sessions`, Cursor `state.vscdb` | **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md** |
-| Normalized store | SQLite under `<project>/.codess/` | **CoSchema.md**, `sql/CoSchema.sql` |
+| Normalized store | SQLite under `<project>/.codess/` | **CoSchema.md**, `schema/coschema/sqlite/schema.sql` |
 | Incremental ingest | mtime state plus transactional source replacement | **CoPlan.md** §3.4, §5.2; **store** / adapters |
 | CLI & configuration | Flags, ENV, defaults, and root resolution | **CoPlan.md** §4–§5 |
 
@@ -80,11 +80,11 @@ active backlog only if the product revives them.
 
 ### 4.0 Maintenance rules
 
-1. **Boundaries:** Use §4.1 before moving prose. Vendor on-disk facts live in **\*Schema.md**; normalized store in **CoSchema.md** + **`sql/CoSchema.sql`**; operator flags and ENV in **CoPlan.md** §5; implementation status, **verified wiring vs `src/`** (**§3.5–§3.6**), tests, and backlog in **CoPlan.md** (§8 Tests after code, §11 including §11.5 test work, §14–§15).
+1. **Boundaries:** Use §4.1 before moving prose. Vendor on-disk facts live in **\*Schema.md**; normalized store in **CoSchema.md** + **`schema/coschema/sqlite/schema.sql`**; operator flags and ENV in **CoPlan.md** §5; implementation status, **verified wiring vs `src/`** (**§3.5–§3.6**), tests, and backlog in **CoPlan.md** (§8 Tests after code, §11 including §11.5 test work, §14–§15).
 
    *Why one engineering doc owns this:* avoids split-brain between README, random markdown, and CoPlan; reviewers know where to look for “what’s left to do.”
 
-2. **Core set:** **Codess.md**, **CoPlan.md**, **README.md**, **\*Schema.md**, **CoSchema.md**, **`sql/CoSchema.sql`** — these are the durable docs. Do **not** link or refer from them to short-lived working notes (scratch FAQs, transient status files, personal paths).
+2. **Core set:** **Codess.md**, **CoPlan.md**, **README.md**, **\*Schema.md**, **CoSchema.md**, **`schema/coschema/sqlite/schema.sql`** — these are the durable docs. Do **not** link or refer from them to short-lived working notes (scratch FAQs, transient status files, personal paths).
 
 3. **Single source:** Avoid duplicating CLI tables or long architecture exposition here; summarize at product level and point to **CoPlan.md**.
 
@@ -116,7 +116,7 @@ Use this table to decide **where a change belongs** before editing.
 | Codex session files | **CodexSchema.md** |
 | Cursor `state.vscdb` keys and values | **CursorSchema.md** |
 | Our normalized `sessions` / `events` columns | **CoSchema.md** |
-| Executable DDL | **sql/CoSchema.sql** |
+| Executable DDL | **schema/coschema/sqlite/schema.sql** |
 
 ### 4.2 Map table (goal / include / exclude)
 
@@ -125,13 +125,13 @@ Use this table to decide **where a change belongs** before editing.
 | **Codess.md** (this file) | *What* and *why*; product narrative; **§4 doc index** | Goals, framing, high-level architecture diagram, glossary, references, §4.0 rules, boundary table §4.1 | Vendor field catalogs; DDL; CLI flag tables (→ **CoPlan** §5) |
 | **CoPlan.md** | *How* the repo implements and validates behavior | Tree, layered architecture, persistence notes, **§3.5–§3.6** status and verified wiring, **§4 configuration**, **§5 CLI**, features→modules, coding, **§8 Tests**, delivery sequence, backlog **§11**, **§14–§15** | Vendor on-disk truth (→ *Schema.md) |
 | **CoSchema.md** | Normalized SQLite semantics | Tables, columns, store layout story | Vendor sources |
-| **sql/CoSchema.sql** | Single executable DDL (avoids duplicated `CREATE` in code) | `CREATE`, indexes; executed by **`store.init_db()`** | Prose; column definitions → **CoSchema.md**; vendor sources |
+| **schema/coschema/sqlite/schema.sql** | Single executable DDL (avoids duplicated `CREATE` in code) | `CREATE`, indexes; executed by **`store.init_db()`** | Prose; column definitions → **CoSchema.md**; vendor sources |
 | **CCSchema.md** | CC storage truth | Layout, metrics, quirks, gaps | Other vendors |
 | **CodexSchema.md** | Codex storage truth | Same role as CC for Codex | Other vendors |
 | **CursorSchema.md** | Cursor storage truth | Keys, JSON, workspace vs global | Other vendors |
 | **README.md** | Onboard quickly | Install, minimal commands, link to **Codess.md** | Doc map (here only) |
 
-**Rule:** Vendor structure → **\*Schema.md**. Implementation tasks → **CoPlan.md** (**§11** backlog, **§8** tests, **§14–§15** questions and themes). Store shape → **CoSchema.md** + **sql/CoSchema.sql**. Core-doc hygiene → **§4.0**; CoPlan editing conventions → **CoPlan §12**.
+**Rule:** Vendor structure → **\*Schema.md**. Implementation tasks → **CoPlan.md** (**§11** backlog, **§8** tests, **§14–§15** questions and themes). Store shape → **CoSchema.md** + **schema/coschema/sqlite/schema.sql**. Core-doc hygiene → **§4.0**; CoPlan editing conventions → **CoPlan §12**.
 
 ---
 

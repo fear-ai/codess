@@ -60,6 +60,21 @@ def test_query_no_store_exit_1():
         assert "No store" in r.stderr or "store" in r.stderr.lower()
 
 
+def test_query_reports_invalid_snapshot_without_traceback():
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        state = project / ".codess"
+        state.mkdir()
+        (state / "current.json").write_text(
+            json.dumps({"path": "snapshots/missing", "manifest_sha256": "bad"}),
+            encoding="utf-8",
+        )
+        result = _run(["query", "--dir", str(project), "--stats"])
+        assert result.returncode == 1
+        assert "cannot open query stores" in result.stderr
+        assert "Traceback" not in result.stderr
+
+
 def test_query_aggregates_multiple_project_roots():
     """Query totals span roots while registry counts remain project-local."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -363,6 +378,34 @@ def test_query_rejects_negative_limit():
     r = _run(["query", "--limit", "-1", "--sessions"])
     assert r.returncode == 1
     assert "--limit must be >= 0" in r.stderr
+
+
+def test_query_v2_diagnostics_and_cross_vendor_artifacts():
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        for source, suffix in (("Claude", "cc"), ("Codex", "codex")):
+            store = project / ".codess" / f"sessions_{suffix}.db"
+            init_db(store)
+            conn = connect(store)
+            replace_session_events(
+                conn,
+                {"id": f"s-{suffix}", "source": source, "type": "Code", "project_path": str(project)},
+                [{
+                    "session_id": f"s-{suffix}", "event_id": "1",
+                    "event_type": "tool_call", "role": "assistant",
+                    "tool_name": "Read", "tool_input": json.dumps({"path": "README.md"}),
+                }],
+                session_id=f"s-{suffix}",
+            )
+            conn.commit()
+            conn.close()
+
+        artifacts = _run(["query", "--dir", str(project), "--artifacts"])
+        diagnostics = _run(["query", "--dir", str(project), "--diagnostics"])
+        assert artifacts.returncode == 0
+        assert "README.md\tClaude,Codex\t2\tread\t2\t2" in artifacts.stdout
+        assert diagnostics.returncode == 0
+        assert diagnostics.stdout.count("missing_tool_call_id") == 2
 
 
 def test_query_no_mode_exit_1():
@@ -734,4 +777,4 @@ def test_ingest_stop_environment_is_fail_fast():
 
 
 # Need init_db for test_query_no_mode
-from codess.store import init_db
+from codess.store import connect, init_db, replace_session_events

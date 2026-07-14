@@ -109,6 +109,7 @@ SUBAGENT = env_bool("CODESS_SUBAGENT")
 
 # --- Ingest redaction default (CLI --redact ORs on top) ---
 INGEST_REDACT = env_bool("CODESS_REDACT")
+RAW_MODE = os.environ.get("CODESS_RAW_MODE", "reference").strip().lower()
 
 # --- Batch / resilience: stop entire command on first error (otherwise log and continue) ---
 STOP = env_bool("CODESS_STOP")
@@ -162,6 +163,10 @@ def validate_config() -> list[str]:
         errs.append(f"CODESS_DAYS={CODESS_DAYS} out of range [0, 3650]")
     if MIN_SIZE < 0:
         errs.append(f"CODESS_MIN_SIZE={MIN_SIZE} must be >= 0")
+    if RAW_MODE not in {"none", "reference", "capture", "seal"}:
+        errs.append(
+            f"CODESS_RAW_MODE={RAW_MODE!r} must be none, reference, capture, or seal"
+        )
     if not CC_PROJECTS.is_absolute():
         errs.append(f"CODESS_CC_PROJECTS must be absolute: {CC_PROJECTS}")
     if not CODEX_SESSIONS.is_absolute():
@@ -177,7 +182,12 @@ def validate_config() -> list[str]:
 
 
 def get_project_stores(project_root: Path) -> list[Path]:
-    """Return existing DB paths: legacy sessions.db first, else per-vendor DBs."""
+    """Return current snapshot stores, falling back to legacy working paths."""
+    from codess.snapshot import current_store_paths
+
+    current = current_store_paths(project_root)
+    if current:
+        return current
     base = project_root / STORE_DIR
     legacy = base / STORE_DB
     if legacy.exists():

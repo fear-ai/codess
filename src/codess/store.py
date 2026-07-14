@@ -1,150 +1,773 @@
-"""SQLite store: init, upsert, incremental state."""
+"""Versioned CoSchema v2 SQLite store and incremental ingest state."""
 
+from __future__ import annotations
+
+import hashlib
 import json
+import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-# Schema at project root sql/CoSchema.sql (store.py is in src/codess/)
-_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "sql" / "CoSchema.sql"
+from codess import __version__
+from codess.schema_contract import (
+    APPLICATION_ID,
+    FORMAT_ID,
+    FORMAT_VERSION,
+    UnsupportedStoreError,
+    database_identity,
+    has_legacy_schema,
+    load_ddl,
+    require_store,
+    verify_package,
+)
 
 
-def _load_schema() -> str:
-    """Load schema from sql/CoSchema.sql."""
-    if _SCHEMA_PATH.exists():
-        return _SCHEMA_PATH.read_text(encoding="utf-8")
-    # Fallback if file missing
-    return """
-CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY, source TEXT NOT NULL, type TEXT NOT NULL,
-  release TEXT, release_value INTEGER, started_at REAL NOT NULL, ended_at REAL,
-  project_path TEXT, metadata TEXT
-);
-CREATE TABLE IF NOT EXISTS events (
-  id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), event_id TEXT NOT NULL,
-  event_type TEXT, subtype TEXT, role TEXT, content TEXT, content_len INTEGER, content_ref TEXT,
-  tool_name TEXT, tool_input TEXT, tool_output TEXT, timestamp REAL, file_path TEXT, source_file TEXT,
-  metadata TEXT, source_raw BLOB, UNIQUE(session_id, event_id)
-);
-CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
-CREATE INDEX IF NOT EXISTS idx_events_tool_name ON events(tool_name);
-CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path);
-"""
+SOURCE_PROFILES = {
+    "Claude": {
+        "source_system_id": "anthropic.claude-code",
+        "vendor_name": "anthropic",
+        "product_name": "claude-code",
+        "harness_name": "claude-code-cli",
+        "storage_format": "claude-jsonl",
+        "surface_kind": "cli",
+        "mapping": "claude",
+    },
+    "Codex": {
+        "source_system_id": "openai.codex",
+        "vendor_name": "openai",
+        "product_name": "codex",
+        "harness_name": "codex-cli",
+        "storage_format": "codex-jsonl",
+        "surface_kind": "cli",
+        "mapping": "codex",
+    },
+    "Cursor": {
+        "source_system_id": "cursor.composer",
+        "vendor_name": "cursor",
+        "product_name": "cursor-composer",
+        "harness_name": "cursor-ide",
+        "storage_format": "cursor-sqlite",
+        "surface_kind": "ide",
+        "mapping": "cursor",
+    },
+}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _json_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _profile(source: str | None) -> dict[str, str]:
+    return SOURCE_PROFILES.get(
+        str(source or ""),
+        {
+            "source_system_id": "legacy.unknown",
+            "vendor_name": "unknown",
+            "product_name": str(source or "unknown").lower(),
+            "harness_name": "unknown",
+            "storage_format": "unknown",
+            "surface_kind": "unknown",
+            "mapping": "unknown",
+        },
+    )
+
+
+def _project_id(path: str | None) -> str | None:
+    if not path:
+        return None
+    normalized = os.path.normcase(os.path.realpath(os.path.expanduser(path)))
+    return "project:path:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
 
 
 def init_db(db_path: Path) -> None:
-    """Create parent dir if needed; execute schema from sql/CoSchema.sql."""
+    """Create a new CoSchema v2 store; refuse mutation of legacy/unknown stores."""
+    verify_package()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
-        conn.executescript(_load_schema())
+        has_tables = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
+        ).fetchone()
+        if has_tables:
+            if has_legacy_schema(conn):
+                raise UnsupportedStoreError(
+                    f"{db_path} is a legacy store; preserve it and rebuild CoSchema v2"
+                )
+            require_store(conn, write=True)
+            return
+        conn.executescript(load_ddl())
+        package_digest = verify_package()
+        meta = {
+            "format_id": FORMAT_ID,
+            "format_version": str(FORMAT_VERSION),
+            "application_id": str(APPLICATION_ID),
+            "package_digest": package_digest,
+            "created_by": __version__,
+            "created_at": _now(),
+        }
+        conn.executemany(
+            "INSERT INTO store_meta(key, value) VALUES (?, ?)", meta.items()
+        )
         conn.commit()
+        require_store(conn, write=True)
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
-    """Open connection; set row_factory=sqlite3.Row."""
-    conn = sqlite3.connect(db_path)
+def connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
+    """Open and validate a CoSchema store."""
+    if read_only:
+        conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
+    else:
+        conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        require_store(conn, write=not read_only, allow_legacy_read=read_only)
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 
-def upsert_session(conn: sqlite3.Connection, session: dict) -> None:
-    """INSERT OR REPLACE into sessions."""
+def _ensure_project(conn: sqlite3.Connection, session: dict[str, Any]) -> str | None:
+    path = session.get("project_path")
+    project_id = session.get("project_id") or _project_id(path)
+    if not project_id:
+        return None
     conn.execute(
         """
-        INSERT OR REPLACE INTO sessions
-        (id, source, type, release, release_value, started_at, ended_at, project_path, metadata)
+        INSERT INTO projects(id, logical_name, root_path, source_cwd, ownership,
+                             activity_state, selection_state, metadata)
+        VALUES (?, ?, ?, ?, 'unknown', 'unknown', 'needs_review', NULL)
+        ON CONFLICT(id) DO UPDATE SET
+          root_path=COALESCE(excluded.root_path, projects.root_path),
+          source_cwd=COALESCE(excluded.source_cwd, projects.source_cwd)
+        """,
+        (
+            project_id,
+            Path(path).name if path else None,
+            path,
+            session.get("source_cwd") or path,
+        ),
+    )
+    return project_id
+
+
+def _source_revision(path: Path) -> tuple[str, float | None, int | None]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return "unavailable", None, None
+    return f"mtime-ns:{stat.st_mtime_ns}:size:{stat.st_size}", stat.st_mtime * 1000, stat.st_size
+
+
+def ensure_source(
+    conn: sqlite3.Connection,
+    *,
+    source: str,
+    source_file: str | None,
+    availability: str = "reference",
+) -> int | None:
+    """Create/locate one observed Source revision for a transcript/database."""
+    if not source_file:
+        return None
+    profile = _profile(source)
+    path = Path(source_file)
+    revision, mtime, size = _source_revision(path)
+    now = _now()
+    conn.execute(
+        """
+        INSERT INTO sources(
+          source_system_id, source_uri, storage_format, source_revision,
+          source_mtime, source_size, observed_at, ingested_at, availability)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_system_id, source_uri, source_revision) DO UPDATE SET
+          observed_at=excluded.observed_at,
+          ingested_at=excluded.ingested_at,
+          availability=excluded.availability
+        """,
+        (
+            profile["source_system_id"],
+            source_file,
+            profile["storage_format"],
+            revision,
+            mtime,
+            size,
+            now,
+            now,
+            availability,
+        ),
+    )
+    row = conn.execute(
+        """
+        SELECT id FROM sources
+        WHERE source_system_id=? AND source_uri=? AND source_revision=?
+        """,
+        (profile["source_system_id"], source_file, revision),
+    ).fetchone()
+    return int(row[0])
+
+
+def _ensure_model_configuration(
+    conn: sqlite3.Connection, metadata: dict[str, Any]
+) -> int | None:
+    exact = metadata.get("model") or metadata.get("model_name")
+    provider = metadata.get("model_provider")
+    family = metadata.get("model_family")
+    effort = metadata.get("reasoning_effort") or metadata.get("effort")
+    speed = metadata.get("speed") or metadata.get("speed_tier")
+    service = metadata.get("service_tier")
+    mode = metadata.get("mode")
+    if not any((exact, provider, family, effort, speed, service, mode)):
+        return None
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO model_configurations(
+          provider, model_family, model_name_exact, model_revision,
+          reasoning_effort, speed_tier, service_tier, mode, source_config)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            session.get("id"),
-            session.get("source", "Claude"),
-            session.get("type", "Code"),
-            session.get("release"),
-            session.get("release_value"),
-            session.get("started_at"),
-            session.get("ended_at"),
-            session.get("project_path"),
-            session.get("metadata"),
+            provider,
+            family,
+            exact,
+            metadata.get("model_revision"),
+            effort,
+            speed,
+            service,
+            mode,
+            json.dumps(metadata, separators=(",", ":")) if metadata else None,
         ),
     )
+    return conn.execute(
+        """
+        SELECT id FROM model_configurations
+        WHERE provider IS ? AND model_name_exact IS ? AND model_revision IS ?
+          AND reasoning_effort IS ? AND speed_tier IS ? AND service_tier IS ?
+          AND mode IS ?
+        """,
+        (provider, exact, metadata.get("model_revision"), effort, speed, service, mode),
+    ).fetchone()[0]
 
 
-def upsert_event(conn: sqlite3.Connection, event: dict) -> None:
-    """INSERT OR REPLACE into events (conflict on session_id, event_id)."""
+def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
+    """Upsert a common session while retaining the 0.1 query projection."""
+    source = str(session.get("source") or "Unknown")
+    profile = _profile(source)
+    metadata = _json_dict(session.get("metadata"))
+    project_id = _ensure_project(conn, session)
+    model_config_id = _ensure_model_configuration(conn, metadata)
+    parent = session.get("parent_session_id") or metadata.get("parent_session_id")
+    relation = session.get("session_relation_kind")
+    if relation is None and metadata.get("is_sidechain"):
+        relation = "subagent"
+    archive_state = session.get("archive_state")
+    archive_source = session.get("archive_source")
+    if archive_state is None and metadata.get("is_archived") is not None:
+        archive_state = "archived" if metadata.get("is_archived") else "active"
+        archive_source = "vendor"
+    started_at = session.get("started_at")
+    time_basis = session.get("time_basis") or ("event" if started_at is not None else "unknown")
+    now = _now()
+    values = (
+        session.get("id"),
+        session.get("source_system_id") or profile["source_system_id"],
+        session.get("vendor_session_id") or session.get("id"),
+        session.get("vendor_name") or profile["vendor_name"],
+        session.get("product_name") or profile["product_name"],
+        session.get("harness_name") or profile["harness_name"],
+        session.get("storage_format") or profile["storage_format"],
+        session.get("surface_kind") or profile["surface_kind"],
+        session.get("session_purpose") or "coding",
+        session.get("harness_version") or session.get("release"),
+        session.get("source_id"),
+        project_id,
+        session.get("source_cwd") or session.get("project_path"),
+        started_at,
+        session.get("ended_at"),
+        session.get("source_mtime"),
+        session.get("observed_at") or now,
+        session.get("ingested_at") or now,
+        time_basis,
+        parent,
+        relation,
+        archive_state or "unknown",
+        archive_source,
+        model_config_id,
+        session.get("metadata"),
+        source,
+        session.get("type", "Code"),
+        session.get("release"),
+        session.get("project_path"),
+    )
     conn.execute(
         """
-        INSERT OR REPLACE INTO events
-        (session_id, event_id, event_type, subtype, role, content, content_len,
-         content_ref, tool_name, tool_input, tool_output, timestamp, file_path,
-         source_file, metadata, source_raw)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sessions(
+          id, source_system_id, vendor_session_id, vendor_name, product_name,
+          harness_name, storage_format, surface_kind, session_purpose,
+          harness_version, source_id, project_id, source_cwd, started_at,
+          ended_at, source_mtime, observed_at, ingested_at, time_basis,
+          parent_session_id, session_relation_kind, archive_state, archive_source,
+          default_model_config_id, metadata, source, type, release, project_path)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+          source_system_id=excluded.source_system_id,
+          vendor_session_id=excluded.vendor_session_id,
+          vendor_name=excluded.vendor_name,
+          product_name=excluded.product_name,
+          harness_name=excluded.harness_name,
+          storage_format=excluded.storage_format,
+          surface_kind=excluded.surface_kind,
+          session_purpose=excluded.session_purpose,
+          harness_version=excluded.harness_version,
+          source_id=COALESCE(excluded.source_id, sessions.source_id),
+          project_id=COALESCE(excluded.project_id, sessions.project_id),
+          source_cwd=excluded.source_cwd,
+          started_at=excluded.started_at,
+          ended_at=excluded.ended_at,
+          source_mtime=excluded.source_mtime,
+          observed_at=excluded.observed_at,
+          ingested_at=excluded.ingested_at,
+          time_basis=excluded.time_basis,
+          parent_session_id=excluded.parent_session_id,
+          session_relation_kind=excluded.session_relation_kind,
+          archive_state=excluded.archive_state,
+          archive_source=excluded.archive_source,
+          default_model_config_id=excluded.default_model_config_id,
+          metadata=excluded.metadata,
+          source=excluded.source,
+          type=excluded.type,
+          release=excluded.release,
+          project_path=excluded.project_path
+        """,
+        values,
+    )
+
+
+def _event_semantics(event: dict[str, Any]) -> dict[str, str | None]:
+    etype, subtype, role = event.get("event_type"), event.get("subtype"), event.get("role")
+    if subtype == "tool_result":
+        return {"event_kind": "tool.result", "actor_kind": "tool", "content_role": "tool_result", "origin_kind": "tool_generated"}
+    if etype == "tool_call":
+        return {"event_kind": "tool.call", "actor_kind": "model", "content_role": "tool_request", "origin_kind": "model_generated"}
+    if subtype == "context_compaction":
+        return {"event_kind": "context.compact", "actor_kind": "harness", "content_role": "context", "origin_kind": "harness_injected"}
+    if subtype == "turn_aborted":
+        return {"event_kind": "lifecycle.abort", "actor_kind": "harness", "content_role": "status", "origin_kind": "harness_injected"}
+    if etype == "user_message":
+        return {"event_kind": "message.prompt", "actor_kind": "human", "content_role": "prompt", "origin_kind": "direct_user_input"}
+    if etype == "assistant_message":
+        return {"event_kind": "message.response", "actor_kind": "model", "content_role": "response", "origin_kind": "model_generated"}
+    if role == "system":
+        return {"event_kind": "message.context", "actor_kind": "harness", "content_role": "context", "origin_kind": "harness_injected"}
+    return {"event_kind": "unknown", "actor_kind": "unknown", "content_role": "status", "origin_kind": "unknown"}
+
+
+def _normalized_status(event: dict[str, Any], metadata: dict[str, Any]) -> tuple[str | None, str | None]:
+    source_status = event.get("source_status") or metadata.get("status")
+    value = str(source_status or "").lower()
+    if event.get("subtype") == "permission_denied":
+        return source_status, "denied"
+    if event.get("subtype") == "turn_aborted":
+        return source_status, "cancelled"
+    if event.get("subtype") == "tool_failure" or value in {"failed", "failure", "error"}:
+        return source_status, "failed"
+    if value == "incomplete":
+        return source_status, "incomplete"
+    if value in {"completed", "complete", "success", "succeeded"}:
+        return source_status, "succeeded"
+    return source_status, event.get("normalized_status")
+
+
+def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
+    """Upsert one event with common semantics and return its surrogate id."""
+    session = conn.execute(
+        "SELECT source, source_system_id, project_id FROM sessions WHERE id=?",
+        (event.get("session_id"),),
+    ).fetchone()
+    source_name = session["source"] if session else "Unknown"
+    profile = _profile(source_name)
+    semantics = _event_semantics(event)
+    metadata = _json_dict(event.get("metadata"))
+    source_status, normalized_status = _normalized_status(event, metadata)
+    trace = {
+        "source_event_type": event.get("event_type"),
+        "source_subtype": event.get("subtype"),
+        "source_role": event.get("role"),
+    }
+    mapping_rule = event.get("mapping_rule") or (
+        f"{profile['mapping']}.{event.get('event_type') or 'record'}.{event.get('subtype') or 'default'}"
+    )
+    values = (
+        event.get("session_id"), event.get("source_id"), event.get("event_id"),
+        event.get("sequence_no"), event.get("source_record_locator") or event.get("event_id"),
+        event.get("source_record_type") or event.get("event_type"),
+        event.get("source_record_subtype") or event.get("subtype"),
+        event.get("event_kind") or semantics["event_kind"],
+        event.get("actor_kind") or semantics["actor_kind"],
+        event.get("content_role") or semantics["content_role"],
+        event.get("origin_kind") or semantics["origin_kind"],
+        event.get("interaction_id"), event.get("model_turn_id"),
+        event.get("parent_event_id"), event.get("caused_by_event_id"),
+        event.get("content"), event.get("content_len"), event.get("tool_name"),
+        event.get("tool_input"), event.get("tool_output"),
+        event.get("event_at", event.get("timestamp")), event.get("event_at_basis") or "vendor",
+        source_status, normalized_status, event.get("source_file"),
+        event.get("artifact_path") or event.get("file_path"), mapping_rule,
+        event.get("mapping_trace") or json.dumps(trace, separators=(",", ":")),
+        event.get("metadata"), event.get("event_type"), event.get("subtype"),
+        event.get("role"), event.get("timestamp"), event.get("file_path"),
+    )
+    conn.execute(
+        """
+        INSERT INTO events(
+          session_id, source_id, event_id, sequence_no, source_record_locator,
+          source_record_type, source_record_subtype, event_kind, actor_kind,
+          content_role, origin_kind, interaction_id, model_turn_id,
+          parent_event_id, caused_by_event_id, content, content_len, tool_name,
+          tool_input, tool_output, event_at, event_at_basis, source_status,
+          normalized_status, source_file, artifact_path, mapping_rule,
+          mapping_trace, metadata, event_type, subtype, role, timestamp, file_path)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(session_id, event_id) DO UPDATE SET
+          source_id=excluded.source_id, sequence_no=excluded.sequence_no,
+          source_record_locator=excluded.source_record_locator,
+          source_record_type=excluded.source_record_type,
+          source_record_subtype=excluded.source_record_subtype,
+          event_kind=excluded.event_kind, actor_kind=excluded.actor_kind,
+          content_role=excluded.content_role, origin_kind=excluded.origin_kind,
+          interaction_id=excluded.interaction_id, model_turn_id=excluded.model_turn_id,
+          parent_event_id=excluded.parent_event_id, caused_by_event_id=excluded.caused_by_event_id,
+          content=excluded.content, content_len=excluded.content_len,
+          tool_name=excluded.tool_name, tool_input=excluded.tool_input,
+          tool_output=excluded.tool_output, event_at=excluded.event_at,
+          event_at_basis=excluded.event_at_basis, source_status=excluded.source_status,
+          normalized_status=excluded.normalized_status, source_file=excluded.source_file,
+          artifact_path=excluded.artifact_path, mapping_rule=excluded.mapping_rule,
+          mapping_trace=excluded.mapping_trace, metadata=excluded.metadata,
+          event_type=excluded.event_type, subtype=excluded.subtype,
+          role=excluded.role, timestamp=excluded.timestamp, file_path=excluded.file_path
+        """,
+        values,
+    )
+    return int(conn.execute(
+        "SELECT id FROM events WHERE session_id=? AND event_id=?",
+        (event.get("session_id"), event.get("event_id")),
+    ).fetchone()[0])
+
+
+def _lineage_id(event: dict[str, Any]) -> str | None:
+    metadata = _json_dict(event.get("metadata"))
+    value = metadata.get("call_id") or metadata.get("tool_use_id")
+    return str(value) if value is not None else None
+
+
+def _record_diagnostic(
+    conn: sqlite3.Connection,
+    event: dict[str, Any],
+    row_id: int,
+    *,
+    reason_code: str,
+    source_field: str | None = None,
+    source_value: Any = None,
+    detail: str | None = None,
+) -> None:
+    mapping_rule = event.get("mapping_rule")
+    if mapping_rule is None:
+        row = conn.execute(
+            "SELECT mapping_rule FROM events WHERE id=?", (row_id,)
+        ).fetchone()
+        mapping_rule = row[0] if row else None
+    conn.execute(
+        """
+        INSERT INTO mapping_diagnostics(
+          source_id, session_id, event_id, level, reason_code, source_field,
+          source_value, mapping_rule, detail, created_at)
+        VALUES (?, ?, ?, 'field', ?, ?, ?, ?, ?, ?)
         """,
         (
-            event.get("session_id"),
-            event.get("event_id"),
-            event.get("event_type"),
-            event.get("subtype"),
-            event.get("role"),
-            event.get("content"),
-            event.get("content_len"),
-            event.get("content_ref"),
-            event.get("tool_name"),
-            event.get("tool_input"),
-            event.get("tool_output"),
-            event.get("timestamp"),
-            event.get("file_path"),
-            event.get("source_file"),
-            event.get("metadata"),
-            event.get("source_raw"),
+            event.get("source_id"), event.get("session_id"), row_id,
+            reason_code, source_field,
+            None if source_value is None else str(source_value),
+            mapping_rule, detail, _now(),
         ),
     )
+
+
+def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -> None:
+    subtype = event.get("subtype")
+    if event.get("event_type") != "tool_call" and subtype != "tool_result":
+        return
+    session_id = str(event["session_id"])
+    metadata = _json_dict(event.get("metadata"))
+    source_status, normalized_status = _normalized_status(event, metadata)
+    call_id = _lineage_id(event)
+    if call_id is None:
+        _record_diagnostic(
+            conn, event, row_id,
+            reason_code="missing_tool_call_id",
+            source_field="call_id",
+            detail="tool invocation/result cannot be correlated by a source identifier",
+        )
+        if subtype == "tool_result":
+            conn.execute(
+                """
+                INSERT INTO tool_results(
+                  invocation_id, result_event_id, sequence_no,
+                  producing_actor_kind, output_text, is_error,
+                  source_status, normalized_status)
+                VALUES (NULL, ?, 1, 'tool', ?, ?, ?, ?)
+                """,
+                (
+                    row_id, event.get("tool_output") or event.get("content"),
+                    1 if normalized_status in {"failed", "denied", "incomplete"} else 0,
+                    source_status, normalized_status,
+                ),
+            )
+            return
+    invocation_id = f"{session_id}:call:{call_id or event['event_id']}"
+    conn.execute(
+        """
+        INSERT INTO tool_invocations(
+          id, session_id, interaction_id, model_turn_id, requested_event_id,
+          source_call_id, source_tool_name, canonical_tool_name, invocation_kind,
+          input_json, source_status, normalized_status, started_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          requested_event_id=COALESCE(excluded.requested_event_id, tool_invocations.requested_event_id),
+          source_tool_name=COALESCE(excluded.source_tool_name, tool_invocations.source_tool_name),
+          canonical_tool_name=COALESCE(excluded.canonical_tool_name, tool_invocations.canonical_tool_name),
+          input_json=COALESCE(excluded.input_json, tool_invocations.input_json),
+          source_status=COALESCE(excluded.source_status, tool_invocations.source_status),
+          normalized_status=COALESCE(excluded.normalized_status, tool_invocations.normalized_status)
+        """,
+        (
+            invocation_id, session_id, event.get("interaction_id"), event.get("model_turn_id"),
+            row_id if event.get("event_type") == "tool_call" else None, call_id,
+            event.get("tool_name"), event.get("tool_name"), "harness_capability",
+            event.get("tool_input"), source_status, normalized_status,
+            event.get("timestamp") if event.get("event_type") == "tool_call" else None,
+        ),
+    )
+    if subtype == "tool_result":
+        next_seq = conn.execute(
+            "SELECT COALESCE(MAX(sequence_no), 0) + 1 FROM tool_results WHERE invocation_id=?",
+            (invocation_id,),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO tool_results(
+              invocation_id, result_event_id, sequence_no, producing_actor_kind,
+              output_text, is_error, source_status, normalized_status)
+            VALUES (?, ?, ?, 'tool', ?, ?, ?, ?)
+            """,
+            (
+                invocation_id, row_id, next_seq, event.get("tool_output") or event.get("content"),
+                1 if normalized_status in {"failed", "denied", "incomplete"} else 0,
+                source_status, normalized_status,
+            ),
+        )
+
+
+def _artifact_path(event: dict[str, Any]) -> str | None:
+    if event.get("file_path"):
+        return str(event["file_path"])
+    raw = event.get("tool_input")
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError:
+        return None
+    if isinstance(value, dict):
+        path = value.get("path") or value.get("file_path")
+        return str(path) if path else None
+    return None
+
+
+def _record_artifact(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -> None:
+    path = _artifact_path(event)
+    if not path:
+        return
+    session = conn.execute(
+        "SELECT project_id, project_path FROM sessions WHERE id=?", (event["session_id"],)
+    ).fetchone()
+    project_id = session["project_id"] if session else None
+    project_path = session["project_path"] if session else None
+    absolute = os.path.abspath(os.path.expanduser(path)) if os.path.isabs(path) else (
+        os.path.abspath(os.path.join(project_path, path)) if project_path else None
+    )
+    relative = path
+    if absolute and project_path:
+        try:
+            relative = os.path.relpath(absolute, project_path)
+        except ValueError:
+            pass
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO artifacts(
+          project_id, artifact_kind, relative_path, observed_absolute_path)
+        VALUES (?, 'file', ?, ?)
+        """,
+        (project_id, relative, absolute),
+    )
+    artifact = conn.execute(
+        """
+        SELECT id FROM artifacts WHERE project_id IS ? AND artifact_kind='file'
+          AND relative_path IS ? AND uri IS NULL AND repository_object_id IS NULL
+          AND content_sha256 IS NULL
+        """,
+        (project_id, relative),
+    ).fetchone()
+    if artifact:
+        tool = str(event.get("tool_name") or "").lower()
+        operation = "read" if tool in {"read", "grep", "glob"} else (
+            "modify" if tool in {"edit", "write"} else "mention"
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO event_artifacts(
+              event_id, artifact_id, operation, evidence_source, confidence)
+            VALUES (?, ?, ?, 'tool_input', 1.0)
+            """,
+            (row_id, artifact[0], operation),
+        )
+
+
+def _prepare_event_groups(
+    conn: sqlite3.Connection,
+    session_id: str,
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    prepared: list[dict[str, Any]] = []
+    interaction_counter = 0
+    model_turn_counter = 0
+    current_interaction: str | None = None
+    turn_by_record: dict[str, str] = {}
+    for sequence, original in enumerate(events, 1):
+        event = dict(original)
+        event["sequence_no"] = sequence
+        semantics = _event_semantics(event)
+        is_prompt = (
+            semantics["actor_kind"] == "human"
+            and event.get("subtype") not in {"tool_result"}
+        )
+        if is_prompt:
+            interaction_counter += 1
+            current_interaction = f"{session_id}:interaction:{interaction_counter}"
+            conn.execute(
+                """
+                INSERT INTO interactions(
+                  id, session_id, sequence_no, initiating_event_id,
+                  boundary_source, confidence)
+                VALUES (?, ?, ?, ?, 'mapping', 0.8)
+                """,
+                (current_interaction, session_id, interaction_counter, event.get("event_id")),
+            )
+        event["interaction_id"] = current_interaction
+        if semantics["actor_kind"] == "model":
+            record_key = str(event.get("event_id") or sequence).split(":", 1)[0]
+            turn_id = turn_by_record.get(record_key)
+            if turn_id is None:
+                model_turn_counter += 1
+                turn_id = f"{session_id}:turn:{model_turn_counter}"
+                turn_by_record[record_key] = turn_id
+                conn.execute(
+                    """
+                    INSERT INTO model_turns(
+                      id, session_id, interaction_id, sequence_no, source_turn_id,
+                      boundary_source)
+                    VALUES (?, ?, ?, ?, ?, 'mapping')
+                    """,
+                    (turn_id, session_id, current_interaction, model_turn_counter, record_key),
+                )
+            event["model_turn_id"] = turn_id
+        prepared.append(event)
+    return prepared
 
 
 def replace_session_events(
     conn: sqlite3.Connection,
-    session: dict | None,
-    events: list[dict],
+    session: dict[str, Any] | None,
+    events: list[dict[str, Any]],
     *,
     session_id: str,
 ) -> None:
     """Replace one transcript-backed session inside the caller's transaction."""
-    conn.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
+    conn.execute("DELETE FROM events WHERE session_id=?", (session_id,))
+    conn.execute("DELETE FROM tool_invocations WHERE session_id=?", (session_id,))
+    conn.execute("DELETE FROM model_turns WHERE session_id=?", (session_id,))
+    conn.execute("DELETE FROM interactions WHERE session_id=?", (session_id,))
     if session is None:
-        conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
         return
-    upsert_session(conn, session)
-    for event in events:
-        upsert_event(conn, event)
+    source_file = next((e.get("source_file") for e in events if e.get("source_file")), None)
+    source_id = ensure_source(
+        conn, source=str(session.get("source") or "Unknown"), source_file=source_file
+    )
+    enriched_session = dict(session)
+    enriched_session["source_id"] = source_id
+    upsert_session(conn, enriched_session)
+    for event in _prepare_event_groups(conn, session_id, events):
+        event["source_id"] = source_id
+        row_id = upsert_event(conn, event)
+        if _event_semantics(event)["event_kind"] == "unknown":
+            _record_diagnostic(
+                conn, event, row_id,
+                reason_code="unmapped_event_semantics",
+                source_field="event_type/subtype/role",
+                source_value="/".join(str(event.get(key) or "") for key in ("event_type", "subtype", "role")),
+                detail="source record retained with open common values set to unknown",
+            )
+        _record_tool(conn, event, row_id)
+        _record_artifact(conn, event, row_id)
 
 
 def replace_source_sessions(
     conn: sqlite3.Connection,
     source_file: str,
-    sessions: dict[str, dict],
-    events: list[dict],
+    sessions: dict[str, dict[str, Any]],
+    events: list[dict[str, Any]],
 ) -> None:
     """Replace events owned by one multi-session source such as a Cursor DB."""
     old_session_ids = {
         row[0]
         for row in conn.execute(
-            "SELECT DISTINCT session_id FROM events WHERE source_file = ?",
-            (source_file,),
+            "SELECT DISTINCT session_id FROM events WHERE source_file=?", (source_file,)
         )
     }
-    conn.execute("DELETE FROM events WHERE source_file = ?", (source_file,))
-    for session in sessions.values():
-        upsert_session(conn, session)
+    grouped: dict[str, list[dict[str, Any]]] = {sid: [] for sid in sessions}
     for event in events:
-        upsert_event(conn, event)
+        grouped.setdefault(str(event["session_id"]), []).append(event)
+    for session_id, session in sessions.items():
+        replace_session_events(
+            conn, session, grouped.get(session_id, []), session_id=session_id
+        )
     for session_id in old_session_ids - set(sessions):
+        conn.execute("DELETE FROM events WHERE session_id=? AND source_file=?", (session_id, source_file))
         remaining = conn.execute(
-            "SELECT 1 FROM events WHERE session_id = ? LIMIT 1", (session_id,)
+            "SELECT 1 FROM events WHERE session_id=? LIMIT 1", (session_id,)
         ).fetchone()
         if remaining is None:
-            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
 
 
 def load_ingest_state(state_path: Path) -> dict[str, float]:
@@ -152,16 +775,17 @@ def load_ingest_state(state_path: Path) -> dict[str, float]:
     if not state_path.exists():
         return {}
     try:
-        data = state_path.read_text(encoding="utf-8")
-        return json.loads(data)
+        return json.loads(state_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
 
 
 def save_ingest_state(state_path: Path, state: dict[str, float]) -> None:
-    """Write ingest_state.json."""
+    """Atomically write incremental state."""
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, indent=0), encoding="utf-8")
+    tmp = state_path.with_name(f".{state_path.name}.tmp-{os.getpid()}")
+    tmp.write_text(json.dumps(state, indent=0), encoding="utf-8")
+    os.replace(tmp, state_path)
 
 
 def should_ingest(
@@ -170,8 +794,6 @@ def should_ingest(
     mtime: float,
     force: bool,
 ) -> bool:
-    """Return True if file should be ingested (force or mtime changed)."""
     if force:
         return True
-    state = load_ingest_state(state_path)
-    return state.get(source_file) != mtime
+    return load_ingest_state(state_path).get(source_file) != mtime

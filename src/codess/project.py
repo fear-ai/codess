@@ -12,6 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from codess import __version__
 from codess.config import (
     CC_PROJECTS,
     CODEX_ARCHIVED_SESSIONS,
@@ -22,7 +23,7 @@ from codess.config import (
 
 log = logging.getLogger(__name__)
 
-CLI_VERSION = "0.1.0"
+CLI_VERSION = __version__
 
 
 # --- Git / slug / vendor layout ---
@@ -329,10 +330,11 @@ class IngestRunOptions:
     min_size: int
     debug: bool
     redact: bool
+    raw_mode: str
 
 
 def build_ingest_run_options(args: Any) -> IngestRunOptions:
-    from codess.config import DEBUG, FORCE, INGEST_REDACT, MIN_SIZE, STOP
+    from codess.config import DEBUG, FORCE, INGEST_REDACT, MIN_SIZE, RAW_MODE, STOP
 
     raw_ms = getattr(args, "min_size", None)
     # Do not use `or MIN_SIZE`: --min-size 0 is valid (falsy int).
@@ -344,6 +346,7 @@ def build_ingest_run_options(args: Any) -> IngestRunOptions:
         min_size=min_size,
         debug=flag_or_env(args, "debug", DEBUG),
         redact=flag_or_env(args, "redact", INGEST_REDACT),
+        raw_mode=str(getattr(args, "raw_mode", None) or RAW_MODE).lower(),
     )
 
 
@@ -453,6 +456,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="ingest: [CODESS_MIN_SIZE] skip smaller sources (default from env at import)",
     )
+    p.add_argument(
+        "--raw-mode",
+        choices=("none", "reference", "capture", "seal"),
+        default=None,
+        help="ingest: raw evidence mode [CODESS_RAW_MODE] (default reference)",
+    )
 
     p.add_argument(
         "--tool",
@@ -525,6 +534,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--taxonomy",
         action="store_true",
         help="query: print event type taxonomy",
+    )
+    p.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="query: print structured CoSchema mapping diagnostics",
+    )
+    p.add_argument(
+        "--artifacts",
+        action="store_true",
+        help="query: correlate artifact evidence across sessions and vendors",
     )
     return p
 

@@ -1,0 +1,15 @@
+{
+  "mapping_id": "codess.codex",
+  "vendor": "openai",
+  "product": "codex",
+  "source_system_id": "openai.codex",
+  "storage_formats": ["codex-jsonl"],
+  "rules": [
+    {"id": "codex.message", "source": "response_item.message", "target": "events", "operation": "from", "retention": "core"},
+    {"id": "codex.tool-call", "source": "response_item.function_call|custom_tool_call|web_search_call", "target": "tool_invocations", "operation": "from_any", "retention": "specialized"},
+    {"id": "codex.tool-result", "source": "response_item.function_call_output|custom_tool_call_output", "target": "tool_results", "operation": "from_any", "retention": "specialized"},
+    {"id": "codex.abort", "source": "event_msg.turn_aborted", "target": "events.lifecycle.abort", "operation": "from", "retention": "core"},
+    {"id": "codex.session-meta", "source": "session_meta.payload", "target": "sessions", "operation": "from", "retention": "extension"}
+  ],
+  "hazards": ["archived-directory-is-not-completion", "no-stable-parent-session-id", "call-status-is-vendor-status"]
+}

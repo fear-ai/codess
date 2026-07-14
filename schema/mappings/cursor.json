@@ -1,0 +1,15 @@
+{
+  "mapping_id": "codess.cursor-composer",
+  "vendor": "cursor",
+  "product": "cursor-composer",
+  "source_system_id": "cursor.composer",
+  "storage_formats": ["cursor-sqlite"],
+  "rules": [
+    {"id": "cursor.bubble", "source": "composerData.bubbles[]", "target": "events", "operation": "from_each", "retention": "core"},
+    {"id": "cursor.tool-result", "source": "bubble.toolResults[]", "target": "tool_results", "operation": "from_each", "retention": "specialized"},
+    {"id": "cursor.header", "source": "composerHeaders", "target": "sessions", "operation": "from", "retention": "extension"},
+    {"id": "cursor.archive", "source": "composerHeaders.isArchived", "target": "sessions.archive_state", "operation": "from", "retention": "core"},
+    {"id": "cursor.subagent", "source": "composerHeaders.isSubagent", "target": "sessions.session_relation_kind", "operation": "from", "retention": "core"}
+  ],
+  "hazards": ["live-sqlite-requires-consistent-read", "global-db-must-be-project-scoped", "bubble-role-is-not-actor"]
+}

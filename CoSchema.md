@@ -1,98 +1,175 @@
-# CoSchema — Our SQLite designs
+# CoSchema v2
 
-Sessions, events, indexes. Executable DDL is `sql/CoSchema.sql`.
+CoSchema is Codess's vendor-neutral logical record model and its current SQLite
+store format. Functional meaning is defined by
+`schema/coschema/contract.json`; the SQLite layout is defined only by
+`schema/coschema/sqlite/schema.sql`. Vendor facts remain in `CCSchema.md`,
+`CodexSchema.md`, and `CursorSchema.md`; executable translations are declared in
+`schema/mappings/` and implemented by the adapters/store mapper.
 
----
+## Package and version identity
 
-## Schema file
+The released package is `schema/coschema/` plus the three mapping profiles.
+`schema/coschema/manifest.json` names and hashes every package file. Runtime
+initialization refuses a package whose files do not match that manifest.
 
-**sql/CoSchema.sql** — Canonical DDL. store.py reads and executes this file. Enables: `sqlite3 .codess/sessions.db < sql/CoSchema.sql` for manual setup.
+One monotonic integer versions the whole readable store contract:
 
----
+- format ID: `codess.coschema`
+- format version: `2`
+- SQLite `application_id`: `0x434F4445` (`CODE`)
+- SQLite `user_version`: `2`
+- Codess software version: independent, currently recorded in `store_meta` and
+  each snapshot manifest
 
-## Store layout
+We do not separately version every table, index, taxonomy, adapter, or vendor
+mapping. A change advances the CoSchema format only when the stored contract or
+reader requirements change. Adapter corrections normally require a new software
+release and rebuilt snapshot, not a new database format.
 
-```
+Released packages are immutable. Unknown package or database formats fail
+closed. Legacy unversioned stores may be read through the compatibility query
+surface but cannot be mutated; rebuild creates v2 stores beside retained
+baselines.
 
-## Replacement semantics
+## Core terms
 
-Claude and Codex transcripts own one normalized session. Re-ingesting one
-replaces that session's events in a single transaction; a valid source with no
-supported events removes the previous session. Cursor databases own many
-sessions, so refresh replaces events whose `source_file` is that database and
-removes only sessions left without events from any Cursor source. Ingest state
-is updated only after the database commit.
-<project>/.codess/
-├── sessions.db          # Legacy: all vendors
-├── sessions_cc.db       # Per-vendor
-├── sessions_codex.db
-├── sessions_cursor.db
-└── ingest_state.json
-```
+- **Source** — one observed revision of vendor evidence, identified by source
+  system, locator, and revision. A source is not a session and need not be
+  retained as a raw object.
+- **Interaction** — one user- or environment-initiated unit that can encompass
+  several model turns, tool calls/results, harness events, and requests for more
+  input. Its boundary may be vendor-provided, mapped, inferred, or manual.
+- **Model turn** — one bounded model execution within an interaction. It is not
+  assumed to equal a displayed message or a user/assistant pair.
+- **Actor** — the producer or operative principal represented by
+  `actor_kind` (for example human, model, harness, tool, agent, or system).
+  `content_role` separately records how content is presented, and `origin_kind`
+  records where it came from. This avoids forcing all harness input into
+  `user` and all model output into `assistant`.
+- **Artifact** — a file, URI, repository object, or other durable object an event
+  reads, creates, modifies, deletes, executes, or mentions. Observed absolute
+  paths are evidence; project-relative paths are the preferred portable key.
 
----
+## Functional entities
 
-## sessions
+| Entity | Purpose and identity |
+|---|---|
+| `projects` | Stable logical project identity plus observed root/cwd, ownership, activity, and selection state |
+| `sources` | Immutable observed source revision; unique by source system, URI, and revision |
+| `model_configurations` | Provider/model family/exact name and independently settable effort, speed, service, and mode values |
+| `sessions` | Vendor/harness container; vendor session ID is scoped by source system and may be absent |
+| `interactions` | Initiating work unit, ordered within a session, with explicit boundary source/confidence |
+| `model_turns` | Model execution, ordered within a session and optionally linked to an interaction |
+| `events` | Ordered normalized observation with preserved vendor type/subtype and mapping trace |
+| `tool_invocations` | Requested operation with source/free-text tool name, optional canonical name, input, and status |
+| `tool_results` | One or more ordered results linked to an invocation when source evidence permits |
+| `artifacts` / `event_artifacts` | Durable objects and evidence-backed operations on them |
+| `mapping_diagnostics` | Source-, record-, or field-level loss, rejection, or ambiguity |
+| `correlation_assertions` | Reviewable cross-session/project/vendor claims with method, evidence, and confidence |
 
-| Column | Type | Nullable | Description |
-|--------|------|----------|-------------|
-| id | TEXT | NOT NULL | session_id (PK) |
-| source | TEXT | NOT NULL | Claude, Codex, Cursor |
-| type | TEXT | NOT NULL | Code, IDE |
-| release | TEXT | NULL | Version string |
-| release_value | INTEGER | NULL | major*256 + minor*16 + build |
-| started_at | REAL | NOT NULL | Unix ms |
-| ended_at | REAL | NULL | Unix ms |
-| project_path | TEXT | NULL | Project root; NULL for Cursor global |
-| metadata | TEXT | NULL | JSON |
+The exhaustive field, nullability, reference, ordering, range, and vocabulary
+definitions are machine-readable in `contract.json`; this document does not
+duplicate that list. SQLite compatibility projection columns in `sessions` and
+`events` preserve the existing query surface but are not the v2 identity model.
 
----
+## Important field decisions
 
-## events
+### Identity and paths
 
-| Column | Type | Nullable | Description |
-|--------|------|----------|-------------|
-| id | INTEGER | NOT NULL | PK autoincrement |
-| session_id | TEXT | NOT NULL | FK sessions(id) |
-| event_id | TEXT | NOT NULL | Stable vendor/adapter identifier; UNIQUE(session_id, event_id). Claude uses the line number for the first emitted block and `line:block` for additional blocks. |
-| event_type | TEXT | NULL | user_message, assistant_message, tool_call, system_event |
-| subtype | TEXT | NULL | prompt, slash_command, response, dialog, truncated, tool_result, permission_denied, tool_failure, turn_aborted, context_compaction |
-| role | TEXT | NULL | user, assistant, system |
-| content | TEXT | NULL | Truncated |
-| content_len | INTEGER | NULL | Full length |
-| content_ref | TEXT | NULL | JSON |
-| tool_name | TEXT | NULL | |
-| tool_input | TEXT | NULL | JSON |
-| tool_output | TEXT | NULL | Truncated |
-| timestamp | REAL | NULL | Unix ms |
-| file_path | TEXT | NULL | |
-| source_file | TEXT | NULL | Raw path |
-| metadata | TEXT | NULL | JSON; Claude events retain record UUID/parent UUID/tool-use id, Codex calls retain call id/status, and Cursor sessions retain global/header classification |
-| source_raw | BLOB | NULL | Debug only |
+`source_system_id` identifies the source/harness namespace; a vendor session ID
+alone is not globally meaningful. Product, vendor, harness, storage format, and
+surface are separate because vendors reuse storage structures across IDE, CLI,
+desktop, agent, and API packaging.
 
-### Audit event contract
+`root_path` is the normalized project anchor. `source_cwd` is what the source
+actually reported. `relative_path` is preferred for artifact correlation;
+`observed_absolute_path` preserves local evidence. Source locators are URIs or
+absolute observed paths and are never treated as portable project identity.
 
-`query --audit` reports only direct upstream evidence. Unsupported means the
-adapter emits no audit row; Codess does not infer a state from timing, missing
-results, prose similarity, or nearby records.
+### Ordering and time
 
-| Audit state | Claude | Codex | Cursor |
-|---|---|---|---|
-| Permission request | Unsupported | Unsupported | Unsupported |
-| Permission decision | Explicit denial text on an error tool result → `permission_denied`; approvals are not emitted | Unsupported | Unsupported |
-| Tool failure | Error tool result that is not an explicit denial → `tool_failure` | Call record with structured status `failed`, `failure`, `error`, or `incomplete` → `tool_failure` | Unsupported |
-| Turn abort | Unsupported | `event_msg.turn_aborted` → `turn_aborted` | Unsupported |
-| Context compaction | `system` + `compact_boundary` → `context_compaction`; retain trigger only, not summary/token bodies | Unsupported | Unsupported |
+`sequence_no` is the deterministic within-session order and is required for
+interactions/model turns and present for mapped events. Event sequence values
+must be positive and are unique within a session. Source record locators and
+vendor IDs remain alongside it for lineage.
 
-The report prints project, session, vendor, timestamp, audit kind, tool name,
-and a bounded structural detail such as status or compaction trigger. It does
-not print failure bodies or compacted summaries.
+`started_at`, `ended_at`, and `event_at` are explicit vendor/mapping timestamps
+or `NULL`. Codess does not manufacture them from file modification time.
+`source_mtime` is captured separately. `time_basis`/`event_at_basis` tells an
+application which evidence supports a time value. SQLite stores event-oriented
+numeric time as Unix milliseconds; manifests and ingest/observation times use
+RFC 3339 UTC strings.
 
----
+### Types, roles, and tools
 
-## Indexes
+Vendor record type/subtype are retained in `source_record_type` and
+`source_record_subtype`. Broad common meaning is mapped into open
+`event_kind`, `actor_kind`, `content_role`, and `origin_kind` values. New vendor
+values therefore remain queryable even before the common vocabulary grows.
 
-- idx_events_session
-- idx_events_timestamp
-- idx_events_tool_name
-- idx_sessions_project
+Source tool names are free text because tool registries are vendor-, harness-,
+plugin-, and version-dependent. `canonical_tool_name` is an optional mapping,
+not a closed enum. `input_json`, `output_json`, and `output_text` describe the
+invocation boundary explicitly; a harness subprocess is not automatically
+classified as a model tool call.
+
+`source_status` preserves the vendor value. `normalized_status` is the common
+taxonomy (`pending`, `running`, `succeeded`, `failed`, `denied`, `cancelled`,
+`incomplete`, `unknown`). Neither silently replaces the other.
+
+### Metadata and mapping trace
+
+Typed, commonly queried meaning belongs in columns/relations. `metadata` is a
+JSON extension object for sparse vendor evidence that has not earned a common
+field. It must not duplicate canonical fields, conceal required identity, or
+become an unbounded raw-record dump. `mapping_rule` and `mapping_trace` identify
+the translation responsible for a normalized event. Structured mapping
+diagnostics record information that could not be mapped reliably.
+
+There is no `release_value`. Version strings remain exact source strings in the
+appropriate software/harness/model fields. There is no database `source_raw`
+column; raw evidence is handled by the sidecar store.
+
+## Raw evidence and immutable snapshots
+
+Raw retention uses `codess.raw/1`, a content-addressed store outside query
+databases. JSONL sources use a stable-file read; Cursor SQLite uses SQLite's
+backup API so WAL-visible committed data is captured consistently. Captured
+objects are zstd-compressed and named by the SHA-256 of uncompressed content.
+
+`--raw-mode` controls retention:
+
+- `none`: record that the source was not retained
+- `reference`: record locator, size, and modification identity (default)
+- `capture`: store a content-addressed exact revision
+- `seal`: capture and hard-link/copy the objects into the snapshot
+
+Each ingest builds `<project>/.codess/snapshots/<snapshot-id>/` beside existing
+snapshots, backs up its v2 databases, writes `raw-manifest.jsonl` and
+`manifest.json`, verifies package/database/raw hashes and logical counts, then
+atomically replaces `<project>/.codess/current.json`. Queries prefer the
+validated current snapshot. Prior snapshots and their matching software/package
+identity remain available as baselines.
+
+## Compatibility and change procedure
+
+`tools/coschema_gate.py OLD_CONTRACT NEW_CONTRACT` classifies a change as same,
+compatible, breaking, or manual review. It checks entity/field removal,
+identity/order changes, type/nullability constraints, and vocabularies; unknown
+change shapes fail closed. Fixtures under `schema/coschema/fixtures/` cover
+minimal, maximal, edge, negative, and compatibility cases.
+
+For a proposed store change:
+
+1. Change the logical contract and mapping specs first.
+2. Run the compatibility gate and record the decision.
+3. Change the SQLite layout without mixing application semantics into SQL.
+4. Add/update fixtures and mapping/database tests.
+5. Advance `format_version` only when the readable contract requires it.
+6. Hash the final package into the manifest and treat it as released.
+7. Rebuild, validate, and atomically promote a new snapshot; never overwrite a
+   retained baseline in place.
+
+See `Schemas.md` for rationale and compatibility-policy provenance and
+`Designs.md` for the broader source, correlation, catalog, and execution design.

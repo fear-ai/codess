@@ -1,0 +1,15 @@
+{
+  "mapping_id": "codess.claude-code",
+  "vendor": "anthropic",
+  "product": "claude-code",
+  "source_system_id": "anthropic.claude-code",
+  "storage_formats": ["claude-jsonl"],
+  "rules": [
+    {"id": "claude.message", "source": "record.message.content[]", "target": "events", "operation": "from_each", "retention": "core"},
+    {"id": "claude.tool-use", "source": "message.content[type=tool_use]", "target": "tool_invocations", "operation": "from_each", "retention": "specialized"},
+    {"id": "claude.tool-result", "source": "message.content[type=tool_result]", "target": "tool_results", "operation": "from_each", "retention": "specialized"},
+    {"id": "claude.compaction", "source": "system.compact_boundary", "target": "events.context.compact", "operation": "from", "retention": "core"},
+    {"id": "claude.lineage", "source": "uuid,parentUuid,tool_use_id", "target": "events.mapping_trace", "operation": "from_any", "retention": "core"}
+  ],
+  "hazards": ["source-role-is-not-actor", "sidechain-parent-may-be-unresolved", "system-records-are-heterogeneous"]
+}

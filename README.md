@@ -24,6 +24,8 @@ python -m main query --dir /path/to/project --sessions --id
 python -m main query --dir /path/to/project --tool
 python -m main query --dir /path/to/project --lineage
 python -m main query --dir /path/to/project --audit --limit 100
+python -m main query --dir /path/to/project --diagnostics
+python -m main query --dir /path/to/project --artifacts
 python -m main query --dir /path/to/project-a --dir /path/to/project-b --stats
 ```
 
@@ -35,6 +37,7 @@ python -m main query --dir /path/to/project-a --dir /path/to/project-b --stats
 # Ingest by source
 python -m main ingest --dir /path/to/project --source cc
 python -m main ingest --dir /path/to/project --source cursor
+python -m main ingest --dir /path/to/project --raw-mode capture
 
 # Show session content
 python -m main query --dir /path/to/project -sess 1 --show pr
@@ -45,6 +48,9 @@ numbers form one global most-recent-first order; `--stats` prints aggregate
 totals while updating the registry with per-project counts. `--lineage`
 joins tool calls to results and identifies missing or orphaned outcomes.
 `--audit` reports evidence-backed denials, failures, aborts, and compactions.
+`--diagnostics` exposes mapping loss and ambiguity. `--artifacts` correlates
+project-relative artifact evidence across vendor stores without asserting
+authorship.
 `--limit N` bounds globally ordered session, permission, lineage, and audit
 rows after merging all selected stores.
 
@@ -53,4 +59,11 @@ events are removed transactionally. A valid transcript with no supported
 events removes its previous normalized session and is reported as an empty
 source.
 
-Store: `<project>/.codess/`. Config: `CODESS_*` env vars. Central registry: `CODESS_REGISTRY` (default `~/.codess`) / `ingested_projects.json` — merged updates from **scan** (index metrics), **ingest** (store stats), **query --stats**; optional **`--registry PATH`** overrides the directory. Subprocess tests should set **`CODESS_REGISTRY`** to a temp dir so runs do not touch your home tree.
+Store: `<project>/.codess/`. Ingest creates and atomically promotes a validated
+immutable CoSchema v2 snapshot; raw evidence defaults to reference-only and can
+be captured or sealed with `--raw-mode`. Config: `CODESS_*` env vars. Central
+registry: `CODESS_REGISTRY` (default `~/.codess`) / `ingested_projects.json` —
+merged updates from **scan** (index metrics), **ingest** (store stats), **query
+--stats**; optional **`--registry PATH`** overrides the directory. Subprocess
+tests should set **`CODESS_REGISTRY`** to a temp dir so runs do not touch your
+home tree.

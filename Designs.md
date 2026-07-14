@@ -1,9 +1,9 @@
 # Codess design decisions
 
-This document defines the intended normalized model and the next design steps.
-It is not a description of the current `0.1.0` database. `CoSchema.md` and
-`sql/CoSchema.sql` remain the description and executable DDL for that database
-until a new baseline is implemented.
+This document records the design decisions behind the implemented CoSchema v2
+foundation and the remaining corpus/catalog/query work. `CoSchema.md`,
+`schema/coschema/contract.json`, and `schema/coschema/sqlite/schema.sql` are the
+authoritative logical description and executable layout.
 
 The immediate goal is reliable ingestion and comparison of recent, active work
 from Claude Code, Codex, and Cursor. Exhaustively finding every historical
@@ -13,12 +13,11 @@ queries.
 
 ## 1. Decisions and priorities
 
-### Implement first
+### Implemented foundation
 
-1. **Version every compatibility boundary independently.** Track the Codess
-   software release, logical schema, physical store layout, normalization
-   taxonomy, each vendor mapping, and the observed harness/source-format
-   version. One number cannot describe all of these.
+1. **Keep two public compatibility versions.** Version the Codess software and
+   a durable CoSchema store-format package. Record implementation and upstream
+   versions as provenance, but do not operate seven release trains.
 2. **Build immutable baselines rather than migrating derived data in place.**
    Build a new snapshot, validate it, then atomically make it current. Preserve
    the previous snapshot and the exact Codess software identity that reads it.
@@ -39,7 +38,7 @@ queries.
 
 ### Accepted removals and corrections
 
-- Remove `release_value` from the next schema. Its packed integer encoding is
+- `release_value` is removed from v2. Its packed integer encoding was
   not a general ordering for SemVer, vendor build identifiers, dates, channels,
   or nonnumeric releases. Retain exact version text and parse into a
   version-specific structure only where a comparison is needed.
@@ -57,35 +56,81 @@ queries.
 
 ## 2. Versioning and immutable baselines
 
-### Independent versions
+### Two managed versions, several recorded facts
 
-| Version | Meaning | Changes when |
+Seven independently managed version numbers would create ceremony without
+useful compatibility. Maintain only these public versions:
+
+| Managed version | Meaning | Changes when |
 |---|---|---|
-| `software_version` | Released Codess application, currently `0.1.0` | CLI or library behavior is released |
-| `software_revision` | Exact source revision and dirty-state marker | The build input changes |
-| `logical_schema_version` | Entities, fields, relationships, and their meanings | The normalized information model changes |
-| `layout_version` | SQLite files, tables, columns, indexes, constraints, and encodings | Physical storage changes, even if semantics do not |
-| `taxonomy_version` | Normalized event, actor, status, and operation vocabularies | Classification meanings or mappings change |
-| `mapping_version[vendor]` | Claude, Codex, or Cursor adapter rules | A vendor mapping changes |
-| `source_format_version` | Observed upstream record/storage format, if known | The vendor changes its format |
-| `harness_version` | Exact Claude Code, Codex, Cursor, or other harness release | The producing application changes |
+| `software_version` | Released Codess application, currently `0.2.0` | CLI, reader, writer, adapter, or query behavior is released |
+| `store_format` | Durable package containing the common logical schema, SQLite layout/DDL, constraints, and normalized taxonomies | A stored baseline can differ in structure or defined meaning |
 
-The versions must be independent. For example, a corrected Codex mapping may
-produce different normalized events without changing the logical schema or the
-Codex harness version. An added index changes the layout but not functional
-meaning. The manifest may additionally record minimum and maximum compatible
-reader versions, but compatibility must be tested rather than inferred from a
-matching number.
+Use a lasting format identifier such as `codess.coschema` plus a small monotonic
+`format_version`. The complete format package contains the logical field
+definitions, canonical DDL, taxonomies/lookup values, required indexes, and
+validation fixtures. Its files should have a reproducible package digest. A
+reader declares the store-format versions it supports; compatibility is tested
+against fixtures rather than inferred from Codess release numbers.
 
-Per-vendor logical schemas are not separate normalized schemas. The vendor
-documents describe upstream formats and each versioned mapping into the common
-logical schema. A vendor-specific staging database is permissible as a physical
-implementation detail and receives its own layout/mapping identity.
+The package can change in a disciplined manner without inventing another
+public version for each layer:
+
+- a meaning, required field, relationship, taxonomy, or incompatible layout
+  change advances `format_version`;
+- a purely operational SQLite index change can update the package digest and
+  software release without making old data unreadable; advance the format only
+  if exact physical reproducibility or reader assumptions require it; and
+- a taxonomy is part of the store contract. If a future taxonomy must evolve
+  independently at high frequency, store its vocabulary ID in the data then,
+  rather than paying that complexity now.
+
+Everything else is recorded provenance, not a separately governed release:
+
+| Recorded fact | Why retain it |
+|---|---|
+| `software_revision` | Exact Git/build identity, including dirty state |
+| adapter implementation identity | The software release/revision and adapter name already identify shipped mapping code; add a separate adapter package version only if adapters become independently distributed |
+| `source_format` and observed harness version | Upstream evidence used for support decisions; these are properties of input data, not Codess versions |
+| Python, SQLite, and platform versions | Reproduction and diagnosis; the store package may declare a minimum SQLite capability, but the SQLite runtime is not another Codess release train |
+| snapshot ID, policy/configuration digest, and source fingerprints | Identify the exact baseline contents without pretending they are schema versions |
+
+For example, a corrected Codex mapping normally advances the Codess software
+version and produces a new immutable snapshot, but does not advance
+`store_format` if the resulting records obey the same schema and taxonomy. A
+schema or taxonomy change advances the store format. This preserves the useful
+distinctions without exposing seven knobs.
+
+Per-vendor logical schemas are not separate common schemas. Vendor documents
+describe upstream formats and mappings into CoSchema. A vendor-specific staging
+database remains a physical implementation detail. If a vendor adapter later
+ships independently, its package may acquire one version then; do not design
+that release process prematurely.
+
+### Durable encoding
+
+Encode the store contract at three deliberate levels:
+
+1. Codess SQLite files use fixed `PRAGMA application_id = 0x434F4445`. This permanently marks
+   the file family and lets readers reject unrelated SQLite databases quickly.
+2. Put the integer CoSchema `format_version` in `PRAGMA user_version`. This is
+   the fast physical compatibility check and remains readable from the SQLite
+   file header.
+3. Repeat `format_id`, `format_version`, package digest, `created_by` software,
+   and snapshot identity in `store_meta`; put the same contract plus hashes and
+   provenance in the external manifest.
+
+The repetition is intentional: SQLite header fields survive detachment,
+`store_meta` is descriptive and queryable, and the manifest can be inspected
+without opening any database. Validation must require them to agree. The fixed
+application ID and monotonic format integer are the lasting encoding; the
+package digest identifies the exact DDL/taxonomy/fixture revision without
+creating another human-managed version number.
 
 ### Names versus authoritative metadata
 
 Do **not** make a database filename or directory name the authoritative version
-record. Encoding every independent version in a path produces long names,
+record. Encoding every version and provenance fact in a path produces long names,
 rename churn, and false confidence when a file is copied. Keep a stable current
 location and store authoritative values in both:
 
@@ -99,7 +144,7 @@ A useful physical layout is:
 <project>/.codess/
 ├── current.json                    # points to one immutable snapshot
 └── snapshots/
-    └── <created>-sw<software>-ls<logical>-ly<layout>/
+    └── <created>-coschema<format>/
         ├── manifest.json
         ├── sessions_cc.db
         ├── sessions_codex.db
@@ -107,7 +152,7 @@ A useful physical layout is:
         └── raw/
 ```
 
-The directory suffixes are human hints only. `manifest.json` and `store_meta`
+The directory suffix is a human hint only. `manifest.json` and `store_meta`
 are authoritative. Keeping vendor names in current DB filenames is reasonable
 because it identifies a physical partition; putting mapping or schema versions
 in every DB filename is not. A future single database can replace the
@@ -117,7 +162,8 @@ per-vendor files without changing the logical model.
 
 Each immutable snapshot should record:
 
-- all versions above, build timestamp, Python and SQLite versions, and platform;
+- `software_version`, `store_format`, package digest, software revision, build
+  timestamp, Python and SQLite versions, and platform;
 - the exact configuration and filtering policy that affects inclusion;
 - source identities, sizes, mtimes, content hashes where captured, and adapter
   results or rejection reasons;
@@ -148,7 +194,7 @@ one, and identify every transformed source row.
 Prior baselines remain accessible in one of two ways:
 
 1. the current reader advertises and tests read-only compatibility with that
-   logical/layout version; or
+   store format; or
 2. the manifest identifies the Git revision, lockfile, release artifact, or
    environment needed to run the matching older reader.
 
@@ -163,8 +209,8 @@ Keep four layers distinct:
 |---|---|---|
 | Functional model (`Designs.md`) | Entity meanings, relationships, invariants, vocabularies, selection policy | SQLite types, index names, SQL |
 | Vendor documents (`CCSchema.md`, `CodexSchema.md`, `CursorSchema.md`) | Upstream records, evidence, vendor semantics, mapping and limitations | Claims that a vendor field is universally meaningful |
-| Logical schema (`CoSchema.md`, next revision) | Common fields, nullability, cardinality, identity and lineage | SQLite-specific optimization |
-| Physical schema (`sql/CoSchema.sql` plus a layout document) | Tables, columns, SQL types, constraints, indexes, pragmas, file partitioning | Product behavior and vendor interpretation except as comments/links |
+| Logical schema (`CoSchema.md` and `schema/coschema/contract.json`) | Common fields, nullability, cardinality, identity and lineage | SQLite-specific optimization |
+| Physical schema (`schema/coschema/sqlite/schema.sql` plus a layout document) | Tables, columns, SQL types, constraints, indexes, pragmas, file partitioning | Product behavior and vendor interpretation except as comments/links |
 
 Code should mirror this boundary: vendor readers and mapping profiles, common
 domain records and validation, then a `storage/sqlite` implementation. SQL
@@ -191,29 +237,121 @@ nor a good indexing strategy.
 
 ## 4. Core entities and relationships
 
-The common model should contain these concepts. This is a logical model, not a
-commitment to one table per item.
+These are logical concepts, not a commitment to one table per item.
+
+### Source
+
+A **Source** is a bounded unit of upstream evidence inspected by Codess: for
+example one Claude or Codex JSONL transcript, one Cursor SQLite database, or one
+API export. It answers “what evidence did this normalized record come from?”
+
+A Source is not a vendor, project, session, or code file merely mentioned in a
+chat. One source may contain one session, as transcript files commonly do, or
+many sessions, as a Cursor database does. A session may also be reconstructed
+from several source revisions or files.
+
+Source identity has two levels:
+
+- a logical source identity: source system plus URI/path or upstream identity;
+- an observed source revision: size, mtime, content fingerprint where captured,
+  observation time, and extraction status.
+
+If a file changes, it remains the same logical source but yields a new observed
+revision. Normalized records link to the revision and source record position so
+their lineage is reproducible. A missing source value means no normalized
+source link was established; diagnostics must say whether evidence was absent,
+unsupported, invalid, redacted, or not retained.
+
+### Interaction versus turn
+
+An **Interaction** is a user-intent grouping inside a session. It starts with a
+direct user request or another evidenced initiating input and contains the
+events performed to pursue that request: model output, tool calls/results,
+harness actions, subagent work, clarification requests, and clarification
+replies. It answers “which user goal was this work serving?”
+
+An interaction is broader than a model call. It can contain many model calls
+and tool cycles. A harness request for more input and the user's answer normally
+remain in the same interaction. A later independent request starts another.
+Where a vendor does not expose boundaries, the grouping is nullable or marked
+as inferred with method/confidence; it must not be presented as upstream fact.
+
+**Turn** is too overloaded to use unqualified. Vendors may call a whole
+user-to-assistant cycle, one inference, or a tool loop a “turn.” In the common
+model use **Model Turn** (or eventually **Inference**) narrowly: one evidenced
+request to a model and its emitted response/requested actions. A tool result may
+lead to another Model Turn within the same Interaction. Preserve any vendor
+`turn_id` and vendor meaning separately. If the source does not expose model
+invocation boundaries, do not manufacture Model Turns merely by alternating
+message roles.
+
+Example:
+
+```text
+Interaction: "Fix the failing parser test"
+  Model Turn 1: proposes inspection and requests file/test tools
+  Tool calls/results: reads files and runs the test
+  Model Turn 2: proposes and requests an edit
+  Tool call/result: applies the edit
+  Model Turn 3: reports verification
+```
+
+### Actor
+
+An **Actor** is the identifiable producer or requester responsible for an
+event. It answers “who or what originated this event?” Actor is independent of
+the serialized message role and of content purpose.
+
+Actor kinds include human, model, harness, agent/subagent, skill, tool, system,
+and developer. An actor can be a durable participant (the human user), a scoped
+runtime instance (a subagent), or a configured service identity (a particular
+model configuration). `assistant` is not an actor identity; it is an upstream
+role label that may have been used for model, harness, or agent-generated
+content. When the true actor is not supported by evidence, use unknown rather
+than interpreting a source role literally.
+
+Do not create actors merely because a label exists. A skill is an actor only
+when evidence treats a scoped skill component as producing or requesting the
+event; otherwise it is an origin or invoked resource. Likewise, `system` and
+`developer` may be source content roles whose actual actor is the harness or an
+unknown configuration author.
+
+Actor, content role, and origin stay separate. For example, a harness actor can
+inject instruction content with `harness_injected` origin; a model actor can
+request a tool; and a tool actor can return result content.
+
+### Artifact
+
+An **Artifact** is a stable referent that work reads, creates, changes, or
+mentions: a project-relative file, document, repository/commit state, URL,
+notebook, image, generated patch, or similar object. It answers “what subject or
+output did this work affect?”
+
+Artifact identity is separate from an observation/version of its content. A
+path can move, a file can change hash, and two paths can refer to the same
+repository object. Record the strongest available identity and evidence:
+project plus relative path, URI, repository plus commit/object ID, content hash,
+or vendor object ID. Link events or tool invocations to artifacts with an
+operation such as read, create, modify, delete, execute, or mention and a
+confidence/source.
+
+A transcript file can occupy two roles without conflation: it is a Source when
+Codess ingests it as evidence, and an Artifact if a session itself edited or
+discussed that file. A tool result body is event payload, not automatically an
+Artifact; it becomes one when it identifies or creates a durable referent.
+
+### Remaining concepts
 
 - **Project**: a stable work identity, independent of its current local path.
 - **Project location**: a machine-local observed root, worktree, subdirectory,
   or vendor-reported working directory.
-- **Source**: one upstream transcript, database, record stream, or bounded
-  extraction unit, with provenance and observation facts.
 - **Session**: one vendor/harness conversation identity and its lifecycle.
-- **Interaction**: a user goal segment initiated by a prompt or reply and
-  containing any number of events. It can remain open across tool/model cycles.
-- **Model turn**: one model inference/request-response cycle when the source
-  provides sufficient evidence. This is not the same as an interaction.
 - **Event**: an ordered observation such as content, a tool request/result,
   lifecycle change, context operation, or audit fact.
-- **Participant/actor**: the human, model, harness, tool, agent, skill, or other
-  producer responsible for an event.
 - **Tool invocation and result**: a request plus zero or more result fragments,
   correlated by a vendor call ID or inferred local identity.
 - **Model configuration**: provider/model and configurable inference settings,
   referenced as a session default and optionally overridden per model turn.
-- **Artifact**: a file, document, repository state, URL, or other resource that
-  a session reads or changes.
 
 Important cardinalities and lineage rules:
 
@@ -391,7 +529,7 @@ to make JSON Schema central to Codess.
 
 ### Releases
 
-Strike `release_value`. Replace ambiguous `release` with the explicit version
+`release_value` is removed. Replace ambiguous `release` with the explicit version
 fields in section 2. Preserve an exact harness version string even when it
 cannot be ordered. If comparisons are required, use a parser declared for that
 specific vendor/version scheme and retain the original string.
@@ -533,20 +671,105 @@ Do not put full `source_raw` blobs in the main query database. They enlarge
 backups, mix sensitive evidence with normalized search data, and make retention
 and redaction all-or-nothing. Raw capture should be explicit and policy-driven.
 
-For reproducible baselines, use an immutable content-addressed sidecar, for
-example `raw/sha256/<prefix>/<hash>.zst`, containing exact source bytes or
-framed exact records. The snapshot manifest maps source URI, source revision,
-record offset/identity, content hash, compression/encoding, and retention policy
-to that object. Normalized records store only the source/record identity and
-optional raw reference/hash.
+The older local `SessionRec.md` proposed a useful hybrid—normalized SQLite plus
+raw sidecar JSONL. Retain the hybrid architecture, but do not make converted
+JSONL the raw format: it cannot preserve a Cursor SQLite source byte-for-byte
+and may discard unknown fields, ordering, encoding, or database structure.
 
-Zstandard-compressed source bytes preserve reparsing fidelity and deduplicate
-identical evidence. Framed JSONL is convenient for record access but should not
-replace exact bytes when formatting or database pages matter. A small sidecar
-index is a physical-layout option, not part of the functional model. Apply
-permissions, encryption, redaction, and deletion policy separately from the
-normalized store. When raw capture is disabled, the source manifest still
-states what was inspected and that exact evidence was not retained.
+### Proposed `codess.raw/1` format
+
+Treat this as part of the CoSchema store package, not another regularly managed
+release train. `codess.raw/1` is a fixed format namespace; create `/2` only if a
+future reader cannot understand the layout.
+
+```text
+~/.codess/raw/codess.raw-1/
+├── objects/
+│   └── sha256/ab/<uncompressed-content-sha256>.zst
+└── locks/                         # writer coordination; not snapshot content
+
+<snapshot>/
+├── manifest.json
+├── raw-manifest.jsonl             # references objects used by this snapshot
+└── raw/objects/...                # present only in a sealed export
+```
+
+An object contains the exact bytes of one consistently observed source
+revision, compressed with Zstandard. Its identity is the SHA-256 of the
+**uncompressed** bytes. The raw manifest also records the stored-object hash,
+compression, sizes, and media/storage format so corruption can be distinguished
+from a changed source. Never use the original filename as the object path.
+
+Each `raw-manifest.jsonl` begins with one header record, followed by one record
+per observed Source revision. A representative source record is:
+
+```json
+{
+  "record_type": "source_revision",
+  "source_revision_id": "srcv_...",
+  "source_system": "cursor-composer",
+  "storage_format": "sqlite",
+  "source_locator": "cursor-user-global/state.vscdb",
+  "observed_at": "2026-07-13T22:00:00Z",
+  "source_mtime_ns": null,
+  "source_size": 42819584,
+  "availability": "captured",
+  "capture_method": "sqlite-backup",
+  "consistency": "transactional-snapshot",
+  "object_id": "sha256:<uncompressed-content-sha256>",
+  "stored_sha256": "<compressed-object-sha256>",
+  "compression": "zstd",
+  "uncompressed_size": 42819584,
+  "stored_size": 7182640,
+  "redaction": "none"
+}
+```
+
+Numeric values above illustrate JSON types, not defaults. Omit or use `null` for
+an unknown fact; never write a fabricated mtime or size. Define the JSONL record
+schema and allowed values in the CoSchema package. Keep machine-sensitive
+absolute paths in a private location mapping where possible; the portable
+locator should be relative to a configured source root.
+
+`object_id` is location-independent. A resolver finds it first in a sealed
+snapshot and then in the configured central raw store; the manifest does not
+hard-code a machine path.
+
+Capture rules differ by storage format:
+
+- Claude/Codex JSONL and exports: capture the exact file bytes after a stable
+  size/mtime check or open-file snapshot; record whether the source changed
+  during capture.
+- Cursor SQLite: use the SQLite backup API or a vendor-safe read transaction so
+  WAL contents are included consistently. Copying only the live main DB file is
+  not a valid raw snapshot.
+- API/stream sources: preserve the exact received body or framed records plus
+  transport metadata needed to interpret them; do not claim byte identity with
+  server-side data that was never received.
+
+The normalized Source revision stores record locators such as JSONL line/byte
+position or Cursor table/key identity. Whole-file Zstandard objects are enough
+initially because ordinary queries use normalized SQLite; reparsing can stream
+the raw object. Add chunking or a seek index only after measured random-access
+need.
+
+### Capture and portability modes
+
+- `none`: normalized data only; manifest records that raw evidence was not
+  retained.
+- `reference`: record source identity/fingerprint and external location without
+  copying bytes. Useful locally but not independently reproducible.
+- `capture`: place exact bytes in the central content-addressed store and pin
+  them from the snapshot manifest.
+- `seal`: hardlink, reflink, or copy all pinned objects into an exported
+  snapshot so it is self-contained; verify every hash afterward.
+
+The central object store deduplicates a global Cursor database and identical
+transcripts instead of copying them into every project store. Garbage
+collection may remove only objects unreferenced by retained manifests. Apply
+permissions, encryption, retention, and deletion policy to raw objects
+separately. A redacted derivative is a different object/class and must never be
+labeled exact raw evidence.
 
 ## 12. Project inventory and selection policy
 
@@ -569,10 +792,37 @@ these dimensions separately:
 - explicit review notes and decisions, kept separately from reproducible scan
   facts.
 
+Local project identity and remote repository identity are separate. For each
+remote, store a dated observation: configured URL, checked time, result
+(`available`, `not_found`, `access_denied`, `redirected`, or `unchecked`),
+observed canonical URL, visibility/archive facts when available, and checking
+credential/profile identity without secrets. A 404 may mean deletion, rename,
+transfer, or inaccessible private data. It must never delete or disqualify a
+local project automatically. Old lists of repositories in the `wkarshat`,
+`fear-ai`, `tearodactyl`, or `zerocurrencycoin` accounts/organizations are
+candidate evidence only until checked again.
+
 Scanning updates observed facts. A review operation updates curation. Ingestion
 uses an explicit saved selection policy or selection set. Tests must always use
 an isolated registry; temporary test projects must never enter the personal
 catalog.
+
+### Reference collections and topical defaults
+
+Most known OSS/reference collections are below path segments `sOSS`, `Claws`,
+and `ZKs`. Current code already excludes the exact prefixes `Spank/sOSS`,
+`Claw/Claws`, and `ZK/ZKs` from ordinary candidate discovery (and also has
+other review/reference exclusions). Preserve those defaults, generalize the
+catalog classification to recognizable collection segments, and allow an
+explicit per-project override. A path inside a reference collection is not
+owned/active merely because its upstream repository committed recently.
+
+Treat `~/Work/Github` as dormant/reference by default: its local collection is
+currently dated by months. A project there requires an explicit review override
+to enter the active corpus even if copied or maintenance commits make Git dates
+look recent. Continue reporting reference-collection counts separately so they
+remain available for fixtures and additional candidates without dominating
+rankings.
 
 ### Selection order
 
@@ -601,54 +851,54 @@ WP projects are currently dormant/deferred, not permanently abandoned.
 `Code/jsonschema` is external/reference and should be considered only as a
 small compatibility/example case, not a priority corpus.
 
-### Current read-only review snapshot
+### Review catalog seed
 
-A fresh scan of `~/Work` found **237 Git repositories** across topical trees and
-**130** with a commit in the last 180 days. Large reference collections under
-`Spank/sOSS`, `ZK/ZKs`, `Claw/Claws`, and similar paths demonstrate why recency
-and repository count alone are noisy. Repository discovery and vendor-session
-discovery are separate inventories.
+Repository counts and commit-recency totals are deliberately not retained here;
+they age quickly and overrepresent reference collections. Repository discovery
+and vendor-session discovery remain separate observations. Use
+`~/Work/Code/SWEmore/active_work_projects_since_2026-05.csv` as the maintained
+active-work candidate input, not Git-repository recency or an old GitHub list.
+Its rows seed this review queue, which must be refreshed with current vendor
+observations before selection:
 
-| Topical tree | Git repositories |
-|---|---:|
-| `Biz` | 1 |
-| `Claude` | 20 |
-| `Claw` | 34 |
-| `Code` | 34 |
-| `Codex` | 1 |
-| `GBP` | 1 |
-| `Github` | 21 |
-| `Spank` | 58 |
-| `WP` | 9 |
-| `ZK` | 58 |
+| Local candidate | Evidence and current disposition |
+|---|---|
+| `ZK/Zero400` | Priority: active-work list plus meaningful Claude/Cursor evidence |
+| `ZK/zerowalletmac` | Priority candidate: active-work list and harness markers; repair/validate the existing zero-session `src` path mapping |
+| `Code/Misses` | Priority candidate: substantial recent work and harness markers; reconcile root identity with the previously discovered nested `petri/petri` project |
+| `Code/CodeSess` | Priority: active implementation and `.codess`; locate/validate current sources from all three vendors |
+| `Spank/spank-py` | Priority: active-work list, harness markers, meaningful source evidence, and an old store that should be rebuilt |
+| `Spank/spank-rs` | Candidate: active-work list and Claude marker; validate whether the `perf` zero-session trace maps to this root |
+| `Claude/CContext` | Candidate/path-mapping case: active-work list, weak marker, and current zero-session trace |
+| `Claw/setpack` | Candidate: active-work list and meaningful session evidence despite no repository marker |
+| `Spank/HECpoc` | Candidate/path-mapping case: substantial local work but current zero-session trace and no marker |
+| `ZK/Zebro` | Local active candidate with no harness marker yet; current configured GitHub remote was unavailable, which does not invalidate the local repository |
+| `ZK/Requihash` | Local active candidate with no harness marker yet; current configured GitHub remote was unavailable, which does not invalidate the local repository |
+| `Codex` | Candidate: recent local work but no harness marker; verify relevant session evidence before inclusion |
+| `Github/Schema` | Needs explicit review: present in the CSV, but `Work/Github` is dormant by default and its current zero-session trace is not an ingestion success |
 
-The current vendor-index scan found 18 project paths plus the global Cursor
-source. Twelve paths had meaningful session evidence and six were zero-session
-Cursor traces. The strongest immediate review set is:
+The CSV remains a list of **local active-work candidates**, not a promise that
+any recorded remote still exists. The generated catalog therefore marks every
+remote `unchecked`; remote availability is updated only by a new, dated
+observation and never inferred from an old list.
 
-| Candidate | Current reason | Proposed state |
-|---|---|---|
-| `Code/CodeSess` | Active owned implementation; repository itself was not in the prior meaningful vendor-index result | Priority; locate/validate all three vendor sources |
-| `Code/SWEmore` | Recent, meaningful session evidence | Priority candidate; classify ownership |
-| `Code/Misses/petri/petri` | Recent meaningful evidence | Candidate; classify ownership and scope |
-| `Spank/spank-py` | Recent meaningful evidence and existing old store | Priority candidate; rebuild rather than trust old store |
-| `ZK/Zero400` | Meaningful Claude and Cursor evidence | Priority cross-vendor baseline |
-| `ZK/ZeroPerf` | Recent meaningful evidence | Priority candidate |
-| `WP/harduw` | Claude and Codex evidence, but currently dated | Deferred cross-vendor compatibility baseline |
-| `Claw/setpack` | Meaningful evidence | Candidate; classify owned/reference and activity |
-| `Code/jsonschema` | External project with recent evidence | Reference/fixture only |
+Supplement the CSV with evidence-driven candidates it does not currently list:
+`Code/SWEmore` itself and `ZK/ZeroPerf` remain priority candidates because the
+fresh vendor scan found recent meaningful sessions. `WP/harduw` remains a
+deferred cross-vendor compatibility baseline. `WP/multiwp`, `WP/must-py`,
+`WP/wp`, and `WP/wpages` remain reviewable but dormant. `Code/jsonschema` is an
+external/reference fixture only.
 
-The other meaningful paths (`WP/multiwp`, `WP/must-py`, `WP/wp`, and
-`WP/wpages`) should remain reviewable but not inflate the first active baseline.
-The six zero-session traces (`Claude/CContext`, `Github/Schema`, `Github/skip`,
-`Spank/HECpoc`, `Spank/spank-rs/perf`, and `ZK/zerowalletmac/src`) are discovery
-diagnostics or candidates for path-mapping repair, not ingestion successes.
+The remaining zero-session traces (`Github/skip` and any unresolved paths
+above) are discovery diagnostics or path-mapping work, not evidence of usable
+session ingestion.
 
-The existing personal registry is not a trustworthy catalog: it is dominated
-by temporary test entries and contains no useful `~/Work` project selection.
-Do not publish or reuse it as the new baseline. Regenerate observed facts into
-a clean review artifact after registry isolation is verified, then add explicit
-ownership and selection decisions.
+The old personal registry is not reused as catalog truth. The maintained CSV is
+now transformed into `catalog/active-work-review.json`, with observed CSV facts,
+local availability, remote status `unchecked`, path-derived conservative
+curation, and an empty human-review decision kept in separate objects. Refresh
+it with `tools/build_review_catalog.py`; then merge current vendor scan evidence
+and explicit review decisions without overwriting observations.
 
 ### Cross-vendor work on the same code or document
 
@@ -667,32 +917,85 @@ matching prompt text. Uncommitted changes and concurrent sessions require
 explicit uncertainty; Codess should report correlation, not claim which model
 authored a line without evidence.
 
-## 13. Immediate work plan
+## 13. Seven key directions and execution order
 
-1. **Freeze the version contract.** Define the manifest and internal store
-   metadata fields, compatibility rules, snapshot validation, and atomic current
-   pointer. Add a reader refusal test for unknown layout/logical versions.
-2. **Write logical schema v2 before DDL.** Finalize Source, Session, Interaction,
-   Event, Actor, Tool Invocation/Result, Model Configuration, Artifact Link, and
-   time/lineage fields. Mark every current field as keep, rename, partition,
-   specialize, raw-only, or remove. `release_value` is remove.
-3. **Build vendor mapping matrices.** For Claude, Codex, and Cursor, map exact
-   fields and variants to the logical model, including absent/unsupported
-   evidence, archive semantics, model settings, roles/origins, tool statuses,
-   parent sessions, context compaction, and memory operations.
-4. **Implement a new snapshot writer.** Build beside the current store, preserve
-   the `0.1.0` baseline, validate counts/order/lineage/integrity, and promote only
-   after success. Do not add an in-place migration path for derived events.
-5. **Repair and republish the catalog.** Verify test registry isolation, move the
-   polluted registry aside as evidence rather than editing it into shape, run a
-   clean topical scan, classify ownership, and publish the candidate review set.
-6. **Create the first compatibility corpus.** Use a small active set covering all
-   three vendors and at least one cross-vendor project. Keep WP as deferred and
-   `jsonschema` as reference unless a specific format case needs them.
-7. **Add mixed-query acceptance tests.** Verify stable ordering, nullable true
-   start times, source-mtime fallback, prompt-to-many-events relationships,
-   tool call/result correlation, source and normalized status, model overrides,
-   compaction versus memory, and same-artifact cross-vendor correlation.
+The numbered directions below are also the intended execution order. Each step
+establishes the contract or evidence needed by the next; avoid broad historical
+ingestion until this path works on a small, representative corpus.
 
-Only after these pass should broader historical discovery, ranking refinements,
-or full raw capture become the priority.
+### 1. Establish a durable store contract — implemented
+
+Package the logical schema, SQLite layout/DDL, constraints, required indexes,
+taxonomies, validation rules, and fixtures as `codess.coschema`. Define the
+manifest and `store_meta`, assign the SQLite application ID, encode the CoSchema
+format in `user_version`, declare reader compatibility, and reject unsupported
+formats. A detached database must be self-identifying and safely readable by a
+known Codess release.
+
+### 2. Finalize CoSchema v2 — implemented
+
+Define Source and Source Revision, Session, Interaction, Model Turn, Event,
+Actor, Tool Invocation/Result, Model Configuration, Artifact, and Artifact Link,
+including identities, relationships, ordering, time provenance, nullability,
+and lineage. Disposition every current field as keep, rename, partition,
+specialize, raw-only, or remove. `release_value` is removed and fabricated
+fallback values and overloaded fields before writing the new DDL.
+
+### 3. Produce explicit vendor mappings — implemented foundation
+
+Create field-by-field Claude, Codex, and Cursor mapping matrices. Preserve exact
+source types, roles, statuses, model settings, and tool names alongside common
+values. Document absent, unsupported, inferred, invalid, redacted, and discarded
+evidence. Cover parent/subagent relationships, archive semantics, commands,
+skills, tool call/results, context compaction, and memory. Every normalized fact
+must be traceable to source evidence and a tested mapping rule.
+
+### 4. Build immutable snapshots and raw capture — implemented
+
+Implement a writer that builds beside the current store, validates the result,
+and atomically promotes it without modifying the prior baseline. Implement
+`codess.raw/1` for exact JSONL capture and transactionally consistent Cursor
+backup, with `none`, `reference`, `capture`, and `seal` modes. Hash sources, raw
+objects, stores, and manifests; preserve the matching software identity. Rebuild
+derived data by default rather than migrating it in place.
+
+### 5. Repair project discovery and cataloging — catalog seed implemented
+
+Permanently isolate test registries and retire the polluted personal registry
+as evidence. Seed the clean review catalog from
+`active_work_projects_since_2026-05.csv`, then add vendor-session observations.
+Separate scan facts from human curation; record topic, ownership, activity,
+selection state, mapping quality, and dated remote observations. Treat reference
+collections and `Work/Github` as non-active by default, without allowing missing
+remotes to invalidate local work.
+
+### 6. Create a small compatibility corpus — next
+
+Select a bounded active corpus covering Claude, Codex, Cursor, multiple harness
+formats, tool cycles, subagents, and at least one cross-vendor project. Start
+with the priority candidates identified above; retain WP as deferred and
+external projects such as `jsonschema` only as targeted fixtures. The corpus
+must be small enough to inspect manually and strong enough to validate mappings.
+
+### 7. Deliver useful mixed queries — initial v2 surface implemented
+
+Implement and test cross-vendor session/event queries, deterministic ordering,
+Interaction and evidenced Model Turn grouping, tool call/result correlation,
+source versus normalized status, model configuration, and artifact correlation.
+Queries may report that multiple coding systems touched the same project or
+artifact, with evidence and confidence, but must not assert unsupported
+authorship.
+
+### Remaining completion sequence
+
+1. Add hazard/golden vendor fixtures and deterministic re-ingestion tests to
+   the current mechanically validated mapping profiles.
+2. Merge fresh vendor observations into the review catalog and make explicit
+   priority/deferred decisions.
+3. Assemble and manually validate the bounded three-vendor compatibility corpus.
+4. Exercise `--diagnostics`, `--artifacts`, ordering, tool lineage, status, and
+   model configuration across that corpus; add acceptance fixtures for gaps.
+5. Rebuild and retain the first reviewed immutable baseline.
+
+Only after these seven steps pass should broader historical discovery, ranking
+refinements, large-scale raw capture, or additional vendors become priorities.

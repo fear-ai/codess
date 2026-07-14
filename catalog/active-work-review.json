@@ -1,0 +1,397 @@
+{
+  "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+  "catalog_format": "codess.catalog/1",
+  "generated_at": "2026-07-14T09:33:43.258083+00:00",
+  "projects": [
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "Claude"
+      },
+      "logical_name": "CContext",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "1 substantive commit since 2026-05-01; weak LLM signal: examples/CLAUDE.md",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/fear-ai/ccontext",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 16,
+        "reported_last_commit_date": "2026-07-07",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/Claude/CContext",
+      "project_id": "project:path:caf3fcc3857b0e1dd7621bf8",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "Claw"
+      },
+      "logical_name": "setpack",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "2 commits since 2026-05-01; no LLM harness marker found",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/fear-ai/setpack",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 14,
+        "reported_last_commit_date": "2026-07-06",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/Claw/setpack",
+      "project_id": "project:path:b4b1a7d08897c630d17b53d5",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "Code"
+      },
+      "logical_name": "CodeSess",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "4 commits since 2026-05-01; LLM harness marker: .codess",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/fear-ai/codess",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 47,
+        "reported_last_commit_date": "2026-07-13",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/Code/CodeSess",
+      "project_id": "project:path:1d0c477f1f901ed75ba63569",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "Code"
+      },
+      "logical_name": "Misses",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "50 commits since 2026-05-01; LLM harness markers: .claude; CLAUDE.md; AGENTS.md",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/fear-ai/falla",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 106,
+        "reported_last_commit_date": "2026-07-07",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/Code/Misses",
+      "project_id": "project:path:373b3f1f7f403a6a38a151b3",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "Codex"
+      },
+      "logical_name": "Codex",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "5 commits since 2026-05-01; no LLM harness marker found",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/wkarshat/codex",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 4,
+        "reported_last_commit_date": "2026-07-07",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/Codex",
+      "project_id": "project:path:bf28a5d6dfcde6fdd67118b1",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "dormant",
+        "ownership": "reference",
+        "selection_state": "needs_review",
+        "topic": "Github"
+      },
+      "logical_name": "Schema",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "11 commits since 2026-05-01; no LLM harness marker found",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/wkarshat/schema",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 93,
+        "reported_last_commit_date": "2026-07-07",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/Github/Schema",
+      "project_id": "project:path:f91d29b8df228e4a86c49652",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "Spank"
+      },
+      "logical_name": "HECpoc",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "76 commits since 2026-05-01; no LLM harness marker found",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/fear-ai/hecpoc",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 115,
+        "reported_last_commit_date": "2026-07-07",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/Spank/HECpoc",
+      "project_id": "project:path:a3a1f31f472b7444d527e0bf",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "Spank"
+      },
+      "logical_name": "spank-py",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "1 substantive commit since 2026-05-01; LLM harness markers: .claude; .codess; CLAUDE.md",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/fear-ai/spank-py",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 135,
+        "reported_last_commit_date": "2026-07-07",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/Spank/spank-py",
+      "project_id": "project:path:6d3d9463eb744de5efc75d37",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "Spank"
+      },
+      "logical_name": "spank-rs",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "3 commits since 2026-05-01; LLM harness marker: .claude",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/fear-ai/spank-rs",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 66,
+        "reported_last_commit_date": "2026-06-06",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/Spank/spank-rs",
+      "project_id": "project:path:6c02d94c4cebdbff77cd8f73",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "ZK"
+      },
+      "logical_name": "Requihash",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "4 commits since 2026-05-01; no LLM harness marker found",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/tearodactyl/requihash",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 51,
+        "reported_last_commit_date": "2026-07-13",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/ZK/Requihash",
+      "project_id": "project:path:94a067ab0f5fac468fd6711f",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "ZK"
+      },
+      "logical_name": "Zebro",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "13 commits since 2026-05-01; no LLM harness marker found",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/tearodactyl/zebro",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 28,
+        "reported_last_commit_date": "2026-07-13",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/ZK/Zebro",
+      "project_id": "project:path:05a1a2a8240a74fdbe73e662",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "ZK"
+      },
+      "logical_name": "Zero400",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "21 commits since 2026-05-01; LLM harness markers: .claude; AGENTS.md",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/zerocurrencycoin/Zero",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 912,
+        "reported_last_commit_date": "2026-07-03",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/ZK/Zero400",
+      "project_id": "project:path:9b8b970c22f92267720eb92f",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    },
+    {
+      "curation": {
+        "activity_state": "active",
+        "ownership": "own",
+        "selection_state": "candidate",
+        "topic": "ZK"
+      },
+      "logical_name": "zerowalletmac",
+      "observations": {
+        "candidate_source": "/Users/walter/Work/Code/SWEmore/active_work_projects_since_2026-05.csv",
+        "local_availability": "present",
+        "notes": "9 commits since 2026-05-01; LLM harness markers: .claude; AGENTS.md",
+        "remote": {
+          "canonical_url": null,
+          "checked_at": null,
+          "configured_url": "https://github.com/zerocurrencycoin/zerowallet",
+          "status": "unchecked"
+        },
+        "reported_doc_and_code_file_count": 179,
+        "reported_last_commit_date": "2026-07-01",
+        "vendors": {}
+      },
+      "path": "/Users/walter/Work/ZK/zerowalletmac",
+      "project_id": "project:path:9777269dfcfccdd1a44c223b",
+      "review": {
+        "decision": null,
+        "notes": null,
+        "reviewed_at": null
+      }
+    }
+  ]
+}
