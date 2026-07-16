@@ -1,4 +1,4 @@
-# CoSchema v2 compatibility review
+# CoSchema v3 compatibility review
 
 ## Decision
 
@@ -14,11 +14,15 @@ drift.
 | Project | Vendors | Sessions / events | Raw evidence | Result |
 |---|---|---:|---|---|
 | `Code/SWEmore` | Codex | 1 / 275 | 1 captured object | Accepted; 19 explicit missing-call-id diagnostics |
-| `Spank/spank-py` | Claude | 6 / 2,937 | 6 captured objects | Accepted |
-| `ZK/Zero400` | Claude, Cursor | 20 / 4,487 | 5 references | Accepted with five reproducibility limitations |
+| `Spank/spank-py` | Claude | 6 / 3,958 | 6 captured objects | Accepted |
+| `ZK/Zero400` | Claude, Cursor | 20 / 39,184 | 6 captured objects | Accepted |
 
-All three passed two forced ingests with equal source revisions and canonical
-semantic digests. Package/store/raw hashes, SQLite integrity and foreign keys,
+All three passed two forced ingests with equal normalization digests. SWEmore
+and spank-py also had equal source revisions and full semantic digests;
+Zero400's live shared Cursor DB advanced between captures, so its policy
+accepted only equal observation-independent normalization digests while each
+exact source revision remained captured.
+Package/store/raw hashes, SQLite integrity and foreign keys,
 manifest counts, event ordering, JSON fields, artifact identity, policy limits,
 and six query modes passed.
 
@@ -47,6 +51,15 @@ The Cursor baseline consequently contains 642 prompts and 2,582 responses
 rather than 60,368 mostly non-message events. Its average interaction fell from
 82.5 to 3.9 events and its maximum from 32,360 to 556. The packaged Cursor
 hazard fixture covers both rules.
+
+A subsequent structure-only audit found that current Cursor tool evidence lives
+in populated `toolFormerData` objects, not the empty `toolResults` arrays. The
+mapping now emits source-call-id-linked invocations and outcomes, preserves
+`completed`/`error`/`loading`/`cancelled`, and retains `modelCallId` as evidence.
+Zero400 contains 13,165 invocations and 17,014 results; 134 inferred model turns
+use vendor selection `composer-2.5` and five use `grok-4.5`. Large unmapped
+attachment/context fields are discarded after decoding but remain in captured
+raw evidence, reducing peak ingest memory from about 6 GB to about 0.6 GB.
 
 Artifact review also found that every spank-py artifact and eight Zero400
 artifacts resolve outside the selected project root. These now use `file:` URIs
@@ -89,16 +102,20 @@ spank-py itself.
 | Unknown/unmapped semantics | None | rejection/diagnostic tests | Fixture-only |
 | Cursor project scoping and inferred turns | Zero400 | policy invariants and adapter tests | Covered |
 | Cursor non-message envelopes and stable bubble deduplication | Zero400 | `hazard/cursor-nonmessage-copies.json` | Covered |
+| Cursor tool lineage and source status | Zero400 | adapter/store tests and `catalog/cursor-feature-audit.json` | Covered |
 | External versus project-scoped artifact identity | spank-py, Zero400 | store/query tests | Covered |
 | Same artifact across vendors | None | `golden/cross-vendor-artifact.json` | Fixture-only |
-| Exact model, effort, speed settings | Source records expose only provider in the Codex sample | model-configuration storage tests | Source-data gap |
-| Exact raw recovery | SWEmore, spank-py | hash/decompression checks | Covered |
-| Reference-only raw behavior | Zero400 | stability checks and explicit limitations | Covered with limitation |
+| Exact model selection | Cursor `modelInfo.modelName` | model-turn configuration tests | Covered |
+| Effort, speed, service settings | None | model-configuration storage tests | Source-data gap |
+| Exact raw recovery | SWEmore, spank-py, Zero400 | hash/decompression checks | Covered |
+| Reference-only raw behavior | Non-reviewed policies/fixtures | stability checks and explicit limitations | Covered |
 
 Reference-only apply validation requires the live locator to remain at the
-ingested revision through both fixed-point runs. Later frozen-set verification
-checks retained identities without requiring that mutable vendor database to
-remain unchanged; it continues to report the lack of exact retained raw bytes.
+ingested revision through both fixed-point runs. Captured shared databases may
+legitimately advance between two reads; a policy must explicitly permit that
+case, and acceptance still requires the normalized, observation-independent
+digest to match. Each snapshot retains its exact captured revision. The frozen
+reviewed set now has no reference-only evidence.
 
 No additional real project is added now. The uncovered items are either already
 bounded by fixtures or require an upstream shape that the current candidates do
@@ -121,14 +138,15 @@ not presented as semantic identity.
 
 ## Remaining execution order
 
-1. Correlate external artifact URIs to known catalog project roots using
-   evidence and confidence without changing session ownership.
-2. Resolve Codex parent-session support only from direct referential fields.
-3. Monitor for a bounded modern Cursor tool-call/result shape and add a fixture
-   before mapping it. Current Zero400 and zerowallet400 candidates contain none.
+1. Maintain catalog-backed external-artifact assertions without changing
+   session ownership or claiming authorship.
+2. Keep Codex parentage unsupported until a direct referential field appears;
+   `catalog/codex-parent-audit.json` found none across 28 sessions/16 releases.
+3. Monitor the mapped Cursor `toolFormerData` and `modelInfo.modelName` shapes
+   with `catalog/cursor-feature-audit.json`; empty `toolResults` is not evidence.
 4. Add a real same-artifact multi-vendor project only when current scoped data
    supplies one; keep the golden fixture as the contract meanwhile.
-5. Capture exact model name/effort/speed only when the vendor source explicitly
-   provides them.
+5. Capture effort/speed/service only when the vendor source explicitly provides
+   them.
 6. Re-run the reviewed-baseline verifier after source refreshes and freeze a new
    set only after semantic sampling.

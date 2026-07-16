@@ -82,9 +82,13 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
     """Return sessions across stores, globally ordered by recency."""
     sessions = []
     for store_index, store in enumerate(scope.stores):
+        session_columns = {
+            row[1] for row in store["conn"].execute("PRAGMA table_info(sessions)")
+        }
+        global_projection = "global_id," if "global_id" in session_columns else "NULL AS global_id,"
         rows = store["conn"].execute(
-            """
-            SELECT id, source_system_id, vendor_session_id, source, release, started_at, ended_at,
+            f"""
+            SELECT id, {global_projection} source_system_id, vendor_session_id, source, release, started_at, ended_at,
                    project_path, metadata
             FROM sessions
             """
@@ -99,8 +103,12 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
             sessions.append(
                 {
                     "id": row["id"],
-                    "global_id": global_session_id(
-                        source_system_id, row["vendor_session_id"] or row["id"]
+                    "global_id": (
+                        row["global_id"]
+                        if row["global_id"] and not row["global_id"].startswith("codess:legacy:")
+                        else global_session_id(
+                            source_system_id, row["vendor_session_id"] or row["id"]
+                        )
                     ),
                     "query_id": (store_index, row["id"]),
                     "source": row["source"],
@@ -320,6 +328,18 @@ def _artifacts(scope: QueryScope, limit: int | None = None) -> int:
         conn = store["conn"]
         if not _has_table(conn, "artifacts") or not _has_table(conn, "event_artifacts"):
             continue
+        correlations = {}
+        if _has_table(conn, "correlation_assertions"):
+            for assertion in conn.execute(
+                "SELECT object_id, relation_kind, evidence, confidence FROM correlation_assertions "
+                "WHERE subject_kind='artifact' AND object_kind='project'"
+            ):
+                evidence = _json_metadata(assertion["evidence"])
+                uri = evidence.get("artifact_uri")
+                if uri:
+                    correlations.setdefault(uri, []).append(
+                        (assertion["object_id"], assertion["relation_kind"], assertion["confidence"])
+                    )
         rows = conn.execute(
             """
             SELECT a.artifact_kind,
@@ -335,11 +355,12 @@ def _artifacts(scope: QueryScope, limit: int | None = None) -> int:
         project = str(store["project_root"])
         for row in rows:
             key = (project, row["artifact_kind"], row["locator"])
-            item = grouped.setdefault(key, {"sources": set(), "operations": set(), "sessions": set(), "evidence": 0})
+            item = grouped.setdefault(key, {"sources": set(), "operations": set(), "sessions": set(), "evidence": 0, "correlations": set()})
             item["sources"].add(row["source"])
             item["operations"].add(row["operation"])
             item["sessions"].add(row["session_id"])
             item["evidence"] += 1
+            item["correlations"].update(correlations.get(row["locator"], []))
     rows = []
     for (project, kind, locator), item in grouped.items():
         rows.append({
@@ -348,18 +369,22 @@ def _artifacts(scope: QueryScope, limit: int | None = None) -> int:
             "source_count": len(item["sources"]),
             "operations": ",".join(sorted(item["operations"])),
             "session_count": len(item["sessions"]), "evidence": item["evidence"],
+            "correlations": ",".join(
+                f"{project_id}|{relation}|{confidence:g}"
+                for project_id, relation, confidence in sorted(item["correlations"])
+            ),
         })
     rows.sort(key=lambda row: (-row["source_count"], -row["evidence"], row["project"], row["locator"]))
     rows = _limited(rows, limit)
     if not rows:
         return 0
-    print("project_path\tartifact_kind\tlocator\tsources\tsource_count\toperations\tsession_count\tevidence_count")
+    print("project_path\tartifact_kind\tlocator\tsources\tsource_count\toperations\tsession_count\tevidence_count\tproject_correlations")
     for row in rows:
         print(
             f"{sanitize_tabular(row['project'])}\t{sanitize_tabular(row['kind'])}\t"
             f"{sanitize_tabular(row['locator'])}\t{sanitize_tabular(row['sources'])}\t"
             f"{row['source_count']}\t{sanitize_tabular(row['operations'])}\t"
-            f"{row['session_count']}\t{row['evidence']}"
+            f"{row['session_count']}\t{row['evidence']}\t{sanitize_tabular(row['correlations'])}"
         )
     return 0
 

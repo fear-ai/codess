@@ -1,0 +1,32 @@
+{
+  "hazards": [
+    "toolResults-may-be-present-but-empty",
+    "default-model-selection-is-not-an-exact-model-name"
+  ],
+  "user_bubble": {
+    "type": 1,
+    "text": "Inspect the file",
+    "modelInfo": {"modelName": "composer-2.5"}
+  },
+  "assistant_bubble": {
+    "type": 2,
+    "text": "",
+    "toolFormerData": {
+      "name": "read_file_v2",
+      "toolCallId": "call-1",
+      "modelCallId": "model-1",
+      "status": "completed",
+      "rawArgs": "{\"path\":\"README.md\"}",
+      "result": "contents"
+    },
+    "toolResults": []
+  },
+  "expected": {
+    "model_name_exact": "composer-2.5",
+    "tool_name": "read_file_v2",
+    "call_id": "call-1",
+    "source_status": "completed",
+    "normalized_status": "succeeded",
+    "result_count": 1
+  }
+}

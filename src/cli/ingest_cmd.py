@@ -34,7 +34,11 @@ from codess.store import (
     should_ingest,
 )
 from codess.raw_store import RawStore
+from codess.project_catalog import ensure_project_binding, get_project_entry
+from codess.project_catalog import load_catalog, register_workspace_bindings
+from codess.artifact_correlation import correlate_external_artifacts
 from codess.snapshot import create_snapshot
+from codess.store import record_processing_run, sync_project_catalog
 
 log = logging.getLogger(__name__)
 
@@ -166,6 +170,7 @@ def _ingest_cc(
                     "source_mtime": mtime * 1000,
                     "time_basis": "event" if timestamps else "unknown",
                     "project_path": str(project_root),
+                    "project_id": opts.get("project_id"),
                     "metadata": (
                         json.dumps(
                             {
@@ -259,6 +264,7 @@ def _ingest_codex(
                     "source_mtime": mtime * 1000,
                     "time_basis": "event" if timestamps else "unknown",
                     "project_path": proj_path if proj_path != "." else str(project_root),
+                    "project_id": opts.get("project_id"),
                     "metadata": (
                         json.dumps(session_metadata, separators=(",", ":"))
                         if session_metadata
@@ -306,6 +312,14 @@ def _ingest_cursor(
     proj_str = str(project_root.resolve())
     ingested, total_events, failures = 0, 0, 0
 
+    workspace_ids = set(get_cursor_workspace_ids(project_root))
+    if workspace_ids and opts.get("registry_root") and opts.get("project_id"):
+        register_workspace_bindings(
+            Path(opts["registry_root"]), str(opts["project_id"]),
+            str(opts["location_id"]), workspace_ids,
+            source_project_path=proj_str,
+        )
+
     dbs = get_cursor_workspace_dbs(project_root)
     for db_path in dbs:
         try:
@@ -339,6 +353,7 @@ def _ingest_cursor(
                     "source_mtime": mtime * 1000,
                     "time_basis": "event" if timestamps else "unknown",
                     "project_path": proj_str,
+                    "project_id": opts.get("project_id"),
                     "metadata": None,
                 }
             replace_source_sessions(
@@ -371,7 +386,6 @@ def _ingest_cursor(
 
     global_db = get_cursor_global_db()
     if global_db is not None:
-        workspace_ids = set(get_cursor_workspace_ids(project_root))
         headers = get_composer_headers(global_db, workspace_ids)
         if not headers:
             if opts.get("debug"):
@@ -420,6 +434,7 @@ def _ingest_cursor(
                             "source_mtime": mtime * 1000,
                             "time_basis": "event" if timestamps else "unknown",
                             "project_path": proj_str,
+                            "project_id": opts.get("project_id"),
                             "metadata": json.dumps(
                                 {
                                     "storage": "global",
@@ -528,6 +543,7 @@ def run(args) -> int:
             opts["content_processor"] = ContentProcessor(
                 ContentPolicy.from_mapping(policy_data)
             )
+            opts["content_policy_data"] = policy_data
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             print(f"codess: invalid content policy {policy_path}: {exc}", file=sys.stderr)
             return 1
@@ -545,6 +561,12 @@ def run(args) -> int:
     for project_root in roots:
         try:
             project_root = project_root.resolve()
+            binding = ensure_project_binding(registry_root, project_root)
+            project_entry = get_project_entry(registry_root, binding["project_id"])
+            opts["project_id"] = binding["project_id"]
+            opts["location_id"] = binding["location_id"]
+            opts["registry_root"] = str(registry_root)
+            opts["content_actions"] = []
             state_path = get_state_path(project_root)
             proj_stats = {}
             project_raw_records: list[dict] = []
@@ -556,6 +578,12 @@ def run(args) -> int:
             if "cc" in sources:
                 store_path = _store_path(project_root, "cc")
                 init_db(store_path)
+                conn = connect(store_path)
+                try:
+                    sync_project_catalog(conn, project_entry)
+                    conn.commit()
+                finally:
+                    conn.close()
                 cc_dir = get_cc_session_dir(project_root)
                 if cc_dir is None and source == "cc":
                     print(f"No CC project dir for {project_root}", file=sys.stderr)
@@ -595,6 +623,12 @@ def run(args) -> int:
             if "codex" in sources:
                 store_path = _store_path(project_root, "codex")
                 init_db(store_path)
+                conn = connect(store_path)
+                try:
+                    sync_project_catalog(conn, project_entry)
+                    conn.commit()
+                finally:
+                    conn.close()
                 n, e, failed = _ingest_codex(
                     project_root,
                     store_path,
@@ -627,6 +661,12 @@ def run(args) -> int:
             if "cursor" in sources:
                 store_path = _store_path(project_root, "cursor")
                 init_db(store_path)
+                conn = connect(store_path)
+                try:
+                    sync_project_catalog(conn, project_entry)
+                    conn.commit()
+                finally:
+                    conn.close()
                 n, e, failed = _ingest_cursor(
                     project_root,
                     store_path,
@@ -656,6 +696,39 @@ def run(args) -> int:
                         conn.close()
 
             if proj_stats:
+                catalog = load_catalog(registry_root)
+                project_entry = get_project_entry(registry_root, binding["project_id"])
+                for vendor in ("Claude", "Codex", "Cursor"):
+                    path = get_store_path(project_root, vendor)
+                    if not path.exists():
+                        continue
+                    conn = connect(path)
+                    try:
+                        sync_project_catalog(conn, project_entry)
+                        outcome = correlate_external_artifacts(conn, catalog)
+                        conn.commit()
+                    finally:
+                        conn.close()
+                    for key, value in outcome.items():
+                        diagnostics[f"artifact_correlation_{key}"] = (
+                            diagnostics.get(f"artifact_correlation_{key}", 0) + value
+                        )
+                if opts.get("content_policy_data"):
+                    for vendor in ("Claude", "Codex", "Cursor"):
+                        path = get_store_path(project_root, vendor)
+                        if not path.exists():
+                            continue
+                        conn = connect(path)
+                        try:
+                            record_processing_run(
+                                conn,
+                                project_id=binding["project_id"],
+                                policy=opts["content_policy_data"],
+                                actions=opts.get("content_actions", []),
+                            )
+                            conn.commit()
+                        finally:
+                            conn.close()
                 if project_raw_records:
                     working_stores = [
                         get_store_path(project_root, vendor)
@@ -673,6 +746,8 @@ def run(args) -> int:
                             "minimum_source_size": min_size,
                             "redaction_enabled": iopt.redact,
                         },
+                        registry_root=registry_root,
+                        project_id=binding["project_id"],
                     )
                 _save_stats(project_root, registry_root, proj_stats)
                 for k, v in proj_stats.items():

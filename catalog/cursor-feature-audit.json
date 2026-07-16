@@ -1,0 +1,365 @@
+{
+  "audit_format": "codess.cursor-feature-audit/1",
+  "bubble_records": 155446,
+  "decisions": {
+    "modelInfo.modelName": "store non-default values as vendor-reported exact model selection; default remains source metadata only",
+    "toolFormerData": "supported as paired tool call/result evidence with source call and status fields",
+    "toolResults": "do not treat empty arrays as outcomes; retain existing nonempty-array compatibility mapping"
+  },
+  "evidence": {
+    "modelInfo_modelName_records": 2530,
+    "nonempty_toolResults_records": 0,
+    "populated_toolFormerData_records": 87767
+  },
+  "model_name_values": [
+    {
+      "model_selection": "composer-1.5",
+      "observations": 1898
+    },
+    {
+      "model_selection": "default",
+      "observations": 181
+    },
+    {
+      "model_selection": "composer-2",
+      "observations": 169
+    },
+    {
+      "model_selection": "composer-2.5",
+      "observations": 143
+    },
+    {
+      "model_selection": "claude-4.6-opus-high-thinking",
+      "observations": 75
+    },
+    {
+      "model_selection": "claude-4.6-sonnet-medium-thinking",
+      "observations": 54
+    },
+    {
+      "model_selection": "composer-2-fast",
+      "observations": 5
+    },
+    {
+      "model_selection": "grok-4.5",
+      "observations": 5
+    }
+  ],
+  "privacy_boundary": "message, argument, result, and attachment values were not retained",
+  "scope": "all valid bubbleId records in the local Cursor global store",
+  "toolFormerData_field_shapes": [
+    {
+      "field": "additionalData",
+      "observations": 49754,
+      "value_type": "object"
+    },
+    {
+      "field": "attachments",
+      "observations": 379,
+      "value_type": "text"
+    },
+    {
+      "field": "error",
+      "observations": 3442,
+      "value_type": "text"
+    },
+    {
+      "field": "modelCallId",
+      "observations": 87767,
+      "value_type": "text"
+    },
+    {
+      "field": "name",
+      "observations": 87767,
+      "value_type": "text"
+    },
+    {
+      "field": "params",
+      "observations": 85675,
+      "value_type": "text"
+    },
+    {
+      "field": "rawArgs",
+      "observations": 76873,
+      "value_type": "text"
+    },
+    {
+      "field": "result",
+      "observations": 63,
+      "value_type": "object"
+    },
+    {
+      "field": "result",
+      "observations": 71864,
+      "value_type": "text"
+    },
+    {
+      "field": "status",
+      "observations": 87767,
+      "value_type": "text"
+    },
+    {
+      "field": "tool",
+      "observations": 87767,
+      "value_type": "integer"
+    },
+    {
+      "field": "toolCallBinary",
+      "observations": 69504,
+      "value_type": "text"
+    },
+    {
+      "field": "toolCallId",
+      "observations": 87767,
+      "value_type": "text"
+    },
+    {
+      "field": "toolIndex",
+      "observations": 87767,
+      "value_type": "integer"
+    },
+    {
+      "field": "userDecision",
+      "observations": 2953,
+      "value_type": "text"
+    }
+  ],
+  "tool_names_top_50": [
+    {
+      "observations": 24255,
+      "tool_name": "read_file_v2"
+    },
+    {
+      "observations": 21701,
+      "tool_name": "edit_file_v2"
+    },
+    {
+      "observations": 15977,
+      "tool_name": "ripgrep_raw_search"
+    },
+    {
+      "observations": 15060,
+      "tool_name": "run_terminal_command_v2"
+    },
+    {
+      "observations": 2537,
+      "tool_name": "glob_file_search"
+    },
+    {
+      "observations": 1121,
+      "tool_name": "web_search"
+    },
+    {
+      "observations": 1100,
+      "tool_name": "run_terminal_cmd"
+    },
+    {
+      "observations": 1082,
+      "tool_name": "todo_write"
+    },
+    {
+      "observations": 919,
+      "tool_name": "search_replace"
+    },
+    {
+      "observations": 875,
+      "tool_name": "read_file"
+    },
+    {
+      "observations": 772,
+      "tool_name": "web_fetch"
+    },
+    {
+      "observations": 591,
+      "tool_name": "edit_file"
+    },
+    {
+      "observations": 359,
+      "tool_name": "grep_search"
+    },
+    {
+      "observations": 287,
+      "tool_name": "read_lints"
+    },
+    {
+      "observations": 277,
+      "tool_name": "await"
+    },
+    {
+      "observations": 178,
+      "tool_name": "delete_file"
+    },
+    {
+      "observations": 136,
+      "tool_name": "semantic_search_full"
+    },
+    {
+      "observations": 135,
+      "tool_name": "task_v2"
+    },
+    {
+      "observations": 132,
+      "tool_name": "list_dir"
+    },
+    {
+      "observations": 132,
+      "tool_name": "mcp-cursor-app-control-move_agent_to_root"
+    },
+    {
+      "observations": 42,
+      "tool_name": "list_dir_v2"
+    },
+    {
+      "observations": 21,
+      "tool_name": "mcp-cursor-app-control-open_resource"
+    },
+    {
+      "observations": 19,
+      "tool_name": "file_search"
+    },
+    {
+      "observations": 11,
+      "tool_name": "update_current_step"
+    },
+    {
+      "observations": 11,
+      "tool_name": "write"
+    },
+    {
+      "observations": 10,
+      "tool_name": "codebase_search"
+    },
+    {
+      "observations": 7,
+      "tool_name": "switch_mode"
+    },
+    {
+      "observations": 4,
+      "tool_name": "ask_question"
+    },
+    {
+      "observations": 4,
+      "tool_name": "grep"
+    },
+    {
+      "observations": 4,
+      "tool_name": "list_mcp_resources"
+    },
+    {
+      "observations": 2,
+      "tool_name": "mcp--"
+    },
+    {
+      "observations": 2,
+      "tool_name": "mcp_Notion_fetch"
+    },
+    {
+      "observations": 2,
+      "tool_name": "mcp_Notion_search"
+    },
+    {
+      "observations": 1,
+      "tool_name": "create_diagram"
+    },
+    {
+      "observations": 1,
+      "tool_name": "get_mcp_tools"
+    }
+  ],
+  "tool_statuses": [
+    {
+      "observations": 84104,
+      "source_status": "completed"
+    },
+    {
+      "observations": 3445,
+      "source_status": "error"
+    },
+    {
+      "observations": 3216,
+      "source_status": "[absent]"
+    },
+    {
+      "observations": 161,
+      "source_status": "loading"
+    },
+    {
+      "observations": 57,
+      "source_status": "cancelled"
+    }
+  ],
+  "workspace_evidence": [
+    {
+      "catalog_project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+      "composers": 17,
+      "model_name_records": 139,
+      "nonempty_tool_results_records": 0,
+      "tool_former_records": 41740,
+      "workspace_id": "243102c47acab6a728df1a9c7dc7067b"
+    },
+    {
+      "catalog_project_id": "codess:project:7fb0e5fa-3d21-4c19-86ab-7b4b3ebf83c0",
+      "composers": 2,
+      "model_name_records": 6,
+      "nonempty_tool_results_records": 0,
+      "tool_former_records": 4318,
+      "workspace_id": "e15dfe2f29fec656024c76d3166d3b28"
+    },
+    {
+      "catalog_project_id": null,
+      "composers": 2,
+      "model_name_records": 0,
+      "nonempty_tool_results_records": 0,
+      "tool_former_records": 2564,
+      "workspace_id": "e754b451838565a4f4a18dec2e3cd5e5"
+    },
+    {
+      "catalog_project_id": null,
+      "composers": 1,
+      "model_name_records": 0,
+      "nonempty_tool_results_records": 0,
+      "tool_former_records": 2145,
+      "workspace_id": "f2ba3d13f5bc01ed196d53f3cab57ee2"
+    },
+    {
+      "catalog_project_id": null,
+      "composers": 1,
+      "model_name_records": 0,
+      "nonempty_tool_results_records": 0,
+      "tool_former_records": 1276,
+      "workspace_id": "e010aa5ce03bbbbf68a10c5523b303bc"
+    },
+    {
+      "catalog_project_id": "codess:project:9ede0c2c-47b3-496e-b710-11d7cc154ee6",
+      "composers": 2,
+      "model_name_records": 33,
+      "nonempty_tool_results_records": 0,
+      "tool_former_records": 786,
+      "workspace_id": "b4ce84bb8a916dc6b4eb6b4e03bafb56"
+    },
+    {
+      "catalog_project_id": null,
+      "composers": 3,
+      "model_name_records": 1,
+      "nonempty_tool_results_records": 0,
+      "tool_former_records": 312,
+      "workspace_id": "empty-window"
+    },
+    {
+      "catalog_project_id": null,
+      "composers": 1,
+      "model_name_records": 38,
+      "nonempty_tool_results_records": 0,
+      "tool_former_records": 248,
+      "workspace_id": "0a60e0360932377a04b9fc6b70b5f3c4"
+    },
+    {
+      "catalog_project_id": null,
+      "composers": 1,
+      "model_name_records": 7,
+      "nonempty_tool_results_records": 0,
+      "tool_former_records": 6,
+      "workspace_id": "1778873861352"
+    }
+  ]
+}

@@ -1,0 +1,1298 @@
+{
+  "audit_format": "codess.codex-parent-audit/1",
+  "cli_versions": {
+    "0.101.0": 1,
+    "0.112.0": 2,
+    "0.114.0": 1,
+    "0.118.0": 1,
+    "0.118.0-alpha.2": 1,
+    "0.120.0": 2,
+    "0.128.0-alpha.1": 1,
+    "0.142.0": 2,
+    "0.142.5": 2,
+    "0.144.0-alpha.4": 1,
+    "0.144.2": 1,
+    "0.58.0": 1,
+    "0.76.0": 3,
+    "0.77.0": 4,
+    "0.96.0": 3,
+    "0.98.0": 2
+  },
+  "decision": "do not infer parentage from time, path, archive state, or content proximity",
+  "duplicate_session_ids": 0,
+  "files_missing_session_meta": 0,
+  "files_with_session_meta": 28,
+  "parent_candidate_fields": [],
+  "privacy_boundary": "message, reasoning, tool, and prompt bodies were not read",
+  "resolved_parent_references": 0,
+  "root_counts": {
+    "active": 26,
+    "archive": 2
+  },
+  "scope": "all local JSONL files under configured active/archive roots; session_meta only",
+  "session_meta_leaf_shapes": [
+    {
+      "field_path": "payload.base_instructions.text",
+      "observations": 20,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.cli_version",
+      "observations": 28,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.context_window.window_id",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.cwd",
+      "observations": 28,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].deferLoading",
+      "observations": 4,
+      "value_type": "bool"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].description",
+      "observations": 11,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.additionalProperties",
+      "observations": 4,
+      "value_type": "bool"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.cwds.anyOf[].items.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.cwds.anyOf[].type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.cwds.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.destination.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.destination.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.executionEnvironment.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.executionEnvironment.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.id.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.id.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.kind.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.kind.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.localEnvironmentConfigPath.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.localEnvironmentConfigPath.type[]",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.mode.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.mode.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.model.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.model.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.name.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.name.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.prompt.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.prompt.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.reasoningEffort.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.reasoningEffort.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.rrule.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.rrule.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.status.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.status.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.targetThreadId.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.properties.targetThreadId.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].inputSchema.type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].name",
+      "observations": 11,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].namespace",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].deferLoading",
+      "observations": 73,
+      "value_type": "bool"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].description",
+      "observations": 89,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema0.$ref",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema0.description",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema1.minLength",
+      "observations": 4,
+      "value_type": "int"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema1.type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema10.anyOf[].minLength",
+      "observations": 2,
+      "value_type": "int"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema10.anyOf[].type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema10.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema10.enum[]",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema10.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema11.$ref",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema11.const",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema11.description",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema11.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema12.description",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema12.enum[]",
+      "observations": 18,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema12.type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema13.$ref",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema13.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema13.enum[]",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema13.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema14.$ref",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema14.const",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema14.description",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema14.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema15.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema15.enum[]",
+      "observations": 10,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema15.type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema16.$ref",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema16.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema17.enum[]",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema17.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema2.$ref",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema2.description",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema3.$ref",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema3.description",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema4.$ref",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema4.description",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema5.description",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema5.enum[]",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema5.type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema6.const",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema6.description",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema6.type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema7.anyOf[].items.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema7.anyOf[].minLength",
+      "observations": 2,
+      "value_type": "int"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema7.anyOf[].type",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema7.description",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema8.$ref",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema8.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema8.enum[]",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema8.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema9.description",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema9.enum[]",
+      "observations": 20,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$defs.__schema9.type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.$schema",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.additionalProperties",
+      "observations": 85,
+      "value_type": "bool"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].additionalProperties",
+      "observations": 8,
+      "value_type": "bool"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].additionalProperties",
+      "observations": 16,
+      "value_type": "bool"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.cwds.$ref",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.destination.$ref",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.destination.const",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.destination.enum[]",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.destination.type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.executionEnvironment.$ref",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.executionEnvironment.const",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.executionEnvironment.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.executionEnvironment.enum[]",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.executionEnvironment.type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.id.$ref",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.kind.$ref",
+      "observations": 16,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.localEnvironmentConfigPath.$ref",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.localEnvironmentConfigPath.anyOf[].minLength",
+      "observations": 2,
+      "value_type": "int"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.localEnvironmentConfigPath.anyOf[].type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.mode.$ref",
+      "observations": 16,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.model.$ref",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.name.$ref",
+      "observations": 16,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.projectId.$ref",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.prompt.$ref",
+      "observations": 16,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.reasoningEffort.$ref",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.rrule.$ref",
+      "observations": 16,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.status.$ref",
+      "observations": 16,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].properties.targetThreadId.$ref",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].required[]",
+      "observations": 136,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].oneOf[].type",
+      "observations": 16,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].properties.id.$ref",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].properties.mode.const",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].properties.mode.type",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].required[]",
+      "observations": 16,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.oneOf[].type",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.afterRevision.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.afterRevision.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.archived.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.archived.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.cursor.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.cursor.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.cwds.anyOf[].items.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.cwds.anyOf[].type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.cwds.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.destination.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.destination.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.destinationHostId.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.destinationHostId.enum[]",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.destinationHostId.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].additionalProperties",
+      "observations": 12,
+      "value_type": "bool"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].properties.startingState.anyOf[].additionalProperties",
+      "observations": 4,
+      "value_type": "bool"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].properties.startingState.anyOf[].properties.branchName.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].properties.startingState.anyOf[].properties.type.enum[]",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].properties.startingState.anyOf[].properties.type.type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].properties.startingState.anyOf[].required[]",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].properties.startingState.anyOf[].type",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].properties.startingState.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].properties.type.enum[]",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].properties.type.type",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].required[]",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.anyOf[].type",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.environment.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.executionEnvironment.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.executionEnvironment.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.followUpPrompt.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.followUpPrompt.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.hostId.description",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.hostId.type",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.id.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.id.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.includeOutputs.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.includeOutputs.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.kind.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.kind.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.limit.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.limit.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.localEnvironmentConfigPath.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.localEnvironmentConfigPath.type[]",
+      "observations": 4,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.maxOutputCharsPerItem.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.maxOutputCharsPerItem.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.mode.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.mode.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.model.description",
+      "observations": 14,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.model.type",
+      "observations": 14,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.name.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.name.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.operationId.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.operationId.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.pinned.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.pinned.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.plugin.description",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.plugin.type",
+      "observations": 1,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.prompt.description",
+      "observations": 14,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.prompt.type",
+      "observations": 14,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.query.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.query.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.reasoningEffort.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.reasoningEffort.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.rrule.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.rrule.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.status.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.status.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].additionalProperties",
+      "observations": 12,
+      "value_type": "bool"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.directoryName.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.directoryName.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].additionalProperties",
+      "observations": 12,
+      "value_type": "bool"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].properties.startingState.anyOf[].additionalProperties",
+      "observations": 12,
+      "value_type": "bool"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].properties.startingState.anyOf[].properties.branchName.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].properties.startingState.anyOf[].properties.type.enum[]",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].properties.startingState.anyOf[].properties.type.type",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].properties.startingState.anyOf[].required[]",
+      "observations": 18,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].properties.startingState.anyOf[].type",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].properties.startingState.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].properties.type.enum[]",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].properties.type.type",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].required[]",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.anyOf[].type",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.environment.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.projectId.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.projectId.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.type.enum[]",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].properties.type.type",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].required[]",
+      "observations": 24,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.anyOf[].type",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.target.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.targetThreadId.description",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.targetThreadId.type",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.thinking.description",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.thinking.enum[]",
+      "observations": 84,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.thinking.type",
+      "observations": 12,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.threadId.description",
+      "observations": 46,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.threadId.minLength",
+      "observations": 4,
+      "value_type": "int"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.threadId.type",
+      "observations": 46,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.title.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.title.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.turnLimit.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.turnLimit.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.waitMs.description",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.properties.waitMs.type",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.required[]",
+      "observations": 75,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].inputSchema.type",
+      "observations": 85,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].name",
+      "observations": 89,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].tools[].type",
+      "observations": 89,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.dynamic_tools[].type",
+      "observations": 7,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.git.branch",
+      "observations": 17,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.git.commit_hash",
+      "observations": 20,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.git.repository_url",
+      "observations": 20,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.history_mode",
+      "observations": 2,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.id",
+      "observations": 28,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.instructions",
+      "observations": 8,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.model_provider",
+      "observations": 28,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.originator",
+      "observations": 28,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.session_id",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.source",
+      "observations": 28,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.thread_source",
+      "observations": 6,
+      "value_type": "str"
+    },
+    {
+      "field_path": "payload.timestamp",
+      "observations": 28,
+      "value_type": "str"
+    }
+  ],
+  "source_surfaces": {
+    "cli": 18,
+    "exec": 2,
+    "vscode": 8
+  },
+  "support_status": "not_observed",
+  "unique_session_ids": 28,
+  "unreadable_files": 0
+}

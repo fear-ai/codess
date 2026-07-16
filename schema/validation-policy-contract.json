@@ -12,7 +12,8 @@
     "cursor_turn_policy",
     "expected_cursor_workspace_ids",
     "expected_raw_records",
-    "require_fixed_point"
+    "require_fixed_point",
+    "allow_source_revision_drift"
   ],
   "raw_modes": ["none", "reference", "capture", "seal"],
   "cursor_turn_policies": ["inferred-per-user-interaction"]

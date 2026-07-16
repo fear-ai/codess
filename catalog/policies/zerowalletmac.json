@@ -13,7 +13,7 @@
     "Claude": 646,
     "Cursor": 114
   },
-  "raw_mode": "reference",
+  "raw_mode": "capture",
   "expected_raw_records": 5,
   "expected_cursor_workspace_ids": [
     "336fccba4cdadb9ae80878ebf603c809",
@@ -24,4 +24,5 @@
   "allowed_diagnostics": {},
   "cursor_turn_policy": "inferred-per-user-interaction",
   "require_fixed_point": true
+  ,"allow_source_revision_drift": true
 }

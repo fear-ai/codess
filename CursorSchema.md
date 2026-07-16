@@ -78,13 +78,16 @@ Fields relevant to normalization:
 | `text` | Message body | Sanitized and truncated |
 | `createdAt` | ISO-8601 event timestamp | Primary normalized timestamp and sort key |
 | `timingInfo.clientStartTime` | Relative client timing, or an epoch value in some legacy shapes | Used only when it plausibly represents Unix seconds or milliseconds |
-| `toolResults` | Tool name and result payloads | Emitted as normalized tool-result events |
+| `toolFormerData` | One tool name/call id/model-call id, arguments, result, and status | Emitted as a linked invocation and, for final states or a result body, a result/failure event |
+| `toolResults` | Legacy/possible tool-result array | Nonempty arrays are mapped for compatibility; the audited local store contains only empty arrays |
+| `modelInfo.modelName` | Model selection attached to a user request | Non-`default` values configure the following inferred model turn; `default` remains source metadata |
 | `codeBlocks`, `fileActions`, context fields | Product state and supporting content | Not normalized |
 
-Current verified bubble shapes do not expose stable permission decisions, a
-structured tool-failure flag, turn aborts, or context compaction boundaries.
-Cursor therefore contributes no `query --audit` rows; missing results or error-
-looking prose are not treated as audit evidence.
+Current `toolFormerData.status` values include `completed`, `error`, `loading`,
+and `cancelled`. Codess preserves the source value and maps those to succeeded,
+failed, running, and cancelled. Cursor therefore contributes evidence-backed
+tool-failure audit rows. It still supplies no verified permission-decision,
+turn-abort, or context-compaction shape; error-looking prose is not evidence.
 
 The adapter uses parsed `createdAt` for sorting and event timestamps. Numeric
 fallback values are accepted only when they plausibly represent Unix seconds or
@@ -95,9 +98,10 @@ The global database may repeat the same logical bubble under several local
 serverBubbleId)` as the stable identity within one composer and keeps the
 earliest observed copy. It does not deduplicate across composers or by content.
 Type-2 envelopes whose `text` is empty or whitespace-only are product/context
-state, not model messages; they emit no response event, although any
-`toolResults` are still normalized. The exact envelopes remain available under
-the selected raw-evidence policy.
+state, not model messages; they emit no response event, although tool evidence
+is still normalized. Before ordering and deduplication, the reader projects each
+decoded bubble to mapped fields; large context/attachment envelopes remain in
+captured raw evidence instead of normalized metadata or retained memory.
 
 ## 4. Composer data
 
@@ -124,9 +128,9 @@ available.
 
 | Codess concept | Workspace DB | Global DB |
 |---|---|---|
-| Project | `workspace.json` folder | `composerHeaders.workspaceId` joined to a matching `workspace.json`, plus explicitly approved source links for renamed/remote identities |
+| Project | `workspace.json` folder | `composerHeaders.workspaceId` joined to a matching `workspace.json`, plus explicitly approved source links for renamed/remote identities; observed local workspace bindings are persisted in the Project catalog |
 | Session | Distinct composer id with bubble rows | Same |
-| Event | Each decodable `bubbleId:*` row, plus derived tool-result events | Same |
+| Event | Supported message evidence plus derived tool invocation/result events from each decodable `bubbleId:*` row | Same |
 | Event timestamp | Parsed bubble `createdAt`, with epoch-only legacy fallback | Same |
 | Stored project path | Resolved workspace folder | Resolved mapped project; header/storage details in metadata |
 

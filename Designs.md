@@ -1,6 +1,6 @@
 # Codess design decisions
 
-This document records the design decisions behind the implemented CoSchema v2
+This document records the design decisions behind the implemented CoSchema v3
 foundation and the remaining corpus/catalog/query work. `CoSchema.md`,
 `schema/coschema/contract.json`, and `schema/coschema/sqlite/schema.sql` are the
 authoritative logical description and executable layout.
@@ -810,11 +810,10 @@ labeled exact raw evidence.
 
 Claude Code and Codex transcripts live in machine-local vendor stores, and
 Cursor workspace/global databases are also local evidence. Normalized working
-databases and retained snapshots currently live below the selected project's
-`.codess/`. A Git clone restores neither category. Therefore deleting a project
-directory can delete normalized outcomes and their manifests, while deleting
-or pruning a vendor store can make every reference-only baseline
-unreproducible.
+databases remain below the selected project's `.codess/`, but retained format-3
+snapshots now live in the stable central Project catalog. A Git clone restores
+neither vendor sources nor its local binding/cache. Deleting or pruning a
+vendor store still makes every reference-only baseline unreproducible.
 
 Before removing, renaming, or replacing a directory:
 
@@ -826,12 +825,11 @@ Before removing, renaming, or replacing a directory:
 4. copy or promote the validated baseline to the durable project catalog; and
 5. verify query access through the new binding before deleting the old tree.
 
-The current project-local snapshot layout does not yet satisfy step 4. The
-recommended next layout is
+Format 3 implements step 4 at
 `~/.codess/projects/<project-id>/snapshots/<snapshot-id>/`, with project-local
-`.codess/` reduced to a cache and pointer/binding. This is a store-layout change
-and must be approved and implemented as a rebuild boundary; until then, archive
-the entire project-local `.codess/` plus captured raw objects before deletion.
+`.codess/` reduced to working cache, pointer, and bindings. The retirement tool
+enforces captured evidence and replacement-location read verification; it does
+not remove the old tree.
 
 ## 12. Project inventory and selection policy
 
@@ -994,7 +992,7 @@ format in `user_version`, declare reader compatibility, and reject unsupported
 formats. A detached database must be self-identifying and safely readable by a
 known Codess release.
 
-### 2. Finalize CoSchema v2 — implemented
+### 2. Finalize CoSchema v3 — implemented
 
 Define Source and Source Revision, Session, Interaction, Model Turn, Event,
 Actor, Tool Invocation/Result, Model Configuration, Artifact, and Artifact Link,
@@ -1041,11 +1039,12 @@ remotes to invalidate local work.
 The frozen SWEmore, spank-py, and Zero400 set covers Claude, Codex, Cursor, tool
 cycles for Claude/Codex, subagents, compaction, mixed-vendor project timing, and
 current mapping hazards. Golden fixtures cover same-artifact multi-vendor
-queries and shapes absent from the real corpus. Current real evidence does not
-contain a Cursor tool-call/result shape or a shared cross-vendor artifact;
-those remain explicit gaps rather than reasons for broad historical ingest.
+queries and shapes absent from the real corpus. Current real evidence contains
+Cursor `toolFormerData` call/result lineage and `modelInfo.modelName` selections
+in approved workspaces. A shared cross-vendor artifact remains absent and is
+not a reason for broad historical ingest.
 
-### 7. Deliver useful mixed queries — implemented; correlation enrichment next
+### 7. Deliver useful mixed queries — implemented
 
 Implement and test cross-vendor session/event queries, deterministic ordering,
 Interaction and evidenced Model Turn grouping, tool call/result correlation,
@@ -1056,13 +1055,11 @@ authorship.
 
 ### Remaining maintenance sequence
 
-1. Correlate external artifact `file:` URIs to known catalog project roots with
-   explicit evidence and confidence; do not infer authorship.
-2. Resolve Codex parent-session support only from direct referential fields.
-3. Monitor for a bounded Cursor tool-call/result shape; current Zero400 and
-   zerowallet400 samples contain none. Add a hazard/golden fixture before any
-   future mapping change.
-4. Add a real same-artifact multi-vendor corpus member or richer model settings
+1. Maintain external-artifact/catalog assertions and Project workspace bindings.
+2. Keep Codex parentage unsupported until a direct referential field appears.
+3. Monitor mapped Cursor `toolFormerData` and `modelInfo.modelName`; keep empty
+   `toolResults` arrays non-evidentiary.
+4. Add a real same-artifact multi-vendor corpus member or effort/speed settings
    only when current source evidence supplies them.
 5. Re-run fixed-point and semantic sampling, then replace the frozen reviewed
    set atomically whenever a mapping or corpus member changes.

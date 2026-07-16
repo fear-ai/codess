@@ -352,12 +352,17 @@ class IngestRunOptions:
     raw_mode: str
     strict_mapping: bool
     content_policy: str | None
+    validate_only: bool
+    max_source_bytes: int | None
+    max_events_per_source: int | None
+    max_events_per_session: int | None
 
 
 def build_ingest_run_options(args: Any) -> IngestRunOptions:
     from codess.config import (
         CONTENT_POLICY, DEBUG, FORCE, INGEST_REDACT, MIN_SIZE, RAW_MODE,
-        STOP, STRICT_MAPPING,
+        STOP, STRICT_MAPPING, MAX_SOURCE_BYTES, MAX_EVENTS_PER_SOURCE,
+        MAX_EVENTS_PER_SESSION,
     )
 
     raw_ms = getattr(args, "min_size", None)
@@ -373,6 +378,10 @@ def build_ingest_run_options(args: Any) -> IngestRunOptions:
         raw_mode=str(getattr(args, "raw_mode", None) or RAW_MODE).lower(),
         strict_mapping=flag_or_env(args, "strict_mapping", STRICT_MAPPING),
         content_policy=getattr(args, "content_policy", None) or CONTENT_POLICY,
+        validate_only=bool(getattr(args, "validate", False)),
+        max_source_bytes=(None if getattr(args, "no_resource_limits", False) else int(getattr(args, "max_source_bytes", None) or MAX_SOURCE_BYTES)),
+        max_events_per_source=(None if getattr(args, "no_resource_limits", False) else int(getattr(args, "max_events_per_source", None) or MAX_EVENTS_PER_SOURCE)),
+        max_events_per_session=(None if getattr(args, "no_resource_limits", False) else int(getattr(args, "max_events_per_session", None) or MAX_EVENTS_PER_SESSION)),
     )
 
 
@@ -500,6 +509,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="ingest: scoped content pre/post-processing policy [CODESS_CONTENT_POLICY]",
     )
+    p.add_argument("--validate", action="store_true", help="ingest: parse and validate using temporary stores; do not mutate project or registry")
+    p.add_argument("--max-source-bytes", type=int, metavar="N", help="ingest: maximum bytes per source")
+    p.add_argument("--max-events-per-source", type=int, metavar="N", help="ingest: maximum normalized events per source")
+    p.add_argument("--max-events-per-session", type=int, metavar="N", help="ingest: maximum normalized events per session")
+    p.add_argument("--no-resource-limits", action="store_true", help="ingest: explicitly disable source/event maximums")
 
     p.add_argument(
         "--tool",
@@ -592,6 +606,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("exact", "read-compatible"),
         default="exact",
         help="query: require matching package, or explicitly allow same-format historical reads",
+    )
+    p.add_argument(
+        "--output-format", choices=("table", "jsonl"), default="table",
+        help="query: table output or versioned JSON Lines rows",
     )
     return p
 

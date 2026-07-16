@@ -25,6 +25,7 @@ POLICY_FIELDS = {
     "minimum_events", "raw_mode", "allowed_diagnostics",
     "cursor_turn_policy", "expected_cursor_workspace_ids",
     "expected_raw_records", "require_fixed_point",
+    "allow_source_revision_drift",
 }
 REQUIRED_ARTIFACT_INDEXES = {
     "idx_artifacts_identity_path",
@@ -116,6 +117,10 @@ def load_policy(path: Path | None) -> dict[str, Any]:
         policy["require_fixed_point"], bool
     ):
         raise ValueError("validation policy require_fixed_point must be boolean")
+    if "allow_source_revision_drift" in policy and not isinstance(
+        policy["allow_source_revision_drift"], bool
+    ):
+        raise ValueError("validation policy allow_source_revision_drift must be boolean")
     return policy
 
 
@@ -127,14 +132,24 @@ def _canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sq
                    activity_state, selection_state, metadata
             FROM projects ORDER BY id
         """,
+        "project_locations": """
+            SELECT id, project_id, machine_id, observed_path, location_kind,
+                   state, metadata
+            FROM project_locations ORDER BY id
+        """,
+        "workspace_bindings": """
+            SELECT id, project_id, location_id, source_system_id, workspace_id,
+                   relation_kind, source_project_path, selection_state, metadata
+            FROM workspace_bindings ORDER BY id
+        """,
         "sources": """
-            SELECT source_system_id, source_uri, storage_format, source_revision,
+            SELECT global_id, source_system_id, source_uri, storage_format, source_revision,
                    source_mtime, source_size, availability, capture_method,
                    consistency, content_sha256, metadata
             FROM sources ORDER BY source_system_id, source_uri, source_revision
         """,
         "sessions": """
-            SELECT id, source_system_id, vendor_session_id, vendor_name,
+            SELECT id, global_id, observation_id, source_system_id, vendor_session_id, vendor_name,
                    product_name, harness_name, storage_format, surface_kind,
                    session_purpose, harness_version, source_cwd, started_at,
                    ended_at, source_mtime, time_basis, parent_session_id,
@@ -153,7 +168,7 @@ def _canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sq
             FROM model_turns ORDER BY session_id, sequence_no
         """,
         "events": """
-            SELECT session_id, event_id, sequence_no, source_record_locator,
+            SELECT global_id, session_id, event_id, sequence_no, source_record_locator,
                    source_record_type, source_record_subtype, event_kind,
                    actor_kind, content_role, origin_kind, interaction_id,
                    model_turn_id, parent_event_id, caused_by_event_id, content,
@@ -162,6 +177,54 @@ def _canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sq
                    artifact_path, mapping_rule, mapping_trace, metadata,
                    file_path
             FROM events ORDER BY session_id, sequence_no, event_id
+        """,
+        "source_records": """
+            SELECT r.id, s.global_id, r.source_locator, r.source_sequence,
+                   r.source_record_type, r.source_record_subtype, r.parent_locator,
+                   r.record_at, r.classification, r.parameters_json
+            FROM source_records r JOIN sources s ON s.id=r.source_id
+            ORDER BY s.global_id, r.source_sequence, r.source_locator
+        """,
+        "content_objects": """
+            SELECT id, content_sha256, media_type, charset, byte_length,
+                   character_length, storage_class, inline_content,
+                   raw_object_id, privacy_class, metadata
+            FROM content_objects ORDER BY id
+        """,
+        "event_content": """
+            SELECT e.global_id, ec.content_id, ec.relation_kind, ec.sequence_no,
+                   ec.start_offset, ec.end_offset, ec.integrity_state
+            FROM event_content ec JOIN events e ON e.id=ec.event_id
+            ORDER BY e.global_id, ec.relation_kind, ec.sequence_no
+        """,
+        "source_record_content": """
+            SELECT source_record_id, content_id, relation_kind, sequence_no,
+                   integrity_state
+            FROM source_record_content
+            ORDER BY source_record_id, relation_kind, sequence_no
+        """,
+        "tool_result_content": """
+            SELECT r.invocation_id, r.sequence_no, c.content_id,
+                   c.relation_kind, c.sequence_no, c.integrity_state
+            FROM tool_result_content c JOIN tool_results r ON r.id=c.tool_result_id
+            ORDER BY r.invocation_id, r.sequence_no, c.relation_kind, c.sequence_no
+        """,
+        "artifact_content": """
+            SELECT a.project_id, a.artifact_kind, a.relative_path, a.uri,
+                   c.content_id, c.relation_kind, c.sequence_no, c.integrity_state
+            FROM artifact_content c JOIN artifacts a ON a.id=c.artifact_id
+            ORDER BY a.project_id, a.artifact_kind, a.relative_path, a.uri,
+                     c.relation_kind, c.sequence_no
+        """,
+        "processing_runs": """
+            SELECT id, project_id, policy_sha256, processor_name,
+                   software_version, scope_json, actions_json, rejection_reason
+            FROM processing_runs ORDER BY id
+        """,
+        "content_derivations": """
+            SELECT processing_run_id, input_content_id, output_content_id,
+                   sequence_no, actions_json, rejection_reason
+            FROM content_derivations ORDER BY processing_run_id, sequence_no
         """,
         "tool_invocations": """
             SELECT id, session_id, interaction_id, model_turn_id, source_call_id,
@@ -216,7 +279,10 @@ def _canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sq
         yield name, conn.execute(query)
 
 
-def semantic_digest(store_paths: Iterable[Path]) -> str:
+def semantic_digest(
+    store_paths: Iterable[Path], *, exclude_tables: frozenset[str] = frozenset(),
+    normalize_observations: bool = False,
+) -> str:
     digest = hashlib.sha256()
     for path in sorted(store_paths, key=lambda item: item.name):
         conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
@@ -224,11 +290,19 @@ def semantic_digest(store_paths: Iterable[Path]) -> str:
         try:
             require_store(conn, write=False)
             for table, rows in _canonical_rows(conn):
+                if table in exclude_tables:
+                    continue
                 digest.update(f"{path.name}\0{table}\n".encode("utf-8"))
                 for row in rows:
+                    values = tuple(row)
+                    if normalize_observations and table == "sessions":
+                        values = tuple(
+                            value for index, value in enumerate(values)
+                            if index not in {2, 15}
+                        )
                     digest.update(
                         json.dumps(
-                            tuple(row), ensure_ascii=False, separators=(",", ":")
+                            values, ensure_ascii=False, separators=(",", ":")
                         ).encode("utf-8")
                     )
                     digest.update(b"\n")
@@ -266,7 +340,11 @@ def _validate_store(
         _add_check(report, f"{prefix}.foreign_keys", not fk_rows, len(fk_rows))
 
         tables = (
-            "sources", "sessions", "interactions", "model_turns", "events",
+            "projects", "project_locations", "workspace_bindings", "sources",
+            "sessions", "interactions", "model_turns", "events",
+            "source_records", "content_objects", "event_content",
+            "source_record_content", "tool_result_content", "artifact_content",
+            "processing_runs", "content_derivations",
             "tool_invocations", "tool_results", "artifacts", "event_artifacts",
             "mapping_diagnostics", "correlation_assertions",
         )
@@ -294,6 +372,22 @@ def _validate_store(
         _add_check(
             report, f"{prefix}.event_sequence", not sequence_failures,
             [row[0] for row in sequence_failures[:10]],
+        )
+        identity_failures = {
+            label: int(conn.execute(
+                f"SELECT COUNT(*)-COUNT(DISTINCT {column}) FROM {table}"
+            ).fetchone()[0])
+            for label, table, column in (
+                ("sources.global_id", "sources", "global_id"),
+                ("sessions.global_id", "sessions", "global_id"),
+                ("sessions.observation_id", "sessions", "observation_id"),
+                ("events.global_id", "events", "global_id"),
+            )
+        }
+        _add_check(
+            report, f"{prefix}.global_identity",
+            all(value == 0 for value in identity_failures.values()),
+            identity_failures,
         )
         indexes = {row[1] for row in conn.execute("PRAGMA index_list('artifacts')")}
         missing_indexes = sorted(REQUIRED_ARTIFACT_INDEXES - indexes)
@@ -561,7 +655,12 @@ def validate_project(
         if not paths:
             raise SnapshotError("no current snapshot")
         current = json.loads((project_root / ".codess" / "current.json").read_text())
-        snapshot = project_root / ".codess" / current["path"]
+        current_path = Path(current["path"])
+        snapshot = (
+            current_path
+            if current_path.is_absolute()
+            else project_root / ".codess" / current_path
+        )
         manifest = json.loads((snapshot / "manifest.json").read_text())
     except (OSError, KeyError, json.JSONDecodeError, SnapshotError) as exc:
         report["errors"].append(f"snapshot: {exc}")
@@ -617,6 +716,11 @@ def validate_project(
     report["raw_records"] = len(raw_records)
     report["source_revisions"] = sorted(revisions)
     report["semantic_digest"] = semantic_digest(paths)
+    report["normalization_digest"] = semantic_digest(
+        paths,
+        exclude_tables=frozenset({"sources", "source_records", "source_record_content"}),
+        normalize_observations=True,
+    )
     _validate_policy(
         project_root, policy, report, counts_by_source, diagnostics,
         report.get("raw_mode"), stores,

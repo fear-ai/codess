@@ -290,6 +290,45 @@ class TestBubbleToEvents:
         assert evs[2]["tool_name"] == "Read"
         assert evs[2]["event_id"] == "c1:b1:tr1"
 
+    def test_tool_former_data_emits_linked_call_and_result(self):
+        data = {
+            "type": 2, "text": "",
+            "toolFormerData": {
+                "name": "read_file_v2", "toolCallId": "call-1",
+                "modelCallId": "model-1", "status": "completed",
+                "rawArgs": '{"path":"README.md"}', "result": "contents",
+            },
+            "toolResults": [],
+        }
+        evs = list(_bubble_to_events("c1", "b1", data, "/db", False))
+        assert [event["event_type"] for event in evs] == ["tool_call", "user_message"]
+        assert [event["subtype"] for event in evs] == ["tool_call", "tool_result"]
+        assert evs[0]["tool_input"] == '{"path":"README.md"}'
+        assert evs[1]["tool_output"] == "contents"
+        assert json.loads(evs[0]["metadata"])["call_id"] == "call-1"
+
+    def test_tool_former_error_without_body_is_retained(self):
+        data = {
+            "type": 2, "text": "",
+            "toolFormerData": {
+                "name": "edit_file_v2", "toolCallId": "call-2", "status": "error",
+            },
+        }
+        evs = list(_bubble_to_events("c1", "b1", data, "/db", False))
+        assert len(evs) == 2
+        assert evs[1]["subtype"] == "tool_failure"
+        assert evs[1]["normalized_status"] == "failed"
+
+    def test_user_model_selection_is_bounded_metadata(self):
+        event = list(_bubble_to_events(
+            "c1", "b1",
+            {"type": 1, "text": "prompt", "modelInfo": {"modelName": "composer-2.5"}},
+            "/db", False,
+        ))[0]
+        assert json.loads(event["metadata"]) == {
+            "model_selection": "composer-2.5", "model": "composer-2.5",
+        }
+
     def test_unknown_type_skipped(self):
         data = {"type": 99, "text": "x", "timingInfo": {}}
         evs = list(_bubble_to_events("c1", "b1", data, "/db", False))

@@ -476,14 +476,13 @@ hazard fixtures, cross-vendor artifact golden fixture, explicit external-file
 identity, CI-safe three-vendor policy, and historical reader boundary are now
 implemented. See `CompatibilityReview.md`.
 
-Next, in order:
+Next maintenance, in order:
 
-1. Correlate external artifact URIs to known catalog roots with explicit
-   evidence and confidence.
-2. Resolve the Codex parent-session evidence question without inferred links.
-3. Monitor for a modern Cursor tool-call/result shape; the current Zero400 and
-   zerowallet400 candidates contain no tool results.
-4. Add a real same-artifact multi-vendor corpus member or exact model settings
+1. Maintain external-artifact/catalog assertions and stable workspace bindings.
+2. Keep Codex parentage unsupported until a direct identifier appears.
+3. Monitor the evidence-backed Cursor `toolFormerData` and
+   `modelInfo.modelName` mappings; empty `toolResults` remains non-evidentiary.
+4. Add a real same-artifact multi-vendor corpus member or effort/speed settings
    only when current source evidence supplies them.
 5. Verify the frozen set after source refreshes and replace it atomically when
    a newly sampled set is accepted.

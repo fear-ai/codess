@@ -40,6 +40,10 @@ python tools/apply_and_verify.py --project /path/to/project --source all \
   --policy catalog/policies/project.json --repeat \
   --approve-catalog catalog/approved-baselines.json \
   --report /tmp/project-apply.json
+
+# Structure-only vendor evidence audits (do not retain conversation bodies)
+python tools/audit_codex_parentage.py --output catalog/codex-parent-audit.json
+python tools/audit_cursor_features.py --output catalog/cursor-feature-audit.json
 ```
 
 ---
@@ -79,21 +83,29 @@ events are removed transactionally. A valid transcript with no supported
 events removes its previous normalized session and is reported as an empty
 source.
 
-Store: `<project>/.codess/`. Ingest creates and atomically promotes a validated
-immutable CoSchema v2 snapshot; raw evidence defaults to reference-only and can
-be captured or sealed with `--raw-mode`. Config: `CODESS_*` env vars. Central
+Working store: `<project>/.codess/`. Ingest creates and atomically promotes a
+validated immutable CoSchema v3 snapshot under
+`~/.codess/projects/<project-id>/`; raw evidence defaults to reference-only and
+can be captured or sealed with `--raw-mode`. Config: `CODESS_*` env vars. Central
 registry: `CODESS_REGISTRY` (default `~/.codess`) / `ingested_projects.json` —
 merged updates from **scan** (index metrics), **ingest** (store stats), **query
 --stats**; optional **`--registry PATH`** overrides the directory. Subprocess
 tests should set **`CODESS_REGISTRY`** to a temp dir so runs do not touch your
-home tree.
+home tree. Stable Project identities, locations, and workspace bindings live in
+`projects.json`; test isolation is enforced by the pytest configuration.
 
 **Do not delete or replace an ingested project directory as though it were only
-a Git checkout.** Its `.codess/` currently contains the normalized outcomes and
-snapshot manifests, while Claude, Codex, and Cursor source records also depend
-on machine-local vendor stores. Before retirement, ingest with `capture` or
-`seal`, validate twice, preserve the snapshot/raw objects, and register the new
-location binding. A fresh clone alone restores none of this evidence.
+a Git checkout.** Claude, Codex, and Cursor sources are machine-local. Before
+retirement, ingest with `capture` or `seal` and validate twice, then run:
+
+```bash
+python tools/retire_project.py --project /old/path --registry ~/.codess \
+  --new-location /new/path
+```
+
+The tool requires captured evidence, updates the stable Project/location
+catalog, and verifies the new location can read the central snapshot. It does
+not delete the old directory.
 
 The acceptance tools process exactly one project per invocation. Validation is
 read-only. Apply-and-verify refuses unversioned legacy stores unless the

@@ -17,7 +17,11 @@ from typing import Any, Iterable
 
 from codess import __version__
 from codess.raw_store import RAW_FORMAT, RawStore
-from codess.schema_contract import FORMAT_ID, FORMAT_VERSION, require_store, verify_package
+from codess.project_catalog import durable_project_root
+from codess.schema_contract import (
+    APPLICATION_ID, FORMAT_ID, FORMAT_VERSION, SUPPORTED_READ_FORMATS,
+    database_identity, require_store, verify_package,
+)
 
 
 class SnapshotError(RuntimeError):
@@ -102,12 +106,28 @@ def _backup_store(
         source.close()
 
 
-def _logical_counts(path: Path) -> dict[str, int]:
+def _logical_counts(
+    path: Path, only: Iterable[str] | None = None
+) -> dict[str, int]:
     conn = sqlite3.connect(path)
     try:
+        available = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        requested = tuple(only) if only is not None else (
+            "projects", "project_locations", "workspace_bindings", "sources",
+            "sessions", "interactions", "model_turns", "events",
+            "source_records", "content_objects", "event_content",
+            "source_record_content", "tool_result_content", "artifact_content",
+            "processing_runs", "content_derivations",
+            "tool_invocations", "tool_results", "artifacts",
+            "mapping_diagnostics",
+        )
         return {
             table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in ("sources", "sessions", "interactions", "model_turns", "events", "tool_invocations", "tool_results", "artifacts", "mapping_diagnostics")
+            for table in requested if table in available
         }
     finally:
         conn.close()
@@ -121,9 +141,16 @@ def create_snapshot(
     raw_store: RawStore,
     seal: bool = False,
     build_policy: dict[str, Any] | None = None,
+    registry_root: Path | None = None,
+    project_id: str | None = None,
 ) -> Path:
-    """Build beside prior snapshots, validate, and atomically promote current.json."""
-    base = project_root / ".codess"
+    """Build, validate, and promote a durable snapshot plus local pointer."""
+    local_base = project_root / ".codess"
+    base = (
+        durable_project_root(registry_root, project_id)
+        if registry_root is not None and project_id is not None
+        else local_base
+    )
     snapshots = base / "snapshots"
     snapshots.mkdir(parents=True, exist_ok=True)
     package_digest = verify_package()
@@ -138,11 +165,13 @@ def create_snapshot(
     ).hexdigest()[:12]
     snapshot_id = f"{created_at.strftime('%Y%m%dT%H%M%S.%fZ')}-coschema{FORMAT_VERSION}-{identity}"
     parent_snapshot_id = None
-    pointer = base / "current.json"
+    pointer = local_base / "current.json"
     if pointer.exists():
         try:
             previous = json.loads(pointer.read_text(encoding="utf-8"))
-            previous_manifest = base / previous["path"] / "manifest.json"
+            previous_path = Path(previous["path"])
+            previous_snapshot = previous_path if previous_path.is_absolute() else local_base / previous_path
+            previous_manifest = previous_snapshot / "manifest.json"
             if _sha256(previous_manifest) != previous["manifest_sha256"]:
                 raise SnapshotError("refusing to replace an invalid current snapshot pointer")
             parent_snapshot_id = previous.get("snapshot_id")
@@ -206,6 +235,7 @@ def create_snapshot(
             "format_id": FORMAT_ID,
             "format_version": FORMAT_VERSION,
             "package_digest": package_digest,
+            "project_id": project_id,
             "raw_format": RAW_FORMAT,
             "sealed": seal,
             "raw_manifest_sha256": _sha256(raw_manifest),
@@ -219,14 +249,20 @@ def create_snapshot(
 
     current = {
         "snapshot_id": snapshot_id,
-        "path": str(final.relative_to(base)),
+        "path": str(final if base != local_base else final.relative_to(local_base)),
+        "project_id": project_id,
         "format_id": FORMAT_ID,
         "format_version": FORMAT_VERSION,
         "manifest_sha256": _sha256(final / "manifest.json"),
     }
-    pointer_tmp = base / f".current.json.tmp-{os.getpid()}"
+    local_base.mkdir(parents=True, exist_ok=True)
+    pointer_tmp = local_base / f".current.json.tmp-{os.getpid()}"
     pointer_tmp.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(pointer_tmp, base / "current.json")
+    os.replace(pointer_tmp, local_base / "current.json")
+    if base != local_base:
+        central_tmp = base / f".current.json.tmp-{os.getpid()}"
+        central_tmp.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(central_tmp, base / "current.json")
     return final
 
 
@@ -246,7 +282,16 @@ def snapshot_store_paths(
     base = project_root / ".codess"
     if not snapshot_id or snapshot_id in {".", ".."} or "/" in snapshot_id:
         raise SnapshotError(f"invalid snapshot identity: {snapshot_id!r}")
+    pointer = base / "current.json"
     snapshot = base / "snapshots" / snapshot_id
+    if pointer.exists():
+        try:
+            current = json.loads(pointer.read_text(encoding="utf-8"))
+            current_path = Path(current["path"])
+            if current_path.is_absolute():
+                snapshot = current_path.parent / snapshot_id
+        except (OSError, KeyError, json.JSONDecodeError):
+            pass
     if not snapshot.is_dir():
         raise SnapshotError(f"retained snapshot not found: {snapshot_id}")
     try:
@@ -254,7 +299,10 @@ def snapshot_store_paths(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("snapshot_id") != snapshot_id:
             raise SnapshotError("snapshot directory and manifest identity disagree")
-        if manifest["format_id"] != FORMAT_ID or manifest["format_version"] != FORMAT_VERSION:
+        if (
+            manifest["format_id"] != FORMAT_ID
+            or manifest["format_version"] not in SUPPORTED_READ_FORMATS
+        ):
             raise SnapshotError("retained snapshot format is unsupported")
         package_matches = manifest.get("package_digest") == verify_package()
         if not package_matches and not allow_package_mismatch:
@@ -269,13 +317,18 @@ def snapshot_store_paths(
                 raise SnapshotError(f"retained store hash mismatch: {name}")
             conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
             try:
-                require_store(conn, write=False)
+                if package_matches:
+                    require_store(conn, write=False)
+                else:
+                    application_id, version = database_identity(conn)
+                    if application_id != APPLICATION_ID or version not in SUPPORTED_READ_FORMATS:
+                        raise SnapshotError(f"retained store format mismatch: {name}")
                 meta = dict(conn.execute("SELECT key, value FROM store_meta"))
                 if meta.get("snapshot_id") != manifest.get("snapshot_id"):
                     raise SnapshotError(f"retained store snapshot identity mismatch: {name}")
                 if meta.get("package_digest") != manifest.get("package_digest"):
                     raise SnapshotError(f"retained store package digest mismatch: {name}")
-                if _logical_counts(path) != entry.get("counts"):
+                if _logical_counts(path, entry.get("counts", {}).keys()) != entry.get("counts"):
                     raise SnapshotError(f"retained store logical counts mismatch: {name}")
             finally:
                 conn.close()
@@ -295,7 +348,8 @@ def current_store_paths(project_root: Path) -> list[Path]:
         return []
     try:
         current = json.loads(pointer.read_text(encoding="utf-8"))
-        snapshot = base / current["path"]
+        current_path = Path(current["path"])
+        snapshot = current_path if current_path.is_absolute() else base / current_path
         manifest_path = snapshot / "manifest.json"
         if _sha256(manifest_path) != current["manifest_sha256"]:
             raise SnapshotError("current snapshot manifest hash mismatch")

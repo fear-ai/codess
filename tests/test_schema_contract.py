@@ -122,6 +122,47 @@ def test_null_vendor_times_do_not_use_source_mtime(tmp_path):
     conn.close()
 
 
+def test_cursor_prompt_model_selection_configures_following_model_turn(tmp_path):
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = connect(path)
+    session = {"id": "cursor-1", "source": "Cursor", "type": "Code"}
+    replace_session_events(conn, session, [
+        {
+            "session_id": "cursor-1", "event_id": "prompt",
+            "event_type": "user_message", "subtype": "prompt", "role": "user",
+            "content": "hello",
+            "metadata": json.dumps({"model_selection": "composer-2.5", "model": "composer-2.5"}),
+        },
+        {
+            "session_id": "cursor-1", "event_id": "response",
+            "event_type": "assistant_message", "subtype": "response",
+            "role": "assistant", "content": "hi",
+        },
+    ], session_id="cursor-1")
+    row = conn.execute(
+        """
+        SELECT c.model_name_exact
+        FROM model_turns t JOIN model_configurations c ON c.id=t.model_config_id
+        """
+    ).fetchone()
+    assert row[0] == "composer-2.5"
+    replace_session_events(conn, session, [
+        {
+            "session_id": "cursor-1", "event_id": "prompt",
+            "event_type": "user_message", "subtype": "prompt", "role": "user",
+            "content": "hello", "metadata": json.dumps({"model": "composer-2.5"}),
+        },
+        {
+            "session_id": "cursor-1", "event_id": "response",
+            "event_type": "assistant_message", "subtype": "response",
+            "role": "assistant", "content": "hi",
+        },
+    ], session_id="cursor-1")
+    assert conn.execute("SELECT COUNT(*) FROM model_configurations").fetchone()[0] == 1
+    conn.close()
+
+
 def test_event_graph_tools_and_artifacts_are_materialized(tmp_path):
     path = tmp_path / "project" / ".codess" / "store.db"
     path.parent.mkdir(parents=True)
@@ -147,6 +188,18 @@ def test_event_graph_tools_and_artifacts_are_materialized(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM tool_results").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM event_artifacts").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM source_records").fetchone()[0] == 3
+    assert conn.execute("SELECT COUNT(*) FROM content_objects").fetchone()[0] >= 3
+    assert conn.execute("SELECT COUNT(*) FROM event_content").fetchone()[0] == 4
+    assert conn.execute("SELECT COUNT(*) FROM source_record_content").fetchone()[0] == 4
+    assert conn.execute("SELECT COUNT(*) FROM tool_result_content").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM artifact_content").fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM sessions WHERE global_id LIKE 'codess:session:sha256:%'"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM events WHERE global_id LIKE 'codess:event:sha256:%'"
+    ).fetchone()[0] == 3
     call = conn.execute("SELECT source_status, normalized_status FROM tool_invocations").fetchone()
     assert tuple(call) == ("completed", "succeeded")
     replace_session_events(conn, session, events, session_id="s1")

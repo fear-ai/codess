@@ -24,7 +24,7 @@ from codess.baseline_validation import (  # noqa: E402
     validate_project,
     write_json_atomic,
 )
-from codess.schema_contract import has_legacy_schema, verify_package  # noqa: E402
+from codess.schema_contract import FORMAT_VERSION, has_legacy_schema, verify_package  # noqa: E402
 from codess.snapshot import snapshot_store_paths  # noqa: E402
 
 
@@ -54,7 +54,7 @@ def _preserve_legacy(project: Path, enabled: bool) -> Path | None:
     if not enabled:
         raise RuntimeError("legacy stores found; rerun with --preserve-legacy")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    destination = base / "legacy" / f"pre-coschema2-{stamp}"
+    destination = base / "legacy" / f"pre-coschema{FORMAT_VERSION}-{stamp}"
     destination.mkdir(parents=True, exist_ok=False)
     manifest: dict[str, Any] = {
         "baseline_kind": "legacy-unversioned-codess",
@@ -197,7 +197,7 @@ def _approve_catalog(
     else:
         data = {
             "catalog_format": "codess.approved-baselines/1",
-            "coschema_format": 2,
+            "coschema_format": FORMAT_VERSION,
             "projects": [],
         }
     by_path = {
@@ -282,8 +282,18 @@ def main(argv: list[str] | None = None) -> int:
             fixed_point = {
                 "source_revisions_match": first.get("source_revisions") == second.get("source_revisions"),
                 "semantic_digest_match": first.get("semantic_digest") == second.get("semantic_digest"),
+                "normalization_digest_match": (
+                    first.get("normalization_digest") == second.get("normalization_digest")
+                ),
             }
-            fixed_point["passed"] = all(fixed_point.values()) and second["status"] != "rejected"
+            source_stable = fixed_point["source_revisions_match"]
+            if policy.get("allow_source_revision_drift"):
+                source_stable = fixed_point["normalization_digest_match"]
+            fixed_point["passed"] = (
+                source_stable
+                and fixed_point["normalization_digest_match"]
+                and second["status"] != "rejected"
+            )
             if not fixed_point["passed"]:
                 raise RuntimeError("fixed-point validation failed")
 
@@ -309,7 +319,9 @@ def main(argv: list[str] | None = None) -> int:
         }
         if args.approve_catalog:
             _approve_catalog(args.approve_catalog, final, args.policy, fixed_point)
-        if args.report:
+        canonical_report = project / ".codess" / "validation-report.json"
+        write_json_atomic(canonical_report, result)
+        if args.report and args.report.resolve() != canonical_report.resolve():
             write_json_atomic(args.report, result)
         print(
             json.dumps(
@@ -330,7 +342,9 @@ def main(argv: list[str] | None = None) -> int:
             "status": "rejected",
             "error": str(exc),
         }
-        if args.report:
+        canonical_report = args.project.expanduser().resolve() / ".codess" / "validation-report.json"
+        write_json_atomic(canonical_report, failure)
+        if args.report and args.report.resolve() != canonical_report.resolve():
             write_json_atomic(args.report, failure)
         print(f"codess: {exc}", file=sys.stderr)
         return 1

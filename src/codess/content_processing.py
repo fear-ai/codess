@@ -9,6 +9,7 @@ apply first, followed by every matching scope in declaration order.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass, field, replace
@@ -206,15 +207,29 @@ def apply_processing(
     )
     method = processor.preprocess if phase == "pre" else processor.postprocess
     result = method(str(value), context)
+    actions = opts.get("content_actions")
+    if actions is not None:
+        input_text = str(value)
+        output_text = result.content
+        actions.append({
+            "phase": phase,
+            "vendor": vendor,
+            "record_type": record_type,
+            "event_kind": event_kind,
+            "accepted": result.accepted,
+            "reason": result.reason,
+            "actions": list(result.actions),
+            "original_length": result.original_length,
+            "output_length": len(output_text),
+            "input_sha256": hashlib.sha256(input_text.encode("utf-8")).hexdigest(),
+            "output_sha256": (
+                hashlib.sha256(output_text.encode("utf-8")).hexdigest()
+                if result.accepted else None
+            ),
+        })
     if not result.accepted:
         diagnostics = opts.get("diagnostics")
         if diagnostics is not None:
             diagnostics["filtered_records"] = diagnostics.get("filtered_records", 0) + 1
         return None
-    actions = opts.get("content_actions")
-    if actions is not None and result.actions:
-        actions.append({
-            "phase": phase, "vendor": vendor, "record_type": record_type,
-            "event_kind": event_kind, "actions": list(result.actions),
-        })
     return apply_sanitization(result.content, opts.get("redact", False))

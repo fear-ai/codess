@@ -35,6 +35,18 @@ def global_event_id(session_id: str, vendor_event_id: str) -> str:
     return _qualified("event", session_id, vendor_event_id)
 
 
+def global_source_revision_id(
+    source_system_id: str, source_uri: str, source_revision: str
+) -> str:
+    """Identify one immutable observation of an upstream source."""
+    return _qualified("source-revision", source_system_id, source_uri, source_revision)
+
+
+def global_source_record_id(source_revision_id: str, source_locator: str) -> str:
+    """Identify one record position within an observed source revision."""
+    return _qualified("source-record", source_revision_id, source_locator)
+
+
 def source_observation_id(
     global_entity_id: str,
     source_system_id: str,
@@ -53,3 +65,10 @@ def location_id(machine_id: str, path: Path | str) -> str:
     """Identify a machine-local observed location, never a logical project."""
     normalized = os.path.normcase(os.path.realpath(os.path.expanduser(str(path))))
     return _qualified("location", machine_id, normalized)
+
+
+def artifact_uri_id(uri: str) -> str:
+    """Identify an artifact locator consistently across project databases."""
+    if not uri:
+        raise ValueError("artifact identity requires a URI")
+    return _qualified("artifact", uri)

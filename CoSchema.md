@@ -1,4 +1,4 @@
-# CoSchema v2
+# CoSchema v3
 
 CoSchema is Codess's vendor-neutral logical record model and its current SQLite
 store format. Functional meaning is defined by
@@ -16,9 +16,9 @@ initialization refuses a package whose files do not match that manifest.
 One monotonic integer versions the whole readable store contract:
 
 - format ID: `codess.coschema`
-- format version: `2`
+- format version: `3`
 - SQLite `application_id`: `0x434F4445` (`CODE`)
-- SQLite `user_version`: `2`
+- SQLite `user_version`: `3`
 - Codess software version: independent, currently recorded in `store_meta` and
   each snapshot manifest
 
@@ -30,7 +30,8 @@ release and rebuilt snapshot, not a new database format.
 Released packages are immutable. Unknown package or database formats fail
 closed. Legacy unversioned stores may be read through the compatibility query
 surface but cannot be mutated; rebuild creates v2 stores beside retained
-baselines.
+baselines. Format-2 stores remain read-only compatibility inputs; all writes
+and rebuilds now produce format 3.
 
 ## Core terms
 
@@ -56,12 +57,16 @@ baselines.
 | Entity | Purpose and identity |
 |---|---|
 | `projects` | Stable logical project identity plus observed root/cwd, ownership, activity, and selection state |
+| `project_locations` / `workspace_bindings` | Machine-local locations and evidence-backed vendor workspace attribution |
 | `sources` | Immutable observed source revision; unique by source system, URI, and revision |
 | `model_configurations` | Provider/model family/exact name and independently settable effort, speed, service, and mode values |
 | `sessions` | Vendor/harness container; vendor session ID is scoped by source system and may be absent |
 | `interactions` | Initiating work unit, ordered within a session, with explicit boundary source/confidence |
 | `model_turns` | Model execution, ordered within a session and optionally linked to an interaction |
 | `events` | Ordered normalized observation with preserved vendor type/subtype and mapping trace |
+| `source_records` | Stable vendor record position and classification within a source revision |
+| `content_objects` / typed links | Deduplicated content identities linked to events and source records |
+| `processing_runs` / `content_derivations` | Policy/software identity, actions, accepted/rejected inputs and outputs, and rejection reason |
 | `tool_invocations` | Requested operation with source/free-text tool name, optional canonical name, input, and status |
 | `tool_results` | One or more ordered results linked to an invocation when source evidence permits |
 | `artifacts` / `event_artifacts` | Durable objects and evidence-backed operations on them |
@@ -71,7 +76,7 @@ baselines.
 The exhaustive field, nullability, reference, ordering, range, and vocabulary
 definitions are machine-readable in `contract.json`; this document does not
 duplicate that list. SQLite compatibility projection columns in `sessions` and
-`events` preserve the existing query surface but are not the v2 identity model.
+`events` preserve the existing query surface but are not the global identity model.
 
 ## Important field decisions
 
@@ -82,13 +87,14 @@ alone is not globally meaningful. Product, vendor, harness, storage format, and
 surface are separate because vendors reuse storage structures across IDE, CLI,
 desktop, agent, and API packaging.
 
-The CLI now displays a deterministic `codess:session:sha256:...` global ID
-derived from the source-system namespace and vendor session ID. This prevents
-cross-store ambiguity without changing the released SQLite layout. The current
-`sessions.id` remains the vendor/local compatibility key; persisting global
-entity and observation keys belongs in the next approved schema package. A
-path hash or inode is not a substitute: paths identify locations and inodes do
-not survive copying or cloning.
+`sources`, `sessions`, and `events` persist deterministic global IDs. Session
+identity derives from source-system namespace plus vendor session ID; event
+identity adds the vendor event ID. `sessions.observation_id` additionally binds
+the logical session to a source revision and Project, so a copied conversation
+can retain one global identity while separate extractions keep distinct
+lineage. The current `sessions.id` remains a vendor/local compatibility key. A
+path hash or inode is not a Project identity: paths identify locations and
+inodes do not survive copying or cloning.
 
 `root_path` is the normalized project anchor. `source_cwd` is what the source
 actually reported. `relative_path` is preferred for artifact correlation;
@@ -99,6 +105,13 @@ project-relative key. It uses a `file:` URI, retains the absolute observation,
 and records `path_scope=external` plus the source spelling in metadata. This
 allows later project correlation without claiming that the file belongs to the
 session's selected project.
+
+External `file:` URIs are compared with catalog locations and aliases by
+longest-root containment. A unique longest match records the matched location,
+relative path, method, and confidence as an
+`artifact_path_within_project_location` assertion. Equal longest roots remain
+explicit candidates. Assertions do not change `artifacts.project_id` or claim
+authorship.
 
 ### Ordering and time
 
@@ -158,19 +171,20 @@ objects are zstd-compressed and named by the SHA-256 of uncompressed content.
 - `capture`: store a content-addressed exact revision
 - `seal`: capture and hard-link/copy the objects into the snapshot
 
-Each ingest builds `<project>/.codess/snapshots/<snapshot-id>/` beside existing
-snapshots, backs up its v2 databases, writes `raw-manifest.jsonl` and
-`manifest.json`, verifies package/database/raw hashes and logical counts, then
-atomically replaces `<project>/.codess/current.json`. Queries prefer the
-validated current snapshot. Prior snapshots and their matching software/package
-identity remain available as baselines.
+Each production ingest builds
+`~/.codess/projects/<project-id>/snapshots/<snapshot-id>/`, backs up its format-3
+working databases, writes `raw-manifest.jsonl` and `manifest.json`, verifies
+package/database/raw hashes and logical counts, then atomically replaces both
+the central and project-local current pointers. Project-local `.codess/` holds
+working caches, identity/source bindings, validation reports, and a pointer;
+the retained baseline no longer depends on survival of the checkout.
 
-This current placement is not durable against deletion of the project
-directory. Nor does `reference` protect Claude, Codex, or Cursor evidence from
-local vendor-store deletion. Before retiring a directory, operators must use
-`capture` or `seal`, validate, and preserve the complete snapshot plus its raw
-objects. Moving retained baselines to a stable project-ID catalog is pending as
-a deliberate store-layout revision; it is not part of the present SQLite DDL.
+`projects.json` is the stable catalog. A minted Project ID owns multiple
+locations and vendor workspace bindings. `tools/retire_project.py` requires a
+fully accepted captured baseline, marks the old location retired, optionally
+binds a replacement, and verifies the replacement can read the durable
+snapshot. It never deletes the old directory. Reference mode remains useful
+for exploration but cannot authorize retirement.
 
 `tools/validate_snapshot.py` verifies the current package and immutable-file
 hashes, SQLite integrity and foreign keys, manifest counts, event ordering,
@@ -194,6 +208,12 @@ row identifiers, and SQLite layout. It includes common entities, vendor/source
 values, ordering, lineage, diagnostics, artifact relations, and correlation
 assertions. It therefore proves repeatable normalization for the same sources;
 it is not a substitute for manual semantic review or exact raw capture.
+
+The separate normalization digest excludes source-revision and observation
+identity. A policy may explicitly use it for a captured shared database that
+advances between repeated reads; this never treats the raw revisions as equal.
+Each revision remains independently captured and identified, while the digest
+proves that the selected normalized Project records did not change.
 
 Working databases are disposable derived state. A writer refuses a store whose
 recorded released-package digest differs from the current package. The guarded

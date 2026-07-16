@@ -1,38 +1,39 @@
 {
   "catalog_format": "codess.reviewed-baselines/1",
-  "reviewed_at": "2026-07-14T11:11:41Z",
-  "review_state": "accepted_with_known_gaps",
-  "package_digest": "28ffae443e8b90231bf3d0aaea40930e6608cc63504d71efe26c619c02f8ba0d",
-  "registry": "/Users/walter/.codess-v2",
+  "known_gaps": [
+    "same-artifact multi-vendor correlation is fixture-proven rather than selected-real-project evidence",
+    "lifecycle abort and missing timestamp behavior remain fixture-only",
+    "reasoning effort, speed tier, and service tier are absent from selected source records",
+    "Codex parent-session identifiers are absent across the metadata-only local audit"
+  ],
+  "package_digest": "110c3132a9aaa4085002ceb6f20a912de0a293c943b3a316706b5c3f9cd5b55a",
   "projects": [
     {
       "path": "/Users/walter/Work/Code/SWEmore",
-      "snapshot_id": "20260714T111121.158475Z-coschema2-ffd37a0a620c",
-      "semantic_digest": "c771f5fa06a62f995fd2608428ca2073ab279e3b267aed1d8fc5147780b31a3d",
-      "validation_state": "accepted",
-      "policy": "catalog/policies/swemore.json"
+      "policy": "catalog/policies/swemore.json",
+      "project_id": "codess:project:d0294926-1b64-42a0-9d1b-2ff2d0332401",
+      "semantic_digest": "4181d88ddea7b7e255658a63b84ee7a78300e9a9e147703c29891b75a30eb77c",
+      "snapshot_id": "20260716T131255.983164Z-coschema3-34f664e8d84e",
+      "validation_state": "accepted"
     },
     {
       "path": "/Users/walter/Work/Spank/spank-py",
-      "snapshot_id": "20260714T111123.493487Z-coschema2-ef9431fee824",
-      "semantic_digest": "f48b1edd8c7d70d11a6f777dfafd2833273ea221625d6fbe9a4d4e3e594b213a",
-      "validation_state": "accepted",
-      "policy": "catalog/policies/spank-py.json"
+      "policy": "catalog/policies/spank-py.json",
+      "project_id": "codess:project:5be64477-9245-47a7-9c5b-254e583826b0",
+      "semantic_digest": "87e87c0f83b990a886b2c869c2d126eaf4d1bce8649df1e22a6548b82c3db820",
+      "snapshot_id": "20260716T131311.774346Z-coschema3-aba96284fd87",
+      "validation_state": "accepted"
     },
     {
       "path": "/Users/walter/Work/ZK/Zero400",
-      "snapshot_id": "20260714T111135.176346Z-coschema2-f28d04b79144",
-      "semantic_digest": "8874ceecadda173ec2eda31cc23e5d2c9a49fc3ad19c59746aadb92eeb981678",
-      "validation_state": "accepted_with_limitations",
-      "policy": "catalog/policies/zero400.json"
+      "policy": "catalog/policies/zero400.json",
+      "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+      "semantic_digest": "c325f76161df85eee019d1152fae21b22769236c31d547c65d2669e4363115d6",
+      "snapshot_id": "20260716T132140.567619Z-coschema3-fbf3945dce7f",
+      "validation_state": "accepted"
     }
   ],
-  "known_gaps": [
-    "Cursor tool-call and tool-result shapes are not present in the selected real corpus",
-    "external artifact URIs are explicit but are not yet correlated to known catalog project identities",
-    "same-artifact multi-vendor correlation is proven by a golden fixture, not a selected real project",
-    "lifecycle abort and missing timestamp behavior are fixture-covered but absent from the selected real corpus",
-    "exact model name, reasoning effort, and speed tier are absent from the selected source records",
-    "Zero400 raw evidence is reference-only and is not independently reproducible"
-  ]
+  "registry": "/Users/walter/.codess",
+  "review_state": "accepted_with_known_gaps",
+  "reviewed_at": "2026-07-16T13:24:03.054280+00:00"
 }

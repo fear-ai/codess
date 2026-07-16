@@ -5,6 +5,7 @@ import json
 from codess.adapters.codex import process_file as process_codex_file
 from codess.adapters.cursor import _bubble_to_events
 from codess.content_processing import ContentContext, ContentPolicy, ContentProcessor
+from codess.store import connect, init_db, record_processing_run
 
 
 def test_preprocessing_maps_charset_normalizes_and_masks_privacy():
@@ -62,6 +63,39 @@ def test_bounds_and_topical_filter_report_actions_without_implicit_acceptance():
     assert rejected.accepted is False
     assert rejected.reason == "topic_excluded"
 
+
+def test_processing_run_persists_accepted_and_rejected_derivations(tmp_path):
+    store = tmp_path / "store.db"
+    init_db(store)
+    conn = connect(store)
+    try:
+        conn.execute(
+            "INSERT INTO projects(id, logical_name) VALUES ('p1', 'project')"
+        )
+        actions = [
+            {
+                "accepted": True, "input_sha256": "a" * 64,
+                "output_sha256": "b" * 64, "original_length": 8,
+                "output_length": 6, "actions": ["privacy_masked"],
+            },
+            {
+                "accepted": False, "input_sha256": "c" * 64,
+                "output_sha256": None, "original_length": 10,
+                "output_length": 0, "actions": ["suppressed"],
+                "reason": "suppressed_pattern",
+            },
+        ]
+        record_processing_run(
+            conn, project_id="p1", policy={"max_chars": 20}, actions=actions
+        )
+        conn.commit()
+        assert conn.execute("SELECT COUNT(*) FROM processing_runs").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM content_derivations").fetchone()[0] == 2
+        assert conn.execute(
+            "SELECT COUNT(*) FROM content_derivations WHERE output_content_id IS NULL"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
 
 def test_vulnerability_suppression_is_explicit_and_scoped():
     policy = ContentPolicy.from_mapping({

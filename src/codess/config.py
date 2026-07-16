@@ -112,6 +112,9 @@ INGEST_REDACT = env_bool("CODESS_REDACT")
 RAW_MODE = os.environ.get("CODESS_RAW_MODE", "reference").strip().lower()
 STRICT_MAPPING = env_bool("CODESS_STRICT_MAPPING")
 CONTENT_POLICY = os.environ.get("CODESS_CONTENT_POLICY")
+MAX_SOURCE_BYTES = env_int("CODESS_MAX_SOURCE_BYTES", 8 * 1024**3)
+MAX_EVENTS_PER_SOURCE = env_int("CODESS_MAX_EVENTS_PER_SOURCE", 500_000)
+MAX_EVENTS_PER_SESSION = env_int("CODESS_MAX_EVENTS_PER_SESSION", 250_000)
 
 # --- Batch / resilience: stop entire command on first error (otherwise log and continue) ---
 STOP = env_bool("CODESS_STOP")
@@ -165,6 +168,13 @@ def validate_config() -> list[str]:
         errs.append(f"CODESS_DAYS={CODESS_DAYS} out of range [0, 3650]")
     if MIN_SIZE < 0:
         errs.append(f"CODESS_MIN_SIZE={MIN_SIZE} must be >= 0")
+    for name, value in (
+        ("CODESS_MAX_SOURCE_BYTES", MAX_SOURCE_BYTES),
+        ("CODESS_MAX_EVENTS_PER_SOURCE", MAX_EVENTS_PER_SOURCE),
+        ("CODESS_MAX_EVENTS_PER_SESSION", MAX_EVENTS_PER_SESSION),
+    ):
+        if value <= 0:
+            errs.append(f"{name}={value} must be > 0")
     if RAW_MODE not in {"none", "reference", "capture", "seal"}:
         errs.append(
             f"CODESS_RAW_MODE={RAW_MODE!r} must be none, reference, capture, or seal"

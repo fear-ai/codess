@@ -62,16 +62,16 @@ Cursor renamed and remote workspaces are never equated from path resemblance.
 An explicit `.codess/source-links.json` record with an approved selection state
 is required when direct `workspaceStorage` mapping is insufficient.
 
-## Central schema proposal — approval required
+## Central schema — implemented in CoSchema 3
 
-The current event-plus-metadata representation is adequate for compatibility
-work but not the best lasting model for large external content, vendor state,
-or structured file updates. Before changing `contract.json` or SQLite DDL,
-choose one of these directions.
+The approved source-record/content-object design is implemented in
+`contract.json` and SQLite. The event-plus-metadata projection remains for
+compatibility, while typed entities carry durable content and processing
+identity.
 
-### A. Source records plus content objects — recommended
+### Source records plus content objects
 
-Add four central concepts:
+CoSchema 3 adds four central concepts:
 
 - `source_records`: source revision, locator, vendor record type/subtype,
   source sequence, parent locator, timestamp, classification, and bounded
@@ -95,19 +95,12 @@ separate identities; external content is deduplicated; processing is auditable;
 and structured updates can specialize incrementally. Cost: four concepts and
 several link tables must be added together to preserve referential integrity.
 
-### B. Events and metadata only
+### Rejected alternatives
 
-Keep all new records as open event kinds and store links/hashes in metadata.
-This is the implemented compatibility path and requires no migration. It is
-simple, but content identity, processing provenance, and structured updates
-remain difficult to constrain or query.
-
-### C. Vendor extension databases
-
-Keep CoSchema unchanged and create per-vendor extension stores for state,
-content, and updates. This isolates vendor drift, but cross-vendor queries and
-snapshot packaging become more complex and duplicated concepts can diverge.
-
-Approval of A should settle entity names, link-table granularity, inline-content
-bounds, and whether rejected content gets a content-object identity before DDL
-or contract changes begin.
+Events/metadata-only and vendor extension databases were rejected as the
+central model. Compatibility projections remain, but accepted and rejected
+processing inputs receive content identities; rejected values use
+`storage_class=not_retained` with hash/length and no body. Event and source
+record links are populated now. Tool-result output and artifact operation
+parameter links are projected from their owning events without duplicating the
+content body.

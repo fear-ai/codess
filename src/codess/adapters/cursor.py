@@ -12,6 +12,11 @@ from codess.content_processing import apply_processing
 
 log = logging.getLogger(__name__)
 
+_MAPPED_BUBBLE_FIELDS = frozenset({
+    "type", "text", "createdAt", "timingInfo", "serverBubbleId",
+    "toolFormerData", "toolResults", "modelInfo",
+})
+
 
 def _connect_readonly(db_path: Path) -> sqlite3.Connection:
     """Open a URI-safe, query-only connection that can observe a live WAL."""
@@ -354,7 +359,12 @@ def _iter_bubbles(
             if isinstance(data, dict):
                 if stats is not None:
                     stats["yielded"] = stats.get("yielded", 0) + 1
-                yield composer_id, bubble_id, data
+                # Large attachment/context envelopes are not mapped. Drop them
+                # before composer-level ordering/deduplication retains records.
+                projected = {
+                    key: data[key] for key in _MAPPED_BUBBLE_FIELDS if key in data
+                }
+                yield composer_id, bubble_id, projected
             elif stats is not None:
                 stats["non_objects"] = stats.get("non_objects", 0) + 1
     finally:
@@ -500,7 +510,16 @@ def _bubble_to_events(
         )
         if truncated is None:
             return
-        yield base_ev("user_message", subtype, "user", truncated, content_len)
+        event = base_ev("user_message", subtype, "user", truncated, content_len)
+        model_info = data.get("modelInfo")
+        if isinstance(model_info, dict):
+            selection = model_info.get("modelName")
+            if isinstance(selection, str) and selection.strip():
+                metadata = {"model_selection": selection.strip()}
+                if selection.strip().lower() != "default":
+                    metadata["model"] = selection.strip()
+                event["metadata"] = json.dumps(metadata, separators=(",", ":"))
+        yield event
         return
 
     if msg_type == 2:
@@ -521,6 +540,73 @@ def _bubble_to_events(
                 "assistant_message", "response", "assistant",
                 truncated, content_len,
             )
+
+        tool_former = data.get("toolFormerData")
+        if isinstance(tool_former, dict):
+            tool_name = tool_former.get("name")
+            call_id = tool_former.get("toolCallId") or f"{event_id}:toolFormerData"
+            status = str(tool_former.get("status") or "unknown")
+            has_tool_evidence = any(
+                tool_former.get(key) not in (None, "")
+                for key in ("name", "toolCallId", "rawArgs", "params", "result", "status")
+            )
+            if has_tool_evidence:
+                raw_input = tool_former.get("rawArgs")
+                if raw_input in (None, ""):
+                    raw_input = tool_former.get("params")
+                input_text = "" if raw_input is None else str(raw_input)
+                input_text = apply_processing(
+                    input_text, opts, vendor="Cursor", record_type="tool_input",
+                    event_kind="tool.call", phase="pre",
+                )
+                normalized = {
+                    "completed": "succeeded", "complete": "succeeded",
+                    "error": "failed", "failed": "failed",
+                    "loading": "running", "running": "running",
+                    "pending": "pending", "cancelled": "cancelled",
+                }.get(status.lower(), "unknown")
+                metadata = json.dumps({
+                    "call_id": str(call_id),
+                    "model_call_id": tool_former.get("modelCallId"),
+                    "status": status,
+                    "source_field": "toolFormerData",
+                }, separators=(",", ":"))
+                call = base_ev("tool_call", "tool_call", "assistant", "", 0)
+                call["event_id"] = f"{event_id}:tool-call"
+                call["tool_name"] = str(tool_name or "unknown")
+                call["tool_input"] = input_text
+                call["metadata"] = metadata
+                call["source_status"] = status
+                call["normalized_status"] = normalized
+                yield call
+
+                result_value = tool_former.get("result")
+                final_status = normalized in {"succeeded", "failed", "denied", "cancelled", "incomplete"}
+                if result_value is not None or final_status:
+                    result_text = "" if result_value is None else str(result_value)
+                    result_text = apply_processing(
+                        result_text, opts, vendor="Cursor", record_type="tool_result",
+                        event_kind="tool.result", phase="pre",
+                    )
+                    if result_text is not None:
+                        result_text, result_len = _truncate(result_text, TRUNCATE_TOOL_RESULT)
+                        result_text = apply_processing(
+                            result_text, opts, vendor="Cursor", record_type="tool_result",
+                            event_kind="tool.result", phase="post",
+                        )
+                        if result_text is not None:
+                            result = base_ev(
+                                "user_message",
+                                "tool_failure" if normalized == "failed" else "tool_result",
+                                "tool", result_text, result_len,
+                            )
+                            result["event_id"] = f"{event_id}:tool-result"
+                            result["tool_name"] = str(tool_name or "unknown")
+                            result["tool_output"] = result_text
+                            result["metadata"] = metadata
+                            result["source_status"] = status
+                            result["normalized_status"] = normalized
+                            yield result
 
         tool_results = data.get("toolResults") or []
         for i, tr in enumerate(tool_results):

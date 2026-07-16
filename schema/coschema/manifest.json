@@ -1,12 +1,12 @@
 {
   "format_id": "codess.coschema",
-  "format_version": 2,
+  "format_version": 3,
   "application_id": 1129268293,
   "state": "released",
   "files": {
     "contract": {
       "path": "schema/coschema/contract.json",
-      "sha256": "66bdcf8b9be65a449cdc6cc7e3dbebac4569fdefa8197fba929cfd705838cbcf"
+      "sha256": "20b31afea9bd5bd19a51639d38a8002f795bd25166bf8af690cec8fda74c9445"
     },
     "mapping_contract": {
       "path": "schema/coschema/mapping-contract.json",
@@ -14,7 +14,7 @@
     },
     "sqlite_schema": {
       "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "ff33675514b8afdb0326703155d1e596ff3557e38aad9b4ad826aeea9fc3afb5"
+      "sha256": "cf136920e6591eb2d5ac26099c8cbe8b2c1d6b0927e856c3e7ae1ff75a62eeff"
     },
     "mapping_claude": {
       "path": "schema/mappings/claude.json",
@@ -26,7 +26,7 @@
     },
     "mapping_cursor": {
       "path": "schema/mappings/cursor.json",
-      "sha256": "5aa117726498c3fc112e830228e9a5f6fccf81b135ff8dd2ec462cf2514c3e5f"
+      "sha256": "99ce3e8cb94f5831dc62d50b947599a35dd729c8dc841f82babef6509b450ec0"
     },
     "fixture_compatibility_store_meta_v2": {
       "path": "schema/coschema/fixtures/compatibility/store-meta-v2.json",
@@ -48,6 +48,10 @@
       "path": "schema/coschema/fixtures/hazard/cursor-nonmessage-copies.json",
       "sha256": "87df2ba00329c95e37b60dcf8118f2a9218ace1525c7dd77c8b9ef30e2b04452"
     },
+    "fixture_hazard_cursor_tool_former": {
+      "path": "schema/coschema/fixtures/hazard/cursor-tool-former.json",
+      "sha256": "3943cc4ed5da0599cd4d933522be96afed7ccfee472fddf884e9cca81708a334"
+    },
     "fixture_maximal_event": {
       "path": "schema/coschema/fixtures/maximal/event.json",
       "sha256": "b6861b0624d79c41ddb613df7ab512850fbb8bfb2e637cd56110c0ab7498ee2d"
@@ -62,8 +66,8 @@
     }
   },
   "reader_compatibility": {
-    "read": [2],
-    "write": [2],
+    "read": [2, 3],
+    "write": [3],
     "legacy_read": [1]
   }
 }

@@ -231,9 +231,9 @@ Verification baseline is the full **`pytest tests/`** suite. **Validated** here 
 
 **Completeness:** Main workflows, configuration validation, source replacement,
 cross-store query aggregation, lineage, audit normalization/reporting, and
-bounded row reports are covered. Active evidence work is limited to a modern
-Cursor tool-call/result shape, catalog-backed external-artifact correlation,
-and direct Codex parent-session evidence. Speculative preflight, machine output,
+bounded row reports are covered. Cursor tool/model evidence, catalog-backed
+artifact correlation, and Codex parentage have been resolved to the extent
+supported by current sources. Speculative preflight, machine output,
 and PII scanning are postponed. See **§11** and **§15**.
 
 ### 3.6 Verified wiring
@@ -509,7 +509,7 @@ Order work by risk and dependency.
 
 | Order | Outcome | Main work |
 |---|---|---|
-| **1. CoSchema v2 foundation — complete** | Versioned contract, mappings, DDL, strict readers/writers, raw capture, snapshots, diagnostics, and initial mixed queries | Maintain package hashes, fixtures, and compatibility-gate tests |
+| **1. CoSchema v3 foundation — complete** | Versioned contract, global/observation identity, project catalog/bindings, typed content lineage, raw capture, durable snapshots, diagnostics, and mixed queries | Maintain package hashes, fixtures, and compatibility-gate tests |
 | **2. Automated baseline gate — complete** | Per-project policies make package, raw, SQLite, mapping, fixed-point, and query acceptance repeatable | Maintain `tools/validate_snapshot.py`, `tools/apply_and_verify.py`, and `catalog/policies/` |
 | **3. Compatibility corpus — complete with recorded gaps** | The bounded Claude/Codex/Cursor corpus proves represented mappings and distinguishes real from fixture-only evidence | Maintain `CompatibilityReview.md` and add candidates only for demonstrated gaps |
 | **4. Reviewed v2 baseline — complete** | The sampled corpus is frozen by package, snapshot, semantic digest, policy, and raw-evidence state | Run `tools/verify_reviewed_baselines.py`; replace the set rather than editing it in place |
@@ -531,27 +531,26 @@ Vendor-specific **known holes** are documented in schema files, not duplicated h
 
 ## 11. Improvement Backlog
 
-**Immediate order:** protect locally held evidence before widening mappings.
+**Completed foundation:** CoSchema 3 now stores stable Project/location/workspace
+bindings, global and observation identities, source records, content objects and
+links, and processing derivations. Production snapshots live under the stable
+central Project catalog. The retirement/relocation tool requires captured raw
+evidence and verifies replacement access. SWEmore, spank-py, and Zero400 were
+rebuilt twice and the reviewed/approved catalogs were atomically replaced;
+zerowalletmac and Spank/Logs were also rebuilt as captured durable baselines.
+`Spank/Logs/spLogs` is explicitly skipped.
 
-1. Design and approve the stable project catalog and durable baseline location;
-   project-local `.codess/` cannot survive checkout deletion.
-2. Add stable project/location/workspace bindings and persist the implemented
-   global session/observation identities in the next approved CoSchema package.
-3. Approve or revise the proposed typed source/content/processing relations in
-   `ContentProcessing.md`; keep the current DDL unchanged until then.
-4. Implement a retire/relocate command or checklist that captures/seals raw
-   Claude, Codex, and Cursor evidence, validates twice, registers the new
-   location, and verifies historical reads before deletion.
-5. Rebuild the bounded reviewed set under the current package and replace the
-   frozen reviewed/approved catalogs atomically; never edit their old snapshot
-   identities in place.
-6. Decide whether the nested Cursor `Spank/Logs/spLogs` workspace is a child
-   project or a second workspace binding under `Spank/Logs`; do not import it
-   into a nested independent store meanwhile.
-   Then correlate observed external artifact URIs to known catalog roots and
-   run the bounded Codex parent-session investigation in §11.1.
-7. Keep Cursor tool mapping, exact model settings, and further corpus expansion
-   evidence-triggered. Current sampled Cursor data supplies no tool results.
+**Current maintenance order:**
+
+1. Keep `verify_reviewed_baselines.py` and the full isolated test suite green
+   after every package change.
+2. Maintain catalog-root artifact assertions and workspace bindings as local
+   locations change.
+3. Keep Codex parentage unsupported until a direct upstream identifier appears;
+   the §11.1 audit reached its exit rule.
+4. Maintain the evidence-backed Cursor `toolFormerData` and
+   `modelInfo.modelName` mappings against structure-only audits.
+5. Add more projects only for a demonstrated compatibility or correlation gap.
 
 The content preflight, machine-readable output, and enterprise PII scanner in
 §11.2 remain intentionally postponed.
@@ -561,7 +560,7 @@ then add representative tests in the same change set.
 
 Work items stay grouped by theme below. **Codess.md §4.0** requires **all** tickets to live here or in **§8** / **§14** / **§15** as specified there.
 
-### 11.0 CoSchema v2 corpus review — complete with known gaps
+### 11.0 CoSchema v3 corpus review — complete with known gaps
 
 The automated gate, semantic sampling, coverage matrix, hazard/golden fixtures,
 home-independent three-vendor CI policy, retained-snapshot read boundary, and
@@ -572,28 +571,28 @@ deduplicated stable Cursor server-bubble identities within each composer, and
 separated external file URIs from project-relative artifacts. All three
 projects were rebuilt and accepted at a semantic fixed point afterward.
 
-Remaining evidence gaps are deliberately narrow: a real modern Cursor tool
-call/result shape, a real same-artifact multi-vendor project, lifecycle/missing
-time shapes outside fixtures, and explicit exact model settings. These do not
+Remaining evidence gaps are deliberately narrow: a real same-artifact
+multi-vendor project, lifecycle/missing-time shapes outside fixtures, and
+explicit effort/speed/service settings. These do not
 justify broad project discovery. Add a candidate or mapping only when one of
 those source shapes is observed.
 
 Next maintenance actions:
 
-1. Match external artifact `file:` URIs against known local catalog roots using
-   longest-root containment; emit evidence/confidence rather than changing the
-   session project or asserting authorship.
-2. Execute §11.1.
-3. Monitor Cursor format changes or newly active candidates for explicit tool
-   invocation/result identity and status. Do not map the current empty
-   `toolResults` arrays or `subagentSpawnTaskToolCallId` as tool outcomes.
-4. Keep real same-artifact and exact model-setting additions
-   evidence-triggered.
+1. Keep longest-root artifact assertions evidence-only; never change the
+   session Project or infer authorship.
+2. Re-run the Codex metadata audit after an upstream storage change, not on
+   ordinary rebuilds.
+3. Re-run `audit_cursor_features.py` when Cursor storage changes. Map populated
+   `toolFormerData`; do not treat empty `toolResults` arrays as outcomes.
+4. Keep real same-artifact and effort/speed/service additions evidence-triggered.
 
-### 11.1 Codex parent-session evidence — next
+### 11.1 Codex parent-session evidence — audited; unsupported
 
-Current verified Codex `session_meta` data has no parent id. Investigate without
-changing normalized data until all acceptance checks pass:
+`catalog/codex-parent-audit.json` records the completed metadata-only audit: 28
+active/archive transcripts, 16 releases, zero candidate fields, and zero
+resolvable references. The audit excluded prompt, reasoning, message, and tool
+bodies. Its reusable procedure is:
 
 1. Read only `session_meta` keys from a bounded sample spanning active and
    archived roots and at least two CLI releases; record field frequencies, not
@@ -625,10 +624,10 @@ record supplies such an identifier.
 | Choice | Decision |
 |--------|----------|
 | Store | SQLite |
-| Current location | `<project>/.codess/`; this is disposable derived state plus retained baselines, but is vulnerable to project-directory deletion |
-| Recommended durable location | `~/.codess/projects/<stable-project-id>/`; approval and a rebuild-boundary implementation are pending |
-| Raw source objects | `~/.codess/raw/codess.raw-1/`; use `capture` or `seal` before any source/project retirement |
-| Project-local role after relocation | Cache plus project/location/workspace binding, not the sole retained baseline |
+| Working location | `<project>/.codess/`; disposable databases, pointer, validation report, and project/source bindings |
+| Durable location | `~/.codess/projects/<stable-project-id>/`; immutable retained snapshots and current pointer |
+| Raw source objects | `~/.codess/raw/codess.raw-1/`; retirement requires every revision captured |
+| Project catalog | `~/.codess/projects.json`; stable IDs, location states/aliases, and workspace bindings |
 
 ### 11.4 Content and sanitize policy
 
@@ -708,19 +707,19 @@ context, viable options, and a recommendation when one is available.
 | Cursor scan timestamps | Use header timestamps and report header/time coverage in debug output. Do not decode large bubble payloads during index-led scan merely to fill missing dates. | Cursor adapter, scan debug output, CursorSchema §5–§7 |
 | Discovery | Keep scan index-led. `--dir` / `--dirs` are path filters, not traversal requests; there is no recursion CLI. | `scan`, root resolution, §3.0–§3.3 |
 | Query aggregation | Open each store read-only; merge report rows in Python. Session numbering is globally recency-ordered; stats are aggregate on stdout and project-local in the registry. | `query_cmd`, CLI aggregation tests |
-| Tool lineage | Join Claude tool-use ids and Codex call ids in a read-only report; retain unlinked Cursor results explicitly instead of guessing a call. | `query --lineage`, adapter metadata, CLI tests |
+| Tool lineage | Join Claude tool-use ids, Codex call ids, and Cursor `toolFormerData.toolCallId`; retain truly unlinked results explicitly. | `query --lineage`, adapter metadata, CLI tests |
 | Source replacement | A changed or forced Claude/Codex transcript replaces its normalized session atomically; a Cursor database refresh replaces only events owned by that database. | `store`, ingest adapters, replacement tests |
 | Empty sources | A valid empty transcript removes its stale normalized session and records a nonfatal `empty_sources` diagnostic. | `ingest_cmd`, replacement tests |
 | Codex duplicate sources | When the same session exists in active and archived trees, ingest one canonical source rather than duplicating the session. | Codex discovery/ingest tests |
 | Report formats | Human-readable tabular output remains the default. Machine-readable output is not a contract until a consumer and stable row schema are defined. | §11.2 |
-| Audit events | Normalize only direct evidence in the CoSchema support matrix. Claude supplies explicit denials/failures and compact boundaries; Codex supplies failed call status and turn aborts; current Cursor shapes supply none. | adapters, `query --audit`, vendor fixtures |
+| Audit events | Normalize only direct evidence in the CoSchema support matrix. Claude supplies denials/failures and compaction; Codex supplies failed calls and turn aborts; Cursor supplies `toolFormerData` failure/cancellation status. | adapters, `query --audit`, vendor fixtures |
 | Query row limit | Apply `--limit` after deterministic global ordering for sessions, permissions, lineage, and audit reports. Zero emits no rows; negative values fail before store access. | `query_cmd`, CLI tests |
 
 ### 14.2 Open decisions
 
-The reviewed corpus is accepted and frozen. Active evidence decisions are a
-modern Cursor tool shape, external-artifact/project correlation, and Codex
-parent-session support (**§11.0–§11.1**). Preflight validation,
+The reviewed corpus is accepted and frozen. Cursor tool/model mapping,
+external-artifact/project correlation, and the evidence-negative Codex
+parentage audit are complete (**§11.0–§11.1**). Preflight validation,
 machine-readable output, and enterprise PII scanning are postponed with
 explicit restart triggers in **§11.2**.
 
@@ -732,6 +731,6 @@ explicit restart triggers in **§11.2**.
 
 | Theme | Open questions | Recommendation (lean) | Justification |
 |-------|----------------|----------------------|---------------|
-| **Compatibility maintenance** | Does current evidence supply Cursor tool identity/status, catalog-resolvable external artifacts, or a real cross-vendor artifact? | Add only the bounded source shape or correlation asserted by evidence; then replace the reviewed set after fixed-point validation. | Keeps the accepted corpus useful without turning historical discovery into the critical path. |
-| **Codex parentage** | Does a modern transcript expose a direct, referential parent-session id across releases and active/archive storage? | Run the bounded §11.1 inventory; implement only if every acceptance check passes. | Prevents plausible-looking but false parent links based on time, path, or content. |
+| **Compatibility maintenance** | Does current evidence add a shared cross-vendor artifact or effort/speed/service setting? | Add only the bounded source shape or correlation asserted by evidence; then replace the reviewed set after fixed-point validation. | Keeps the accepted corpus useful without turning historical discovery into the critical path. |
+| **Codex parentage** | Has a direct, referential parent-session id appeared upstream? | Keep unsupported until the metadata-only §11.1 audit finds one. | Prevents plausible-looking but false parent links based on time, path, or content. |
 | **Postponed surfaces** | Has a named operator, automation consumer, or deployment threat model triggered validation, JSON Lines, or PII scanning? | Keep all three postponed until their documented trigger exists. | Avoids speculative CLI/schema/dependency commitments. |

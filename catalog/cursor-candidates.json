@@ -21,7 +21,7 @@
       "observed_tool_result_records": 0,
       "selection_state": "approved",
       "validation_policy": "catalog/policies/zero400.json",
-      "validation_state": "accepted_with_limitations",
+      "validation_state": "accepted",
       "reason": "Largest attributable Cursor corpus and active Claude overlap"
     },
     {
@@ -34,9 +34,9 @@
       "normalized_prompts": 37,
       "normalized_responses": 77,
       "observed_tool_result_records": 0,
-      "selection_state": "imported_with_limitations",
+      "selection_state": "imported",
       "validation_policy": "catalog/policies/zerowalletmac.json",
-      "validation_state": "accepted_with_limitations",
+      "validation_state": "accepted",
       "reason": "Compact renamed-path case and current Claude/Cursor overlap"
     },
     {
@@ -47,10 +47,10 @@
       "normalized_events": 256,
       "normalized_prompts": 84,
       "normalized_responses": 172,
-      "selection_state": "imported_with_limitations",
+      "selection_state": "imported",
       "validation_policy": "catalog/policies/spank-logs.json",
-      "validation_state": "accepted_with_limitations",
-      "reason": "Diverse non-repository log-analysis workload imported through an explicit remote-to-local workspace binding; reference-only raw evidence remains local-store dependent"
+      "validation_state": "accepted",
+      "reason": "Diverse non-repository log-analysis workload imported through an explicit remote-to-local workspace binding with captured raw evidence"
     },
     {
       "path": "/Users/walter/Work/Spank/Logs/spLogs",
@@ -60,8 +60,8 @@
       "normalized_events": 225,
       "normalized_prompts": 77,
       "normalized_responses": 148,
-      "selection_state": "needs_review",
-      "reason": "Focused nested workspace; decide child project versus a second binding under Spank/Logs before import"
+      "selection_state": "excluded",
+      "reason": "Explicitly skipped; nested log-data workspace is not part of the current import or review set"
     },
     {
       "path": "/home/ubuntu/Work/Spank/LogsLaz24",

@@ -10,7 +10,7 @@
   "minimum_events": {
     "Cursor": 256
   },
-  "raw_mode": "reference",
+  "raw_mode": "capture",
   "expected_raw_records": 1,
   "expected_cursor_workspace_ids": [
     "e15dfe2f29fec656024c76d3166d3b28"
@@ -18,4 +18,5 @@
   "allowed_diagnostics": {},
   "cursor_turn_policy": "inferred-per-user-interaction",
   "require_fixed_point": true
+  ,"allow_source_revision_drift": true
 }

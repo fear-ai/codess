@@ -107,11 +107,13 @@ call/result lineage is stored in event metadata through `call_id`.
 
 ### Parent-session evidence
 
-Current verified `session_meta` fixtures provide session id, working directory,
-release/provider/origin fields, but no stable parent-session identifier. Codess
-therefore does not infer parentage from timestamps, path proximity, active vs
-archived location, or similar content. The evidence-gathering procedure and
-acceptance criteria are in **CoPlan.md §11.1**.
+The repeatable metadata-only audit in `tools/audit_codex_parentage.py` inspected
+all 28 local active/archive transcripts spanning 16 CLI/Desktop releases. It
+found no parent-like field and no resolvable parent reference; message,
+reasoning, prompt, and tool bodies were not inspected. The evidence report is
+`catalog/codex-parent-audit.json`. Codess therefore does not infer parentage
+from timestamps, path proximity, archive location, or content. Reopen support
+only when a direct upstream identifier appears.
 
 ---
 

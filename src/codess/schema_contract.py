@@ -18,10 +18,10 @@ DDL_PATH = PACKAGE_ROOT / "sqlite" / "schema.sql"
 MAPPINGS_ROOT = REPO_ROOT / "schema" / "mappings"
 
 FORMAT_ID = "codess.coschema"
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 APPLICATION_ID = 0x434F4445
-SUPPORTED_READ_FORMATS = frozenset({2})
-SUPPORTED_WRITE_FORMATS = frozenset({2})
+SUPPORTED_READ_FORMATS = frozenset({2, 3})
+SUPPORTED_WRITE_FORMATS = frozenset({3})
 
 
 class SchemaContractError(RuntimeError):
@@ -178,7 +178,7 @@ def require_store(
         if not write and allow_legacy_read:
             return 1
         raise UnsupportedStoreError(
-            "legacy unversioned Codess store is read-only; rebuild into CoSchema v2"
+            "legacy unversioned Codess store is read-only; rebuild into CoSchema v3"
         )
     if application_id != APPLICATION_ID:
         raise UnsupportedStoreError(
@@ -197,7 +197,7 @@ def require_store(
             "store package differs from the current released package; rebuild "
             "the derived working store from source"
         )
-    layout_errors = validate_database_contract(conn)
+    layout_errors = validate_database_contract(conn) if version == FORMAT_VERSION else []
     if layout_errors:
         raise UnsupportedStoreError(
             "store layout disagrees with CoSchema contract: " + "; ".join(layout_errors)
