@@ -176,8 +176,15 @@ def test_query_duplicate_session_ids_route_by_global_number():
 
         assert listed.returncode == 0
         rows = listed.stdout.strip().splitlines()
-        assert rows[1].startswith("same\t1\tCodex")
-        assert rows[2].startswith("same\t2\tClaude")
+        codex_fields = rows[1].split("\t")
+        claude_fields = rows[2].split("\t")
+        assert codex_fields[0] == "same"
+        assert codex_fields[2:4] == ["1", "Codex"]
+        assert claude_fields[0] == "same"
+        assert claude_fields[2:4] == ["2", "Claude"]
+        assert codex_fields[1].startswith("codess:session:sha256:")
+        assert claude_fields[1].startswith("codess:session:sha256:")
+        assert codex_fields[1] != claude_fields[1]
         assert shown.returncode == 0
         assert "new" in shown.stdout
         assert "old" not in shown.stdout
@@ -623,7 +630,7 @@ def test_query_taxonomy():
 
 
 def test_query_sessions_with_id():
-    """Query --sessions --id includes num column."""
+    """Query --sessions --id includes global and display identities."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         proj = tmp / "proj"
@@ -639,7 +646,7 @@ def test_query_sessions_with_id():
         _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         r = _run(["query", "--dir", str(proj), "--sessions", "--id"], env=env)
         assert r.returncode == 0
-        assert "num" in r.stdout and "\t1\t" in r.stdout
+        assert "global_id" in r.stdout and "num" in r.stdout and "\t1\t" in r.stdout
 
 
 def test_ingest_source_codex_only():

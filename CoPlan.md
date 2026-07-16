@@ -531,12 +531,30 @@ Vendor-specific **known holes** are documented in schema files, not duplicated h
 
 ## 11. Improvement Backlog
 
-**Immediate order:** correlate the observed external artifact URIs to known
-catalog roots, then run the Codex parent-session investigation in §11.1.
-Current Zero400 and zerowallet400 Cursor samples contain no tool results, so a
-Cursor tool mapping waits for new explicit source evidence. Add a real cross-vendor
-artifact case or richer model configuration only when explicit source evidence
-appears. The items in §11.2 remain intentionally postponed.
+**Immediate order:** protect locally held evidence before widening mappings.
+
+1. Design and approve the stable project catalog and durable baseline location;
+   project-local `.codess/` cannot survive checkout deletion.
+2. Add stable project/location/workspace bindings and persist the implemented
+   global session/observation identities in the next approved CoSchema package.
+3. Approve or revise the proposed typed source/content/processing relations in
+   `ContentProcessing.md`; keep the current DDL unchanged until then.
+4. Implement a retire/relocate command or checklist that captures/seals raw
+   Claude, Codex, and Cursor evidence, validates twice, registers the new
+   location, and verifies historical reads before deletion.
+5. Rebuild the bounded reviewed set under the current package and replace the
+   frozen reviewed/approved catalogs atomically; never edit their old snapshot
+   identities in place.
+6. Decide whether the nested Cursor `Spank/Logs/spLogs` workspace is a child
+   project or a second workspace binding under `Spank/Logs`; do not import it
+   into a nested independent store meanwhile.
+   Then correlate observed external artifact URIs to known catalog roots and
+   run the bounded Codex parent-session investigation in §11.1.
+7. Keep Cursor tool mapping, exact model settings, and further corpus expansion
+   evidence-triggered. Current sampled Cursor data supplies no tool results.
+
+The content preflight, machine-readable output, and enterprise PII scanner in
+§11.2 remain intentionally postponed.
 
 For each item: settle any product contract, change code and schema docs together,
 then add representative tests in the same change set.
@@ -607,7 +625,10 @@ record supplies such an identifier.
 | Choice | Decision |
 |--------|----------|
 | Store | SQLite |
-| Location | `<project>/.codess/` |
+| Current location | `<project>/.codess/`; this is disposable derived state plus retained baselines, but is vulnerable to project-directory deletion |
+| Recommended durable location | `~/.codess/projects/<stable-project-id>/`; approval and a rebuild-boundary implementation are pending |
+| Raw source objects | `~/.codess/raw/codess.raw-1/`; use `capture` or `seal` before any source/project retirement |
+| Project-local role after relocation | Cache plus project/location/workspace binding, not the sole retained baseline |
 
 ### 11.4 Content and sanitize policy
 

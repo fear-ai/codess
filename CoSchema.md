@@ -82,6 +82,14 @@ alone is not globally meaningful. Product, vendor, harness, storage format, and
 surface are separate because vendors reuse storage structures across IDE, CLI,
 desktop, agent, and API packaging.
 
+The CLI now displays a deterministic `codess:session:sha256:...` global ID
+derived from the source-system namespace and vendor session ID. This prevents
+cross-store ambiguity without changing the released SQLite layout. The current
+`sessions.id` remains the vendor/local compatibility key; persisting global
+entity and observation keys belongs in the next approved schema package. A
+path hash or inode is not a substitute: paths identify locations and inodes do
+not survive copying or cloning.
+
 `root_path` is the normalized project anchor. `source_cwd` is what the source
 actually reported. `relative_path` is preferred for artifact correlation;
 `observed_absolute_path` preserves local evidence. Source locators are URIs or
@@ -156,6 +164,13 @@ snapshots, backs up its v2 databases, writes `raw-manifest.jsonl` and
 atomically replaces `<project>/.codess/current.json`. Queries prefer the
 validated current snapshot. Prior snapshots and their matching software/package
 identity remain available as baselines.
+
+This current placement is not durable against deletion of the project
+directory. Nor does `reference` protect Claude, Codex, or Cursor evidence from
+local vendor-store deletion. Before retiring a directory, operators must use
+`capture` or `seal`, validate, and preserve the complete snapshot plus its raw
+objects. Moving retained baselines to a stable project-ID catalog is pending as
+a deliberate store-layout revision; it is not part of the present SQLite DDL.
 
 `tools/validate_snapshot.py` verifies the current package and immutable-file
 hashes, SQLite integrity and foreign keys, manifest counts, event ordering,

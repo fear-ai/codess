@@ -393,6 +393,41 @@ Uniqueness should be based on `(source_system_id, vendor_session_id)`, not
 `(vendor, session_id)`. “Harness” is useful but can change packaging; the
 source-system identity should be defined by evidence from the storage format.
 
+### Global IDs and operational units
+
+Cross-database IDs must not depend on a database filename, row number, inode,
+or current project path. Inodes change on copy and fresh clone; paths change on
+rename; both identify an observation location, not the work or conversation.
+Use a versioned, domain-separated SHA-256 over the source namespace and exact
+vendor ID for a session. Derive event IDs from that global session ID plus the
+vendor event ID. This preserves one identity when the same vendor session is
+copied or re-extracted while preventing identical vendor strings from
+colliding across Claude, Codex, and Cursor. Legacy rows lacking a source-system
+namespace use an explicit compatibility namespace derived from their recorded
+vendor label.
+
+Keep a separate **observation ID** for one extraction of that entity from a
+specific source revision and project/workspace binding. Thus a copied session
+can remain the same logical session while two extractions retain distinct
+lineage. A machine ID plus canonical path may define a **location ID**, but
+must never become the logical project ID. Project IDs should be minted catalog
+identities with path, workspace, and repository aliases recorded as evidence.
+
+The operation hierarchy is:
+
+1. **Project** is the durable curation, baseline, and mixed-query unit: one
+   continuing body of work, even across checkout replacement or rename.
+2. **Workspace binding** attributes a vendor project/workspace identity and an
+   observed local or remote location to that project.
+3. **Source revision** is the atomic ingest unit: one consistent transcript,
+   database snapshot, or export, yielding one or many sessions.
+4. **Session**, interaction, and event are analysis/query units below ingest.
+
+A Git repository is useful artifact and correlation evidence but is not the
+universal operation unit: work may be non-Git, span repositories, or use a
+monorepo subdirectory. A local directory is a mutable location. A vendor
+workspace is an attribution binding. None alone replaces Project.
+
 Replace the current `type = Code|IDE` with independent open dimensions:
 
 - `surface_kind`: `cli`, `ide`, `desktop`, `api`, `agent`, or `unknown`;
@@ -770,6 +805,33 @@ collection may remove only objects unreferenced by retained manifests. Apply
 permissions, encryption, retention, and deletion policy to raw objects
 separately. A redacted derivative is a different object/class and must never be
 labeled exact raw evidence.
+
+### Retiring or replacing a local directory
+
+Claude Code and Codex transcripts live in machine-local vendor stores, and
+Cursor workspace/global databases are also local evidence. Normalized working
+databases and retained snapshots currently live below the selected project's
+`.codess/`. A Git clone restores neither category. Therefore deleting a project
+directory can delete normalized outcomes and their manifests, while deleting
+or pruning a vendor store can make every reference-only baseline
+unreproducible.
+
+Before removing, renaming, or replacing a directory:
+
+1. ingest with `capture` or `seal`, never only `reference`;
+2. validate the new snapshot, its raw objects, and a repeated semantic fixed
+   point under the recorded software/package identity;
+3. register the replacement location and any vendor workspace/path alias
+   against the same stable project identity;
+4. copy or promote the validated baseline to the durable project catalog; and
+5. verify query access through the new binding before deleting the old tree.
+
+The current project-local snapshot layout does not yet satisfy step 4. The
+recommended next layout is
+`~/.codess/projects/<project-id>/snapshots/<snapshot-id>/`, with project-local
+`.codess/` reduced to a cache and pointer/binding. This is a store-layout change
+and must be approved and implemented as a rebuild boundary; until then, archive
+the entire project-local `.codess/` plus captured raw objects before deletion.
 
 ## 12. Project inventory and selection policy
 

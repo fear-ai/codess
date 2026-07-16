@@ -70,6 +70,9 @@ project-relative artifact evidence across vendor stores without asserting
 authorship.
 `--limit N` bounds globally ordered session, permission, lineage, and audit
 rows after merging all selected stores.
+Session listings show both the exact vendor `id` and a deterministic
+source-namespaced `global_id`, so identical vendor strings cannot collide when
+several databases are queried together.
 
 Changed or forced source ingestion is replacement-based: stale normalized
 events are removed transactionally. A valid transcript with no supported
@@ -84,6 +87,13 @@ merged updates from **scan** (index metrics), **ingest** (store stats), **query
 --stats**; optional **`--registry PATH`** overrides the directory. Subprocess
 tests should set **`CODESS_REGISTRY`** to a temp dir so runs do not touch your
 home tree.
+
+**Do not delete or replace an ingested project directory as though it were only
+a Git checkout.** Its `.codess/` currently contains the normalized outcomes and
+snapshot manifests, while Claude, Codex, and Cursor source records also depend
+on machine-local vendor stores. Before retirement, ingest with `capture` or
+`seal`, validate twice, preserve the snapshot/raw objects, and register the new
+location binding. A fresh clone alone restores none of this evidence.
 
 The acceptance tools process exactly one project per invocation. Validation is
 read-only. Apply-and-verify refuses unversioned legacy stores unless the

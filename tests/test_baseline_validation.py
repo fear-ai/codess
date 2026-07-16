@@ -145,7 +145,8 @@ def test_repository_acceptance_policies_are_valid():
     root = Path(__file__).resolve().parents[1]
     policies = sorted((root / "catalog/policies").glob("*.json"))
     assert {path.name for path in policies} == {
-        "ci-fixture.json", "spank-py.json", "swemore.json", "zero400.json"
+        "ci-fixture.json", "spank-logs.json", "spank-py.json", "swemore.json",
+        "zero400.json", "zerowalletmac.json",
     }
     assert all(load_policy(path)["require_fixed_point"] for path in policies)
 

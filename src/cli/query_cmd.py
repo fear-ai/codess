@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from codess.config import get_project_stores, validate_config
+from codess.identity import global_session_id
 from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
 from codess.registry_store import merge_query_stats, update_project_entry
 from codess.sanitize import sanitize_for_display, sanitize_tabular, sanitize_text
@@ -83,15 +84,24 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
     for store_index, store in enumerate(scope.stores):
         rows = store["conn"].execute(
             """
-            SELECT id, source, release, started_at, ended_at,
+            SELECT id, source_system_id, vendor_session_id, source, release, started_at, ended_at,
                    project_path, metadata
             FROM sessions
             """
         )
         for row in rows:
+            source_system_id = row["source_system_id"]
+            if not source_system_id or source_system_id == "legacy.unknown":
+                # Pre-provenance stores did not persist a source namespace.  Keep
+                # their IDs globally distinct by deriving a compatibility
+                # namespace from the recorded vendor label.
+                source_system_id = f"legacy.vendor:{str(row['source']).casefold()}"
             sessions.append(
                 {
                     "id": row["id"],
+                    "global_id": global_session_id(
+                        source_system_id, row["vendor_session_id"] or row["id"]
+                    ),
                     "query_id": (store_index, row["id"]),
                     "source": row["source"],
                     "release": row["release"],
@@ -522,24 +532,24 @@ def _sessions(scope: QueryScope, with_id: bool, limit: int | None = None) -> int
     if not rows:
         return 0
     if with_id:
-        print("id\tnum\tsource\trelease\tdetails\tstarted_at\tended_at\tproject_path")
+        print("id\tglobal_id\tnum\tsource\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for i, row in enumerate(rows, 1):
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
             print(
-                f"{sanitize_tabular(row['id'])}\t{i}\t"
+                f"{sanitize_tabular(row['id'])}\t{row['global_id']}\t{i}\t"
                 f"{sanitize_tabular(row['source'])}\t"
                 f"{sanitize_tabular(row['release'])}\t{details}\t"
                 f"{row['started_at']}\t"
                 f"{row['ended_at']}\t{sanitize_tabular(project)}"
             )
     else:
-        print("id\tsource\trelease\tdetails\tstarted_at\tended_at\tproject_path")
+        print("id\tglobal_id\tsource\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for row in rows:
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
             print(
-                f"{sanitize_tabular(row['id'])}\t{sanitize_tabular(row['source'])}\t"
+                f"{sanitize_tabular(row['id'])}\t{row['global_id']}\t{sanitize_tabular(row['source'])}\t"
                 f"{sanitize_tabular(row['release'])}\t{details}\t"
                 f"{row['started_at']}\t{row['ended_at']}\t{sanitize_tabular(project)}"
             )

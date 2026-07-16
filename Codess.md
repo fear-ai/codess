@@ -138,6 +138,18 @@ Use this table to decide **where a change belongs** before editing.
 | **CursorSchema.md** | Cursor storage truth | Keys, JSON, workspace vs global | Other vendors |
 | **README.md** | Onboard quickly | Install, minimal commands, link to **Codess.md** | Doc map (here only) |
 
+Audience separation is intentional:
+
+- **User/operator path:** `README.md` for safe commands and retention warnings,
+  then this document for product concepts and selection policy.
+- **Contributor/developer path:** `CoPlan.md` for implementation and the one
+  work queue, `Designs.md`/`Schemas.md` for rationale, and the vendor/common
+  schema documents for source and normalized contracts.
+- **Machine contracts:** files below `schema/`; prose explains their meaning but
+  does not duplicate executable fields or DDL.
+- **Project-local evidence:** `.codess/source-links.json`, manifests, validation
+  reports, and snapshots are operational records, not end-user documentation.
+
 **Rule:** Vendor structure → **\*Schema.md**. Implementation tasks → **CoPlan.md** (**§11** backlog, **§8** tests, **§14–§15** questions and themes). Store shape → **CoSchema.md** + **schema/coschema/sqlite/schema.sql**. Core-doc hygiene → **§4.0**; CoPlan editing conventions → **CoPlan §12**.
 
 ---

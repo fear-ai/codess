@@ -1,0 +1,21 @@
+{
+  "policy_format": "codess.validation-policy/1",
+  "project": "/Users/walter/Work/Spank/Logs",
+  "required_sources": [
+    "Cursor"
+  ],
+  "minimum_sessions": {
+    "Cursor": 2
+  },
+  "minimum_events": {
+    "Cursor": 256
+  },
+  "raw_mode": "reference",
+  "expected_raw_records": 1,
+  "expected_cursor_workspace_ids": [
+    "e15dfe2f29fec656024c76d3166d3b28"
+  ],
+  "allowed_diagnostics": {},
+  "cursor_turn_policy": "inferred-per-user-interaction",
+  "require_fixed_point": true
+}

@@ -14,12 +14,14 @@
       "path": "/Users/walter/Work/ZK/Zero400",
       "identity_basis": "local file workspace and tracked Git repository",
       "composer_headers": 18,
-      "normalized_sessions": 18,
+      "normalized_sessions": 17,
       "normalized_events": 3224,
       "normalized_prompts": 642,
       "normalized_responses": 2582,
       "observed_tool_result_records": 0,
       "selection_state": "approved",
+      "validation_policy": "catalog/policies/zero400.json",
+      "validation_state": "accepted_with_limitations",
       "reason": "Largest attributable Cursor corpus and active Claude overlap"
     },
     {
@@ -33,6 +35,8 @@
       "normalized_responses": 77,
       "observed_tool_result_records": 0,
       "selection_state": "imported_with_limitations",
+      "validation_policy": "catalog/policies/zerowalletmac.json",
+      "validation_state": "accepted_with_limitations",
       "reason": "Compact renamed-path case and current Claude/Cursor overlap"
     },
     {
@@ -43,8 +47,10 @@
       "normalized_events": 256,
       "normalized_prompts": 84,
       "normalized_responses": 172,
-      "selection_state": "priority_candidate",
-      "reason": "Diverse non-repository log-analysis workload; requires explicit remote-to-local source link"
+      "selection_state": "imported_with_limitations",
+      "validation_policy": "catalog/policies/spank-logs.json",
+      "validation_state": "accepted_with_limitations",
+      "reason": "Diverse non-repository log-analysis workload imported through an explicit remote-to-local workspace binding; reference-only raw evidence remains local-store dependent"
     },
     {
       "path": "/Users/walter/Work/Spank/Logs/spLogs",
@@ -54,8 +60,8 @@
       "normalized_events": 225,
       "normalized_prompts": 77,
       "normalized_responses": 148,
-      "selection_state": "priority_candidate",
-      "reason": "Focused log-analysis subset suitable for project-versus-subdirectory attribution tests"
+      "selection_state": "needs_review",
+      "reason": "Focused nested workspace; decide child project versus a second binding under Spank/Logs before import"
     },
     {
       "path": "/home/ubuntu/Work/Spank/LogsLaz24",
@@ -65,8 +71,8 @@
       "normalized_events": 120,
       "normalized_prompts": 39,
       "normalized_responses": 81,
-      "selection_state": "needs_review",
-      "reason": "Useful remote-only case, but no verified local project identity"
+      "selection_state": "excluded",
+      "reason": "Remote-only case with no verified local project identity; excluded from the current Cursor practice set"
     }
   ],
   "header_only": [
