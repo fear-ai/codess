@@ -11,5 +11,5 @@
     {"id": "cursor.archive", "source": "composerHeaders.isArchived", "target": "sessions.archive_state", "operation": "from", "retention": "core"},
     {"id": "cursor.subagent", "source": "composerHeaders.isSubagent", "target": "sessions.session_relation_kind", "operation": "from", "retention": "core"}
   ],
-  "hazards": ["live-sqlite-requires-consistent-read", "global-db-must-be-project-scoped", "bubble-role-is-not-actor"]
+  "hazards": ["live-sqlite-requires-consistent-read", "global-db-must-be-project-scoped", "renamed-or-remote-workspace-requires-approved-source-link", "bubble-role-is-not-actor", "repeated-server-bubble-copies", "whitespace-only-assistant-envelopes-are-not-messages"]
 }

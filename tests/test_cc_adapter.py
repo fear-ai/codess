@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from codess.adapters.cc import (
+    SourceCompatibilityError,
     extract_tool_input,
     iter_cc_records,
     normalize_assistant,
@@ -88,10 +89,24 @@ class TestExtractToolInput:
             "path": "a.py", "offset": 0, "limit": 100
         }
 
+    def test_read_modern_file_path(self):
+        assert extract_tool_input(
+            "Read", {"file_path": "a.py", "offset": 0, "limit": 100, "pages": "1"}
+        ) == {"file_path": "a.py", "offset": 0, "limit": 100, "pages": "1"}
+
     def test_edit(self):
         assert extract_tool_input("Edit", {"path": "x", "old_len": 5, "new_len": 10}) == {
             "path": "x", "old_len": 5, "new_len": 10
         }
+
+    def test_modern_edit_and_write_retain_path_but_only_content_lengths(self):
+        assert extract_tool_input(
+            "Edit",
+            {"file_path": "x.py", "old_string": "old", "new_string": "newer", "replace_all": True},
+        ) == {"file_path": "x.py", "replace_all": True, "old_len": 3, "new_len": 5}
+        assert extract_tool_input(
+            "Write", {"file_path": "x.py", "content": "secret body"}
+        ) == {"file_path": "x.py", "content_len": 11}
 
     def test_grep_truncates_pattern(self):
         long_pat = "x" * 250
@@ -125,6 +140,45 @@ class TestNormalizeUser:
         assert len(evs) == 1
         assert evs[0]["event_type"] == "user_message" and evs[0]["subtype"] == "prompt"
 
+    def test_modern_string_prompt_preserves_human_origin(self):
+        rec = {
+            "uuid": "prompt-record",
+            "origin": {"kind": "human"},
+            "promptSource": "typed",
+            "permissionMode": "acceptEdits",
+            "message": {"role": "user", "content": "repair the build"},
+        }
+        evs = normalize_user(rec, 7, "s1", "/f", {}, {"redact": False})
+        assert len(evs) == 1
+        assert evs[0]["event_type"] == "user_message"
+        assert evs[0]["subtype"] == "prompt"
+        assert evs[0]["actor_kind"] == "human"
+        assert evs[0]["origin_kind"] == "direct_user_input"
+        assert evs[0]["content"] == "repair the build"
+        metadata = json.loads(evs[0]["metadata"])
+        assert metadata["prompt_source"] == "typed"
+        assert metadata["permission_mode"] == "acceptEdits"
+
+    def test_string_system_notification_is_not_mislabeled_human(self):
+        rec = {
+            "origin": {"kind": "task-notification"},
+            "promptSource": "system",
+            "message": {"role": "user", "content": "scheduled task completed"},
+        }
+        event = normalize_user(rec, 8, "s1", "/f", {}, {"redact": False})[0]
+        assert event["event_type"] == "system_event"
+        assert event["subtype"] == "task_notification"
+        assert event["actor_kind"] == "harness"
+        assert event["origin_kind"] == "harness_injected"
+
+    def test_strict_mode_rejects_unsupported_user_content_shape(self):
+        rec = {"message": {"role": "user", "content": {"unexpected": True}}}
+        with pytest.raises(SourceCompatibilityError, match="user content"):
+            normalize_user(
+                rec, 9, "s1", "/f", {},
+                {"redact": False, "strict_mapping": True},
+            )
+
     def test_slash_command(self):
         rec = {"message": {"role": "user", "content": [{"type": "text", "text": "/fix"}]}}
         evs = normalize_user(rec, 1, "s1", "/f", {}, {"redact": False})
@@ -136,6 +190,7 @@ class TestNormalizeUser:
         ]}}
         evs = normalize_user(rec, 1, "s1", "/f", {"t1": "Bash"}, {"redact": False})
         assert len(evs) == 1 and evs[0]["subtype"] == "tool_result" and evs[0]["tool_name"] == "Bash"
+        assert evs[0]["normalized_status"] == "succeeded"
 
     def test_permission_denied(self):
         rec = {"message": {"role": "user", "content": [
@@ -144,6 +199,7 @@ class TestNormalizeUser:
         ]}}
         evs = normalize_user(rec, 1, "s1", "/f", {"t1": "Edit"}, {"redact": False})
         assert evs[0]["subtype"] == "permission_denied" and evs[0]["tool_name"] == "Edit"
+        assert evs[0]["normalized_status"] is None
 
     def test_non_permission_error_is_tool_failure(self):
         rec = {"message": {"role": "user", "content": [
@@ -356,3 +412,85 @@ class TestProcessFile:
         events = list(process_file(path, "s1", {"redact": False}))
         assert [event["event_id"] for event in events] == ["1", "1:1"]
         assert len({event["event_id"] for event in events}) == len(events)
+
+    def test_product_state_records_are_classified_with_bounded_parameters(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        records = [
+            {"type": "mode", "mode": "normal", "sessionId": "s1"},
+            {"type": "permission-mode", "permissionMode": "acceptEdits", "sessionId": "s1"},
+            {"type": "system", "subtype": "turn_duration", "durationMs": 42, "messageCount": 3},
+        ]
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+        events = list(process_file(path, "s1", {"redact": False}))
+        assert [(event["event_type"], event["subtype"]) for event in events] == [
+            ("product_state", "mode"),
+            ("product_state", "permission_mode"),
+            ("lifecycle_event", "turn_duration"),
+        ]
+        assert json.loads(events[0]["metadata"])["mode"] == "normal"
+        assert json.loads(events[2]["metadata"]) == {
+            "duration_ms": 42,
+            "message_count": 3,
+        }
+
+    def test_persisted_tool_result_emits_linked_external_content(self, tmp_path):
+        session_dir = tmp_path / "session-id"
+        sidecar = session_dir / "tool-results" / "result.txt"
+        sidecar.parent.mkdir(parents=True)
+        sidecar.write_text("external result body")
+        transcript = tmp_path / "session-id.jsonl"
+        transcript.write_text("".join([
+            json.dumps({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{
+                    "type": "tool_use", "id": "tool-1", "name": "Bash",
+                    "input": {"command": "run"},
+                }]},
+            }) + "\n",
+            json.dumps({
+                "type": "user",
+                "message": {"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "tool-1",
+                    "content": "Output persisted externally", "is_error": False,
+                }]},
+                "toolUseResult": {
+                    "persistedOutputPath": str(sidecar),
+                    "persistedOutputSize": sidecar.stat().st_size,
+                },
+            }) + "\n",
+        ]))
+        external_sources = []
+        events = list(process_file(
+            transcript, "session-id",
+            {"redact": False, "external_sources": external_sources},
+        ))
+        external = [e for e in events if e["event_type"] == "external_content"]
+        assert len(external) == 1
+        assert external[0]["subtype"] == "persisted_tool_result"
+        assert external[0]["content"] == "external result body"
+        assert external[0]["caused_by_event_id"] == "2"
+        metadata = json.loads(external[0]["metadata"])
+        assert metadata["content_sha256"]
+        assert metadata["source_locator"] == str(sidecar)
+        assert external_sources == [{
+            "path": str(sidecar),
+            "parent_source": str(transcript.resolve()),
+            "relation_kind": "persisted_tool_result",
+        }]
+
+    def test_strict_mode_rejects_persisted_output_outside_session_tree(self, tmp_path):
+        outside = tmp_path / "outside.txt"
+        outside.write_text("secret")
+        transcript = tmp_path / "session-id.jsonl"
+        transcript.write_text(json.dumps({
+            "type": "user",
+            "message": {"role": "user", "content": [{
+                "type": "tool_result", "tool_use_id": "tool-1", "content": "x",
+            }]},
+            "toolUseResult": {"persistedOutputPath": str(outside)},
+        }) + "\n")
+        with pytest.raises(SourceCompatibilityError, match="outside session tree"):
+            list(process_file(
+                transcript, "session-id",
+                {"redact": False, "strict_mapping": True},
+            ))

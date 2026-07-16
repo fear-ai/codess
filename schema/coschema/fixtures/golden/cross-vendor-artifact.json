@@ -1,0 +1,10 @@
+{
+  "artifact_path": "README.md",
+  "operation": "read",
+  "sources": ["Claude", "Codex"],
+  "expected": {
+    "source_count": 2,
+    "event_count": 2,
+    "artifact_rows_across_stores": 2
+  }
+}

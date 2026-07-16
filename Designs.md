@@ -864,7 +864,7 @@ observations before selection:
 | Local candidate | Evidence and current disposition |
 |---|---|
 | `ZK/Zero400` | Priority: active-work list plus meaningful Claude/Cursor evidence |
-| `ZK/zerowalletmac` | Priority candidate: active-work list and harness markers; repair/validate the existing zero-session `src` path mapping |
+| `ZK/zerowalletmac` | Imported compatibility candidate: one current Claude session plus two Cursor sessions linked explicitly from the former `zerowallet400` workspace; direct root/`src` Cursor traces still have no headers |
 | `Code/Misses` | Priority candidate: substantial recent work and harness markers; reconcile root identity with the previously discovered nested `petri/petri` project |
 | `Code/CodeSess` | Priority: active implementation and `.codess`; locate/validate current sources from all three vendors |
 | `Spank/spank-py` | Priority: active-work list, harness markers, meaningful source evidence, and an old store that should be rebuilt |
@@ -941,7 +941,7 @@ and lineage. Disposition every current field as keep, rename, partition,
 specialize, raw-only, or remove. `release_value` is removed and fabricated
 fallback values and overloaded fields before writing the new DDL.
 
-### 3. Produce explicit vendor mappings — implemented foundation
+### 3. Produce explicit vendor mappings — implemented with evidence gaps
 
 Create field-by-field Claude, Codex, and Cursor mapping matrices. Preserve exact
 source types, roles, statuses, model settings, and tool names alongside common
@@ -959,6 +959,11 @@ backup, with `none`, `reference`, `capture`, and `seal` modes. Hash sources, raw
 objects, stores, and manifests; preserve the matching software identity. Rebuild
 derived data by default rather than migrating it in place.
 
+For a clean worktree, software revision is the Git commit. For a dirty
+worktree, snapshot identity also includes a SHA-256 over status, the binary Git
+diff, and every untracked file's path and bytes; `commit+dirty` alone is not a
+reproducible software identity.
+
 ### 5. Repair project discovery and cataloging — catalog seed implemented
 
 Permanently isolate test registries and retire the polluted personal registry
@@ -969,15 +974,16 @@ selection state, mapping quality, and dated remote observations. Treat reference
 collections and `Work/Github` as non-active by default, without allowing missing
 remotes to invalidate local work.
 
-### 6. Create a small compatibility corpus — next
+### 6. Create a small compatibility corpus — implemented with known gaps
 
-Select a bounded active corpus covering Claude, Codex, Cursor, multiple harness
-formats, tool cycles, subagents, and at least one cross-vendor project. Start
-with the priority candidates identified above; retain WP as deferred and
-external projects such as `jsonschema` only as targeted fixtures. The corpus
-must be small enough to inspect manually and strong enough to validate mappings.
+The frozen SWEmore, spank-py, and Zero400 set covers Claude, Codex, Cursor, tool
+cycles for Claude/Codex, subagents, compaction, mixed-vendor project timing, and
+current mapping hazards. Golden fixtures cover same-artifact multi-vendor
+queries and shapes absent from the real corpus. Current real evidence does not
+contain a Cursor tool-call/result shape or a shared cross-vendor artifact;
+those remain explicit gaps rather than reasons for broad historical ingest.
 
-### 7. Deliver useful mixed queries — initial v2 surface implemented
+### 7. Deliver useful mixed queries — implemented; correlation enrichment next
 
 Implement and test cross-vendor session/event queries, deterministic ordering,
 Interaction and evidenced Model Turn grouping, tool call/result correlation,
@@ -986,16 +992,19 @@ Queries may report that multiple coding systems touched the same project or
 artifact, with evidence and confidence, but must not assert unsupported
 authorship.
 
-### Remaining completion sequence
+### Remaining maintenance sequence
 
-1. Add hazard/golden vendor fixtures and deterministic re-ingestion tests to
-   the current mechanically validated mapping profiles.
-2. Merge fresh vendor observations into the review catalog and make explicit
-   priority/deferred decisions.
-3. Assemble and manually validate the bounded three-vendor compatibility corpus.
-4. Exercise `--diagnostics`, `--artifacts`, ordering, tool lineage, status, and
-   model configuration across that corpus; add acceptance fixtures for gaps.
-5. Rebuild and retain the first reviewed immutable baseline.
+1. Correlate external artifact `file:` URIs to known catalog project roots with
+   explicit evidence and confidence; do not infer authorship.
+2. Resolve Codex parent-session support only from direct referential fields.
+3. Monitor for a bounded Cursor tool-call/result shape; current Zero400 and
+   zerowallet400 samples contain none. Add a hazard/golden fixture before any
+   future mapping change.
+4. Add a real same-artifact multi-vendor corpus member or richer model settings
+   only when current source evidence supplies them.
+5. Re-run fixed-point and semantic sampling, then replace the frozen reviewed
+   set atomically whenever a mapping or corpus member changes.
 
-Only after these seven steps pass should broader historical discovery, ranking
-refinements, large-scale raw capture, or additional vendors become priorities.
+Broad historical discovery, ranking refinements, large-scale raw capture, and
+additional vendors remain outside this sequence until a concrete consumer or
+compatibility gap requires them.

@@ -1,6 +1,7 @@
 """CC JSONL parser and normalizer."""
 
 import json
+import hashlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,10 @@ from codess.config import (
 from codess.sanitize import apply_sanitization, sanitize_value
 
 log = logging.getLogger(__name__)
+
+
+class SourceCompatibilityError(ValueError):
+    """A source record cannot be mapped without silently losing meaning."""
 
 SKIP_TYPES = frozenset({
     "progress", "file-history-snapshot", "queue-operation", "last-prompt", "system",
@@ -111,16 +116,23 @@ def extract_tool_input(tool_name: str, input_obj: dict) -> dict:
     out = {}
     name = (tool_name or "").lower()
     if name == "bash":
-        if "command" in input_obj:
-            out["command"] = input_obj["command"]
+        for k in ("command", "description"):
+            if k in input_obj:
+                out[k] = input_obj[k]
     elif name == "read":
-        for k in ("path", "offset", "limit"):
+        for k in ("path", "file_path", "offset", "limit", "pages"):
             if k in input_obj:
                 out[k] = input_obj[k]
     elif name in ("edit", "write"):
-        for k in ("path", "old_len", "new_len", "content_len"):
+        for k in ("path", "file_path", "old_len", "new_len", "content_len", "replace_all"):
             if k in input_obj:
                 out[k] = input_obj[k]
+        if "old_string" in input_obj:
+            out["old_len"] = len(str(input_obj["old_string"]))
+        if "new_string" in input_obj:
+            out["new_len"] = len(str(input_obj["new_string"]))
+        if "content" in input_obj:
+            out["content_len"] = len(str(input_obj["content"]))
     elif name == "grep":
         for k in ("pattern", "path", "output_mode", "glob"):
             if k in input_obj:
@@ -133,7 +145,7 @@ def extract_tool_input(tool_name: str, input_obj: dict) -> dict:
             if k in input_obj:
                 out[k] = input_obj[k]
     elif name == "agent":
-        for k in ("subagent_type", "description"):
+        for k in ("subagent_type", "description", "model"):
             if k in input_obj:
                 out[k] = input_obj[k]
         if "prompt" in input_obj:
@@ -221,7 +233,7 @@ def _block_event_id(line_num: int, emitted_index: int) -> str:
     return str(line_num) if emitted_index == 0 else f"{line_num}:{emitted_index}"
 
 
-def _event_metadata(record: dict, tool_use_id=None) -> str | None:
+def _event_metadata(record: dict, tool_use_id=None, extra: dict | None = None) -> str | None:
     """Retain stable Claude lineage identifiers without copying the envelope."""
     metadata = {}
     if record.get("uuid") is not None:
@@ -230,7 +242,92 @@ def _event_metadata(record: dict, tool_use_id=None) -> str | None:
         metadata["parent_uuid"] = record["parentUuid"]
     if tool_use_id is not None:
         metadata["tool_use_id"] = tool_use_id
+    if extra:
+        metadata.update({key: value for key, value in extra.items() if value is not None})
     return json.dumps(metadata, separators=(",", ":")) if metadata else None
+
+
+def _diagnostic(opts: dict, name: str, count: int = 1) -> None:
+    diagnostics = opts.get("diagnostics")
+    if diagnostics is not None:
+        diagnostics[name] = diagnostics.get(name, 0) + count
+
+
+def _process_text(text: str, opts: dict, *, phase: str, record_type: str) -> str | None:
+    from codess.content_processing import apply_processing
+    return apply_processing(
+        text, opts, vendor="Claude", record_type=record_type, phase=phase
+    )
+
+
+def _base_event(
+    *, session_id: str, event_id: str, event_type: str, subtype: str,
+    role: str, timestamp: float | None, source_file: str,
+) -> dict:
+    return {
+        "session_id": session_id, "event_id": event_id,
+        "event_type": event_type, "subtype": subtype, "role": role,
+        "content": None, "content_len": None, "content_ref": None,
+        "tool_name": None, "tool_input": None, "tool_output": None,
+        "timestamp": timestamp, "file_path": None,
+        "source_file": source_file, "metadata": None, "source_raw": None,
+    }
+
+
+def normalize_product_state(
+    record: dict, line_num: int, session_id: str, source_file: str, opts: dict,
+) -> dict | None:
+    """Map bounded Claude product/lifecycle state without copying envelopes."""
+    rtype = record.get("type")
+    subtype = record.get("subtype")
+    event = None
+    metadata: dict = {}
+    if rtype == "mode":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="mode", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        metadata["mode"] = record.get("mode")
+    elif rtype == "permission-mode":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="permission_mode", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        metadata["permission_mode"] = record.get("permissionMode")
+    elif rtype == "ai-title":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="ai_title", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        title = _process_text(record.get("aiTitle") or "", opts, phase="pre", record_type="ai-title")
+        if title is not None:
+            event["content"], event["content_len"] = truncate_content(title, 512)
+    elif rtype == "attachment":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="context_attachment", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        attachment = record.get("attachment") or {}
+        if isinstance(attachment, dict):
+            metadata = {
+                "attachment_type": attachment.get("type"),
+                "item_count": attachment.get("itemCount"),
+                "is_initial": attachment.get("isInitial"),
+                "command_mode": attachment.get("commandMode"),
+                "has_content": bool(attachment.get("content")),
+            }
+    elif rtype == "file-history-snapshot":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="file_history_snapshot", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        metadata["snapshot_field_count"] = len(record)
+    elif rtype == "queue-operation":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="queue_operation", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        metadata["operation"] = record.get("operation")
+    elif rtype == "last-prompt":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="last_prompt_marker", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        value = record.get("lastPrompt") or record.get("prompt") or ""
+        metadata["content_len"] = len(str(value))
+    elif rtype == "system" and subtype == "turn_duration":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="turn_duration", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        metadata = {"duration_ms": record.get("durationMs"), "message_count": record.get("messageCount")}
+    elif rtype == "system" and subtype == "scheduled_task_fire":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="scheduled_task_fire", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+    if event is None:
+        return None
+    event.update({
+        "event_kind": "state.product" if event["event_type"] == "product_state" else "lifecycle.vendor",
+        "actor_kind": "harness", "content_role": "state",
+        "origin_kind": "harness_generated",
+        "metadata": _event_metadata(record, extra=metadata),
+    })
+    return event
 
 
 def normalize_assistant(
@@ -247,7 +344,6 @@ def normalize_assistant(
     role = record.get("message", {}).get("role", "assistant")
     ts = _get_timestamp(record)
     redact_enabled = opts.get("redact", False)
-
     # Build tool_map from tool_use blocks
     for block in content:
         if isinstance(block, dict) and block.get("type") == "tool_use":
@@ -266,7 +362,9 @@ def normalize_assistant(
 
         if btype == "text":
             text = block.get("text") or ""
-            text = apply_sanitization(text, redact_enabled)
+            text = _process_text(text, opts, phase="pre", record_type="assistant.text")
+            if text is None:
+                continue
             # Response: no tool_use follows in this record. Dialog: tool_use follows.
             follows_tool_use = any(
                 isinstance(content[j], dict) and content[j].get("type") == "tool_use"
@@ -279,6 +377,12 @@ def normalize_assistant(
                 subtype = "truncated" if "max_tokens" in str(stop_reason) else "response"
                 limit = TRUNCATE_RESPONSE
             truncated, content_len = truncate_content(text, limit)
+            processed = _process_text(
+                truncated, opts, phase="post", record_type="assistant.text"
+            )
+            if processed is None:
+                continue
+            truncated = processed
             events.append({
                 "session_id": session_id,
                 "event_id": _block_event_id(line_num, emitted_index),
@@ -318,7 +422,10 @@ def normalize_assistant(
                 "tool_input": json.dumps(tool_input) if tool_input else None,
                 "tool_output": None,
                 "timestamp": ts,
-                "file_path": tool_input.get("path") if isinstance(tool_input, dict) else None,
+                "file_path": (
+                    tool_input.get("path") or tool_input.get("file_path")
+                    if isinstance(tool_input, dict) else None
+                ),
                 "source_file": source_file,
                 "metadata": _event_metadata(record, tool_use_id),
                 "source_raw": None,
@@ -338,11 +445,64 @@ def normalize_user(
 ) -> list[dict]:
     """Extract user events."""
     events = []
-    content = record.get("message", {}).get("content") or []
+    content = record.get("message", {}).get("content")
     role = record.get("message", {}).get("role", "user")
     ts = _get_timestamp(record)
-    redact_enabled = opts.get("redact", False)
     emitted_index = 0
+
+    # The post-compaction summary is harness-generated replacement context, not
+    # a human prompt.  The preceding compact_boundary is the retained audit fact.
+    if record.get("isCompactSummary"):
+        _diagnostic(opts, "known_ignored_records")
+        return []
+
+    if isinstance(content, str):
+        text = _process_text(content, opts, phase="pre", record_type="user.prompt")
+        if text is None:
+            return []
+        text = _process_text(text, opts, phase="post", record_type="user.prompt")
+        if text is None:
+            return []
+        origin = record.get("origin") or {}
+        origin_kind = origin.get("kind") if isinstance(origin, dict) else str(origin)
+        prompt_source = record.get("promptSource")
+        harness_generated = prompt_source == "system" or origin_kind not in {None, "human"}
+        subtype = (
+            "task_notification" if origin_kind == "task-notification"
+            else "system_prompt" if harness_generated
+            else "slash_command" if text.strip().startswith("/")
+            else "prompt"
+        )
+        event_type = "system_event" if harness_generated else "user_message"
+        actor_kind = "harness" if harness_generated else "human"
+        event = _base_event(
+            session_id=session_id, event_id=str(line_num), event_type=event_type,
+            subtype=subtype, role="harness" if harness_generated else role,
+            timestamp=ts, source_file=source_file,
+        )
+        event.update({
+            "content": text, "content_len": len(text),
+            "event_kind": "message.context" if harness_generated else "message.prompt",
+            "actor_kind": actor_kind,
+            "content_role": "notification" if harness_generated else "prompt",
+            "origin_kind": "harness_injected" if harness_generated else "direct_user_input",
+            "metadata": _event_metadata(record, extra={
+                "prompt_source": prompt_source,
+                "origin_kind": origin_kind,
+                "permission_mode": record.get("permissionMode"),
+                "user_type": record.get("userType"),
+            }),
+        })
+        return [event]
+    if content is None:
+        content = []
+    elif not isinstance(content, list):
+        _diagnostic(opts, "unsupported_records")
+        if opts.get("strict_mapping"):
+            raise SourceCompatibilityError(
+                f"unsupported Claude user content type: {type(content).__name__}"
+            )
+        return []
 
     for block in content:
         if not isinstance(block, dict):
@@ -351,7 +511,12 @@ def normalize_user(
 
         if btype == "text":
             text = block.get("text") or ""
-            text = apply_sanitization(text, redact_enabled)
+            text = _process_text(text, opts, phase="pre", record_type="user.text")
+            if text is None:
+                continue
+            text = _process_text(text, opts, phase="post", record_type="user.text")
+            if text is None:
+                continue
             subtype = "slash_command" if text.strip().startswith("/") else "prompt"
             events.append({
                 "session_id": session_id,
@@ -386,8 +551,16 @@ def normalize_user(
                         parts.append(c.get("text", ""))
                 content_val = "\n".join(parts)
             text = str(content_val) if content_val else ""
-            text = apply_sanitization(text, redact_enabled)
+            text = _process_text(text, opts, phase="pre", record_type="tool_result")
+            if text is None:
+                continue
             truncated, content_len = truncate_content(text, TRUNCATE_TOOL_RESULT)
+            processed = _process_text(
+                truncated, opts, phase="post", record_type="tool_result"
+            )
+            if processed is None:
+                continue
+            truncated = processed
             if is_error:
                 subtype = (
                     "permission_denied"
@@ -408,6 +581,7 @@ def normalize_user(
                 "tool_name": tool_name,
                 "tool_input": None,
                 "tool_output": truncated,
+                "normalized_status": "succeeded" if subtype == "tool_result" else None,
                 "timestamp": ts,
                 "file_path": None,
                 "source_file": source_file,
@@ -415,6 +589,90 @@ def normalize_user(
                 "source_raw": None,
             })
             emitted_index += 1
+
+    persisted = record.get("toolUseResult")
+    if isinstance(persisted, dict) and persisted.get("persistedOutputPath"):
+        path = Path(str(persisted["persistedOutputPath"])).expanduser().resolve()
+        allowed_root = Path(source_file).with_suffix("").resolve()
+        result_event = next(
+            (event for event in events if event.get("subtype") in {
+                "tool_result", "tool_failure", "permission_denied"
+            }),
+            None,
+        )
+        try:
+            if not path.is_relative_to(allowed_root):
+                raise SourceCompatibilityError(
+                    f"persisted tool output outside session tree: {path}"
+                )
+            before = path.stat()
+            raw = path.read_bytes()
+            after = path.stat()
+            if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+                raise SourceCompatibilityError(
+                    f"persisted tool output changed during read: {path}"
+                )
+            processor = opts.get("content_processor")
+            if processor is not None:
+                from codess.content_processing import ContentContext
+                decoded = processor.decode(raw, ContentContext(
+                    vendor="Claude", record_type="external.tool_result",
+                    project_path=opts.get("project_path"),
+                    repo_path=opts.get("repo_path"), phase="pre",
+                ))
+                if not decoded.accepted:
+                    _diagnostic(opts, "filtered_records")
+                    return events
+                full_text = decoded.content
+            else:
+                full_text = raw.decode("utf-8", errors="replace")
+            full_text = apply_sanitization(full_text, opts.get("redact", False))
+            extracted, full_len = truncate_content(full_text, TRUNCATE_TOOL_RESULT)
+            extracted = _process_text(
+                extracted, opts, phase="post", record_type="external.tool_result"
+            )
+            if extracted is None:
+                return events
+            expected_size = persisted.get("persistedOutputSize")
+            if expected_size is not None and int(expected_size) != len(raw):
+                _diagnostic(opts, "external_content_size_mismatch")
+            external_id = _block_event_id(line_num, emitted_index)
+            external = _base_event(
+                session_id=session_id, event_id=external_id,
+                event_type="external_content", subtype="persisted_tool_result",
+                role="tool", timestamp=ts, source_file=source_file,
+            )
+            external.update({
+                "content": extracted, "content_len": full_len,
+                "content_ref": str(path), "file_path": str(path),
+                "caused_by_event_id": result_event.get("event_id") if result_event else None,
+                "tool_name": result_event.get("tool_name") if result_event else None,
+                "event_kind": "content.external", "actor_kind": "tool",
+                "content_role": "tool_result_detail", "origin_kind": "tool_generated",
+                "metadata": _event_metadata(record, extra={
+                    "source_locator": str(path),
+                    "content_sha256": hashlib.sha256(raw).hexdigest(),
+                    "byte_size": len(raw), "character_length": full_len,
+                    "extraction": "complete" if len(extracted) == full_len else "bounded",
+                    "media_type": "text/plain",
+                }),
+            })
+            events.append(external)
+            external_sources = opts.get("external_sources")
+            if external_sources is not None:
+                external_sources.append({
+                    "path": str(path), "parent_source": source_file,
+                    "relation_kind": "persisted_tool_result",
+                })
+            _diagnostic(opts, "external_content_records")
+        except (OSError, UnicodeError, ValueError, SourceCompatibilityError) as exc:
+            _diagnostic(opts, "external_content_errors")
+            if opts.get("strict_mapping"):
+                if isinstance(exc, SourceCompatibilityError):
+                    raise
+                raise SourceCompatibilityError(
+                    f"cannot extract persisted tool output {path}: {exc}"
+                ) from exc
 
     return events
 
@@ -433,11 +691,18 @@ def process_file(
         if record.get("type") == "system" and record.get("subtype") == "compact_boundary":
             yield _normalize_compaction(record, line_num, session_id, source_file)
             continue
+        product_state = normalize_product_state(
+            record, line_num, session_id, source_file, opts
+        )
+        if product_state is not None:
+            if opts.get("include_product_state", True):
+                yield product_state
+                _diagnostic(opts, "product_state_records")
+            else:
+                _diagnostic(opts, "known_ignored_records")
+            continue
         if should_skip(record):
-            if diagnostics is not None:
-                diagnostics["ignored_records"] = (
-                    diagnostics.get("ignored_records", 0) + 1
-                )
+            _diagnostic(opts, "known_ignored_records")
             continue
         rtype = record.get("type")
         debug = opts.get("debug", False)
@@ -470,6 +735,10 @@ def process_file(
                     ev["source_raw"] = source_raw
                 yield ev
         elif diagnostics is not None:
-            diagnostics["ignored_records"] = (
-                diagnostics.get("ignored_records", 0) + 1
+            diagnostics["unsupported_records"] = (
+                diagnostics.get("unsupported_records", 0) + 1
             )
+            if opts.get("strict_mapping"):
+                raise SourceCompatibilityError(
+                    f"unsupported Claude record type: {rtype!r} at {path}:{line_num}"
+                )

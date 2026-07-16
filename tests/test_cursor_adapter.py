@@ -254,10 +254,21 @@ class TestBubbleToEvents:
         evs = list(_bubble_to_events("c1", "b1", data, "/db", False))
         assert evs[0]["timestamp"] is None
 
-    def test_assistant_dialog_empty_text(self):
+    def test_assistant_whitespace_only_envelope_is_not_a_model_message(self):
         data = {"type": 2, "text": "", "timingInfo": {}}
         evs = list(_bubble_to_events("c1", "b1", data, "/db", False))
-        assert evs[0]["subtype"] == "dialog"
+        assert evs == []
+
+    def test_assistant_empty_envelope_still_emits_tool_results(self):
+        data = {
+            "type": 2,
+            "text": "  \n",
+            "toolResults": [{"toolName": "Read", "result": "contents"}],
+        }
+        evs = list(_bubble_to_events("c1", "b1", data, "/db", False))
+        assert len(evs) == 1
+        assert evs[0]["subtype"] == "tool_result"
+        assert evs[0]["tool_name"] == "Read"
 
     def test_assistant_with_tool_results(self):
         data = {
@@ -415,6 +426,20 @@ class TestProcessDb:
         out = list(process_db(db, "/proj", {}))
         assert out[0][1]["content"] == "first"
         assert out[1][1]["content"] == "second"
+
+    def test_process_db_deduplicates_server_identity_per_composer(self, tmp_path):
+        fixture = json.loads(
+            (Path(__file__).parents[1] / "schema/coschema/fixtures/hazard/"
+             "cursor-nonmessage-copies.json").read_text()
+        )
+        diagnostics = {}
+        db = _make_cursor_db(tmp_path, fixture["bubbles"])
+        out = list(process_db(db, "/proj", {"diagnostics": diagnostics}))
+        assert [list(item) for item in (
+            (sid, event["event_id"]) for sid, event in out
+        )] == fixture["expected_events"]
+        assert diagnostics["duplicate_records"] == fixture["expected_duplicate_records"]
+        assert diagnostics["ignored_records"] == fixture["expected_ignored_records"]
 
     def test_process_db_places_missing_timestamps_last(self, tmp_path):
         bubbles = [

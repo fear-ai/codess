@@ -69,7 +69,7 @@ assembled dynamically and are not recoverable from normalized message events.
 
 | Pattern | Notes |
 |---------|--------|
-| **Main session** | `user` / `assistant` with `message.content` blocks (`text`, `tool_use`, `tool_result`) |
+| **Main session** | `user` / `assistant`; typed user content may be a string while assistant and tool content commonly use blocks (`text`, `tool_use`, `tool_result`) |
 | **Subagent** | Messages may carry `isSidechain: true`, `agentId`; linking to parent session not always in file (see GitHub CC issues on `parentSessionId`) |
 | **Product state** | Records can include `system`, `mode`, `permission-mode`, `attachment`, `file-history-snapshot`, `queue-operation`, `ai-title`, and `last-prompt` |
 
@@ -78,8 +78,9 @@ Common record-envelope fields include `sessionId`, `uuid`, `parentUuid`,
 varies by record type.
 
 The current adapter emits conversation events from `user` and `assistant`
-records and one bounded product-state event from `system` records with subtype
-`compact_boundary`. It retains the compaction trigger but not compacted summary
+records, distinguishes typed human prompts from harness/system inputs carried
+in user envelopes, and emits bounded product-state and lifecycle events. It
+retains the compaction trigger but not compacted summary
 or token-accounting bodies. Error tool results are split into explicit
 `permission_denied` evidence and other `tool_failure` results. Each emitted
 content block has a distinct stable event id. Event metadata retains `uuid` /
@@ -88,6 +89,12 @@ making record and call/result lineage queryable without copying the full
 envelope. Task-list metadata under
 `~/.claude/tasks/` is separate from transcript JSONL and from live background
 processes.
+
+Large tool results may be externalized below
+`<sessionId>/tool-results/` and referenced by
+`toolUseResult.persistedOutputPath`. Codess accepts only references within that
+session subtree, emits a bounded linked external-content event for query use,
+and exposes the exact file as a related raw revision.
 
 Re-ingesting a changed or forced transcript transactionally replaces its
 normalized session events. If the transcript remains valid but yields no
@@ -135,7 +142,7 @@ supported events, Codess removes the prior normalized session and reports an
 
 | Gap | Detail |
 |-----|--------|
-| Product-state coverage | Compaction boundaries are normalized narrowly. Mode, permission-mode, attachment, snapshot, title, queue, and other system records remain unsupported. |
+| Product-state specialization | Mode, permission, attachment, snapshot, title, queue, duration, and scheduled-task facts have bounded common events; richer vendor fields remain raw or metadata pending the central content/source-record decision. |
 | Runtime-context snapshots | Memory, skills, tool schemas, instructions, compaction summaries, and token usage need a separate model if context analysis becomes a goal; audit events do not represent runtime context faithfully. |
 
 ---

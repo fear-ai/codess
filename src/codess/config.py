@@ -110,6 +110,8 @@ SUBAGENT = env_bool("CODESS_SUBAGENT")
 # --- Ingest redaction default (CLI --redact ORs on top) ---
 INGEST_REDACT = env_bool("CODESS_REDACT")
 RAW_MODE = os.environ.get("CODESS_RAW_MODE", "reference").strip().lower()
+STRICT_MAPPING = env_bool("CODESS_STRICT_MAPPING")
+CONTENT_POLICY = os.environ.get("CODESS_CONTENT_POLICY")
 
 # --- Batch / resilience: stop entire command on first error (otherwise log and continue) ---
 STOP = env_bool("CODESS_STOP")

@@ -1,0 +1,19 @@
+{
+  "policy_format": "codess.validation-policy/1",
+  "required": ["policy_format"],
+  "allowed_fields": [
+    "policy_format",
+    "project",
+    "required_sources",
+    "minimum_sessions",
+    "minimum_events",
+    "raw_mode",
+    "allowed_diagnostics",
+    "cursor_turn_policy",
+    "expected_cursor_workspace_ids",
+    "expected_raw_records",
+    "require_fixed_point"
+  ],
+  "raw_modes": ["none", "reference", "capture", "seal"],
+  "cursor_turn_policies": ["inferred-per-user-interaction"]
+}

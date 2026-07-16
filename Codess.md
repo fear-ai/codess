@@ -84,7 +84,12 @@ active backlog only if the product revives them.
 
    *Why one engineering doc owns this:* avoids split-brain between README, random markdown, and CoPlan; reviewers know where to look for “what’s left to do.”
 
-2. **Core set:** **Codess.md**, **CoPlan.md**, **README.md**, **\*Schema.md**, **CoSchema.md**, **`schema/coschema/sqlite/schema.sql`** — these are the durable docs. Do **not** link or refer from them to short-lived working notes (scratch FAQs, transient status files, personal paths).
+2. **Core set:** **Codess.md**, **CoPlan.md**, **README.md**, **\*Schema.md**,
+   **CoSchema.md**, **CompatibilityReview.md**, and
+   **`schema/coschema/sqlite/schema.sql`** are durable docs. The compatibility
+   review may identify frozen local evidence through its versioned catalog; it
+   is not a chronological work log. Do **not** link or refer from core docs to
+   short-lived working notes or scratch status files.
 
 3. **Single source:** Avoid duplicating CLI tables or long architecture exposition here; summarize at product level and point to **CoPlan.md**.
 
@@ -116,6 +121,7 @@ Use this table to decide **where a change belongs** before editing.
 | Codex session files | **CodexSchema.md** |
 | Cursor `state.vscdb` keys and values | **CursorSchema.md** |
 | Our normalized `sessions` / `events` columns | **CoSchema.md** |
+| Frozen compatibility evidence and coverage gaps | **CompatibilityReview.md** and `catalog/reviewed-baselines.json` |
 | Executable DDL | **schema/coschema/sqlite/schema.sql** |
 
 ### 4.2 Map table (goal / include / exclude)
@@ -125,6 +131,7 @@ Use this table to decide **where a change belongs** before editing.
 | **Codess.md** (this file) | *What* and *why*; product narrative; **§4 doc index** | Goals, framing, high-level architecture diagram, glossary, references, §4.0 rules, boundary table §4.1 | Vendor field catalogs; DDL; CLI flag tables (→ **CoPlan** §5) |
 | **CoPlan.md** | *How* the repo implements and validates behavior | Tree, layered architecture, persistence notes, **§3.5–§3.6** status and verified wiring, **§4 configuration**, **§5 CLI**, features→modules, coding, **§8 Tests**, delivery sequence, backlog **§11**, **§14–§15** | Vendor on-disk truth (→ *Schema.md) |
 | **CoSchema.md** | Normalized SQLite semantics | Tables, columns, store layout story | Vendor sources |
+| **CompatibilityReview.md** | Evidence-backed state of the bounded reviewed corpus | Frozen identities, semantic findings, real-vs-fixture coverage, known gaps | General backlog; chronological work log; copied prompt bodies |
 | **schema/coschema/sqlite/schema.sql** | Single executable DDL (avoids duplicated `CREATE` in code) | `CREATE`, indexes; executed by **`store.init_db()`** | Prose; column definitions → **CoSchema.md**; vendor sources |
 | **CCSchema.md** | CC storage truth | Layout, metrics, quirks, gaps | Other vendors |
 | **CodexSchema.md** | Codex storage truth | Same role as CC for Codex | Other vendors |

@@ -143,6 +143,32 @@ class TestUpsert:
         ] == [("1", "old-1"), ("2", "old-2")]
         conn.close()
 
+    def test_explicit_open_semantics_do_not_create_unmapped_diagnostic(self, tmp_path):
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        replace_session_events(
+            conn,
+            {"id": "s1", "source": "Claude", "type": "Code"},
+            [{
+                "session_id": "s1", "event_id": "1",
+                "event_type": "product_state", "subtype": "mode",
+                "role": "harness", "event_kind": "state.product",
+                "actor_kind": "harness", "content_role": "state",
+                "origin_kind": "harness_generated",
+            }],
+            session_id="s1",
+        )
+        assert conn.execute(
+            "SELECT COUNT(*) FROM mapping_diagnostics"
+        ).fetchone()[0] == 0
+        assert tuple(conn.execute(
+            "SELECT event_kind, actor_kind, content_role, origin_kind FROM events"
+        ).fetchone()) == (
+            "state.product", "harness", "state", "harness_generated"
+        )
+        conn.close()
+
     def test_replace_empty_session_removes_previous_session(self, tmp_path):
         db = tmp_path / "s.db"
         init_db(db)

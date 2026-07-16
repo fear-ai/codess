@@ -6,10 +6,14 @@
   "storage_formats": ["claude-jsonl"],
   "rules": [
     {"id": "claude.message", "source": "record.message.content[]", "target": "events", "operation": "from_each", "retention": "core"},
+    {"id": "claude.typed-prompt", "source": "user.message.content:string+origin+promptSource", "target": "events.message.prompt|message.context", "operation": "from_any", "retention": "core"},
     {"id": "claude.tool-use", "source": "message.content[type=tool_use]", "target": "tool_invocations", "operation": "from_each", "retention": "specialized"},
     {"id": "claude.tool-result", "source": "message.content[type=tool_result]", "target": "tool_results", "operation": "from_each", "retention": "specialized"},
+    {"id": "claude.persisted-tool-result", "source": "toolUseResult.persistedOutputPath", "target": "events.content.external+raw.related_content_revision", "operation": "from", "retention": "specialized"},
     {"id": "claude.compaction", "source": "system.compact_boundary", "target": "events.context.compact", "operation": "from", "retention": "core"},
+    {"id": "claude.product-state", "source": "mode|permission-mode|ai-title|attachment|file-history-snapshot|last-prompt", "target": "events.state.product", "operation": "from_any", "retention": "core"},
+    {"id": "claude.lifecycle", "source": "queue-operation|system.turn_duration|system.scheduled_task_fire", "target": "events.lifecycle.vendor", "operation": "from_any", "retention": "core"},
     {"id": "claude.lineage", "source": "uuid,parentUuid,tool_use_id", "target": "events.mapping_trace", "operation": "from_any", "retention": "core"}
   ],
-  "hazards": ["source-role-is-not-actor", "sidechain-parent-may-be-unresolved", "system-records-are-heterogeneous"]
+  "hazards": ["source-role-is-not-actor", "user-envelope-may-be-harness-origin", "sidechain-parent-may-be-unresolved", "external-content-path-must-remain-in-session-tree", "system-records-are-heterogeneous"]
 }

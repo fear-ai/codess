@@ -86,6 +86,11 @@ desktop, agent, and API packaging.
 actually reported. `relative_path` is preferred for artifact correlation;
 `observed_absolute_path` preserves local evidence. Source locators are URIs or
 absolute observed paths and are never treated as portable project identity.
+An artifact resolving outside `root_path` is not assigned a misleading `../`
+project-relative key. It uses a `file:` URI, retains the absolute observation,
+and records `path_scope=external` plus the source spelling in metadata. This
+allows later project correlation without claiming that the file belongs to the
+session's selected project.
 
 ### Ordering and time
 
@@ -151,6 +156,41 @@ snapshots, backs up its v2 databases, writes `raw-manifest.jsonl` and
 atomically replaces `<project>/.codess/current.json`. Queries prefer the
 validated current snapshot. Prior snapshots and their matching software/package
 identity remain available as baselines.
+
+`tools/validate_snapshot.py` verifies the current package and immutable-file
+hashes, SQLite integrity and foreign keys, manifest counts, event ordering,
+artifact identity/index invariants, JSON fields, raw object recovery, mapping
+diagnostic allowances, source-specific minimums, and optional Cursor scoping
+and turn rules. `tools/apply_and_verify.py` applies this gate to one project at
+a time and can require two rebuilds with unchanged source revisions and equal
+canonical logical digests. It runs read-only query smoke tests before atomically
+updating `catalog/approved-baselines.json`. Policies are versioned data under
+`catalog/policies/`; their contract is
+`schema/validation-policy-contract.json`.
+
+Immediate apply validation compares a reference-only locator's current size and
+mtime identity to the revision just ingested, preventing promotion after source
+drift. Frozen reviewed-baseline verification does not require a live mutable
+locator to remain unchanged forever; it verifies retained snapshot/store/raw-
+manifest identities and reports reference reproducibility as a limitation.
+
+The logical digest deliberately excludes snapshot creation time, surrogate
+row identifiers, and SQLite layout. It includes common entities, vendor/source
+values, ordering, lineage, diagnostics, artifact relations, and correlation
+assertions. It therefore proves repeatable normalization for the same sources;
+it is not a substitute for manual semantic review or exact raw capture.
+
+Working databases are disposable derived state. A writer refuses a store whose
+recorded released-package digest differs from the current package. The guarded
+apply workflow first verifies the retained current snapshot, archives the old
+working databases and ingest state with hashes, then rebuilds from source. This
+is a rebuild boundary, not an in-place schema or mapping migration.
+
+Historical queries select one retained identity with `--snapshot-id`. Exact
+package matching is the default. The explicit `read-compatible` package policy
+checks immutable hashes and the supported SQLite contract but warns that it
+does not recreate the older mapping semantics; historical stats do not update
+the current registry.
 
 ## Compatibility and change procedure
 

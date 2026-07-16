@@ -10,7 +10,12 @@ import zstandard
 
 from cli.ingest_cmd import _record_raw
 from codess.raw_store import RawStore
-from codess.snapshot import SnapshotError, create_snapshot, current_store_paths
+from codess.snapshot import (
+    SnapshotError,
+    create_snapshot,
+    current_store_paths,
+    snapshot_store_paths,
+)
 from codess.store import connect, ensure_source, init_db, replace_session_events
 
 
@@ -36,6 +41,28 @@ def test_jsonl_capture_is_content_addressed_and_recoverable(tmp_path):
         storage_format="codex-jsonl",
         mode="capture",
     )["object_id"] == record["object_id"]
+
+
+def test_related_external_content_has_stable_identity_and_parent_link(tmp_path):
+    sidecar = tmp_path / "tool-results" / "result.txt"
+    sidecar.parent.mkdir()
+    sidecar.write_text("full external output", encoding="utf-8")
+    raw = RawStore(tmp_path / "raw")
+    record = raw.observe_related(
+        sidecar,
+        source_system_id="anthropic.claude-code",
+        storage_format="text/plain",
+        mode="capture",
+        parent_source_locator="/source/session.jsonl",
+        relation_kind="persisted_tool_result",
+    )
+    assert record["record_type"] == "related_content_revision"
+    assert record["record_id"].startswith("rawrel:sha256:")
+    assert record["parent_source_locator"] == "/source/session.jsonl"
+    assert record["relation_kind"] == "persisted_tool_result"
+    assert zstandard.ZstdDecompressor().decompress(
+        raw.resolve(record).read_bytes()
+    ) == b"full external output"
 
 
 def test_raw_capture_updates_normalized_source_provenance(tmp_path):
@@ -155,3 +182,30 @@ def test_snapshot_rejects_raw_manifest_tamper(tmp_path):
     (snapshot / "raw-manifest.jsonl").write_text("tamper\n", encoding="utf-8")
     with pytest.raises(SnapshotError, match="raw manifest hash mismatch"):
         current_store_paths(project)
+
+
+def test_retained_snapshot_requires_exact_package_unless_explicitly_compatible(
+    tmp_path, monkeypatch
+):
+    project = tmp_path / "project"
+    store = project / ".codess" / "sessions_codex.db"
+    init_db(store)
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"type":"user"}\n', encoding="utf-8")
+    record = raw.observe(
+        source,
+        source_system_id="openai.codex",
+        storage_format="codex-jsonl",
+        mode="capture",
+    )
+    snapshot = create_snapshot(project, [store], [record], raw_store=raw)
+    snapshot_id = snapshot.name
+    assert snapshot_store_paths(project, snapshot_id)
+
+    monkeypatch.setattr("codess.snapshot.verify_package", lambda: "f" * 64)
+    with pytest.raises(SnapshotError, match="package digest mismatch"):
+        snapshot_store_paths(project, snapshot_id)
+    assert snapshot_store_paths(
+        project, snapshot_id, allow_package_mismatch=True
+    )

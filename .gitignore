@@ -383,6 +383,8 @@ data/backups/
 *.sqlite3
 *.db
 *.sql
+!schema/coschema/sqlite/schema.sql
+!schema/legacy/coschema-v1.sql
 *.dump
 
 # Large binary assets
@@ -419,4 +421,3 @@ Thumbs.db
 desktop.ini
 .Spotlight-V100
 .Trashes
-

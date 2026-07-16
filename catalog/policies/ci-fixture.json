@@ -1,0 +1,11 @@
+{
+  "policy_format": "codess.validation-policy/1",
+  "required_sources": ["Claude", "Codex", "Cursor"],
+  "minimum_sessions": {"Claude": 1, "Codex": 1, "Cursor": 1},
+  "minimum_events": {"Claude": 1, "Codex": 1, "Cursor": 1},
+  "raw_mode": "capture",
+  "expected_raw_records": 3,
+  "allowed_diagnostics": {},
+  "cursor_turn_policy": "inferred-per-user-interaction",
+  "require_fixed_point": true
+}

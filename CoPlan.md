@@ -231,9 +231,10 @@ Verification baseline is the full **`pytest tests/`** suite. **Validated** here 
 
 **Completeness:** Main workflows, configuration validation, source replacement,
 cross-store query aggregation, lineage, audit normalization/reporting, and
-bounded row reports are covered. The only active investigation is evidence for
-Codex parent-session linkage; speculative validation, machine output, and PII
-scanning are postponed. See **§11** and **§15**.
+bounded row reports are covered. Active evidence work is limited to a modern
+Cursor tool-call/result shape, catalog-backed external-artifact correlation,
+and direct Codex parent-session evidence. Speculative preflight, machine output,
+and PII scanning are postponed. See **§11** and **§15**.
 
 ### 3.6 Verified wiring
 
@@ -509,10 +510,11 @@ Order work by risk and dependency.
 | Order | Outcome | Main work |
 |---|---|---|
 | **1. CoSchema v2 foundation — complete** | Versioned contract, mappings, DDL, strict readers/writers, raw capture, snapshots, diagnostics, and initial mixed queries | Maintain package hashes, fixtures, and compatibility-gate tests |
-| **2. Compatibility corpus — next** | A bounded, manually inspectable Claude/Codex/Cursor corpus proves mappings and mixed behavior | Curate from `catalog/active-work-review.json`; add hazard/golden fixtures and acceptance results |
-| **3. Reviewed v2 baseline** | The selected corpus rebuilds reproducibly into one retained immutable snapshot | Validate ordering, tool lineage, diagnostics, model settings, artifacts, hashes, and old-reader policy |
-| **4. Compatibility maintenance** | Vendor drift is detected early | Refresh the smallest real-shape fixture when an upstream format changes; rebuild rather than mutate derived data |
-| **5. Postponed work** | Speculative surfaces stay out of the active queue | Restart preflight, machine output, or PII scanning only on the triggers in §11.2 |
+| **2. Automated baseline gate — complete** | Per-project policies make package, raw, SQLite, mapping, fixed-point, and query acceptance repeatable | Maintain `tools/validate_snapshot.py`, `tools/apply_and_verify.py`, and `catalog/policies/` |
+| **3. Compatibility corpus — complete with recorded gaps** | The bounded Claude/Codex/Cursor corpus proves represented mappings and distinguishes real from fixture-only evidence | Maintain `CompatibilityReview.md` and add candidates only for demonstrated gaps |
+| **4. Reviewed v2 baseline — complete** | The sampled corpus is frozen by package, snapshot, semantic digest, policy, and raw-evidence state | Run `tools/verify_reviewed_baselines.py`; replace the set rather than editing it in place |
+| **5. Compatibility maintenance** | Vendor drift is detected early | Refresh the smallest real-shape fixture when an upstream format changes; rebuild rather than mutate derived data |
+| **6. Postponed work** | Speculative surfaces stay out of the active queue | Restart preflight, machine output, or PII scanning only on the triggers in §11.2 |
 
 Keep **`schema/coschema/sqlite/schema.sql`** aligned with **CoSchema.md** whenever normalized event shapes change.
 
@@ -529,31 +531,46 @@ Vendor-specific **known holes** are documented in schema files, not duplicated h
 
 ## 11. Improvement Backlog
 
-**Immediate order:** complete the bounded compatibility corpus and reviewed v2
-baseline in §11.0. Run the Codex parent-session investigation in §11.1 as one
-corpus evidence question; either retain a direct identifier or record the
-feature as unsupported. The items in §11.2 remain intentionally postponed.
+**Immediate order:** correlate the observed external artifact URIs to known
+catalog roots, then run the Codex parent-session investigation in §11.1.
+Current Zero400 and zerowallet400 Cursor samples contain no tool results, so a
+Cursor tool mapping waits for new explicit source evidence. Add a real cross-vendor
+artifact case or richer model configuration only when explicit source evidence
+appears. The items in §11.2 remain intentionally postponed.
 
 For each item: settle any product contract, change code and schema docs together,
 then add representative tests in the same change set.
 
 Work items stay grouped by theme below. **Codess.md §4.0** requires **all** tickets to live here or in **§8** / **§14** / **§15** as specified there.
 
-### 11.0 CoSchema v2 completion — next
+### 11.0 CoSchema v2 corpus review — complete with known gaps
 
-1. Refresh vendor observations for the 13 seeded candidates without trusting
-   configured remotes as current facts; add explicit priority/deferred review
-   decisions separately from observations.
-2. Select a small corpus covering all three vendors, tool call/results,
-   compaction/lifecycle records, subagents where evidenced, unknown records,
-   missing timestamps, and at least one same-artifact multi-vendor case.
-3. Add hazard and golden vendor fixtures plus deterministic re-ingestion tests;
-   compare mapping diagnostics and logical content, not SQLite byte identity.
-4. Rebuild with the released CoSchema package. Validate package/store/raw
-   hashes, logical counts, deterministic ordering, source/normalized status,
-   model configuration, tool lineage, and `--artifacts` correlation.
-5. Manually review the bounded output, record acceptance results, and retain the
-   promoted snapshot as the first v2 baseline before broad historical ingest.
+The automated gate, semantic sampling, coverage matrix, hazard/golden fixtures,
+home-independent three-vendor CI policy, retained-snapshot read boundary, and
+frozen reviewed set are implemented. See `CompatibilityReview.md` and
+`catalog/reviewed-baselines.json`. Review corrected Claude failure/denial tool
+actors and statuses, removed Cursor whitespace-only non-message envelopes,
+deduplicated stable Cursor server-bubble identities within each composer, and
+separated external file URIs from project-relative artifacts. All three
+projects were rebuilt and accepted at a semantic fixed point afterward.
+
+Remaining evidence gaps are deliberately narrow: a real modern Cursor tool
+call/result shape, a real same-artifact multi-vendor project, lifecycle/missing
+time shapes outside fixtures, and explicit exact model settings. These do not
+justify broad project discovery. Add a candidate or mapping only when one of
+those source shapes is observed.
+
+Next maintenance actions:
+
+1. Match external artifact `file:` URIs against known local catalog roots using
+   longest-root containment; emit evidence/confidence rather than changing the
+   session project or asserting authorship.
+2. Execute §11.1.
+3. Monitor Cursor format changes or newly active candidates for explicit tool
+   invocation/result identity and status. Do not map the current empty
+   `toolResults` arrays or `subagentSpawnTaskToolCallId` as tool outcomes.
+4. Keep real same-artifact and exact model-setting additions
+   evidence-triggered.
 
 ### 11.1 Codex parent-session evidence — next
 
@@ -680,8 +697,9 @@ context, viable options, and a recommendation when one is available.
 
 ### 14.2 Open decisions
 
-Active evidence decisions are compatibility-corpus membership/acceptance
-(**§11.0**) and Codex parent-session support (**§11.1**). Preflight validation,
+The reviewed corpus is accepted and frozen. Active evidence decisions are a
+modern Cursor tool shape, external-artifact/project correlation, and Codex
+parent-session support (**§11.0–§11.1**). Preflight validation,
 machine-readable output, and enterprise PII scanning are postponed with
 explicit restart triggers in **§11.2**.
 
@@ -693,6 +711,6 @@ explicit restart triggers in **§11.2**.
 
 | Theme | Open questions | Recommendation (lean) | Justification |
 |-------|----------------|----------------------|---------------|
-| **Compatibility corpus** | Which smallest inspected set covers all three vendors, mapping hazards, and real cross-vendor artifact evidence? | Curate the seeded catalog, add explicit decisions, and retain the first reviewed v2 snapshot before expanding. | Makes compatibility and mapping quality measurable without turning historical discovery into the critical path. |
+| **Compatibility maintenance** | Does current evidence supply Cursor tool identity/status, catalog-resolvable external artifacts, or a real cross-vendor artifact? | Add only the bounded source shape or correlation asserted by evidence; then replace the reviewed set after fixed-point validation. | Keeps the accepted corpus useful without turning historical discovery into the critical path. |
 | **Codex parentage** | Does a modern transcript expose a direct, referential parent-session id across releases and active/archive storage? | Run the bounded §11.1 inventory; implement only if every acceptance check passes. | Prevents plausible-looking but false parent links based on time, path, or content. |
 | **Postponed surfaces** | Has a named operator, automation consumer, or deployment threat model triggered validation, JSON Lines, or PII scanning? | Keep all three postponed until their documented trigger exists. | Avoids speculative CLI/schema/dependency commitments. |

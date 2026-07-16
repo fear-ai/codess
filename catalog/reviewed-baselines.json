@@ -1,0 +1,38 @@
+{
+  "catalog_format": "codess.reviewed-baselines/1",
+  "reviewed_at": "2026-07-14T11:11:41Z",
+  "review_state": "accepted_with_known_gaps",
+  "package_digest": "28ffae443e8b90231bf3d0aaea40930e6608cc63504d71efe26c619c02f8ba0d",
+  "registry": "/Users/walter/.codess-v2",
+  "projects": [
+    {
+      "path": "/Users/walter/Work/Code/SWEmore",
+      "snapshot_id": "20260714T111121.158475Z-coschema2-ffd37a0a620c",
+      "semantic_digest": "c771f5fa06a62f995fd2608428ca2073ab279e3b267aed1d8fc5147780b31a3d",
+      "validation_state": "accepted",
+      "policy": "catalog/policies/swemore.json"
+    },
+    {
+      "path": "/Users/walter/Work/Spank/spank-py",
+      "snapshot_id": "20260714T111123.493487Z-coschema2-ef9431fee824",
+      "semantic_digest": "f48b1edd8c7d70d11a6f777dfafd2833273ea221625d6fbe9a4d4e3e594b213a",
+      "validation_state": "accepted",
+      "policy": "catalog/policies/spank-py.json"
+    },
+    {
+      "path": "/Users/walter/Work/ZK/Zero400",
+      "snapshot_id": "20260714T111135.176346Z-coschema2-f28d04b79144",
+      "semantic_digest": "8874ceecadda173ec2eda31cc23e5d2c9a49fc3ad19c59746aadb92eeb981678",
+      "validation_state": "accepted_with_limitations",
+      "policy": "catalog/policies/zero400.json"
+    }
+  ],
+  "known_gaps": [
+    "Cursor tool-call and tool-result shapes are not present in the selected real corpus",
+    "external artifact URIs are explicit but are not yet correlated to known catalog project identities",
+    "same-artifact multi-vendor correlation is proven by a golden fixture, not a selected real project",
+    "lifecycle abort and missing timestamp behavior are fixture-covered but absent from the selected real corpus",
+    "exact model name, reasoning effort, and speed tier are absent from the selected source records",
+    "Zero400 raw evidence is reference-only and is not independently reproducible"
+  ]
+}

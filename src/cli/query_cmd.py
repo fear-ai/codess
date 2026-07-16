@@ -12,7 +12,7 @@ from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_d
 from codess.registry_store import merge_query_stats, update_project_entry
 from codess.sanitize import sanitize_for_display, sanitize_tabular, sanitize_text
 from codess.schema_contract import SchemaContractError
-from codess.snapshot import SnapshotError
+from codess.snapshot import SnapshotError, snapshot_store_paths
 from codess.store import connect as connect_store
 log = logging.getLogger(__name__)
 
@@ -35,14 +35,26 @@ class QueryScope:
             store["conn"].close()
 
 
-def _open_query_scope(roots: list[Path]) -> tuple[QueryScope, list[Path]]:
+def _open_query_scope(
+    roots: list[Path],
+    *,
+    snapshot_id: str | None = None,
+    allow_package_mismatch: bool = False,
+) -> tuple[QueryScope, list[Path]]:
     """Open every existing project store read-only without an attachment limit."""
     scope = QueryScope()
     roots_without_stores = []
     try:
         for root in roots:
             resolved_root = root.resolve()
-            stores = get_project_stores(resolved_root)
+            stores = (
+                snapshot_store_paths(
+                    resolved_root, snapshot_id,
+                    allow_package_mismatch=allow_package_mismatch,
+                )
+                if snapshot_id
+                else get_project_stores(resolved_root)
+            )
             if not stores:
                 roots_without_stores.append(resolved_root)
                 continue
@@ -143,8 +155,17 @@ def run(args) -> int:
         print(err, file=sys.stderr)
         return 1
     resolved_roots = [root.resolve() for root in roots]
+    snapshot_id = getattr(args, "snapshot_id", None)
+    package_policy = getattr(args, "snapshot_package_policy", "exact")
+    if snapshot_id and len(resolved_roots) != 1:
+        print("codess: --snapshot-id requires exactly one project root", file=sys.stderr)
+        return 1
     try:
-        scope, missing_roots = _open_query_scope(resolved_roots)
+        scope, missing_roots = _open_query_scope(
+            resolved_roots,
+            snapshot_id=snapshot_id,
+            allow_package_mismatch=package_policy == "read-compatible",
+        )
     except (sqlite3.Error, SchemaContractError, SnapshotError) as exc:
         print(f"codess: cannot open query stores: {exc}", file=sys.stderr)
         return 1
@@ -156,10 +177,19 @@ def run(args) -> int:
             f"codess: warning: no store found for {sanitize_tabular(root)}",
             file=sys.stderr,
         )
+    if snapshot_id and package_policy == "read-compatible":
+        print(
+            "codess: warning: historical snapshot package differs or was not "
+            "required to match; hashes and format were verified, mapping parity was not",
+            file=sys.stderr,
+        )
 
     try:
         if getattr(args, "stats", False):
-            return _stats(scope, resolved_roots, resolve_registry_directory(args))
+            return _stats(
+                scope, resolved_roots, resolve_registry_directory(args),
+                update_registry=not bool(snapshot_id),
+            )
         if getattr(args, "taxonomy", False):
             return _taxonomy(scope)
         if getattr(args, "tool", None) is not None:
@@ -190,7 +220,13 @@ def run(args) -> int:
         scope.close()
 
 
-def _stats(scope: QueryScope, project_roots: list[Path], registry_root: Path) -> int:
+def _stats(
+    scope: QueryScope,
+    project_roots: list[Path],
+    registry_root: Path,
+    *,
+    update_registry: bool = True,
+) -> int:
     """Print aggregate stats and merge per-project counts into the registry."""
     counts = {
         str(root.resolve()): {"sessions": 0, "events": 0}
@@ -208,6 +244,8 @@ def _stats(scope: QueryScope, project_roots: list[Path], registry_root: Path) ->
     events = sum(item["events"] for item in counts.values())
     print(f"Sessions: {sessions}")
     print(f"Events: {events}")
+    if not update_registry:
+        return 0
     for project_root in project_roots:
         proj_str = str(project_root.resolve())
         project_sessions = counts[proj_str]["sessions"]

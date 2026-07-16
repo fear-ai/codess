@@ -367,7 +367,7 @@
       "curation": {
         "activity_state": "active",
         "ownership": "own",
-        "selection_state": "candidate",
+        "selection_state": "priority",
         "topic": "ZK"
       },
       "logical_name": "zerowalletmac",
@@ -383,14 +383,32 @@
         },
         "reported_doc_and_code_file_count": 179,
         "reported_last_commit_date": "2026-07-01",
-        "vendors": {}
+        "vendors": {
+          "Claude": {
+            "events": 646,
+            "external_content_records": 3,
+            "human_prompts": 29,
+            "sessions": 1
+          },
+          "Codex": {
+            "events": 0,
+            "sessions": 0
+          },
+          "Cursor": {
+            "events": 114,
+            "human_prompts": 37,
+            "sessions": 2,
+            "source_project_path": "/Users/walter/Work/ZK/zerowallet400",
+            "workspace_id": "b4ce84bb8a916dc6b4eb6b4e03bafb56"
+          }
+        }
       },
       "path": "/Users/walter/Work/ZK/zerowalletmac",
       "project_id": "project:path:9777269dfcfccdd1a44c223b",
       "review": {
-        "decision": null,
-        "notes": null,
-        "reviewed_at": null
+        "decision": "accepted_with_limitations",
+        "notes": "Strict fixed-point import and validation pass. Raw evidence remains reference-only; Cursor identity uses an explicit approved project source link.",
+        "reviewed_at": "2026-07-16T10:11:11Z"
       }
     }
   ]

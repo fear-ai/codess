@@ -42,11 +42,32 @@ def _software_revision() -> str | None:
             ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
             text=True, check=True, timeout=5,
         ).stdout.strip()
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=root, capture_output=True,
-            text=True, check=True, timeout=5,
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            cwd=root, capture_output=True, check=True, timeout=5,
         ).stdout
-        return revision + ("+dirty" if dirty else "")
+        if not status:
+            return revision
+        digest = hashlib.sha256()
+        digest.update(b"git-status\0")
+        digest.update(status)
+        digest.update(b"git-diff\0")
+        digest.update(subprocess.run(
+            ["git", "diff", "--binary", "HEAD"], cwd=root,
+            capture_output=True, check=True, timeout=10,
+        ).stdout)
+        for entry in status.split(b"\0"):
+            if not entry.startswith(b"?? "):
+                continue
+            relative = entry[3:].decode("utf-8", errors="surrogateescape")
+            path = root / relative
+            if not path.is_file():
+                continue
+            digest.update(b"untracked\0")
+            digest.update(relative.encode("utf-8", errors="surrogateescape"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+        return revision + "+worktree.sha256:" + digest.hexdigest()
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -209,6 +230,63 @@ def create_snapshot(
     return final
 
 
+def snapshot_store_paths(
+    project_root: Path,
+    snapshot_id: str,
+    *,
+    allow_package_mismatch: bool = False,
+) -> list[Path]:
+    """Resolve and validate one retained snapshot by immutable identity.
+
+    Package mismatch is rejected unless a caller explicitly requests the
+    format-compatible reader path. That path verifies every retained hash and
+    the current reader's database contract, but cannot promise identical
+    mapping semantics.
+    """
+    base = project_root / ".codess"
+    if not snapshot_id or snapshot_id in {".", ".."} or "/" in snapshot_id:
+        raise SnapshotError(f"invalid snapshot identity: {snapshot_id!r}")
+    snapshot = base / "snapshots" / snapshot_id
+    if not snapshot.is_dir():
+        raise SnapshotError(f"retained snapshot not found: {snapshot_id}")
+    try:
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("snapshot_id") != snapshot_id:
+            raise SnapshotError("snapshot directory and manifest identity disagree")
+        if manifest["format_id"] != FORMAT_ID or manifest["format_version"] != FORMAT_VERSION:
+            raise SnapshotError("retained snapshot format is unsupported")
+        package_matches = manifest.get("package_digest") == verify_package()
+        if not package_matches and not allow_package_mismatch:
+            raise SnapshotError("retained snapshot CoSchema package digest mismatch")
+        raw_manifest = snapshot / "raw-manifest.jsonl"
+        if _sha256(raw_manifest) != manifest.get("raw_manifest_sha256"):
+            raise SnapshotError("retained snapshot raw manifest hash mismatch")
+        paths = []
+        for name, entry in manifest["stores"].items():
+            path = snapshot / name
+            if _sha256(path) != entry["sha256"]:
+                raise SnapshotError(f"retained store hash mismatch: {name}")
+            conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+            try:
+                require_store(conn, write=False)
+                meta = dict(conn.execute("SELECT key, value FROM store_meta"))
+                if meta.get("snapshot_id") != manifest.get("snapshot_id"):
+                    raise SnapshotError(f"retained store snapshot identity mismatch: {name}")
+                if meta.get("package_digest") != manifest.get("package_digest"):
+                    raise SnapshotError(f"retained store package digest mismatch: {name}")
+                if _logical_counts(path) != entry.get("counts"):
+                    raise SnapshotError(f"retained store logical counts mismatch: {name}")
+            finally:
+                conn.close()
+            paths.append(path)
+        return sorted(paths)
+    except SnapshotError:
+        raise
+    except (OSError, KeyError, json.JSONDecodeError, sqlite3.Error) as exc:
+        raise SnapshotError(f"invalid retained snapshot: {exc}") from exc
+
+
 def current_store_paths(project_root: Path) -> list[Path]:
     """Resolve validated current-snapshot DB paths, or return an empty list."""
     base = project_root / ".codess"
@@ -221,34 +299,10 @@ def current_store_paths(project_root: Path) -> list[Path]:
         manifest_path = snapshot / "manifest.json"
         if _sha256(manifest_path) != current["manifest_sha256"]:
             raise SnapshotError("current snapshot manifest hash mismatch")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest["format_id"] != FORMAT_ID or manifest["format_version"] != FORMAT_VERSION:
-            raise SnapshotError("current snapshot format is unsupported")
-        if manifest.get("package_digest") != verify_package():
-            raise SnapshotError("current snapshot CoSchema package digest mismatch")
-        raw_manifest = snapshot / "raw-manifest.jsonl"
-        if _sha256(raw_manifest) != manifest.get("raw_manifest_sha256"):
-            raise SnapshotError("current snapshot raw manifest hash mismatch")
-        paths = []
-        for name, entry in manifest["stores"].items():
-            path = snapshot / name
-            if _sha256(path) != entry["sha256"]:
-                raise SnapshotError(f"current store hash mismatch: {name}")
-            conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
-            try:
-                require_store(conn, write=False)
-                meta = dict(conn.execute("SELECT key, value FROM store_meta"))
-                if meta.get("snapshot_id") != manifest.get("snapshot_id"):
-                    raise SnapshotError(f"current store snapshot identity mismatch: {name}")
-                if meta.get("package_digest") != manifest.get("package_digest"):
-                    raise SnapshotError(f"current store package digest mismatch: {name}")
-                if _logical_counts(path) != entry.get("counts"):
-                    raise SnapshotError(f"current store logical counts mismatch: {name}")
-            finally:
-                conn.close()
-            paths.append(path)
-        return sorted(paths)
+        if snapshot.name != current["snapshot_id"]:
+            raise SnapshotError("current snapshot path and identity disagree")
+        return snapshot_store_paths(project_root, current["snapshot_id"])
     except SnapshotError:
         raise
-    except (OSError, KeyError, json.JSONDecodeError, sqlite3.Error) as exc:
+    except (OSError, KeyError, json.JSONDecodeError) as exc:
         raise SnapshotError(f"invalid current snapshot pointer: {exc}") from exc

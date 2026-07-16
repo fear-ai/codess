@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
-from codess.sanitize import apply_sanitization
+from codess.content_processing import apply_processing
 
 log = logging.getLogger(__name__)
 
@@ -389,11 +389,30 @@ def process_db(
             timestamp = _bubble_timestamp(item[1])
             return timestamp is None, timestamp or 0, item[0]
 
+        canonical: dict[tuple[object, str], tuple[str, dict]] = {}
+        without_server_identity: list[tuple[str, dict]] = []
+        duplicate_count = 0
+        for item in bubbles:
+            server_bubble_id = item[1].get("serverBubbleId")
+            if not server_bubble_id:
+                without_server_identity.append(item)
+                continue
+            key = (item[1].get("type"), str(server_bubble_id))
+            previous = canonical.get(key)
+            if previous is None or sort_key(item) < sort_key(previous):
+                canonical[key] = item
+            if previous is not None:
+                duplicate_count += 1
+        if duplicate_count and diagnostics is not None:
+            diagnostics["duplicate_records"] = (
+                diagnostics.get("duplicate_records", 0) + duplicate_count
+            )
+        bubbles = without_server_identity + list(canonical.values())
         bubbles.sort(key=sort_key)
         for bubble_id, data in bubbles:
             events = list(
                 _bubble_to_events(
-                    composer_id, bubble_id, data, source_file, redact_enabled
+                    composer_id, bubble_id, data, source_file, opts
                 )
             )
             if not events and diagnostics is not None:
@@ -436,13 +455,14 @@ def _bubble_to_events(
     bubble_id: str,
     data: dict,
     source_file: str,
-    redact: bool,
+    opts: dict | bool,
 ) -> Iterator[dict]:
     """Convert bubble to normalized event(s). Yields 0 or more events."""
     msg_type = data.get("type", 0)
     event_id = f"{composer_id}:{bubble_id}"
+    if isinstance(opts, bool):
+        opts = {"redact": opts}
     text = data.get("text") or ""
-    text = apply_sanitization(text, redact)
     timestamp = _bubble_timestamp(data)
 
     def base_ev(etype: str, subtype: str, role: str, content: str, content_len: int):
@@ -466,23 +486,60 @@ def _bubble_to_events(
         }
 
     if msg_type == 1:
+        text = apply_processing(
+            text, opts, vendor="Cursor", record_type="bubble.user",
+            event_kind="message.prompt", phase="pre",
+        )
+        if text is None:
+            return
         subtype = "slash_command" if text.strip().startswith("/") else "prompt"
         truncated, content_len = _truncate(text, TRUNCATE_PROMPT)
+        truncated = apply_processing(
+            truncated, opts, vendor="Cursor", record_type="bubble.user",
+            event_kind="message.prompt", phase="post",
+        )
+        if truncated is None:
+            return
         yield base_ev("user_message", subtype, "user", truncated, content_len)
         return
 
     if msg_type == 2:
-        truncated, content_len = _truncate(text, TRUNCATE_RESPONSE)
-        subtype = "response" if text.strip() else "dialog"
-        yield base_ev("assistant_message", subtype, "assistant", truncated, content_len)
+        if text.strip():
+            text = apply_processing(
+                text, opts, vendor="Cursor", record_type="bubble.assistant",
+                event_kind="message.response", phase="pre",
+            )
+        if text and text.strip():
+            truncated, content_len = _truncate(text, TRUNCATE_RESPONSE)
+            truncated = apply_processing(
+                truncated, opts, vendor="Cursor", record_type="bubble.assistant",
+                event_kind="message.response", phase="post",
+            )
+            if truncated is None:
+                return
+            yield base_ev(
+                "assistant_message", "response", "assistant",
+                truncated, content_len,
+            )
 
         tool_results = data.get("toolResults") or []
         for i, tr in enumerate(tool_results):
             tname = tr.get("toolName") or "unknown"
             result = tr.get("result")
             result_str = str(result) if result is not None else ""
-            result_str = apply_sanitization(result_str, redact)
+            result_str = apply_processing(
+                result_str, opts, vendor="Cursor", record_type="tool_result",
+                event_kind="tool.result", phase="pre",
+            )
+            if result_str is None:
+                continue
             ttrunc, tlen = _truncate(result_str, TRUNCATE_TOOL_RESULT)
+            ttrunc = apply_processing(
+                ttrunc, opts, vendor="Cursor", record_type="tool_result",
+                event_kind="tool.result", phase="post",
+            )
+            if ttrunc is None:
+                continue
             ev = base_ev("user_message", "tool_result", "user", ttrunc, tlen)
             ev["event_id"] = f"{event_id}:tr{i}"
             ev["tool_name"] = tname

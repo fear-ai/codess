@@ -184,7 +184,26 @@ def get_cursor_workspace_ids(project_root: Path) -> list[str]:
                 workspace_ids.append(hash_dir.name)
         except (json.JSONDecodeError, OSError):
             continue
-    return sorted(workspace_ids)
+    link_path = project_root / ".codess" / "source-links.json"
+    if link_path.exists():
+        try:
+            links = json.loads(link_path.read_text(encoding="utf-8"))
+            if links.get("format") != "codess.source-links/1":
+                raise ValueError("unsupported source-link format")
+            for link in links.get("links") or []:
+                if not isinstance(link, dict):
+                    continue
+                identity = link.get("source_identity") or {}
+                workspace_id = identity.get("workspace_id") if isinstance(identity, dict) else None
+                if (
+                    link.get("source_system_id") == "cursor.composer"
+                    and link.get("selection_state") == "approved"
+                    and workspace_id
+                ):
+                    workspace_ids.append(str(workspace_id))
+        except (OSError, json.JSONDecodeError, ValueError, AttributeError) as exc:
+            log.warning("Cannot read Cursor source links from %s: %s", link_path, exc)
+    return sorted(set(workspace_ids))
 
 
 # --- CLI: bool merge, roots, run options (merged from former cli_options.py) ---
@@ -331,10 +350,15 @@ class IngestRunOptions:
     debug: bool
     redact: bool
     raw_mode: str
+    strict_mapping: bool
+    content_policy: str | None
 
 
 def build_ingest_run_options(args: Any) -> IngestRunOptions:
-    from codess.config import DEBUG, FORCE, INGEST_REDACT, MIN_SIZE, RAW_MODE, STOP
+    from codess.config import (
+        CONTENT_POLICY, DEBUG, FORCE, INGEST_REDACT, MIN_SIZE, RAW_MODE,
+        STOP, STRICT_MAPPING,
+    )
 
     raw_ms = getattr(args, "min_size", None)
     # Do not use `or MIN_SIZE`: --min-size 0 is valid (falsy int).
@@ -347,6 +371,8 @@ def build_ingest_run_options(args: Any) -> IngestRunOptions:
         debug=flag_or_env(args, "debug", DEBUG),
         redact=flag_or_env(args, "redact", INGEST_REDACT),
         raw_mode=str(getattr(args, "raw_mode", None) or RAW_MODE).lower(),
+        strict_mapping=flag_or_env(args, "strict_mapping", STRICT_MAPPING),
+        content_policy=getattr(args, "content_policy", None) or CONTENT_POLICY,
     )
 
 
@@ -462,6 +488,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="ingest: raw evidence mode [CODESS_RAW_MODE] (default reference)",
     )
+    p.add_argument(
+        "--strict-mapping",
+        action="store_true",
+        help="ingest: fail a source on unsupported/lossy records [CODESS_STRICT_MAPPING]",
+    )
+    p.add_argument(
+        "--content-policy",
+        type=str,
+        metavar="JSON",
+        default=None,
+        help="ingest: scoped content pre/post-processing policy [CODESS_CONTENT_POLICY]",
+    )
 
     p.add_argument(
         "--tool",
@@ -544,6 +582,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--artifacts",
         action="store_true",
         help="query: correlate artifact evidence across sessions and vendors",
+    )
+    p.add_argument(
+        "--snapshot-id",
+        help="query: select one retained snapshot (requires exactly one project)",
+    )
+    p.add_argument(
+        "--snapshot-package-policy",
+        choices=("exact", "read-compatible"),
+        default="exact",
+        help="query: require matching package, or explicitly allow same-format historical reads",
     )
     return p
 

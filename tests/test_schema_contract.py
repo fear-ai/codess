@@ -87,6 +87,20 @@ def test_writer_refuses_legacy_store_but_reader_can_identify_it(tmp_path):
         init_db(path)
 
 
+def test_writer_refuses_store_from_another_released_package(tmp_path):
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "UPDATE store_meta SET value=? WHERE key='package_digest'", ("0" * 64,)
+    )
+    conn.commit()
+    assert require_store(conn, write=False) == FORMAT_VERSION
+    with pytest.raises(UnsupportedStoreError, match="rebuild"):
+        require_store(conn, write=True)
+    conn.close()
+
+
 def test_null_vendor_times_do_not_use_source_mtime(tmp_path):
     session = load_fixture("edge", "null-session-times.json")
     path = tmp_path / "store.db"
@@ -135,6 +149,51 @@ def test_event_graph_tools_and_artifacts_are_materialized(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM event_artifacts").fetchone()[0] == 1
     call = conn.execute("SELECT source_status, normalized_status FROM tool_invocations").fetchone()
     assert tuple(call) == ("completed", "succeeded")
+    replace_session_events(conn, session, events, session_id="s1")
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM event_artifacts").fetchone()[0] == 1
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO artifacts(project_id, artifact_kind, relative_path)
+            SELECT project_id, artifact_kind, relative_path FROM artifacts LIMIT 1
+            """
+        )
+    conn.close()
+
+
+def test_artifact_outside_project_uses_uri_and_explicit_scope(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "shared" / "README.md"
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = connect(path)
+    replace_session_events(
+        conn,
+        {
+            "id": "s1", "source": "Claude", "type": "Code",
+            "project_path": str(project),
+        },
+        [{
+            "session_id": "s1", "event_id": "read", "event_type": "tool_call",
+            "role": "assistant", "tool_name": "Read",
+            "tool_input": json.dumps({"path": "../shared/README.md"}),
+            "metadata": '{"call_id":"c1"}',
+        }],
+        session_id="s1",
+    )
+    conn.commit()
+    artifact = conn.execute(
+        "SELECT relative_path, observed_absolute_path, uri, metadata FROM artifacts"
+    ).fetchone()
+    assert artifact["relative_path"] is None
+    assert artifact["observed_absolute_path"] == str(outside)
+    assert artifact["uri"] == outside.as_uri()
+    assert json.loads(artifact["metadata"]) == {
+        "path_scope": "external", "source_path": "../shared/README.md"
+    }
     conn.close()
 
 
@@ -159,6 +218,90 @@ def test_unlinked_tool_result_is_preserved_with_diagnostic(tmp_path):
         "SELECT level, reason_code FROM mapping_diagnostics"
     ).fetchone()
     assert tuple(diagnostic) == ("field", "missing_tool_call_id")
+    conn.close()
+
+
+def test_claude_source_role_hazard_keeps_denial_as_tool_outcome(tmp_path):
+    fixture = load_fixture("hazard", "claude-error-tool-results.json")
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = connect(path)
+    replace_session_events(
+        conn, fixture["session"], fixture["events"],
+        session_id=fixture["session"]["id"],
+    )
+    conn.commit()
+    semantic = conn.execute(
+        "SELECT event_kind, actor_kind, content_role, normalized_status "
+        "FROM events WHERE event_id='denied'"
+    ).fetchone()
+    expected = fixture["expected_result"]
+    assert tuple(semantic) == tuple(
+        expected[key]
+        for key in ("event_kind", "actor_kind", "content_role", "normalized_status")
+    )
+    result = conn.execute(
+        "SELECT is_error, normalized_status FROM tool_results"
+    ).fetchone()
+    assert tuple(result) == (expected["is_error"], expected["normalized_status"])
+    assert conn.execute("SELECT COUNT(*) FROM interactions").fetchone()[0] == 0
+    conn.close()
+
+
+def test_failed_codex_tool_call_remains_an_invocation(tmp_path):
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = connect(path)
+    replace_session_events(
+        conn,
+        {"id": "s1", "source": "Codex", "type": "Code"},
+        [{
+            "session_id": "s1", "event_id": "call", "event_type": "tool_call",
+            "subtype": "tool_failure", "role": "assistant", "tool_name": "exec",
+            "metadata": '{"call_id":"c1","status":"failed"}',
+        }],
+        session_id="s1",
+    )
+    conn.commit()
+    semantic = conn.execute(
+        "SELECT event_kind, actor_kind, content_role, normalized_status FROM events"
+    ).fetchone()
+    assert tuple(semantic) == ("tool.call", "model", "tool_request", "failed")
+    assert conn.execute("SELECT COUNT(*) FROM tool_invocations").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM tool_results").fetchone()[0] == 0
+    conn.close()
+
+
+def test_cursor_turns_are_inferred_per_prompt_interaction(tmp_path):
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = connect(path)
+    events = [
+        {"session_id": "c1", "event_id": "pre", "event_type": "assistant_message", "role": "assistant"},
+        {"session_id": "c1", "event_id": "p1", "event_type": "user_message", "subtype": "prompt", "role": "user"},
+        {"session_id": "c1", "event_id": "a1", "event_type": "assistant_message", "role": "assistant"},
+        {"session_id": "c1", "event_id": "a2", "event_type": "assistant_message", "role": "assistant"},
+        {"session_id": "c1", "event_id": "p2", "event_type": "user_message", "subtype": "prompt", "role": "user"},
+        {"session_id": "c1", "event_id": "a3", "event_type": "assistant_message", "role": "assistant"},
+    ]
+    replace_session_events(
+        conn, {"id": "c1", "source": "Cursor", "type": "IDE"}, events,
+        session_id="c1",
+    )
+    conn.commit()
+    turns = conn.execute(
+        "SELECT interaction_id, source_turn_id, boundary_source FROM model_turns ORDER BY sequence_no"
+    ).fetchall()
+    assert [tuple(row) for row in turns] == [
+        ("c1:interaction:1", None, "inferred"),
+        ("c1:interaction:2", None, "inferred"),
+    ]
+    assignments = dict(
+        conn.execute("SELECT event_id, model_turn_id FROM events")
+    )
+    assert assignments["pre"] is None
+    assert assignments["a1"] == assignments["a2"]
+    assert assignments["a3"] != assignments["a2"]
     conn.close()
 
 

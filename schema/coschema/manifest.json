@@ -14,11 +14,11 @@
     },
     "sqlite_schema": {
       "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "eb85428cde2d6b0e0911c73538fd6d63aa119f8681e65698a8d09a978c850e28"
+      "sha256": "ff33675514b8afdb0326703155d1e596ff3557e38aad9b4ad826aeea9fc3afb5"
     },
     "mapping_claude": {
       "path": "schema/mappings/claude.json",
-      "sha256": "17defdea089221b4dd796728dfbc7f30b6506bc6a999324b0ec4c0297a4114f2"
+      "sha256": "fccfd738b9cb1eca4c0a2eb91c8bdb4bb9aea38eb2e393465b144eac180f8152"
     },
     "mapping_codex": {
       "path": "schema/mappings/codex.json",
@@ -26,7 +26,7 @@
     },
     "mapping_cursor": {
       "path": "schema/mappings/cursor.json",
-      "sha256": "5772cdf8d9b97779eb92c2d39e2811eae07baf74cd0d4c2b8e704098070af0bc"
+      "sha256": "5aa117726498c3fc112e830228e9a5f6fccf81b135ff8dd2ec462cf2514c3e5f"
     },
     "fixture_compatibility_store_meta_v2": {
       "path": "schema/coschema/fixtures/compatibility/store-meta-v2.json",
@@ -35,6 +35,18 @@
     "fixture_edge_null_session_times": {
       "path": "schema/coschema/fixtures/edge/null-session-times.json",
       "sha256": "39c2a84e683860d3f8e5ff01795bd0144d3f0bda752d38d1e215dbad577633a1"
+    },
+    "fixture_golden_cross_vendor_artifact": {
+      "path": "schema/coschema/fixtures/golden/cross-vendor-artifact.json",
+      "sha256": "32c745e2c2dc2df70d04693e63ec8a3925e0248a62a729bb7a5486f30f67961b"
+    },
+    "fixture_hazard_claude_error_tool_results": {
+      "path": "schema/coschema/fixtures/hazard/claude-error-tool-results.json",
+      "sha256": "8c9168d42f701c3e338a732e681083fb09ff36e9570bcc363d457839c91db4a9"
+    },
+    "fixture_hazard_cursor_nonmessage_copies": {
+      "path": "schema/coschema/fixtures/hazard/cursor-nonmessage-copies.json",
+      "sha256": "87df2ba00329c95e37b60dcf8118f2a9218ace1525c7dd77c8b9ef30e2b04452"
     },
     "fixture_maximal_event": {
       "path": "schema/coschema/fixtures/maximal/event.json",

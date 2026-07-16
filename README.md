@@ -27,6 +27,19 @@ python -m main query --dir /path/to/project --audit --limit 100
 python -m main query --dir /path/to/project --diagnostics
 python -m main query --dir /path/to/project --artifacts
 python -m main query --dir /path/to/project-a --dir /path/to/project-b --stats
+python -m main query --dir /path/to/project --snapshot-id SNAPSHOT_ID --stats
+
+# Verify an existing immutable baseline against an explicit acceptance policy
+python tools/validate_snapshot.py --project /path/to/project \
+  --policy catalog/policies/project.json --raw-store-root ~/.codess/raw \
+  --query-smoke --report /tmp/project-validation.json
+
+# Rebuild twice, require a semantic fixed point, then approve atomically
+python tools/apply_and_verify.py --project /path/to/project --source all \
+  --raw-mode capture --registry ~/.codess \
+  --policy catalog/policies/project.json --repeat \
+  --approve-catalog catalog/approved-baselines.json \
+  --report /tmp/project-apply.json
 ```
 
 ---
@@ -38,6 +51,10 @@ python -m main query --dir /path/to/project-a --dir /path/to/project-b --stats
 python -m main ingest --dir /path/to/project --source cc
 python -m main ingest --dir /path/to/project --source cursor
 python -m main ingest --dir /path/to/project --raw-mode capture
+
+# Fail on lossy source mappings and apply an optional scoped content policy
+python -m main ingest --dir /path/to/project --strict-mapping \
+  --content-policy schema/content-policy.example.json
 
 # Show session content
 python -m main query --dir /path/to/project -sess 1 --show pr
@@ -67,3 +84,19 @@ merged updates from **scan** (index metrics), **ingest** (store stats), **query
 --stats**; optional **`--registry PATH`** overrides the directory. Subprocess
 tests should set **`CODESS_REGISTRY`** to a temp dir so runs do not touch your
 home tree.
+
+The acceptance tools process exactly one project per invocation. Validation is
+read-only. Apply-and-verify refuses unversioned legacy stores unless the
+operator explicitly requests preservation, performs two forced ingests when
+`--repeat` is set, compares source revision identities and a canonical logical
+digest (not SQLite bytes), exercises every version-aware query path, and updates
+the approved-baseline catalog only after all gates pass. A reference-only raw
+policy remains an explicit reproducibility limitation rather than being called
+an exact capture.
+
+Retained snapshot queries require an explicit immutable ID. They require the
+recorded package digest by default. `--snapshot-package-policy read-compatible`
+allows a same-format historical read only after all retained hashes and the
+current database contract pass; it prints a semantic-parity warning and never
+updates current registry counts. The frozen reviewed set is checked with
+`python tools/verify_reviewed_baselines.py`.

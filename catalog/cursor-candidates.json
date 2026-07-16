@@ -1,0 +1,88 @@
+{
+  "catalog_format": "codess.cursor-candidates/1",
+  "observation_basis": "Cursor composerHeaders joined first to workspaceStorage mappings, then to structured composerData workspaceIdentifier and trackedGitRepos fields; normalized counts apply stable serverBubbleId deduplication and message filtering",
+  "store_summary": {
+    "composer_headers": 50,
+    "normalized_sessions": 50,
+    "normalized_events": 4221,
+    "duplicate_raw_bubble_copies": 45924,
+    "ignored_nonmessage_records": 29844,
+    "malformed_or_null_records": 25
+  },
+  "candidates": [
+    {
+      "path": "/Users/walter/Work/ZK/Zero400",
+      "identity_basis": "local file workspace and tracked Git repository",
+      "composer_headers": 18,
+      "normalized_sessions": 18,
+      "normalized_events": 3224,
+      "normalized_prompts": 642,
+      "normalized_responses": 2582,
+      "observed_tool_result_records": 0,
+      "selection_state": "approved",
+      "reason": "Largest attributable Cursor corpus and active Claude overlap"
+    },
+    {
+      "path": "/Users/walter/Work/ZK/zerowalletmac",
+      "source_project_path": "/Users/walter/Work/ZK/zerowallet400",
+      "workspace_id": "b4ce84bb8a916dc6b4eb6b4e03bafb56",
+      "identity_basis": "approved project-local source link backed by Cursor workspace identity, branch history, and overlapping project files",
+      "normalized_sessions": 2,
+      "normalized_events": 114,
+      "normalized_prompts": 37,
+      "normalized_responses": 77,
+      "observed_tool_result_records": 0,
+      "selection_state": "imported_with_limitations",
+      "reason": "Compact renamed-path case and current Claude/Cursor overlap"
+    },
+    {
+      "path": "/Users/walter/Work/Spank/Logs",
+      "workspace_id": "e15dfe2f29fec656024c76d3166d3b28",
+      "identity_basis": "Cursor composerData remote workspaceIdentifier; matching local directory exists",
+      "normalized_sessions": 2,
+      "normalized_events": 256,
+      "normalized_prompts": 84,
+      "normalized_responses": 172,
+      "selection_state": "priority_candidate",
+      "reason": "Diverse non-repository log-analysis workload; requires explicit remote-to-local source link"
+    },
+    {
+      "path": "/Users/walter/Work/Spank/Logs/spLogs",
+      "workspace_id": "e754b451838565a4f4a18dec2e3cd5e5",
+      "identity_basis": "Cursor composerData remote workspaceIdentifier; matching local directory exists",
+      "normalized_sessions": 2,
+      "normalized_events": 225,
+      "normalized_prompts": 77,
+      "normalized_responses": 148,
+      "selection_state": "priority_candidate",
+      "reason": "Focused log-analysis subset suitable for project-versus-subdirectory attribution tests"
+    },
+    {
+      "path": "/home/ubuntu/Work/Spank/LogsLaz24",
+      "workspace_id": "f2ba3d13f5bc01ed196d53f3cab57ee2",
+      "identity_basis": "Cursor composerData remote workspaceIdentifier only",
+      "normalized_sessions": 1,
+      "normalized_events": 120,
+      "normalized_prompts": 39,
+      "normalized_responses": 81,
+      "selection_state": "needs_review",
+      "reason": "Useful remote-only case, but no verified local project identity"
+    }
+  ],
+  "header_only": [
+    {"path": "/Users/walter/Work/Spank/HECpoc", "composer_headers": 2},
+    {"path": "/Users/walter/Work/Spank/spank-rs/perf", "composer_headers": 2}
+  ],
+  "direct_workspace_traces_without_headers": [
+    "/Users/walter/Work/Claude/CContext",
+    "/Users/walter/Work/Github/Schema",
+    "/Users/walter/Work/Github/skip",
+    "/Users/walter/Work/ZK/zerowalletmac",
+    "/Users/walter/Work/ZK/zerowalletmac/src"
+  ],
+  "unattributed": {
+    "normalized_sessions": 14,
+    "normalized_events": 393,
+    "rule": "Do not import until a structured workspace identity or approved source link exists"
+  }
+}

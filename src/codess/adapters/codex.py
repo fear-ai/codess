@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Iterator
 
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
-from codess.sanitize import apply_sanitization, sanitize_value
+from codess.sanitize import sanitize_value
+from codess.content_processing import apply_processing
 
 log = logging.getLogger(__name__)
 
@@ -183,11 +184,23 @@ def process_file(
                 role = payload.get("role", "")
                 content = payload.get("content") or []
                 text = _extract_text_from_content(content)
-                text = apply_sanitization(text, redact_enabled)
+                text = apply_processing(
+                    text, opts, vendor="Codex", record_type="message",
+                    event_kind="message.prompt" if role == "user" else "message.response",
+                    phase="pre",
+                )
+                if text is None:
+                    continue
 
                 if role == "user":
                     subtype = "slash_command" if text.strip().startswith("/") else "prompt"
                     truncated, content_len = _truncate(text, TRUNCATE_PROMPT)
+                    truncated = apply_processing(
+                        truncated, opts, vendor="Codex", record_type="message",
+                        event_kind="message.prompt", phase="post",
+                    )
+                    if truncated is None:
+                        continue
                     yield {
                         "session_id": session_id,
                         "event_id": str(line_num),
@@ -208,6 +221,12 @@ def process_file(
                     }
                 elif role == "assistant":
                     truncated, content_len = _truncate(text, TRUNCATE_RESPONSE)
+                    truncated = apply_processing(
+                        truncated, opts, vendor="Codex", record_type="message",
+                        event_kind="message.response", phase="post",
+                    )
+                    if truncated is None:
+                        continue
                     yield {
                         "session_id": session_id,
                         "event_id": str(line_num),
@@ -286,8 +305,19 @@ def process_file(
                     text = output
                 else:
                     text = json.dumps(output, ensure_ascii=False)
-                text = apply_sanitization(text, redact_enabled)
+                text = apply_processing(
+                    text, opts, vendor="Codex", record_type="tool_result",
+                    event_kind="tool.result", phase="pre",
+                )
+                if text is None:
+                    continue
                 truncated, content_len = _truncate(text, TRUNCATE_TOOL_RESULT)
+                truncated = apply_processing(
+                    truncated, opts, vendor="Codex", record_type="tool_result",
+                    event_kind="tool.result", phase="post",
+                )
+                if truncated is None:
+                    continue
                 yield {
                     "session_id": session_id,
                     "event_id": str(line_num),
@@ -323,8 +353,19 @@ def process_file(
                     )
                 continue
             content = str(payload.get("reason") or payload.get("info") or "turn aborted")
-            content = apply_sanitization(content, redact_enabled)
+            content = apply_processing(
+                content, opts, vendor="Codex", record_type="turn_aborted",
+                event_kind="lifecycle.abort", phase="pre",
+            )
+            if content is None:
+                continue
             truncated, content_len = _truncate(content, 500)
+            truncated = apply_processing(
+                truncated, opts, vendor="Codex", record_type="turn_aborted",
+                event_kind="lifecycle.abort", phase="post",
+            )
+            if truncated is None:
+                continue
             ev = {
                 "session_id": session_id,
                 "event_id": str(line_num),

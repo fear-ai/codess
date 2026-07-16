@@ -221,6 +221,45 @@ class TestGetCursorPaths:
         monkeypatch.setattr("codess.project.CURSOR_DATA", base)
         assert get_cursor_global_db() == db
 
+    def test_approved_project_source_link_adds_renamed_cursor_workspace(
+        self, tmp_path, monkeypatch
+    ):
+        base = tmp_path / "cursor" / "User"
+        (base / "workspaceStorage").mkdir(parents=True)
+        monkeypatch.setattr("codess.project.CURSOR_DATA", base)
+        project = tmp_path / "renamed-project"
+        links = project / ".codess" / "source-links.json"
+        links.parent.mkdir(parents=True)
+        links.write_text(json.dumps({
+            "format": "codess.source-links/1",
+            "links": [{
+                "source_system_id": "cursor.composer",
+                "source_identity": {"workspace_id": "workspace-old"},
+                "relation_kind": "renamed_from",
+                "source_project_path": str(tmp_path / "old-name"),
+                "selection_state": "approved",
+            }],
+        }))
+        assert get_cursor_workspace_ids(project) == ["workspace-old"]
+
+    def test_unapproved_or_wrong_vendor_source_links_are_not_used(
+        self, tmp_path, monkeypatch
+    ):
+        base = tmp_path / "cursor" / "User"
+        (base / "workspaceStorage").mkdir(parents=True)
+        monkeypatch.setattr("codess.project.CURSOR_DATA", base)
+        project = tmp_path / "project"
+        links = project / ".codess" / "source-links.json"
+        links.parent.mkdir(parents=True)
+        links.write_text(json.dumps({
+            "format": "codess.source-links/1",
+            "links": [
+                {"source_system_id": "cursor.composer", "source_identity": {"workspace_id": "pending"}, "selection_state": "needs_review"},
+                {"source_system_id": "openai.codex", "source_identity": {"workspace_id": "wrong"}, "selection_state": "approved"},
+            ],
+        }))
+        assert get_cursor_workspace_ids(project) == []
+
     def test_workspace_dbs_empty_when_no_match(self, tmp_path, monkeypatch):
         monkeypatch.setattr("codess.project.CURSOR_DATA", tmp_path / "cursor")
         (tmp_path / "cursor" / "workspaceStorage").mkdir(parents=True)

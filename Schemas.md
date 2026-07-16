@@ -467,17 +467,26 @@ Implemented: the v2 entity contract (`contract.json`), released manifest and
 hash checks, fixed application/user IDs, canonical DDL, common fixtures,
 mechanically checked Claude/Codex/Cursor profiles, fail-closed evolution gate,
 mapping traces/field diagnostics, strict store validation, raw capture, and
-immutable snapshot promotion.
+immutable snapshot promotion. Per-project acceptance policies now automate
+package/store/raw checks, SQLite invariants, diagnostic limits, fixed-point
+semantic rebuilds, query smoke tests, and atomic approval after success.
+
+The first reviewed set, coverage matrix, Claude actor and Cursor envelope/copy
+hazard fixtures, cross-vendor artifact golden fixture, explicit external-file
+identity, CI-safe three-vendor policy, and historical reader boundary are now
+implemented. See `CompatibilityReview.md`.
 
 Next, in order:
 
-1. Add vendor hazard/golden fixtures and fixed-point re-ingestion tests.
-2. Assemble the bounded three-vendor compatibility corpus from the review
-   catalog, including cross-vendor artifact evidence.
-3. Validate old read-only baselines, rebuild behavior, diagnostics, artifact
-   correlation, model configurations, and mixed ordering against that corpus.
-4. Freeze and retain the first manually reviewed v2 snapshot before broad
-   historical ingestion.
+1. Correlate external artifact URIs to known catalog roots with explicit
+   evidence and confidence.
+2. Resolve the Codex parent-session evidence question without inferred links.
+3. Monitor for a modern Cursor tool-call/result shape; the current Zero400 and
+   zerowallet400 candidates contain no tool results.
+4. Add a real same-artifact multi-vendor corpus member or exact model settings
+   only when current source evidence supplies them.
+5. Verify the frozen set after source refreshes and replace it atomically when
+   a newly sampled set is accepted.
 
 The evolution gate should follow the contract rather than lead it. Building a
 generic schema-diff framework before CoSchema v2 semantics are fixed would

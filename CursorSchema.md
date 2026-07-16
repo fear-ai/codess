@@ -74,7 +74,7 @@ Fields relevant to normalization:
 
 | Field | Meaning | Codess status |
 |---|---|---|
-| `type` | `1` user, `2` assistant | Mapped to normalized roles |
+| `type` | `1` user, `2` assistant-shaped envelope | Mapped only when the record contains message or tool-result evidence |
 | `text` | Message body | Sanitized and truncated |
 | `createdAt` | ISO-8601 event timestamp | Primary normalized timestamp and sort key |
 | `timingInfo.clientStartTime` | Relative client timing, or an epoch value in some legacy shapes | Used only when it plausibly represents Unix seconds or milliseconds |
@@ -90,6 +90,15 @@ The adapter uses parsed `createdAt` for sorting and event timestamps. Numeric
 fallback values are accepted only when they plausibly represent Unix seconds or
 milliseconds; small relative values are rejected.
 
+The global database may repeat the same logical bubble under several local
+`bubbleId` keys. When `serverBubbleId` is present, Codess treats `(type,
+serverBubbleId)` as the stable identity within one composer and keeps the
+earliest observed copy. It does not deduplicate across composers or by content.
+Type-2 envelopes whose `text` is empty or whitespace-only are product/context
+state, not model messages; they emit no response event, although any
+`toolResults` are still normalized. The exact envelopes remain available under
+the selected raw-evidence policy.
+
 ## 4. Composer data
 
 `composerData:<composerId>` may include identity, title, model/mode, context,
@@ -100,6 +109,13 @@ also be null.
 decode/null status, a legacy `conversation` presence check, and selected possible
 workspace fields. It is a diagnostic probe, not part of scan or ingest.
 
+Newer composer data may carry stronger structured identity in
+`workspaceIdentifier.uri` and `trackedGitRepos[].repoPath`, including remote
+workspace URIs. These fields are useful for candidate review. They do not by
+themselves authorize mapping a remote or renamed workspace to a local project.
+Codess requires an approved project-local `.codess/source-links.json` entry for
+that case.
+
 Reliable content normalization currently comes from `bubbleId:*`; session and
 workspace metadata should come from `composerHeaders` when that table is
 available.
@@ -108,7 +124,7 @@ available.
 
 | Codess concept | Workspace DB | Global DB |
 |---|---|---|
-| Project | `workspace.json` folder | `composerHeaders.workspaceId` joined to a matching `workspace.json` |
+| Project | `workspace.json` folder | `composerHeaders.workspaceId` joined to a matching `workspace.json`, plus explicitly approved source links for renamed/remote identities |
 | Session | Distinct composer id with bubble rows | Same |
 | Event | Each decodable `bubbleId:*` row, plus derived tool-result events | Same |
 | Event timestamp | Parsed bubble `createdAt`, with epoch-only legacy fallback | Same |
@@ -159,6 +175,10 @@ mapped composer ids rather than decoding every bubble in the global database.
 
 - Global composers without a usable header/workspace mapping are excluded from
   project ingest.
+- Direct workspace traces can exist without composer headers, and newer
+  composer headers can exist without a surviving workspaceStorage mapping.
+  Candidate review should use structured composer identity; ambiguous paths
+  remain unattributed.
 - Scan time ranges remain incomplete when matching headers omit usable
   timestamps. Codess reports header/timestamp coverage in debug output and does
   not decode every bubble merely to improve scan dates.

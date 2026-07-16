@@ -364,7 +364,9 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
 
 def _event_semantics(event: dict[str, Any]) -> dict[str, str | None]:
     etype, subtype, role = event.get("event_type"), event.get("subtype"), event.get("role")
-    if subtype == "tool_result":
+    if etype != "tool_call" and subtype in {
+        "tool_result", "tool_failure", "permission_denied"
+    }:
         return {"event_kind": "tool.result", "actor_kind": "tool", "content_role": "tool_result", "origin_kind": "tool_generated"}
     if etype == "tool_call":
         return {"event_kind": "tool.call", "actor_kind": "model", "content_role": "tool_request", "origin_kind": "model_generated"}
@@ -379,6 +381,15 @@ def _event_semantics(event: dict[str, Any]) -> dict[str, str | None]:
     if role == "system":
         return {"event_kind": "message.context", "actor_kind": "harness", "content_role": "context", "origin_kind": "harness_injected"}
     return {"event_kind": "unknown", "actor_kind": "unknown", "content_role": "status", "origin_kind": "unknown"}
+
+
+def _resolved_event_semantics(event: dict[str, Any]) -> dict[str, str | None]:
+    """Prefer explicit adapter mappings, filling only absent common dimensions."""
+    inferred = _event_semantics(event)
+    return {
+        key: event.get(key) or inferred[key]
+        for key in ("event_kind", "actor_kind", "content_role", "origin_kind")
+    }
 
 
 def _normalized_status(event: dict[str, Any], metadata: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -405,7 +416,7 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
     ).fetchone()
     source_name = session["source"] if session else "Unknown"
     profile = _profile(source_name)
-    semantics = _event_semantics(event)
+    semantics = _resolved_event_semantics(event)
     metadata = _json_dict(event.get("metadata"))
     source_status, normalized_status = _normalized_status(event, metadata)
     trace = {
@@ -514,7 +525,9 @@ def _record_diagnostic(
 
 def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -> None:
     subtype = event.get("subtype")
-    if event.get("event_type") != "tool_call" and subtype != "tool_result":
+    result_subtypes = {"tool_result", "tool_failure", "permission_denied"}
+    is_result = event.get("event_type") != "tool_call" and subtype in result_subtypes
+    if event.get("event_type") != "tool_call" and not is_result:
         return
     session_id = str(event["session_id"])
     metadata = _json_dict(event.get("metadata"))
@@ -527,7 +540,7 @@ def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -
             source_field="call_id",
             detail="tool invocation/result cannot be correlated by a source identifier",
         )
-        if subtype == "tool_result":
+        if is_result:
             conn.execute(
                 """
                 INSERT INTO tool_results(
@@ -567,7 +580,7 @@ def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -
             event.get("timestamp") if event.get("event_type") == "tool_call" else None,
         ),
     )
-    if subtype == "tool_result":
+    if is_result:
         next_seq = conn.execute(
             "SELECT COALESCE(MAX(sequence_no), 0) + 1 FROM tool_results WHERE invocation_id=?",
             (invocation_id,),
@@ -612,44 +625,64 @@ def _record_artifact(conn: sqlite3.Connection, event: dict[str, Any], row_id: in
     ).fetchone()
     project_id = session["project_id"] if session else None
     project_path = session["project_path"] if session else None
-    absolute = os.path.abspath(os.path.expanduser(path)) if os.path.isabs(path) else (
-        os.path.abspath(os.path.join(project_path, path)) if project_path else None
+    absolute = os.path.realpath(os.path.expanduser(path)) if os.path.isabs(path) else (
+        os.path.realpath(os.path.join(project_path, path)) if project_path else None
     )
     relative = path
+    uri = None
+    artifact_metadata = None
     if absolute and project_path:
         try:
             relative = os.path.relpath(absolute, project_path)
         except ValueError:
             pass
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO artifacts(
-          project_id, artifact_kind, relative_path, observed_absolute_path)
-        VALUES (?, 'file', ?, ?)
-        """,
-        (project_id, relative, absolute),
-    )
+        if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+            uri = Path(absolute).as_uri()
+            relative = None
+            artifact_metadata = json.dumps(
+                {"path_scope": "external", "source_path": path},
+                sort_keys=True, separators=(",", ":"),
+            )
+    elif absolute:
+        uri = Path(absolute).as_uri()
+        relative = None
+        artifact_metadata = json.dumps(
+            {"path_scope": "external", "source_path": path},
+            sort_keys=True, separators=(",", ":"),
+        )
     artifact = conn.execute(
         """
         SELECT id FROM artifacts WHERE project_id IS ? AND artifact_kind='file'
-          AND relative_path IS ? AND uri IS NULL AND repository_object_id IS NULL
+          AND relative_path IS ? AND uri IS ? AND repository_object_id IS NULL
           AND content_sha256 IS NULL
         """,
-        (project_id, relative),
+        (project_id, relative, uri),
     ).fetchone()
-    if artifact:
-        tool = str(event.get("tool_name") or "").lower()
-        operation = "read" if tool in {"read", "grep", "glob"} else (
-            "modify" if tool in {"edit", "write"} else "mention"
-        )
-        conn.execute(
+    if artifact is None:
+        cursor = conn.execute(
             """
-            INSERT OR IGNORE INTO event_artifacts(
-              event_id, artifact_id, operation, evidence_source, confidence)
-            VALUES (?, ?, ?, 'tool_input', 1.0)
+            INSERT INTO artifacts(
+              project_id, artifact_kind, relative_path, observed_absolute_path,
+              uri, metadata)
+            VALUES (?, 'file', ?, ?, ?, ?)
             """,
-            (row_id, artifact[0], operation),
+            (project_id, relative, absolute, uri, artifact_metadata),
         )
+        artifact_id = int(cursor.lastrowid)
+    else:
+        artifact_id = int(artifact[0])
+    tool = str(event.get("tool_name") or "").lower()
+    operation = "read" if tool in {"read", "grep", "glob"} else (
+        "modify" if tool in {"edit", "write"} else "mention"
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO event_artifacts(
+          event_id, artifact_id, operation, evidence_source, confidence)
+        VALUES (?, ?, ?, 'tool_input', 1.0)
+        """,
+        (row_id, artifact_id, operation),
+    )
 
 
 def _prepare_event_groups(
@@ -658,6 +691,10 @@ def _prepare_event_groups(
     events: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     prepared: list[dict[str, Any]] = []
+    session_row = conn.execute(
+        "SELECT source FROM sessions WHERE id=?", (session_id,)
+    ).fetchone()
+    session_source = session_row[0] if session_row else "Unknown"
     interaction_counter = 0
     model_turn_counter = 0
     current_interaction: str | None = None
@@ -665,7 +702,7 @@ def _prepare_event_groups(
     for sequence, original in enumerate(events, 1):
         event = dict(original)
         event["sequence_no"] = sequence
-        semantics = _event_semantics(event)
+        semantics = _resolved_event_semantics(event)
         is_prompt = (
             semantics["actor_kind"] == "human"
             and event.get("subtype") not in {"tool_result"}
@@ -684,7 +721,15 @@ def _prepare_event_groups(
             )
         event["interaction_id"] = current_interaction
         if semantics["actor_kind"] == "model":
-            record_key = str(event.get("event_id") or sequence).split(":", 1)[0]
+            if session_source == "Cursor":
+                if current_interaction is None:
+                    prepared.append(event)
+                    continue
+                record_key = current_interaction
+                boundary_source = "inferred"
+            else:
+                record_key = str(event.get("event_id") or sequence).split(":", 1)[0]
+                boundary_source = "mapping"
             turn_id = turn_by_record.get(record_key)
             if turn_id is None:
                 model_turn_counter += 1
@@ -695,9 +740,14 @@ def _prepare_event_groups(
                     INSERT INTO model_turns(
                       id, session_id, interaction_id, sequence_no, source_turn_id,
                       boundary_source)
-                    VALUES (?, ?, ?, ?, ?, 'mapping')
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (turn_id, session_id, current_interaction, model_turn_counter, record_key),
+                    (
+                        turn_id, session_id, current_interaction,
+                        model_turn_counter,
+                        None if session_source == "Cursor" else record_key,
+                        boundary_source,
+                    ),
                 )
             event["model_turn_id"] = turn_id
         prepared.append(event)
@@ -713,6 +763,10 @@ def replace_session_events(
 ) -> None:
     """Replace one transcript-backed session inside the caller's transaction."""
     conn.execute("DELETE FROM events WHERE session_id=?", (session_id,))
+    conn.execute(
+        "DELETE FROM artifacts WHERE NOT EXISTS "
+        "(SELECT 1 FROM event_artifacts WHERE event_artifacts.artifact_id=artifacts.id)"
+    )
     conn.execute("DELETE FROM tool_invocations WHERE session_id=?", (session_id,))
     conn.execute("DELETE FROM model_turns WHERE session_id=?", (session_id,))
     conn.execute("DELETE FROM interactions WHERE session_id=?", (session_id,))
@@ -729,7 +783,7 @@ def replace_session_events(
     for event in _prepare_event_groups(conn, session_id, events):
         event["source_id"] = source_id
         row_id = upsert_event(conn, event)
-        if _event_semantics(event)["event_kind"] == "unknown":
+        if _resolved_event_semantics(event)["event_kind"] == "unknown":
             _record_diagnostic(
                 conn, event, row_id,
                 reason_code="unmapped_event_semantics",

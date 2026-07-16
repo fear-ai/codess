@@ -140,7 +140,44 @@ class RawStore:
         )
         return record
 
+    def observe_related(
+        self,
+        path: Path,
+        *,
+        source_system_id: str,
+        storage_format: str,
+        mode: str,
+        parent_source_locator: str,
+        relation_kind: str,
+    ) -> dict[str, Any]:
+        """Observe external content as a linked raw revision.
+
+        The object remains exact raw evidence.  ``record_id`` identifies the
+        relationship record, not the content object, so the same object may be
+        linked from more than one transcript without losing provenance.
+        """
+        record = self.observe(
+            path,
+            source_system_id=source_system_id,
+            storage_format=storage_format,
+            mode=mode,
+        )
+        identity = "\0".join((
+            parent_source_locator,
+            relation_kind,
+            str(record.get("source_locator") or ""),
+            str(record.get("source_revision_id") or ""),
+        ))
+        record.update({
+            "record_type": "related_content_revision",
+            "record_id": "rawrel:sha256:" + hashlib.sha256(
+                identity.encode("utf-8")
+            ).hexdigest(),
+            "parent_source_locator": parent_source_locator,
+            "relation_kind": relation_kind,
+        })
+        return record
+
     def resolve(self, record: dict[str, Any]) -> Path | None:
         relpath = record.get("object_relpath")
         return self.root / relpath if relpath else None
-

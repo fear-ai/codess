@@ -192,6 +192,11 @@ def require_store(
     meta = dict(conn.execute("SELECT key, value FROM store_meta"))
     if meta.get("format_id") != FORMAT_ID or int(meta.get("format_version", -1)) != version:
         raise UnsupportedStoreError("store_meta disagrees with SQLite format identity")
+    if write and meta.get("package_digest") != verify_package():
+        raise UnsupportedStoreError(
+            "store package differs from the current released package; rebuild "
+            "the derived working store from source"
+        )
     layout_errors = validate_database_contract(conn)
     if layout_errors:
         raise UnsupportedStoreError(

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from codess.config import get_state_path, get_store_path, validate_config
+from codess.content_processing import ContentPolicy, ContentProcessor
 from codess.adapters.cc import process_file as process_cc_file
 from codess.adapters.codex import (
     get_session_meta,
@@ -77,6 +78,30 @@ def _record_raw(opts: dict, path: Path, source: str, conn=None) -> None:
         )
 
 
+def _record_related_raw(
+    opts: dict,
+    path: Path,
+    source: str,
+    *,
+    parent_source_locator: str,
+    relation_kind: str,
+) -> None:
+    """Capture/reference one externally persisted content revision."""
+    recorder = opts.get("raw_store")
+    records = opts.get("raw_records")
+    if recorder is None or records is None:
+        return
+    profile = SOURCE_PROFILES[source]
+    records.append(recorder.observe_related(
+        path,
+        source_system_id=profile["source_system_id"],
+        storage_format="text/plain",
+        mode=opts.get("raw_mode", "reference"),
+        parent_source_locator=parent_source_locator,
+        relation_kind=relation_kind,
+    ))
+
+
 def _cc_session_files(cc_dir: Path) -> list[tuple[Path, str | None]]:
     """Return main and nested subagent transcripts with their parent session id."""
     main = [(path, None) for path in cc_dir.glob("*.jsonl")]
@@ -118,7 +143,14 @@ def _ingest_cc(
         session_id = path.stem
         conn = connect(store_path)
         try:
-            events_list = list(process_cc_file(path, session_id, opts))
+            external_sources = opts.setdefault("external_sources", [])
+            external_start = len(external_sources)
+            source_opts = {
+                **opts,
+                "project_path": str(project_root),
+                "repo_path": str(project_root),
+            }
+            events_list = list(process_cc_file(path, session_id, source_opts))
             session = None
             if events_list:
                 timestamps = [e["timestamp"] for e in events_list if e.get("timestamp") is not None]
@@ -156,6 +188,12 @@ def _ingest_cc(
                 conn, session, events_list, session_id=session_id
             )
             _record_raw(opts, path, "Claude", conn)
+            for external in external_sources[external_start:]:
+                _record_related_raw(
+                    opts, Path(external["path"]), "Claude",
+                    parent_source_locator=external["parent_source"],
+                    relation_kind=external["relation_kind"],
+                )
             conn.commit()
             total_events += len(events_list)
         except Exception as e:
@@ -313,7 +351,8 @@ def _ingest_cursor(
                     for event in session_events
                 ],
             )
-            _record_raw(opts, db_path, "Cursor", conn)
+            if sessions_events:
+                _record_raw(opts, db_path, "Cursor", conn)
             conn.commit()
             total_events += sum(len(events) for events in sessions_events.values())
         except Exception as e:
@@ -478,7 +517,20 @@ def run(args) -> int:
         "redact": iopt.redact,
         "diagnostics": diagnostics,
         "raw_mode": iopt.raw_mode,
+        "strict_mapping": iopt.strict_mapping,
     }
+    if iopt.content_policy:
+        policy_path = Path(iopt.content_policy).expanduser()
+        try:
+            policy_data = json.loads(policy_path.read_text(encoding="utf-8"))
+            if not isinstance(policy_data, dict):
+                raise ValueError("policy root must be a JSON object")
+            opts["content_processor"] = ContentProcessor(
+                ContentPolicy.from_mapping(policy_data)
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            print(f"codess: invalid content policy {policy_path}: {exc}", file=sys.stderr)
+            return 1
     force = iopt.force
     min_size = iopt.min_size
 
@@ -499,6 +551,7 @@ def run(args) -> int:
             raw_store = RawStore(registry_root / "raw")
             opts["raw_records"] = project_raw_records
             opts["raw_store"] = raw_store
+            opts["external_sources"] = []
 
             if "cc" in sources:
                 store_path = _store_path(project_root, "cc")
@@ -644,7 +697,12 @@ def run(args) -> int:
             f"malformed={diagnostics.get('malformed_records', 0)} "
             f"ignored={diagnostics.get('ignored_records', 0)} "
             f"empty_sources={diagnostics.get('empty_sources', 0)} "
-            f"failed_sources={diagnostics.get('failed_sources', 0)}",
+            f"failed_sources={diagnostics.get('failed_sources', 0)} "
+            f"unsupported={diagnostics.get('unsupported_records', 0)} "
+            f"known_ignored={diagnostics.get('known_ignored_records', 0)} "
+            f"filtered={diagnostics.get('filtered_records', 0)} "
+            f"external_content={diagnostics.get('external_content_records', 0)} "
+            f"external_errors={diagnostics.get('external_content_errors', 0)}",
             file=sys.stderr,
         )
     return 1 if had_error else 0

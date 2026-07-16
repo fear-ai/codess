@@ -383,7 +383,13 @@ def test_query_rejects_negative_limit():
 def test_query_v2_diagnostics_and_cross_vendor_artifacts():
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp)
-        for source, suffix in (("Claude", "cc"), ("Codex", "codex")):
+        fixture = json.loads(
+            (Path(__file__).parents[1] / "schema/coschema/fixtures/golden/"
+             "cross-vendor-artifact.json").read_text()
+        )
+        suffixes = {"Claude": "cc", "Codex": "codex"}
+        for source in fixture["sources"]:
+            suffix = suffixes[source]
             store = project / ".codess" / f"sessions_{suffix}.db"
             init_db(store)
             conn = connect(store)
@@ -393,7 +399,8 @@ def test_query_v2_diagnostics_and_cross_vendor_artifacts():
                 [{
                     "session_id": f"s-{suffix}", "event_id": "1",
                     "event_type": "tool_call", "role": "assistant",
-                    "tool_name": "Read", "tool_input": json.dumps({"path": "README.md"}),
+                    "tool_name": "Read",
+                    "tool_input": json.dumps({"path": fixture["artifact_path"]}),
                 }],
                 session_id=f"s-{suffix}",
             )
@@ -403,9 +410,47 @@ def test_query_v2_diagnostics_and_cross_vendor_artifacts():
         artifacts = _run(["query", "--dir", str(project), "--artifacts"])
         diagnostics = _run(["query", "--dir", str(project), "--diagnostics"])
         assert artifacts.returncode == 0
-        assert "README.md\tClaude,Codex\t2\tread\t2\t2" in artifacts.stdout
+        assert (
+            f"{fixture['artifact_path']}\t{','.join(fixture['sources'])}\t"
+            f"{fixture['expected']['source_count']}\t{fixture['operation']}\t"
+            f"{fixture['expected']['event_count']}\t"
+            f"{fixture['expected']['artifact_rows_across_stores']}"
+        ) in artifacts.stdout
         assert diagnostics.returncode == 0
         assert diagnostics.stdout.count("missing_tool_call_id") == 2
+
+
+def test_query_can_select_an_exact_retained_snapshot_without_registry_update():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        working = root / "sessions_codex.db"
+        init_db(working)
+        conn = connect(working)
+        replace_session_events(
+            conn,
+            {"id": "historical", "source": "Codex", "type": "Code"},
+            [{
+                "session_id": "historical", "event_id": "prompt",
+                "event_type": "user_message", "subtype": "prompt",
+                "role": "user", "content": "history",
+            }],
+            session_id="historical",
+        )
+        conn.commit()
+        conn.close()
+        snapshot = create_snapshot(
+            project, [working], [], raw_store=RawStore(root / "raw")
+        )
+        registry = root / "registry"
+        result = _run([
+            "query", "--dir", str(project), "--snapshot-id", snapshot.name,
+            "--registry", str(registry), "--stats",
+        ])
+        assert result.returncode == 0
+        assert "Sessions: 1" in result.stdout and "Events: 1" in result.stdout
+        assert not (registry / "ingested_projects.json").exists()
 
 
 def test_query_no_mode_exit_1():
@@ -777,4 +822,6 @@ def test_ingest_stop_environment_is_fail_fast():
 
 
 # Need init_db for test_query_no_mode
+from codess.raw_store import RawStore
+from codess.snapshot import create_snapshot
 from codess.store import connect, init_db, replace_session_events
