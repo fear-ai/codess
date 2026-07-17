@@ -1,4 +1,4 @@
-"""Project roots, slug/git/Cursor paths, CLI roots/options, and argparse dispatch."""
+"""Project/Git roots, Claude slugs, shared CLI options, and dispatch."""
 
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from typing import Any
 from codess import __version__
 from codess.config import (
     CC_PROJECTS,
-    CODEX_ARCHIVED_SESSIONS,
-    CODEX_SESSIONS,
     VERBOSE,
 )
 
@@ -105,60 +103,6 @@ def get_cc_session_dir(project_root: Path) -> Path | None:
     if slug:
         return get_cc_projects_dir() / slug
     return None
-
-
-def get_codex_session_roots() -> list[Path]:
-    """Return configured active and archived transcript roots, deduplicated."""
-    roots = [CODEX_SESSIONS]
-    if CODEX_ARCHIVED_SESSIONS is not None:
-        roots.append(CODEX_ARCHIVED_SESSIONS)
-    return list(dict.fromkeys(path.resolve() for path in roots))
-
-
-def read_codex_session_meta(path: Path) -> dict | None:
-    """Return the first session_meta record, tolerating blank/malformed prefixes."""
-    try:
-        with path.open(encoding="utf-8", errors="replace") as stream:
-            for line in stream:
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if record.get("type") == "session_meta":
-                    return record
-    except OSError:
-        return None
-    return None
-
-
-def get_codex_session_files(project_root: Path) -> list[Path]:
-    """Return Codex JSONL files whose session_meta.cwd matches project. Empty if none."""
-    project_root = project_root.resolve()
-    project_str = str(project_root)
-    selected: dict[str, tuple[tuple[int, float, str], Path]] = {}
-    for root_index, root in enumerate(get_codex_session_roots()):
-        if not root.exists():
-            continue
-        for path in sorted(root.rglob("*.jsonl")):
-            record = read_codex_session_meta(path)
-            payload = (record or {}).get("payload") or {}
-            cwd = payload.get("cwd") or ""
-            if not cwd or not (
-                cwd == project_str or cwd.startswith(project_str + "/")
-            ):
-                continue
-            session_id = str(payload.get("id") or path.stem)
-            try:
-                negative_mtime = -path.stat().st_mtime
-            except OSError:
-                negative_mtime = 0
-            rank = (root_index, negative_mtime, str(path))
-            current = selected.get(session_id)
-            if current is None or rank < current[0]:
-                selected[session_id] = (rank, path)
-    return sorted((item[1] for item in selected.values()), key=str)
 
 
 # --- CLI: bool merge, roots, run options (merged from former cli_options.py) ---

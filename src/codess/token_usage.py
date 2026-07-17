@@ -8,7 +8,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from codess.fileio import read_json, write_json_atomic
+
 TOKEN_OBSERVATION_FORMAT = "codess.token-observation/1"
+TOKEN_CACHE_FORMAT = "codess.token-source-set-cache/1"
 MAX_TOKEN_LINE_BYTES = 8 * 1024**2
 
 
@@ -170,8 +173,10 @@ def _codex(paths: Iterable[Path]) -> dict[str, Any]:
     }
 
 
-def collect_token_usage(store_paths: Iterable[Path]) -> dict[str, Any]:
-    """Collect token observations from distinct current source URIs."""
+def collect_token_usage(
+    store_paths: Iterable[Path], *, cache_path: Path | None = None,
+) -> dict[str, Any]:
+    """Collect token observations, reusing an unchanged current-source set."""
     sources: dict[str, set[Path]] = defaultdict(set)
     for store in store_paths:
         try:
@@ -188,9 +193,36 @@ def collect_token_usage(store_paths: Iterable[Path]) -> dict[str, Any]:
                 conn.close()
         except (OSError, sqlite3.Error):
             continue
+    fingerprints = []
+    for system, paths in sorted(sources.items()):
+        for path in sorted(paths):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            fingerprints.append({
+                "source_system_id": system,
+                "path": str(path.resolve()),
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            })
+    if cache_path and cache_path.exists():
+        try:
+            cached = read_json(cache_path)
+            if (
+                cached.get("format") == TOKEN_CACHE_FORMAT
+                and cached.get("fingerprints") == fingerprints
+                and isinstance(cached.get("result"), dict)
+            ):
+                return {
+                    **cached["result"],
+                    "cache": {"status": "hit", "files": len(fingerprints)},
+                }
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
     claude = _claude(sources["anthropic.claude-code"])
     codex = _codex(sources["openai.codex"])
-    return {
+    result = {
         "format": TOKEN_OBSERVATION_FORMAT,
         "vendors": [
             claude,
@@ -204,4 +236,14 @@ def collect_token_usage(store_paths: Iterable[Path]) -> dict[str, Any]:
                 "monthly": [],
             },
         ],
+    }
+    if cache_path:
+        write_json_atomic(cache_path, {
+            "format": TOKEN_CACHE_FORMAT,
+            "fingerprints": fingerprints,
+            "result": result,
+        })
+    return {
+        **result,
+        "cache": {"status": "miss", "files": len(fingerprints)},
     }

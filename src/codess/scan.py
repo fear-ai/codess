@@ -15,12 +15,9 @@ from codess.cursor_source import (
     get_workspace_ids as get_cursor_workspace_ids,
 )
 from codess.helpers import is_excluded, local_path_from_uri, slug_to_path
-from codess.project import (
-    get_cc_session_dir,
-    get_codex_session_files,
-    get_codex_session_roots,
-    read_codex_session_meta,
-)
+from codess.codex_source import build_session_index as build_codex_session_index
+from codess.codex_source import get_session_files as get_codex_session_files
+from codess.project import get_cc_session_dir
 
 log = logging.getLogger(__name__)
 
@@ -148,18 +145,20 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool 
     return {"count": count, "events": events, "size_mb": round(total_bytes / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "stale_index_entries": stale_index_entries, "main_sessions": main_sessions, "subagent_sessions_available": subagent_sessions, "subagents_included": subagent}
 
 
-def _session_metrics_codex(p: Path, cutoff_ms: float | None = None) -> dict:
+def _session_metrics_codex(
+    p: Path, cutoff_ms: float | None = None,
+    *, codex_index: list[dict] | None = None,
+) -> dict:
     count, total_bytes, events, min_ts, max_ts = 0, 0, 0, float("inf"), 0.0
     p_res = str(p.resolve())
-    for f in get_codex_session_files(p):
+    by_path = {str(item.get("path")): item for item in (codex_index or [])}
+    for f in get_codex_session_files(p, index=codex_index):
         try:
-            d = read_codex_session_meta(f)
-            if d is None:
-                continue
-            cwd = (d.get("payload") or {}).get("cwd", "")
+            item = by_path.get(str(f.resolve()), {})
+            cwd = str(item.get("cwd") or "")
             if not cwd or str(Path(cwd).resolve()) != p_res:
                 continue
-            ts = d.get("timestamp")
+            ts = item.get("timestamp")
             if isinstance(ts, (int, float)):
                 ts_ms = ts * 1000 if ts < 1e12 else ts
             elif isinstance(ts, str):
@@ -173,12 +172,16 @@ def _session_metrics_codex(p: Path, cutoff_ms: float | None = None) -> dict:
             if cutoff_ms and ts_ms < cutoff_ms:
                 continue
             count += 1
-            total_bytes += f.stat().st_size
-            try:
-                with f.open() as fp:
-                    events += sum(1 for _ in fp if _.strip())
-            except OSError:
-                pass
+            total_bytes += int(item.get("size", 0))
+            cached_count = item.get("record_count")
+            if isinstance(cached_count, int):
+                events += cached_count
+            else:
+                try:
+                    with f.open() as fp:
+                        events += sum(1 for line in fp if line.strip())
+                except OSError:
+                    pass
             if ts_ms:
                 min_ts = min(min_ts, ts_ms)
                 max_ts = max(max_ts, ts_ms)
@@ -250,6 +253,7 @@ def run_scan(
     subagent: bool = False,
     diagnostics: dict | None = None,
     include_cursor_global: bool = True,
+    codex_index: list[dict] | None = None,
 ) -> list[dict]:
     """Discover projects with session data. Return list of dicts: path, vendor, sess, mb, span_weeks.
     recent_days: if set, only include sessions from last N days (CODESS_DAYS).
@@ -310,25 +314,16 @@ def run_scan(
                     if debug:
                         print(f"[dir] CC dir: {d} -> {r}", file=sys.stderr)
     if "codex" in vendors:
-        codex_files = (
-            f
-            for root in get_codex_session_roots()
-            if root.exists()
-            for f in root.rglob("*.jsonl")
-        )
-        for f in codex_files:
-            try:
-                d = read_codex_session_meta(f)
-                if d is not None:
-                    cwd = (d.get("payload") or {}).get("cwd", "")
-                    if cwd and in_work_root(str(cwd)):
-                        r = Path(cwd).resolve()
-                        if r not in codex_paths:
-                            codex_paths.add(r)
-                            if debug:
-                                print(f"[dir] Codex file: {f} -> {r}", file=sys.stderr)
-            except OSError as exc:
-                _record_diagnostic(diagnostics, "failed_sources", f, str(exc))
+        if codex_index is None:
+            codex_index = build_codex_session_index(include_record_counts=True)
+        for item in codex_index:
+            cwd = str(item.get("cwd") or "")
+            if cwd and in_work_root(cwd):
+                r = Path(cwd).resolve()
+                if r not in codex_paths:
+                    codex_paths.add(r)
+                    if debug:
+                        print(f"[dir] Codex file: {item.get('path')} -> {r}", file=sys.stderr)
     if "cursor" in vendors and CURSOR_WS.exists():
         for ws in CURSOR_WS.iterdir():
             wj = ws / "workspace.json"
@@ -449,7 +444,9 @@ def run_scan(
             sess_mb += m_cc["size_mb"]
             span_w = m_cc["span_weeks"]
         if p in codex_paths:
-            m_codex = _session_metrics_codex(p, cutoff_ms)
+            m_codex = _session_metrics_codex(
+                p, cutoff_ms, codex_index=codex_index
+            )
             if m_codex["count"]:
                 src.append("Codex")
             if not cutoff_ms or m_codex.get("max_ts", 0) >= cutoff_ms:

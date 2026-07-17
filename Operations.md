@@ -142,13 +142,20 @@ all vendor history:
 - Claude resolves the selected Project's storage directory. Candidate discovery
   reads top-level session indexes only; feature audit is explicitly bounded by
   `--max-files`.
-- Codex currently has no vendor Project index, so discovery and per-Project
-  lookup still scan session metadata across active/archive JSONL. The next
-  optimization is a persistent `(path, size, mtime_ns) -> session id/cwd`
-  inventory, updating only new or changed files.
-- Token accounting streams distinct source URIs referenced by current stores.
-  It avoids unrelated sources but rereads a referenced JSONL; the next
-  optimization is a fingerprinted per-file cache of monthly aggregates.
+- Codex has no vendor Project index, so Codess still enumerates active/archive
+  JSONL filenames once per operation. A persistent
+  `~/.codess/cache/codex-session-index-v1.json` maps
+  `(path, size, mtime_ns)` to session ID, cwd, timestamp, and optional record
+  count. Unchanged transcripts are not reparsed, missing paths are dropped, and
+  one in-memory inventory is shared by every selected root and Project during a
+  scan or ingest.
+- Token accounting selects only distinct source URIs referenced by current
+  stores. `~/.codess/cache/token-usage-v1.json` fingerprints that complete
+  current source set by path, size, and `mtime_ns`; unchanged observations reuse
+  the prior monthly result without opening transcripts. A changed source
+  currently causes a complete selected-set recomputation. Specialize this to
+  per-file aggregates and Claude deduplication identities only if routine churn
+  makes that recomputation material.
 - `storage report` enumerates current stores directly. It reads only current raw
   manifests; it lists snapshot directories and raw object filenames once to
   measure reclaimable storage. `storage prune` necessarily performs the same

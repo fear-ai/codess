@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from codess.catalog import CATALOG_FORMAT, classify_project_path, load_candidate_csv, project_id_for_path
 from codess.fileio import read_json, write_json_atomic
 from codess.helpers import should_prune_directory, unsafe_traversal_root_reason
+from codess.codex_source import build_session_index as build_codex_session_index
 from codess.scan import run_scan
 
 
@@ -193,10 +194,15 @@ def refresh_candidates(
         existing["projects"] = list(existing_by_path.values())
     projects = {item["path"]: dict(item) for item in existing.get("projects", [])}
     diagnostics: dict[str, Any] = {}
+    codex_index = (
+        build_codex_session_index(include_record_counts=True)
+        if "codex" in (vendor_filter or ["cc", "codex", "cursor"])
+        else None
+    )
     for root in roots:
         for row in run_scan(
             root, vendor_filter=vendor_filter, recent_days=recent_days,
-            diagnostics=diagnostics,
+            diagnostics=diagnostics, codex_index=codex_index,
         ):
             if row["path"] == "(global)":
                 continue

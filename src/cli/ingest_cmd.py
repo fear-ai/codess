@@ -24,11 +24,14 @@ from codess.cursor_source import (
     get_workspace_dbs as get_cursor_workspace_dbs,
     get_workspace_ids as get_cursor_workspace_ids,
 )
-from codess.project import RootsWhenEmpty, build_ingest_run_options, resolve_cli_roots
 from codess.project import (
+    RootsWhenEmpty,
+    build_ingest_run_options,
     get_cc_session_dir,
-    get_codex_session_files,
+    resolve_cli_roots,
 )
+from codess.codex_source import build_session_index as build_codex_session_index
+from codess.codex_source import get_session_files as get_codex_session_files
 from codess.store import (
     SOURCE_PROFILES,
     connect,
@@ -304,7 +307,9 @@ def _ingest_codex(
     stop_on_error: bool,
 ) -> tuple[int, int, int]:
     """Ingest Codex. Return (sessions_added, events_added, failed_sources)."""
-    files = get_codex_session_files(project_root)
+    files = get_codex_session_files(
+        project_root, index=opts.get("codex_session_index")
+    )
     ingested, total_events, failures = 0, 0, 0
     for path in files:
         try:
@@ -708,6 +713,13 @@ def run(args) -> int:
     staging_root = Path(temporary.name) if temporary else None
     if iopt.validate_only:
         opts["raw_mode"] = "none"
+    if "codex" in sources:
+        opts["codex_session_index"] = build_codex_session_index(
+            cache_path=(
+                None if iopt.validate_only else
+                registry_root / "cache" / "codex-session-index-v1.json"
+            )
+        )
 
     for project_index, project_root in enumerate(roots):
         try:

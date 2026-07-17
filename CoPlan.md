@@ -78,13 +78,14 @@ Codess/
 │       ├── config.py       # ENV → Path / int / bool; defaults; no other codess imports
 │       ├── helpers.py      # parse_dir_list, validate_dirs_file, write_csv, is_excluded, slug/path … ; imports config
 │       ├── registry_store.py  # ingested_projects.json merge (scan / ingest / query)
+│       ├── codex_source.py # Codex roots, metadata, fingerprinted inventory/selection
 │       ├── cursor_source.py # Cursor layout, workspace mapping, read-only selective SQL
 │       ├── storage_report.py # dated SQLite/snapshot/raw utilization and deltas
 │       ├── token_usage.py  # derived monthly vendor token observations/confidence
 │       ├── sanitize.py     # text cleanup + redact; imports config
 │       ├── store.py        # SQLite, DDL, transactional replacement, ingest state
-│       ├── project.py      # argparse, roots, run-options, git/Claude/Codex helpers
-│       ├── scan.py         # run_scan(); config, helpers, project, cursor_source
+│       ├── project.py      # argparse, roots, run-options, Git and Claude-slug helpers
+│       ├── scan.py         # run_scan(); selected vendor source indexes and metrics
 │       ├── adapters/
 │       │   ├── cc.py
 │       │   ├── codex.py
@@ -93,6 +94,7 @@ Codess/
     ├── test_config.py
     ├── test_helpers.py
     ├── test_project.py
+    ├── test_codex_source.py
     ├── test_store.py
     ├── test_scan.py
     ├── test_registry_store.py
@@ -130,9 +132,10 @@ a filesystem crawl. There is no recursion flag or general walk subsystem.
 - **`codess.store`:** SQLite, DDL, upsert primitives, transactional source
   replacement, and ingest state. **`ingest_cmd`** writes it; query opens the
   resulting databases read-only.
-- **`codess.project`:** CLI parsing/root resolution and Git/Claude/Codex path helpers; no Cursor layout or SQL.
+- **`codess.project`:** CLI parsing/root resolution and Git/Claude-slug helpers; no Codex/Cursor storage layout or SQL.
+- **`codess.codex_source`:** active/archive roots, session metadata, fingerprinted inventory, Project selection, and active-over-archive deduplication.
 - **`codess.cursor_source`:** Cursor installation/workspace discovery, read-only connections, composer headers, indexed bubble ranges, and metrics.
-- **`codess.scan`:** **`run_scan()`**; imports **`config`**, **`helpers`**, **`project`**, and **`cursor_source`**.
+- **`codess.scan`:** **`run_scan()`**; shares one `codex_source` inventory and uses selective `cursor_source` metrics.
 - **`codess.storage_report`:** dated read-only CoSchema/Cursor utilization, skew, retention inventory, thresholds, and deltas.
 - **`cli/*_cmd`:** Thin **`run(args) -> int`**: roots/options, then **`run_scan`** / **`_ingest_*`** / **`store.connect`**.
 
@@ -154,6 +157,7 @@ on those DBs only—no vendor files or adapters.
  codess.scan.run_scan      _ingest_cc / _ingest_codex /   store.connect + SQL
         │                  _ingest_cursor                    init_db if needed
         │
+        ├──► codess.codex_source
         ├──► codess.cursor_source
         ▼
  codess.config   codess.helpers   codess.project  (path helpers for scan)
@@ -161,10 +165,11 @@ on those DBs only—no vendor files or adapters.
  ingest_cmd ──► codess.adapters.* ──► store.replace_* … , ingest_state JSON
 ```
 
-**Dependency sketch:** Cursor layout/SQL callers use **`cursor_source`**;
+**Dependency sketch:** Codex filesystem callers use **`codex_source`** and
+Cursor layout/SQL callers use **`cursor_source`**;
 **`adapters.cursor`** consumes selected raw rows and normalizes them. **`scan.py`**
-uses **`cursor_source`**, not adapters. **`project.py`** owns common CLI plus
-Claude/Codex helpers. **`store.py`** remains independent of vendor access.
+uses vendor source modules, not adapters. **`project.py`** owns common CLI,
+Git-root, and Claude-slug helpers. **`store.py`** remains independent of vendor access.
 
 ### 3.2 Discouraged Imports
 
@@ -175,6 +180,8 @@ This subsection is **normative policy**, not a full import graph. It answers: *w
 - **`query_cmd`:** do not import **`adapters/*`**.
 - **Cursor callers:** do not duplicate `state.vscdb`, workspaceStorage, table,
   or key-range knowledge; use **`cursor_source`**.
+- **Codex callers:** do not duplicate active/archive traversal, metadata reads,
+  or active-over-archive selection; use **`codex_source`**.
 
 ### 3.3 Data Movement — Three Pipelines
 
@@ -253,8 +260,8 @@ Cross-checked against **`src/`** and **`tests/`** so this plan does not drift fr
 - **`run_scan(work_root, …)`:** parameters are **`vendor_filter`**, **`recent_days`**, **`debug`**, and **`subagent`**. Scan is index-led and exposes no recursion option.
 - **`validate_config()`:** invoked before work by scan, ingest, and query; errors are printed to stderr and return exit 1.
 - **`query_cmd`:** opens every selected project store read-only and aggregates report rows in Python, avoiding SQLite's attached-database limit and preserving duplicate vendor session IDs internally. It imports **`get_project_stores`**, **no** **`adapters/*`**.
-- **`scan.py`:** imports **`cursor_source`** for Cursor discovery/metrics; **does not** import adapters or **`walk`**.
-- **`project.py` module imports:** contain no Cursor storage-layout or SQLite details.
+- **`scan.py`:** imports **`codex_source`** and **`cursor_source`** for vendor discovery/metrics; **does not** import adapters or **`walk`**.
+- **`project.py` module imports:** contain no Codex/Cursor storage-layout or SQLite details.
 - **`adapters/*`:** **no** imports of **`scan`**, **`scan_cmd`**, or **`ingest_cmd`**.
 - **Central registry (`ingested_projects.json`):** **`codess.registry_store`** merges per-project records. **Scan** always upserts **`scan`** / **`last_scan`** for every discovered project path into **`resolve_registry_directory(args)`** (default **`CODESS_REGISTRY`**). **`--registry PATH`** overrides that root and, when set, **also** filters CSV to paths present in the file **before** this run + appends **`reg_*`** columns — **no** sidecar. **Ingest** merges **`sources`** / **`last_ingestion`**. **Query `--stats`** merges **`query`** / **`last_query`** into the same file (**§5**).
 - **`validate_scan_source_for_cli` / scan `--source`:** invalid tokens → **stderr + exit 1** before any scan work (**global** invocation policy — **§11.5**, **§14**).
@@ -538,7 +545,8 @@ work items.
 
 - **`test_config.py`** — **`config`**, **`build_*_run_options`** in **`project`**
 - **`test_helpers.py`** — **`helpers`**
-- **`test_project.py`** — **`project`** paths and roots
+- **`test_project.py`** — shared CLI/Project paths, roots, and Claude slugs
+- **`test_codex_source.py`** — Codex active/archive inventory, cache invalidation, selection, and deduplication
 - **`test_store.py`** — **`store`**, **`schema/coschema/sqlite/schema.sql`**
 - **`test_scan.py`**, **`test_candidate.py`**, **`test_subagent_detail.py`** — **`scan`**, scan CLI subprocess
 - **`test_registry_store.py`** — **`registry_store`** merges
@@ -607,8 +615,10 @@ zerowalletmac and Spank/Logs were also rebuilt as captured durable baselines.
 6. Run `storage report` after material ingestion/baseline work; review size and
    skew deltas before accepting unexplained growth.
 7. Validate provisional Codex monthly token deltas against fork/interleave
-   evidence and the CodexBar algorithm; add fingerprinted Codex-session and
-   per-source token inventories so routine observations process only changes.
+   evidence and the CodexBar algorithm. The fingerprinted Codex session
+   inventory is shared by scan/ingest, and unchanged token source sets reuse a
+   cached observation; specialize token caching per file only if measured churn
+   makes full selected-set recomputation material.
 
 Operational ingest preflight is implemented and machine-readable query output
 is prototyped. The broader enterprise PII scanner in §11.2 remains postponed.

@@ -6,7 +6,7 @@ import time
 
 from codess.adapters.cursor import _iter_bubbles
 from codess.cursor_source import get_db_metrics
-from codess.project import get_codex_session_files
+from codess.codex_source import get_session_files as get_codex_session_files
 
 
 def test_cursor_large_header_metrics_and_selected_read(tmp_path):
@@ -78,9 +78,9 @@ def test_codex_active_archive_dedup_scales(tmp_path, monkeypatch):
         (active / f"active-{index:04d}.jsonl").write_text(record)
         (archived / f"archived-{index:04d}.jsonl").write_text(record)
 
-    monkeypatch.setattr("codess.project.CODEX_SESSIONS", active)
+    monkeypatch.setattr("codess.codex_source.CODEX_SESSIONS", active)
     monkeypatch.setattr(
-        "codess.project.CODEX_ARCHIVED_SESSIONS", archived
+        "codess.codex_source.CODEX_ARCHIVED_SESSIONS", archived
     )
     started = time.perf_counter()
     files = get_codex_session_files(project)

@@ -14,7 +14,6 @@ from codess.cursor_source import (
 from codess.project import (
     find_slug_for_project,
     get_cc_session_dir,
-    get_codex_session_files,
     path_to_slug,
     resolve_cli_roots,
     slug_to_path,
@@ -157,76 +156,6 @@ class TestGetCcSessionDir:
         proj = tmp_path / "orphan"
         proj.mkdir()
         assert proj_mod.get_cc_session_dir(proj) is None
-
-
-class TestGetCodexSessionFiles:
-    """get_codex_session_files filters by cwd."""
-
-    def test_empty_when_no_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("codess.project.CODEX_SESSIONS", tmp_path / "nonexistent")
-        monkeypatch.setattr("codess.project.CODEX_ARCHIVED_SESSIONS", None)
-        proj = tmp_path / "proj"
-        proj.mkdir()
-        assert get_codex_session_files(proj) == []
-
-    def test_matches_cwd(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("codess.project.CODEX_SESSIONS", tmp_path / "codex")
-        monkeypatch.setattr("codess.project.CODEX_ARCHIVED_SESSIONS", None)
-        (tmp_path / "codex").mkdir()
-        proj = tmp_path / "myproj"
-        proj.mkdir()
-        sess_dir = tmp_path / "codex" / "2024" / "01"
-        sess_dir.mkdir(parents=True)
-        f = sess_dir / "rollout-abc.jsonl"
-        f.write_text(f'{{"type":"session_meta","payload":{{"cwd":"{proj}"}}}}\n')
-        files = get_codex_session_files(proj)
-        assert len(files) == 1
-        assert files[0].name == "rollout-abc.jsonl"
-
-    def test_includes_archived_sessions(self, tmp_path, monkeypatch):
-        active = tmp_path / "sessions"
-        archived = tmp_path / "archived_sessions"
-        active.mkdir()
-        archived.mkdir()
-        project = tmp_path / "project"
-        project.mkdir()
-        transcript = archived / "rollout-archived.jsonl"
-        transcript.write_text(
-            "\nnot json\n"
-            + json.dumps({
-                "type": "session_meta",
-                "payload": {"id": "archived", "cwd": str(project)},
-            })
-            + "\n"
-        )
-        monkeypatch.setattr("codess.project.CODEX_SESSIONS", active)
-        monkeypatch.setattr(
-            "codess.project.CODEX_ARCHIVED_SESSIONS", archived
-        )
-        assert get_codex_session_files(project) == [transcript]
-
-    def test_active_session_wins_over_archived_duplicate(
-        self, tmp_path, monkeypatch
-    ):
-        active = tmp_path / "sessions"
-        archived = tmp_path / "archived_sessions"
-        active.mkdir()
-        archived.mkdir()
-        project = tmp_path / "project"
-        project.mkdir()
-        record = json.dumps({
-            "type": "session_meta",
-            "payload": {"id": "same-id", "cwd": str(project)},
-        }) + "\n"
-        active_file = active / "active.jsonl"
-        archived_file = archived / "archived.jsonl"
-        active_file.write_text(record)
-        archived_file.write_text(record)
-        monkeypatch.setattr("codess.project.CODEX_SESSIONS", active)
-        monkeypatch.setattr(
-            "codess.project.CODEX_ARCHIVED_SESSIONS", archived
-        )
-        assert get_codex_session_files(project) == [active_file]
 
 
 class TestGetCursorPaths:

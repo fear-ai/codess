@@ -818,6 +818,23 @@ pointer blocks pruning; historical parent IDs remain lineage labels without
 retaining storage. Vendor source stores and Project working archives are never
 cleanup targets for Codess.
 
+Vendor discovery indexes are operational caches, not source evidence or
+CoSchema entities. The Codex cache records only transcript location,
+fingerprint, session identity, cwd, timestamp, and optional line count. Its
+root-list signature prevents reuse across a different active/archive setup;
+each refresh enumerates names, reuses unchanged entries, reparses changed/new
+files, and drops missing ones. Scan and ingest share the refreshed inventory in
+memory so Project count does not multiply vendor-tree traversal. Deleting the
+cache changes performance only and must never affect results.
+
+Token observation caching follows the same replaceable-cache rule but starts at
+the complete selected-source-set boundary. Exact path/size/mtime fingerprints
+guard reuse of a previously derived monthly result. Any membership or
+fingerprint change recomputes all selected sources, preserving Claude's
+cross-file message deduplication without persisting a second detailed token
+record model. Per-file cached records are justified only if measurements show
+that source churn makes this simpler invalidation policy too expensive.
+
 ### Retiring or replacing a local directory
 
 Claude Code and Codex transcripts live in machine-local vendor stores, and

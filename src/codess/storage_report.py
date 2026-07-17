@@ -324,7 +324,9 @@ def build_storage_report(
         },
         "warnings": [],
     }
-    report["token_usage"] = collect_token_usage(stores)
+    report["token_usage"] = collect_token_usage(
+        stores, cache_path=registry / "cache" / "token-usage-v1.json"
+    )
     if cursor_db and cursor_db.exists():
         report["cursor"] = inspect_sqlite(cursor_db)
     for item in report["stores"]:

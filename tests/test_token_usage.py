@@ -79,3 +79,28 @@ def test_cursor_is_explicitly_unavailable(tmp_path):
     cursor = report["vendors"][2]
     assert cursor["availability"] == "unavailable"
     assert cursor["monthly"] == []
+
+
+def test_source_set_cache_hits_and_invalidates_on_change(tmp_path):
+    source = tmp_path / "codex.jsonl"
+    record = {"type": "event_msg", "timestamp": "2026-07-01T00:00:00Z", "payload": {
+        "type": "token_count", "info": {"total_token_usage": {
+            "input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
+        }},
+    }}
+    _lines(source, [record])
+    store = tmp_path / "store.db"
+    _source_store(store, [("openai.codex", str(source))])
+    cache = tmp_path / "registry" / "token-cache.json"
+
+    first = collect_token_usage([store], cache_path=cache)
+    second = collect_token_usage([store], cache_path=cache)
+    assert first["cache"]["status"] == "miss"
+    assert second["cache"]["status"] == "hit"
+    assert first["vendors"] == second["vendors"]
+
+    record["payload"]["info"]["total_token_usage"]["input_tokens"] = 3
+    _lines(source, [record])
+    third = collect_token_usage([store], cache_path=cache)
+    assert third["cache"]["status"] == "miss"
+    assert third["vendors"][1]["monthly"][0]["input_tokens"] == 3

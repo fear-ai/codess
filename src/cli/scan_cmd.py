@@ -17,6 +17,7 @@ from codess.project import (
     resolve_registry_directory,
     validate_scan_source_for_cli,
 )
+from codess.codex_source import build_session_index as build_codex_session_index
 from codess.registry_store import (
     merge_scan_rows, prune_legacy_cursor_global_entries, update_project_entry,
 )
@@ -99,6 +100,13 @@ def run(args) -> int:
     seen_paths: set[str] = set()
     had_error = False
     diagnostics: dict = {}
+    write_root = resolve_registry_directory(args)
+    codex_index = None
+    if opts.vendors is None or "codex" in opts.vendors:
+        codex_index = build_codex_session_index(
+            cache_path=write_root / "cache" / "codex-session-index-v1.json",
+            include_record_counts=True,
+        )
 
     for root_index, work_root in enumerate(roots):
         failures_before = diagnostics.get("failed_sources", 0)
@@ -111,6 +119,7 @@ def run(args) -> int:
                 subagent=opts.subagent,
                 diagnostics=diagnostics,
                 include_cursor_global=root_index == 0,
+                codex_index=codex_index,
             )
         except Exception:
             log.exception("Scan failed for work root %s", work_root)
@@ -133,7 +142,6 @@ def run(args) -> int:
                 seen_paths.add(full)
                 merged.append((full, r))
 
-    write_root = resolve_registry_directory(args)
     pruned_global = prune_legacy_cursor_global_entries(write_root)
     if pruned_global and opts.debug:
         print(
