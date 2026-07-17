@@ -456,6 +456,7 @@ codess catalog relocate
 codess baseline validate|apply|freeze|verify
 codess evidence gather|audit
 codess schema compare
+codess storage report|prune|token-validate
 ```
 
 `codess candidate-review` may remain as a discoverable alias for
@@ -575,7 +576,7 @@ Order work by risk and dependency.
 | **4. Reviewed v2 baseline — complete** | The sampled corpus is frozen by package, snapshot, semantic digest, policy, and raw-evidence state | Run `tools/verify_reviewed_baselines.py`; replace the set rather than editing it in place |
 | **5. Compatibility maintenance** | Vendor drift is detected early | Refresh the smallest real-shape fixture when an upstream format changes; rebuild rather than mutate derived data |
 | **6. Operational maintenance** | Preflight, bounded ingest, and evidence inventory catch drift before accepted rebuilds | Maintain implemented checks; expand machine output only for a consumer and restart enterprise scanning only on its §11.2 trigger |
-| **7. Storage and usage observations — active** | Dated size/utilization/skew/token observations and validated latest-only retention bound local growth | Maintain `storage report`/`storage prune`; validate provisional Codex token attribution and add incremental Codex/token inventories |
+| **7. Storage and usage observations — on demand** | Dated size/utilization/skew/token observations and validated latest-only retention bound local growth | Maintain `storage report`/`storage prune`; validate provisional Codex token attribution. Periodic scheduling is postponed. |
 
 Keep **`schema/coschema/sqlite/schema.sql`** aligned with **CoSchema.md** whenever normalized event shapes change.
 
@@ -601,24 +602,31 @@ rebuilt twice and the reviewed/approved catalogs were atomically replaced;
 zerowalletmac and Spank/Logs were also rebuilt as captured durable baselines.
 `Spank/Logs/spLogs` is explicitly skipped.
 
-**Current maintenance order:**
+**Current execution status and order:**
 
-1. Keep `verify_reviewed_baselines.py` and the full isolated test suite green
-   after every package change.
-2. Maintain catalog-root artifact assertions and workspace bindings as local
-   locations change.
-3. Keep Codex parentage unsupported until a direct upstream identifier appears;
-   the §11.1 audit reached its exit rule.
-4. Maintain the evidence-backed Cursor `toolFormerData` and
-   `modelInfo.modelName` mappings against structure-only audits.
-5. Add more projects only for a demonstrated compatibility or correlation gap.
-6. Run `storage report` after material ingestion/baseline work; review size and
-   skew deltas before accepting unexplained growth.
-7. Validate provisional Codex monthly token deltas against fork/interleave
-   evidence and the CodexBar algorithm. The fingerprinted Codex session
-   inventory is shared by scan/ingest, and unchanged token source sets reuse a
-   cached observation; specialize token caching per file only if measured churn
-   makes full selected-set recomputation material.
+1. **Next:** replace whole-file exact raw capture with chunked
+   hashing/compression and bounded SQLite-backup streaming. Normal Cursor
+   scan/query/ingest already use indexed workspace, composer, and bubble
+   selection; the full backup is required only by explicit exact
+   `capture`/`seal`.
+2. **Complete:** working archives are a separately reported, opt-in retention
+   class. A validated July 17 apply removed five obsolete trees and retained a
+   receipt; vendor evidence was untouched.
+3. **Complete:** filesystem logical, allocated, unique-allocated, tree, and
+   file accounting is shared in `codess.resources`; retention owns selection
+   and deletion while `storage_report` remains read-only.
+4. **Prototype complete; validation continues:** `storage token-validate`
+   reports Codex counter resets, repetition, timestamp order, model changes, and
+   cross-file shared counter points. Current evidence is not billing-ready.
+5. **Now:** specify the common query catalogue, scope/plan/result contracts,
+   saved-query automation, and bounded content-search path in `Designs.md`.
+6. **Postponed by decision:** proactive baseline-maintenance work beyond the
+   existing regression gate; routine periodic storage-report automation; and
+   vendor-mapping audits. Existing safety checks remain in force. Restart only
+   for a package/source-format change, unexplained storage growth, or observed
+   unmapped vendor evidence respectively.
+7. **Evidence-triggered:** update catalog locations or add corpus members only
+   for an actual move, compatibility gap, or cross-vendor correlation need.
 
 Operational ingest preflight is implemented and machine-readable query output
 is prototyped. The broader enterprise PII scanner in §11.2 remains postponed.
@@ -688,10 +696,11 @@ record supplies such an identifier.
 | **`ingest --validate` preflight** | Implemented | Maintain strict no-mutation tests | Real adapters and temporary CoSchema stores report counts, diagnostics, resources, integrity, and foreign keys; raw/snapshot/fixed-point checks remain in the acceptance gate. |
 | **Machine-readable query rows** | Prototype | Expand after consumers confirm row requirements | `codess.query-row/1` supports sessions/stats with an independent JSON Schema; preserve the tabular default. |
 | **Resource bounds and telemetry** | Implemented | Stage incrementally if a real source approaches event limits or retained-buffer memory is excessive | Enforce source/session event limits while collecting, record bytes/events/peak RSS, explicitly release completed source buffers, and emit content-free review evidence for size/type/charset failures before treating them as malformed content or merely raising a limit. |
+| **Streaming raw capture** | Planned; highest implementation priority | Current Cursor capture materializes a SQLite backup and compressed object in memory | Stream source/backup chunks through content hashing and zstd into an atomic temporary object; bound memory independently of source size and clean partial output on failure. |
 | **Evidence inventory** | Implemented | Refresh during vendor-storage maintenance or corpus review | Search current catalog stores and local structural metadata; retain aggregate/identity evidence, not conversation bodies. |
-| **Storage observations** | Implemented | Run after material ingest/baseline changes and periodically | Versioned dated reports cover SQLite allocation, content/session skew, Cursor size, snapshot/raw retention, warnings, and deltas. |
-| **Monthly token observations** | Implemented with explicit Codex limitation | Validate before cost/forecast reporting | Claude usage is deduplicated/local-observed; Codex uses provisional positive cumulative deltas pending fork/interleave validation; Cursor remains unavailable until verified token evidence exists. |
-| **Retention prune/GC** | Implemented | Run a dry-run after material baseline rebuilds, then invoke explicit `storage prune --apply` when reviewed | Keeps one central current snapshot per Project and its raw references; validates selected catalogs/local pointers, re-plans on apply, and emits a receipt. Working archives and vendor stores are excluded. |
+| **Storage observations** | Implemented; periodic automation postponed | Run manually after material ingest/baseline changes or unexplained growth | Versioned dated reports cover SQLite allocation, content/session skew, Cursor size, snapshot/raw retention, warnings, and deltas. |
+| **Monthly token observations** | Implemented; Codex diagnostic prototype added | Resolve counter-reset/model-change attribution before cost/forecast reporting | Claude usage is deduplicated/local-observed; Codex positive deltas remain provisional and `storage token-validate` exposes ambiguity; Cursor remains unavailable until verified token evidence exists. |
+| **Retention prune/GC** | Implemented for central snapshots/raw and explicit working-archive sweeps | Run a dry-run after material baseline rebuilds; apply only a reviewed selection | Keeps one central current snapshot per Project and its raw references; validates catalogs/local pointers, re-plans on apply, and emits a receipt. `--working-archives` is separately reported and requires a current central replacement; vendor stores remain excluded. |
 | **Enterprise PII/secret scanner** | Postponed | A deployment threat model shows configured regex redaction is insufficient | Choose scanner, false-positive policy, and storage/output boundaries before adding a dependency. |
 
 ### 11.3 Platform
@@ -749,8 +758,8 @@ for a specific uncovered contract or reproduced defect.
 
 ### 11.7 Administrative workflow repartition
 
-Implemented in this dependency order. Keep the old scripts until the removal
-checkpoint:
+Implemented in this dependency order. The compatibility scripts reached their
+removal checkpoint and were deleted in commit `6fbf657`:
 
 1. **Complete:** `codess.fileio` provides file hashing and atomic versioned JSON writes;
    replace exact copies without changing formats.
@@ -775,9 +784,8 @@ checkpoint:
    receipts.
 8. **Current validation:** keep the full suite plus representative real candidate,
    onboarding, evidence, baseline, and relocation workflows green.
-9. **Removal checkpoint:** report replacement coverage and remind the operator
-   that `scripts/find_candidate.py` and `scripts/batch_ingest.py` can then be
-   removed; do not delete them earlier.
+9. **Complete removal checkpoint:** replacement coverage was validated and
+   `scripts/find_candidate.py` plus `scripts/batch_ingest.py` were removed.
 
 The former batch `worthy` rule is not retained as authorization. A policy may
 reproduce its signals for comparison, but size/session thresholds yield a

@@ -22,7 +22,8 @@ from codess.fileio import read_json, write_json_atomic
 from codess.helpers import parse_dir_list, unsafe_traversal_root_reason
 from codess.project_catalog import add_project_location, load_catalog
 from codess.schema_evolution import RANK, compare, required
-from codess.storage_report import build_storage_report
+from codess.storage_report import build_storage_report, current_store_paths
+from codess.token_usage import source_paths, validate_codex_token_usage
 from codess.retention import apply_retention_plan, build_retention_plan
 from codess.vendor_audits.claude_features import audit_claude_features
 
@@ -173,9 +174,14 @@ def build_parser() -> argparse.ArgumentParser:
     prune.add_argument("--registry", type=Path, default=Path.home() / ".codess")
     prune.add_argument("--reference-catalog", type=Path, action="append", default=[])
     prune.add_argument("--apply", action="store_true")
+    prune.add_argument("--working-archives", action="store_true")
     prune.add_argument("--receipt", type=Path)
     prune.add_argument("--output", type=Path)
     prune.set_defaults(handler=_storage_prune)
+    token_validate = storage_commands.add_parser("token-validate")
+    token_validate.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    token_validate.add_argument("--output", type=Path)
+    token_validate.set_defaults(handler=_storage_token_validate)
     return parser
 
 
@@ -399,14 +405,31 @@ def _storage_prune(args) -> int:
         REPO_ROOT / "catalog/reviewed-baselines.json",
     ]
     result = (
-        apply_retention_plan(args.registry, reference_catalogs=catalogs, receipt_path=args.receipt)
+        apply_retention_plan(
+            args.registry, reference_catalogs=catalogs,
+            receipt_path=args.receipt,
+            include_working_archives=args.working_archives,
+        )
         if args.apply else
-        build_retention_plan(args.registry, reference_catalogs=catalogs)
+        build_retention_plan(
+            args.registry, reference_catalogs=catalogs,
+            include_working_archives=args.working_archives,
+        )
     )
     if args.output:
         write_json_atomic(args.output, result)
     _json(result)
     return 0 if args.apply or result["safe_to_apply"] else 1
+
+
+def _storage_token_validate(args) -> int:
+    stores, _ = current_store_paths(args.registry.expanduser().resolve())
+    paths = source_paths(stores, "openai.codex")
+    result = validate_codex_token_usage(paths)
+    if args.output:
+        write_json_atomic(args.output, result)
+    _json(result)
+    return 0
 
 
 def run(argv: list[str]) -> int:

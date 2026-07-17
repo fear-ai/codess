@@ -100,3 +100,35 @@ def test_stale_selected_catalog_blocks_apply(tmp_path):
     plan = build_retention_plan(registry, reference_catalogs=[catalog])
     assert not plan["safe_to_apply"]
     assert plan["references"]["blocking"][0]["snapshot_id"] == "old"
+
+
+def test_working_archives_require_explicit_selection_and_current_project(tmp_path):
+    registry = tmp_path / "registry"
+    _snapshot(registry)
+    project = tmp_path / "workspace"
+    archive = project / ".codess" / "working-archives" / "pre-package"
+    archive.mkdir(parents=True)
+    (archive / "sessions.db").write_bytes(b"obsolete")
+    (registry / "projects.json").write_text(json.dumps({
+        "projects": [{
+            "project_id": "codess:project:project",
+            "locations": [{"path": str(project), "state": "active"}],
+        }],
+    }))
+
+    default = build_retention_plan(registry)
+    assert default["working_archives"]["candidates"] == 1
+    assert default["delete"]["working_archives"] == 0
+    assert archive.exists()
+
+    selected = build_retention_plan(
+        registry, include_working_archives=True
+    )
+    assert selected["safe_to_apply"]
+    assert selected["delete"]["working_archives"] == 1
+    receipt = apply_retention_plan(
+        registry, include_working_archives=True,
+        receipt_path=tmp_path / "receipt.json",
+    )
+    assert not (project / ".codess" / "working-archives").exists()
+    assert len(receipt["deleted"]["working_archive_paths"]) == 1

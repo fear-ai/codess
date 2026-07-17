@@ -12,6 +12,7 @@ from codess.fileio import read_json, write_json_atomic
 
 TOKEN_OBSERVATION_FORMAT = "codess.token-observation/1"
 TOKEN_CACHE_FORMAT = "codess.token-source-set-cache/1"
+TOKEN_VALIDATION_FORMAT = "codess.codex-token-validation/1"
 MAX_TOKEN_LINE_BYTES = 8 * 1024**2
 
 
@@ -105,60 +106,81 @@ def _claude(paths: Iterable[Path]) -> dict[str, Any]:
     }
 
 
-def _codex(paths: Iterable[Path]) -> dict[str, Any]:
-    buckets: dict[tuple[str, str], dict[str, int]] = defaultdict(_new_bucket)
-    files = malformed = oversized = counter_resets = 0
-    for path in sorted(set(paths)):
-        previous = _new_bucket()
-        model = "unknown"
-        try:
-            stream = path.open("rb")
-        except OSError:
-            continue
-        files += 1
-        with stream:
-            for raw in stream:
-                if len(raw) > MAX_TOKEN_LINE_BYTES:
-                    oversized += 1
-                    continue
-                try:
-                    record = json.loads(raw)
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    malformed += 1
-                    continue
-                payload = record.get("payload") or {}
-                if record.get("type") == "turn_context" and payload.get("model"):
-                    model = str(payload["model"])
-                if not (
-                    record.get("type") == "event_msg"
-                    and payload.get("type") == "token_count"
-                ):
-                    continue
-                total = (payload.get("info") or {}).get("total_token_usage")
-                if not isinstance(total, dict):
-                    continue
-                current = {
+def _codex_file_observations(path: Path) -> dict[str, Any]:
+    observations: list[dict[str, Any]] = []
+    malformed = oversized = 0
+    model = "unknown"
+    try:
+        stream = path.open("rb")
+    except OSError:
+        return {"path": str(path), "observations": [], "malformed": 0, "oversized": 0}
+    with stream:
+        for line_number, raw in enumerate(stream, 1):
+            if len(raw) > MAX_TOKEN_LINE_BYTES:
+                oversized += 1
+                continue
+            try:
+                record = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                malformed += 1
+                continue
+            payload = record.get("payload") or {}
+            if record.get("type") == "turn_context" and payload.get("model"):
+                model = str(payload["model"])
+            if not (
+                record.get("type") == "event_msg"
+                and payload.get("type") == "token_count"
+            ):
+                continue
+            total = (payload.get("info") or {}).get("total_token_usage")
+            if not isinstance(total, dict):
+                continue
+            observations.append({
+                "line": line_number,
+                "timestamp": record.get("timestamp"),
+                "model": model,
+                "counters": {
                     "input_tokens": _integer(total.get("input_tokens")),
                     "cached_input_tokens": _integer(total.get("cached_input_tokens")),
                     "cache_creation_input_tokens": 0,
                     "output_tokens": _integer(total.get("output_tokens")),
                     "reasoning_output_tokens": _integer(total.get("reasoning_output_tokens")),
                     "total_tokens": _integer(total.get("total_tokens")),
-                }
-                keys = tuple(current)
-                if all(current[key] == previous.get(key, 0) for key in keys):
-                    continue
-                monotonic = all(current[key] >= previous.get(key, 0) for key in keys)
-                if monotonic:
-                    delta = {key: current[key] - previous.get(key, 0) for key in keys}
-                else:
-                    counter_resets += 1
-                    delta = current
-                if any(delta.values()):
-                    _add(
-                        buckets[(_month(record.get("timestamp")), model)], delta
-                    )
-                previous = {**previous, **current}
+                },
+            })
+    return {
+        "path": str(path.resolve()), "observations": observations,
+        "malformed": malformed, "oversized": oversized,
+    }
+
+
+def _codex(paths: Iterable[Path]) -> dict[str, Any]:
+    buckets: dict[tuple[str, str], dict[str, int]] = defaultdict(_new_bucket)
+    files = malformed = oversized = counter_resets = 0
+    for path in sorted(set(paths)):
+        previous = _new_bucket()
+        parsed = _codex_file_observations(path)
+        if not Path(parsed["path"]).is_file():
+            continue
+        files += 1
+        malformed += parsed["malformed"]
+        oversized += parsed["oversized"]
+        for observation in parsed["observations"]:
+            current = observation["counters"]
+            keys = tuple(current)
+            if all(current[key] == previous.get(key, 0) for key in keys):
+                continue
+            monotonic = all(current[key] >= previous.get(key, 0) for key in keys)
+            if monotonic:
+                delta = {key: current[key] - previous.get(key, 0) for key in keys}
+            else:
+                counter_resets += 1
+                delta = current
+            if any(delta.values()):
+                _add(
+                    buckets[(_month(observation.get("timestamp")), observation["model"])], delta
+                )
+            previous = {**previous, **current}
     return {
         "source_system_id": "openai.codex",
         "method": "cumulative_positive_delta_v1",
@@ -171,6 +193,114 @@ def _codex(paths: Iterable[Path]) -> dict[str, Any]:
         "oversized_lines": oversized, "counter_resets": counter_resets,
         "monthly": _rows(buckets),
     }
+
+
+def validate_codex_token_usage(paths: Iterable[Path]) -> dict[str, Any]:
+    """Prototype evidence report for resets, interleaving, and shared prefixes."""
+    files = []
+    counter_files: dict[tuple[int, ...], set[str]] = defaultdict(set)
+    keys = tuple(_new_bucket())[:-1]
+    for path in sorted(set(paths)):
+        parsed = _codex_file_observations(path)
+        previous: dict[str, int] | None = None
+        previous_timestamp: datetime | None = None
+        previous_model: str | None = None
+        resets = timestamp_regressions = repeated = model_changes = 0
+        models: set[str] = set()
+        for observation in parsed["observations"]:
+            current = observation["counters"]
+            current_model = observation["model"]
+            models.add(current_model)
+            if previous_model is not None and current_model != previous_model:
+                model_changes += 1
+            previous_model = current_model
+            point = tuple(int(current[key]) for key in keys)
+            if any(point):
+                counter_files[point].add(parsed["path"])
+            if previous is not None:
+                if current == previous:
+                    repeated += 1
+                elif any(current[key] < previous[key] for key in keys):
+                    resets += 1
+            timestamp = None
+            raw_timestamp = observation.get("timestamp")
+            if isinstance(raw_timestamp, str):
+                try:
+                    timestamp = datetime.fromisoformat(
+                        raw_timestamp.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    pass
+            if timestamp and previous_timestamp and timestamp < previous_timestamp:
+                timestamp_regressions += 1
+            if timestamp:
+                previous_timestamp = timestamp
+            previous = current
+        files.append({
+            "path": parsed["path"],
+            "observations": len(parsed["observations"]),
+            "counter_resets": resets,
+            "repeated_points": repeated,
+            "timestamp_regressions": timestamp_regressions,
+            "models": sorted(models),
+            "model_changes": model_changes,
+            "malformed_lines": parsed["malformed"],
+            "oversized_lines": parsed["oversized"],
+        })
+    shared = [
+        {"counter_point": dict(zip(keys, point)), "files": sorted(paths)}
+        for point, paths in counter_files.items() if len(paths) > 1
+    ]
+    shared.sort(key=lambda item: (-len(item["files"]), tuple(item["counter_point"].values())))
+    totals = {
+        "files": len(files),
+        "observations": sum(item["observations"] for item in files),
+        "files_with_resets": sum(bool(item["counter_resets"]) for item in files),
+        "files_with_model_changes": sum(bool(item["model_changes"]) for item in files),
+        "timestamp_regressions": sum(item["timestamp_regressions"] for item in files),
+        "shared_counter_points": len(shared),
+    }
+    limitations = []
+    if totals["files_with_resets"]:
+        limitations.append("counter drops require reset-versus-interleave review")
+    if shared:
+        limitations.append("shared cumulative points may represent forks/shared prefixes and double counting")
+    if totals["files_with_model_changes"]:
+        limitations.append("model changes complicate attribution within a cumulative sequence")
+    return {
+        "format": TOKEN_VALIDATION_FORMAT,
+        "confidence": "diagnostic_prototype",
+        "totals": totals,
+        "files": files,
+        "shared_counter_points": shared[:100],
+        "limitations": limitations,
+        "billing_ready": not limitations and bool(totals["observations"]),
+    }
+
+
+def source_paths(
+    store_paths: Iterable[Path], source_system_id: str,
+) -> set[Path]:
+    """Return distinct live source URIs selected by current CoSchema stores."""
+    import sqlite3
+
+    selected: set[Path] = set()
+    for store in store_paths:
+        try:
+            conn = sqlite3.connect(store.resolve().as_uri() + "?mode=ro", uri=True)
+            try:
+                for (uri,) in conn.execute(
+                    "SELECT source_uri FROM sources WHERE source_system_id=?",
+                    (source_system_id,),
+                ):
+                    path = Path(str(uri))
+                    if path.is_file():
+                        selected.add(path)
+            finally:
+                conn.close()
+        except (OSError, sqlite3.Error):
+            continue
+    return selected
 
 
 def collect_token_usage(

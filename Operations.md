@@ -89,6 +89,13 @@ is validated against the CodexBar lineage algorithm. Cursor remains explicitly
 unavailable because no verified local token field is mapped. These are usage
 observations, not billed cost, and are never inferred from text length.
 
+`python -m main storage token-validate` is the Codex validation prototype. It
+selects only Codex source files referenced by current stores and reports
+cumulative counter drops, repeated points, timestamp regressions, model changes,
+and counter points shared across files. `billing_ready` remains false whenever
+those observations make attribution ambiguous. The report contains counters and
+source paths, not conversation text; `--output` saves an explicit copy.
+
 Storage locations and cleanup boundaries are:
 
 - immutable snapshots: `~/.codess/projects/<project-id>/snapshots/`;
@@ -101,14 +108,25 @@ The active retention policy keeps exactly the central `current.json` snapshot
 for each Project and the raw objects named by those current raw manifests. It
 does not retain a historical snapshot merely because it is old, reviewed, or
 named as a parent. A parent snapshot ID is durable lineage information, not a
-promise that the parent's bytes remain resolvable. Working archives are outside
-this policy and are never removed by the command.
+promise that the parent's bytes remain resolvable. Working archives are a
+separate, explicitly selected retention class.
+
+Project-local `working-archives` contain pre-package normalized databases, not
+vendor transcripts or current source evidence. `storage prune` inventories them
+but selects none by default. `--working-archives` selects only archives whose
+catalogued Project has a current central snapshot; apply remains explicit and
+the receipt records every removed path and reclaimed allocation. They are not
+silently folded into raw-object garbage collection. The reviewed July 17 sweep
+removed five such trees after validation and reclaimed 603,422,720 allocated
+bytes.
 
 Pruning is mark-and-sweep and dry-run by default:
 
 ```sh
 python -m main storage prune --registry ~/.codess --output /tmp/codess-prune.json
 python -m main storage prune --registry ~/.codess --apply
+python -m main storage prune --registry ~/.codess --working-archives --output /tmp/codess-archives.json
+python -m main storage prune --registry ~/.codess --working-archives --apply
 ```
 
 The plan validates each central current pointer and manifest, every current DB
@@ -118,7 +136,8 @@ referenced by a current manifest with reclaimable allocation. `--apply`
 recomputes that plan immediately, performs only the listed removals, checks the
 zero-candidate postcondition, and writes a receipt below
 `~/.codess/receipts/retention/` (or `--receipt`). It does not delete vendor
-stores, Project working databases, working archives, or observation history.
+stores, Project working databases, unselected working archives, or observation
+history.
 
 Approved/reviewed catalogs are checked before deletion. A catalog whose
 selected `snapshot_id` is superseded blocks apply: run `baseline freeze` after
@@ -139,6 +158,15 @@ all vendor history:
   indexed key ranges for only those composers. Even an explicit all-composer
   audit uses a bounded prefix range rather than `LIKE`. A full transactional
   Cursor backup occurs only for raw capture, not querying.
+- Cursor's live `composerHeaders` indexes select a workspace's composers, and
+  `cursorDiskKV`'s unique key index selects `bubbleId:<composer-id>:` ranges.
+  Counts and byte totals use `COUNT(*)` and `length(value)` without JSON decode;
+  ingest decodes only selected rows. A logical export of selected rows can be a
+  useful derived artifact, but it is not an exact raw copy of the vendor store.
+  Exact `capture`/`seal` still requires one SQLite backup so WAL state is
+  included. Main-file size/mtime alone cannot safely cache that backup while a
+  WAL exists; any capture-reuse key must fingerprint the main file and WAL
+  before and after backup and refer to a verified raw object.
 - Claude resolves the selected Project's storage directory. Candidate discovery
   reads top-level session indexes only; feature audit is explicitly bounded by
   `--max-files`.

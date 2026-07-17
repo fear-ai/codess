@@ -64,6 +64,10 @@ python -m main baseline verify
 python -m main evidence gather --component-dir /tmp/codess-evidence
 python -m main storage report --output /tmp/codess-storage.json
 python -m main storage prune --registry ~/.codess --output /tmp/codess-prune.json  # dry-run
+python -m main storage prune --registry ~/.codess --working-archives \
+  --output /tmp/codess-archives.json  # separate dry-run selection
+python -m main storage token-validate --registry ~/.codess \
+  --output /tmp/codess-token-validation.json
 python -m main schema compare OLD.json NEW.json --declared compatible
 ```
 

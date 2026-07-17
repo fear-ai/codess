@@ -12,24 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from codess.fileio import hash_file, write_json_atomic
+from codess.resources import storage_usage
 
 
 PLAN_FORMAT = "codess.retention-plan/1"
 RECEIPT_FORMAT = "codess.retention-receipt/1"
-
-
-def _usage(paths: list[Path]) -> dict[str, int]:
-    logical = allocated = files = 0
-    for root in paths:
-        candidates = [root] if root.is_file() else root.rglob("*")
-        for path in candidates:
-            if not path.is_file():
-                continue
-            stat = path.stat()
-            files += 1
-            logical += stat.st_size
-            allocated += int(getattr(stat, "st_blocks", 0) * 512 or stat.st_size)
-    return {"files": files, "logical_bytes": logical, "allocated_bytes": allocated}
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -159,7 +146,35 @@ def _local_pointer_references(registry: Path, current_by_project: dict[str, str]
     return result
 
 
-def build_retention_plan(registry: Path, *, reference_catalogs: list[Path] | None = None) -> dict[str, Any]:
+def _working_archives(
+    registry: Path, current_by_project: dict[str, str],
+) -> list[Path]:
+    """Return pre-package archives only from active, current catalog locations."""
+    catalog_path = registry / "projects.json"
+    if not catalog_path.exists():
+        return []
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    archives: set[Path] = set()
+    for project in catalog.get("projects", []):
+        if not isinstance(project, dict):
+            continue
+        project_key = str(project.get("project_id") or "").rsplit(":", 1)[-1]
+        if project_key not in current_by_project:
+            continue
+        for location in project.get("locations", []):
+            if not isinstance(location, dict) or location.get("state") != "active":
+                continue
+            root = Path(str(location.get("path") or ""))
+            archive = root / ".codess" / "working-archives"
+            if archive.is_dir() and _inside(archive, root / ".codess"):
+                archives.add(archive.resolve())
+    return sorted(archives)
+
+
+def build_retention_plan(
+    registry: Path, *, reference_catalogs: list[Path] | None = None,
+    include_working_archives: bool = False,
+) -> dict[str, Any]:
     """Plan keeping exactly each central current snapshot and its raw objects."""
     registry = registry.expanduser().resolve()
     projects_root = registry / "projects"
@@ -198,6 +213,7 @@ def build_retention_plan(registry: Path, *, reference_catalogs: list[Path] | Non
     references["local_pointers"] = _local_pointer_references(
         registry, current_by_project, delete_ids
     )
+    working_archives = _working_archives(registry, current_by_project)
     if references["blocking"]:
         errors.append("a reference catalog selects a superseded snapshot; refreeze or drop that catalog entry before pruning")
     if references["local_pointers"]["blocking"]:
@@ -207,6 +223,10 @@ def build_retention_plan(registry: Path, *, reference_catalogs: list[Path] | Non
         "delete_snapshots": [str(path) for path in delete_snapshots],
         "raw_keep": sorted(raw_keep),
         "delete_objects": [str(path) for path in delete_objects],
+        "delete_working_archives": (
+            [str(path) for path in working_archives]
+            if include_working_archives else []
+        ),
     }
     plan_sha256 = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
@@ -226,20 +246,45 @@ def build_retention_plan(registry: Path, *, reference_catalogs: list[Path] | Non
             "snapshots": len(delete_snapshots), "raw_objects": len(delete_objects),
             "snapshot_paths": [str(path) for path in delete_snapshots],
             "raw_object_paths": [str(path) for path in delete_objects],
-            "snapshots_usage": _usage(delete_snapshots),
-            "raw_objects_usage": _usage(delete_objects),
+            "snapshots_usage": storage_usage(delete_snapshots),
+            "raw_objects_usage": storage_usage(
+                delete_objects, recurse_directories=False
+            ),
+            "working_archives": (
+                len(working_archives) if include_working_archives else 0
+            ),
+            "working_archive_paths": (
+                [str(path) for path in working_archives]
+                if include_working_archives else []
+            ),
+            "working_archives_usage": storage_usage(
+                working_archives if include_working_archives else []
+            ),
+        },
+        "working_archives": {
+            "candidates": len(working_archives),
+            "candidate_paths": [str(path) for path in working_archives],
+            "usage": storage_usage(working_archives),
+            "selected_for_delete": include_working_archives,
         },
         "references": references,
     }
 
 
-def apply_retention_plan(registry: Path, *, reference_catalogs: list[Path] | None = None, receipt_path: Path | None = None) -> dict[str, Any]:
+def apply_retention_plan(
+    registry: Path, *, reference_catalogs: list[Path] | None = None,
+    receipt_path: Path | None = None, include_working_archives: bool = False,
+) -> dict[str, Any]:
     """Re-plan immediately, then delete only the validated latest-only candidates."""
-    plan = build_retention_plan(registry, reference_catalogs=reference_catalogs)
+    plan = build_retention_plan(
+        registry, reference_catalogs=reference_catalogs,
+        include_working_archives=include_working_archives,
+    )
     if not plan["safe_to_apply"]:
         raise RuntimeError("retention plan rejected: " + "; ".join(plan["errors"]))
     deleted_snapshots: list[str] = []
     deleted_objects: list[str] = []
+    deleted_working_archives: list[str] = []
     for value in plan["delete"]["snapshot_paths"]:
         path = Path(value)
         shutil.rmtree(path)
@@ -248,13 +293,25 @@ def apply_retention_plan(registry: Path, *, reference_catalogs: list[Path] | Non
         path = Path(value)
         path.unlink()
         deleted_objects.append(value)
+    for value in plan["delete"]["working_archive_paths"]:
+        path = Path(value)
+        shutil.rmtree(path)
+        deleted_working_archives.append(value)
     raw_objects_root = Path(plan["registry"]) / "raw" / "codess.raw-1" / "objects"
     if raw_objects_root.exists():
         for root, dirs, files in os.walk(raw_objects_root, topdown=False):
             if not dirs and not files:
                 Path(root).rmdir()
-    after = build_retention_plan(registry, reference_catalogs=reference_catalogs)
-    if after["delete"]["snapshots"] or after["delete"]["raw_objects"] or not after["safe_to_apply"]:
+    after = build_retention_plan(
+        registry, reference_catalogs=reference_catalogs,
+        include_working_archives=include_working_archives,
+    )
+    if (
+        after["delete"]["snapshots"]
+        or after["delete"]["raw_objects"]
+        or after["delete"]["working_archives"]
+        or not after["safe_to_apply"]
+    ):
         raise RuntimeError("retention postcondition failed; inspect the receipt and registry")
     receipt = {
         "format": RECEIPT_FORMAT,
@@ -262,10 +319,15 @@ def apply_retention_plan(registry: Path, *, reference_catalogs: list[Path] | Non
         "registry": plan["registry"],
         "policy": plan["policy"],
         "plan_sha256": plan["plan_sha256"],
-        "deleted": {"snapshot_paths": deleted_snapshots, "raw_object_paths": deleted_objects},
+        "deleted": {
+            "snapshot_paths": deleted_snapshots,
+            "raw_object_paths": deleted_objects,
+            "working_archive_paths": deleted_working_archives,
+        },
         "reclaimed": {
             "snapshot_allocated_bytes": plan["delete"]["snapshots_usage"]["allocated_bytes"],
             "raw_allocated_bytes": plan["delete"]["raw_objects_usage"]["allocated_bytes"],
+            "working_archive_allocated_bytes": plan["delete"]["working_archives_usage"]["allocated_bytes"],
         },
         "postcondition": {"safe_to_apply": True, "remaining_candidates": 0},
     }

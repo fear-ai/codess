@@ -3,7 +3,7 @@
 import json
 import sqlite3
 
-from codess.token_usage import collect_token_usage
+from codess.token_usage import collect_token_usage, validate_codex_token_usage
 
 
 def _lines(path, values):
@@ -104,3 +104,33 @@ def test_source_set_cache_hits_and_invalidates_on_change(tmp_path):
     third = collect_token_usage([store], cache_path=cache)
     assert third["cache"]["status"] == "miss"
     assert third["vendors"][1]["monthly"][0]["input_tokens"] == 3
+
+
+def test_codex_validation_flags_resets_models_and_shared_points(tmp_path):
+    def usage(total, model=None, timestamp="2026-07-01T00:00:00Z"):
+        if model:
+            return {"type": "turn_context", "payload": {"model": model}}
+        return {
+            "type": "event_msg", "timestamp": timestamp,
+            "payload": {"type": "token_count", "info": {
+                "total_token_usage": {
+                    "input_tokens": total, "output_tokens": total // 2,
+                    "total_tokens": total + total // 2,
+                },
+            }},
+        }
+
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    _lines(first, [
+        usage(0, "gpt-5"), usage(10), usage(20),
+        usage(0, "gpt-5-mini"), usage(5),
+    ])
+    _lines(second, [usage(0, "gpt-5"), usage(10), usage(30)])
+
+    report = validate_codex_token_usage([first, second])
+    assert report["format"] == "codess.codex-token-validation/1"
+    assert report["totals"]["files_with_resets"] == 1
+    assert report["totals"]["files_with_model_changes"] == 1
+    assert report["totals"]["shared_counter_points"] == 1
+    assert not report["billing_ready"]

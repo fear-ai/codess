@@ -815,8 +815,10 @@ snapshot. Current raw manifests form the object mark set; every other snapshot
 and unmarked raw object is reclaimable. Reviewed catalogs validate current
 selections rather than pin old bytes. A stale selected catalog or active local
 pointer blocks pruning; historical parent IDs remain lineage labels without
-retaining storage. Vendor source stores and Project working archives are never
-cleanup targets for Codess.
+retaining storage. Vendor source stores and current Project working databases
+are never cleanup targets. Obsolete pre-package `working-archives` are a
+separate opt-in class and may be removed only after a current central replacement
+validates.
 
 Vendor discovery indexes are operational caches, not source evidence or
 CoSchema entities. The Codex cache records only transcript location,
@@ -834,6 +836,39 @@ fingerprint change recomputes all selected sources, preserving Claude's
 cross-file message deduplication without persisting a second detailed token
 record model. Per-file cached records are justified only if measurements show
 that source churn makes this simpler invalidation policy too expensive.
+
+Cursor does not require a whole-database decode for routine operations. Resolve
+workspace IDs from bindings, select composer headers through the
+`(workspaceId,isSubagent,isArchived,recency)` index, and select each composer's
+`bubbleId:<composer-id>:` half-open key range through the unique key index.
+Compute row and byte inventories in SQL with `COUNT(*)` and `length(value)`;
+decode JSON values only for selected ingest or content inspection. This supports
+one workspace, session, or composer even when another composer is very large.
+
+Keep two distinct portability products:
+
+- an exact raw Cursor source is one transactionally consistent SQLite backup,
+  including live WAL state, stored once by content identity and referenced by
+  any number of Project snapshots; and
+- a selective logical export contains identified headers and chosen key/value
+  rows. It is smaller and reparsable for that selection but is a derived export,
+  not byte-identical vendor evidence.
+
+Exact backup reuse is safe only when a revision guard covers the main database
+and WAL before and after backup and resolves to an already verified raw object.
+The main file's mtime/size is insufficient in WAL mode. Content addressing
+currently deduplicates stored bytes after backup; it does not avoid the backup
+or whole-buffer compression cost, which is why streaming remains pending.
+
+Large raw capture is the next resource-boundary change. The current capture
+implementation reads an ordinary source or completed Cursor SQLite backup into
+one byte string and produces another full compressed byte string. Replace that
+with a chunked pipeline: SQLite backup or stable source file → incremental
+content hash → streaming zstd writer → incremental stored hash → atomic
+content-addressed rename. The temporary output must live on the destination
+filesystem, be removed on every failure, and publish only after source-stability
+and stored-size/hash checks. Peak memory should be approximately the configured
+chunk/buffer sizes, not source size.
 
 ### Retiring or replacing a local directory
 
@@ -1298,18 +1333,77 @@ Queries may report that multiple coding systems touched the same project or
 artifact, with evidence and confidence, but must not assert unsupported
 authorship.
 
+### Common questions and a query workflow
+
+Prioritize questions that recur in corpus review and operations, plus the
+usage/reset/burn-rate views proven useful by
+[CodexBar](https://github.com/steipete/CodexBar) and
+[Claude Code Usage Monitor](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor).
+Do not build a generic natural-language-to-SQL surface first.
+
+| Priority | Question | Current method | Missing method |
+|----------|----------|----------------|----------------|
+| 1 | What changed since the preceding scan, ingest, or usage observation? | Registry observations and storage-report deltas | Versioned entity-level new/changed/removed result |
+| 2 | Which Projects or sessions need review? | Preflight, diagnostics, audit, candidate review, resource/skew reports | One health summary with reasons and evidence IDs |
+| 3 | What is the current vendor usage, reset horizon, pace, and likely monthly total/cost? | Monthly Claude/Codex observations; Codex diagnostic | Verified quota/reset and price sources; confidence-aware forecast |
+| 4 | What consumes storage and what is safely reclaimable? | `storage report` and dry-run `storage prune` | Saved threshold comparison only when routine automation resumes |
+| 5 | Which recent sessions exist for a Project/vendor/model, and how large/long are they? | Sessions, stats, taxonomy, direct SQL | Typed filters and duration/content-size projections |
+| 6 | Where did a prompt, response, error, path, symbol, or topic occur? | Bounded session display and direct SQL | Scoped content search; optional rebuildable FTS index |
+| 7 | Which vendors touched the same Project or artifact, and what is the evidence? | Artifact and correlation reports | Typed correlation result with confidence and source locators |
+| 8 | What happened around a user request, tool call/result, denial, compaction, or abort? | Session, lineage, permissions, and audit reports | One ordered interaction/turn window |
+| 9 | Which tool/command outcomes failed, were orphaned, or lack mappings? | Lineage, audit, diagnostics | Composable status/tool/source filters |
+| 10 | What intent, decisions, and unresolved work can be summarized from selected evidence? | Manual bounded review | Optional derived summary that cites event/source IDs and records its processor |
+
+Every formulated query should become a versioned request independent of the
+physical SQLite schema. A `codess.query-request/1` contains:
+
+- a stable `question_kind` and optional saved-query name;
+- scope by Project/location/workspace, vendor, session, and time interval;
+- typed filters for text, event/record kind, actor/role, tool, status, model,
+  artifact, and diagnostic reason;
+- projection, grouping, ordering, row/byte limits, and content policy; and
+- requested freshness: current retained snapshots by default, or an explicit
+  historical snapshot.
+
+The planner resolves durable Project identities to current store paths, rejects
+ambiguous or stale scope, pushes indexed identity/time/tool/path predicates into
+each read-only SQLite store, streams bounded rows, merges deterministically, and
+only then aggregates or summarizes. Exact IDs, time, tool, status, and artifact
+queries use B-tree indexes. Text search must first be bounded by Project/time/
+record kind. Current `events.content`, `tool_input`, and `tool_output` have no FTS
+index, so ad hoc substring search is an explicit bounded scan. If repeated use
+justifies it, add a separately versioned, rebuildable FTS5 projection after
+content filtering; do not make FTS tables part of the durable CoSchema contract.
+
+A `codess.query-result/1` response contains the normalized request, observation
+and data-as-of times, selected store/snapshot identities, summary, typed rows and
+aggregates, evidence references, confidence, and explicit truncation or missing-
+data limitations. Stream large row sets as `codess.query-row/1` JSON Lines;
+write one JSON result for bounded aggregates; derive a table or Markdown view
+from the same typed result rather than scraping terminal output.
+
+Saved queries should be declarative JSON/YAML definitions invoking one runner,
+not one wrapper script per question. Manual and post-ingest execution come
+first. A saved query can compare with its prior result, set threshold conditions,
+and return stable exit codes without sending notifications or mutating external
+systems. Periodic scheduling is postponed; when resumed, record the query
+definition hash, input snapshot IDs, result path, duration, rows/bytes examined,
+peak memory, and whether output was truncated. Any LLM-generated summary is a
+derived processing record and must cite the bounded rows it saw.
+
 ### Remaining maintenance sequence
 
-1. Maintain external-artifact/catalog assertions and Project workspace bindings.
-2. Keep Codex parentage unsupported until a direct referential field appears.
-3. Monitor mapped Cursor `toolFormerData` and `modelInfo.modelName`; keep empty
-   `toolResults` arrays non-evidentiary.
-4. Add effort/speed/service settings or lifecycle-abort evidence only when
-   current source records supply them; maintain shared-artifact evidence with
-   the structure-only inventory.
-5. Re-run fixed-point and semantic sampling, then replace the frozen reviewed
-   set atomically whenever a mapping or corpus member changes.
+1. Implement bounded streaming for exact raw capture without changing routine
+   selective Cursor access.
+2. Continue Codex counter-attribution experiments until the token result can be
+   accepted or permanently limited as non-billing evidence.
+3. Prototype the query request/result planner with the first five operational
+   questions before adding content FTS or natural-language formulation.
 
-Broad historical discovery, ranking refinements, large-scale raw capture, and
-additional vendors remain outside this sequence until a concrete consumer or
-compatibility gap requires them.
+Proactive baseline maintenance, periodic storage/query automation, and vendor-
+mapping audits are postponed. Existing gates still run when code changes.
+Restart the respective work only for a package/source-format change,
+unexplained growth, or observed unmapped vendor evidence. Codex parentage stays
+unsupported until a direct referential field appears. Broad historical
+discovery and additional vendors likewise require a concrete compatibility or
+correlation gap.

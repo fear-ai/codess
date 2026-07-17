@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,48 +11,13 @@ from typing import Any
 from codess.config import MAX_CODESS_DB_BYTES, MAX_CURSOR_DB_BYTES
 from codess.fileio import write_json_atomic
 from codess.token_usage import collect_token_usage
+from codess.resources import allocated_bytes, file_usage, storage_usage, tree_usage
 
 REPORT_FORMAT = "codess.storage-observation/1"
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _disk_bytes(path: Path) -> int:
-    try:
-        stat = path.stat()
-        return int(getattr(stat, "st_blocks", 0) * 512 or stat.st_size)
-    except OSError:
-        return 0
-
-
-def _tree_usage(root: Path) -> dict[str, int]:
-    files = logical = allocated = 0
-    inodes: set[tuple[int, int]] = set()
-    unique_allocated = 0
-    if root.exists():
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            files += 1
-            logical += stat.st_size
-            disk = int(getattr(stat, "st_blocks", 0) * 512 or stat.st_size)
-            allocated += disk
-            inode = (stat.st_dev, stat.st_ino)
-            if inode not in inodes:
-                inodes.add(inode)
-                unique_allocated += disk
-    return {
-        "files": files,
-        "logical_bytes": logical,
-        "allocated_bytes": allocated,
-        "unique_allocated_bytes": unique_allocated,
-    }
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:
@@ -68,7 +32,7 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
     """Inspect allocation and CoSchema content skew without changing the DB."""
     result: dict[str, Any] = {
         "path": str(path), "file_bytes": path.stat().st_size,
-        "allocated_bytes": _disk_bytes(path),
+        "allocated_bytes": allocated_bytes(path),
     }
     try:
         conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
@@ -159,7 +123,7 @@ def _load_pointer(path: Path) -> Path | None:
         return None
 
 
-def _current_stores(registry: Path) -> tuple[list[Path], set[Path]]:
+def current_store_paths(registry: Path) -> tuple[list[Path], set[Path]]:
     stores: list[Path] = []
     current_snapshots: set[Path] = set()
     projects_root = registry / "projects"
@@ -186,41 +150,16 @@ def _snapshot_inventory(registry: Path, current: set[Path]) -> dict[str, Any]:
         "snapshots": len(snapshots),
         "current_snapshots": len(current_paths),
         "superseded_snapshots": len(old_paths),
-        "all": _tree_usage(registry / "projects"),
-        "current": _sum_tree_usage(current_paths),
-        "superseded": _sum_tree_usage(old_paths),
-    }
-
-
-def _sum_tree_usage(paths: list[Path]) -> dict[str, int]:
-    total = {key: 0 for key in (
-        "files", "logical_bytes", "allocated_bytes", "unique_allocated_bytes"
-    )}
-    for path in paths:
-        item = _tree_usage(path)
-        for key in total:
-            total[key] += item[key]
-    return total
-
-
-def _file_usage(paths: list[Path]) -> dict[str, int]:
-    logical = allocated = 0
-    for path in paths:
-        try:
-            logical += path.stat().st_size
-            allocated += _disk_bytes(path)
-        except OSError:
-            continue
-    return {
-        "files": len(paths), "logical_bytes": logical,
-        "allocated_bytes": allocated, "unique_allocated_bytes": allocated,
+        "all": tree_usage(registry / "projects"),
+        "current": storage_usage(current_paths),
+        "superseded": storage_usage(old_paths),
     }
 
 
 def _raw_inventory(registry: Path, current_snapshots: set[Path]) -> dict[str, Any]:
     raw_root = registry / "raw" / "codess.raw-1"
     objects_root = raw_root / "objects"
-    objects = [path for path in objects_root.rglob("*.zst") if path.is_file()] 
+    objects = [path for path in objects_root.rglob("*.zst") if path.is_file()]
     by_relpath = {
         str(path.relative_to(raw_root)): path for path in objects
     } if raw_root.exists() else {}
@@ -250,13 +189,13 @@ def _raw_inventory(registry: Path, current_snapshots: set[Path]) -> dict[str, An
         "root": str(raw_root),
         # `objects` is already the complete content-addressed inventory; do not
         # walk the multi-gigabyte tree a second time merely to total it.
-        **_file_usage(objects),
+        **file_usage(objects),
         "reference_scope": "current_snapshots",
         "objects": len(objects), "manifest_references": references,
         "referenced_objects": len(referenced_paths),
-        "referenced": _file_usage(referenced_paths),
-        "unreferenced": _file_usage(orphan_paths),
-        "objects_over_300_mib": _file_usage(large),
+        "referenced": file_usage(referenced_paths),
+        "unreferenced": file_usage(orphan_paths),
+        "objects_over_300_mib": file_usage(large),
     }
 
 
@@ -309,7 +248,7 @@ def build_storage_report(
     history_dir = history_dir or registry / "observations" / "storage"
     observed = _now()
     previous = _previous(history_dir)
-    stores, current = _current_stores(registry)
+    stores, current = current_store_paths(registry)
     report: dict[str, Any] = {
         "report_format": REPORT_FORMAT,
         "observed_at": observed.isoformat(),
