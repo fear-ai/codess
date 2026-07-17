@@ -10,6 +10,7 @@ from typing import Any, Iterable
 
 from codess.catalog import CATALOG_FORMAT, classify_project_path, load_candidate_csv, project_id_for_path
 from codess.fileio import read_json, write_json_atomic
+from codess.helpers import should_prune_directory, unsafe_traversal_root_reason
 from codess.scan import run_scan
 
 
@@ -97,7 +98,7 @@ def discover_git_roots(roots: Iterable[Path], *, max_depth: int) -> list[Path]:
     found: set[Path] = set()
     for raw_root in roots:
         root = raw_root.expanduser().resolve()
-        if not root.exists():
+        if not root.exists() or unsafe_traversal_root_reason(root):
             continue
         for current, directories, _ in os.walk(root):
             path = Path(current)
@@ -107,11 +108,13 @@ def discover_git_roots(roots: Iterable[Path], *, max_depth: int) -> list[Path]:
                 continue
             if ".git" in directories or (path / ".git").is_file():
                 found.add(path.resolve())
-                directories[:] = [name for name in directories if name != ".git"]
+                # A repository is one candidate boundary. Do not turn nested
+                # checkouts, vendored sources, or workspaces into peers.
+                directories[:] = []
                 continue
             directories[:] = [
                 name for name in directories
-                if name not in {".git", ".codess", "node_modules", "__pycache__"}
+                if not should_prune_directory(name)
             ]
     return sorted(found)
 
@@ -124,7 +127,12 @@ def recommend(
     path = Path(project["path"])
     curation = project.get("curation", {})
     scan = project.get("observations", {}).get("vendors", {})
-    vendor_count = len([value for value in scan.values() if value])
+    vendor_count = len([
+        value for value in scan.values()
+        if value is True or (
+            isinstance(value, dict) and int(value.get("sessions", 0) or 0) > 0
+        )
+    ])
     sessions = int(project.get("observations", {}).get("session_count", 0) or 0)
     size_mb = float(project.get("observations", {}).get("session_mb", 0) or 0)
     git = project.get("observations", {}).get("git", {})
@@ -206,7 +214,9 @@ def refresh_candidates(
                 "local_availability": "present" if path.exists() else "missing",
                 "session_count": row["sess"], "session_mb": row["mb"],
                 "session_span_weeks": row["span_weeks"], "scan_observed_at": _now(),
-                "vendors": {name: True for name in row["vendor"].split("|") if name},
+                "vendors": row.get("source_metrics") or {
+                    name: True for name in row["vendor"].split("|") if name
+                },
             })
             projects[key] = item
     if discover_git:

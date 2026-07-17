@@ -1,0 +1,11 @@
+{
+  "policy_format": "codess.validation-policy/1",
+  "project": "/Users/walter/Work/ZK/insight",
+  "required_sources": ["Claude"],
+  "minimum_sessions": {"Claude": 14},
+  "minimum_events": {"Claude": 8600},
+  "raw_mode": "capture",
+  "expected_raw_records": 18,
+  "allowed_diagnostics": {},
+  "require_fixed_point": true
+}

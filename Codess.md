@@ -21,7 +21,7 @@ Material is ordered **outcomes → capabilities → audiences → traceable requ
 - **Inclusion:** Path exists; session data present or explicit curator interest;
   typically a Git root; not under backup/review dirs. Candidate observations
   recommend consideration but never authorize ingest by themselves.
-- **Exclusion:** Invalid paths; slug-decode ambiguity; backup trees (`OLD`, `Save`); review dirs (CodingTools, MCPs, etc.).
+- **Exclusion:** Invalid paths; slug-decode ambiguity; backup trees (`OLD`, `Save`); reference/review trees (`Code/CodingTools`, `MCP/MCPs`, `Spank/sOSS`, etc.). Third-party source may be inspected explicitly but is not promoted as owned work.
 - **Filters:** Scan supports source and recency filters. Ingest supports source
   selection and a run-wide minimum source-file size; it does not define
   vendor-specific event-count or duration thresholds.

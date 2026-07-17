@@ -1,6 +1,7 @@
 """Tests for codess scan CLI and run_scan."""
 
 import json
+import sqlite3
 
 import pytest
 import os
@@ -32,6 +33,112 @@ def _scan_env(base: Path, **extra: str) -> dict:
     return {**os.environ.copy(), "CODESS_REGISTRY": str(reg), **extra}
 
 
+def _write_codex_session(root: Path, project: Path, session_id: str = "session") -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f"{session_id}.jsonl").write_text(json.dumps({
+        "type": "session_meta", "timestamp": "2026-07-10T00:00:00Z",
+        "payload": {"id": session_id, "cwd": str(project)},
+    }) + "\n")
+
+
+def test_scan_rejects_remote_cursor_uri_that_looks_like_project_child(tmp_path):
+    work = tmp_path / "work"
+    project = work / "project"
+    project.mkdir(parents=True)
+    codex = tmp_path / "codex"
+    _write_codex_session(codex, project)
+    cursor = tmp_path / "cursor" / "User"
+    ws = cursor / "workspaceStorage" / "remote"
+    ws.mkdir(parents=True)
+    (ws / "workspace.json").write_text(json.dumps({
+        "folder": "vscode-remote://ssh-remote+host/home/user/other"
+    }))
+    env = _scan_env(
+        tmp_path, CODESS_CC_PROJECTS=str(tmp_path / "cc"),
+        CODESS_CODEX_SESSIONS=str(codex), CODESS_CURSOR_DATA=str(cursor),
+    )
+    result = _run(["scan", "--dir", str(work), "--days", "0", "--out", "-"], env=env)
+    assert result.returncode == 0
+    assert result.stdout.strip().splitlines()[1].split(",")[:2] == ["project", "Codex"]
+
+
+def test_scan_coalesces_nested_workspace_into_observed_git_project(tmp_path):
+    import sqlite3
+
+    work = tmp_path / "work"
+    project = work / "project"
+    child = project / "src"
+    child.mkdir(parents=True)
+    (project / ".git").mkdir()
+    codex = tmp_path / "codex"
+    _write_codex_session(codex, project)
+    cursor = tmp_path / "cursor" / "User"
+    ws = cursor / "workspaceStorage" / "child"
+    ws.mkdir(parents=True)
+    (ws / "workspace.json").write_text(json.dumps({"folder": str(child)}))
+    conn = sqlite3.connect(ws / "state.vscdb")
+    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    conn.commit()
+    conn.close()
+    env = _scan_env(
+        tmp_path, CODESS_CC_PROJECTS=str(tmp_path / "cc"),
+        CODESS_CODEX_SESSIONS=str(codex), CODESS_CURSOR_DATA=str(cursor),
+    )
+    result = _run(["scan", "--dir", str(work), "--days", "0", "--out", "-"], env=env)
+    assert result.returncode == 0
+    rows = result.stdout.strip().splitlines()
+    assert len(rows) == 2
+    assert rows[1].split(",")[:2] == ["project", "Codex|Cursor"]
+
+
+def test_scan_maps_lone_nested_workspace_to_nearest_git_root(tmp_path):
+    work = tmp_path / "work"
+    project = work / "project"
+    child = project / "src"
+    child.mkdir(parents=True)
+    (project / ".git").mkdir()
+    cursor = tmp_path / "cursor" / "User"
+    ws = cursor / "workspaceStorage" / "child"
+    ws.mkdir(parents=True)
+    (ws / "workspace.json").write_text(json.dumps({"folder": str(child)}))
+    env = _scan_env(
+        tmp_path, CODESS_CC_PROJECTS=str(tmp_path / "cc"),
+        CODESS_CODEX_SESSIONS=str(tmp_path / "codex"), CODESS_CURSOR_DATA=str(cursor),
+    )
+    result = _run(["scan", "--dir", str(work), "--days", "0", "--out", "-"], env=env)
+    assert result.returncode == 0
+    rows = result.stdout.strip().splitlines()
+    assert len(rows) == 2
+    assert rows[1].split(",", 1)[0] == "project"
+
+
+def test_scan_does_not_count_explicitly_missing_claude_source(tmp_path):
+    work = tmp_path / "work"
+    project = work / "project"
+    project.mkdir(parents=True)
+    cc = tmp_path / "cc"
+    slug = "-" + str(project.resolve()).lstrip("/").replace("/", "-")
+    source = cc / slug
+    source.mkdir(parents=True)
+    (source / "sessions-index.json").write_text(json.dumps({"entries": [{
+        "projectPath": str(project), "sessionId": "gone", "fileMtime": 1e12,
+        "messageCount": 5, "isSidechain": False,
+        "fullPath": str(source / "gone.jsonl"),
+    }]}))
+    codex = tmp_path / "codex"
+    _write_codex_session(codex, project)
+    cursor = tmp_path / "cursor" / "User"
+    cursor.mkdir(parents=True)
+    env = _scan_env(
+        tmp_path, CODESS_CC_PROJECTS=str(cc),
+        CODESS_CODEX_SESSIONS=str(codex), CODESS_CURSOR_DATA=str(cursor),
+    )
+    result = _run(["scan", "--dir", str(work), "--days", "0", "--out", "-"], env=env)
+    assert result.returncode == 0
+    assert result.stdout.strip().splitlines()[1].split(",")[:2] == ["project", "Codex"]
+    assert "stale_index_entries=1" in result.stderr
+
+
 def test_scan_mixed_dir_dirs(tmp_path):
     """Scan with both --dirs file and --dir: dedupe, both used."""
     work = tmp_path / "work"
@@ -60,6 +167,67 @@ def test_scan_mixed_dir_dirs(tmp_path):
     assert r.returncode == 0
     lines = r.stdout.strip().split("\n")
     assert len(lines) >= 2  # header + at least one project (deduped)
+
+
+def test_scan_dirs_accepts_candidate_csv_directory_path_column(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    dirs_file = tmp_path / "candidates.csv"
+    dirs_file.write_text(
+        "title,directory_path,repo_url,notes\n"
+        f'example,{work},https://example.invalid/repo,"contains, comma"\n'
+    )
+    result = _run(
+        ["scan", "--dirs", str(dirs_file), "--days", "0", "--out", "-"],
+        env=_scan_env(tmp_path),
+    )
+    assert result.returncode == 0
+    assert "directory root does not exist" not in result.stderr
+
+
+def test_multi_root_scan_does_not_register_cursor_global_as_project(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    cursor = tmp_path / "cursor" / "User"
+    (cursor / "globalStorage").mkdir(parents=True)
+    db = cursor / "globalStorage" / "state.vscdb"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)")
+    conn.execute("INSERT INTO cursorDiskKV VALUES (?, ?)", ("composerData:c1", b'{}'))
+    conn.commit()
+    conn.close()
+    reg = tmp_path / "registry"
+    env = _scan_env(tmp_path, CODESS_CURSOR_DATA=str(cursor), CODESS_REGISTRY=str(reg))
+    result = _run(
+        ["scan", "--dir", str(first), "--dir", str(second), "--days", "0", "--out", "-"],
+        env=env,
+    )
+    assert result.returncode == 0
+    registry_path = reg / "ingested_projects.json"
+    if registry_path.exists():
+        registry = json.loads(registry_path.read_text())
+        assert not any("(global)" in row["path"] for row in registry["projects"])
+
+
+def test_scan_prunes_legacy_cursor_global_pseudo_project(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    reg = tmp_path / "registry"
+    reg.mkdir()
+    (reg / "ingested_projects.json").write_text(json.dumps({"projects": [{
+        "path": str(work / "(global)"),
+        "scan": {"by_vendor": {"Cursor": {"sess": 5}}},
+    }]}))
+    result = _run(
+        ["scan", "--dir", str(work), "--days", "0", "--out", "-"],
+        env=_scan_env(tmp_path, CODESS_REGISTRY=str(reg)),
+    )
+    assert result.returncode == 0
+    registry = json.loads((reg / "ingested_projects.json").read_text())
+    assert registry["projects"] == []
+
 
 def test_scan_help():
     """Scan subcommand shows help."""
@@ -365,6 +533,45 @@ def test_scan_writes_csv(tmp_path):
     assert r.returncode == 0
     assert out_file.exists()
     assert "path,vendor" in out_file.read_text()
+
+
+def test_scan_rejects_vendor_project_mapping_inside_pruned_tree(tmp_path):
+    work = tmp_path / "work"
+    noisy_project = work / "node_modules" / "dependency"
+    noisy_project.mkdir(parents=True)
+    cc = tmp_path / "cc"
+    slug_dir = cc / ("-" + str(noisy_project.resolve()).lstrip("/").replace("/", "-"))
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "sessions-index.json").write_text(json.dumps({
+        "entries": [{
+            "projectPath": str(noisy_project), "sessionId": "s1",
+            "fileMtime": 1e12, "messageCount": 2, "isSidechain": False,
+        }]
+    }))
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    cursor = tmp_path / "cursor" / "User"
+    cursor.mkdir(parents=True)
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(cc),
+        CODESS_CODEX_SESSIONS=str(codex),
+        CODESS_CURSOR_DATA=str(cursor),
+    )
+
+    result = _run(["scan", "--dir", str(work), "--days", "9999", "--out", "-"], env=env)
+
+    assert result.returncode == 0
+    assert result.stdout.strip().splitlines() == ["path,vendor,sess,mb,span_weeks"]
+
+
+def test_scan_rejects_broad_system_root_before_source_discovery(tmp_path):
+    result = _run(
+        ["scan", "--dir", "/", "--out", "-"],
+        env=_scan_env(tmp_path),
+    )
+    assert result.returncode == 1
+    assert "broad system traversal root" in result.stderr
 
 
 @pytest.mark.parametrize("subagent_flag,env_val,expected_sess", [

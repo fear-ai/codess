@@ -18,7 +18,7 @@ from codess.baseline_validation import (
 )
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.schema_contract import FORMAT_VERSION, has_legacy_schema, verify_package
-from codess.snapshot import snapshot_store_paths
+from codess.snapshot import current_store_paths, snapshot_store_paths
 
 
 def preserve_legacy(project: Path, enabled: bool) -> Path | None:
@@ -139,6 +139,30 @@ def archive_stale_working_stores(project: Path) -> Path | None:
     return destination
 
 
+def reset_rebuildable_working_stores(project: Path) -> list[str]:
+    """Discard derived working stores only after verifying a retained snapshot."""
+    base = project / ".codess"
+    databases = sorted(base.glob("*.db"))
+    if not databases:
+        return []
+    if not (base / "current.json").exists() or not current_store_paths(project):
+        raise RuntimeError(
+            "refusing to rebuild working stores without a readable retained snapshot"
+        )
+    removed = []
+    for database in databases:
+        removed.append(database.name)
+        for path in (
+            database,
+            Path(str(database) + "-journal"),
+            Path(str(database) + "-wal"),
+            Path(str(database) + "-shm"),
+        ):
+            path.unlink(missing_ok=True)
+    (base / "ingest_state.json").unlink(missing_ok=True)
+    return removed
+
+
 def run_ingest(
     project: Path,
     *,
@@ -187,6 +211,7 @@ def apply_project(
         raise RuntimeError("policy requires --repeat")
     legacy = preserve_legacy(project, preserve_legacy_stores)
     working_archive = archive_stale_working_stores(project)
+    first_reset = reset_rebuildable_working_stores(project)
     first_ingest = run_ingest(
         project, source=source, raw_mode=raw_mode, registry=registry,
         min_size=min_size, repo_root=repo_root,
@@ -201,6 +226,7 @@ def apply_project(
     second_ingest = None
     fixed_point = None
     if repeat:
+        repeat_reset = reset_rebuildable_working_stores(project)
         second_ingest = run_ingest(
             project, source=source, raw_mode=raw_mode, registry=registry,
             min_size=min_size, repo_root=repo_root,
@@ -234,6 +260,10 @@ def apply_project(
         "project": str(project), "status": final["status"],
         "legacy_preserved": str(legacy) if legacy else None,
         "working_stores_archived": str(working_archive) if working_archive else None,
+        "working_stores_reset": {
+            "before_first": first_reset,
+            "before_repeat": repeat_reset if repeat else [],
+        },
         "first_ingest": first_ingest, "first_validation": first,
         "repeat_ingest": second_ingest, "repeat_validation": second,
         "fixed_point": fixed_point, "final_validation": final,

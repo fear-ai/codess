@@ -74,6 +74,7 @@ AGGREGATORS = frozenset(
 # Path prefixes (relative to work root) excluded as review/backup-style trees in `is_excluded`.
 EXCLUDE_REVIEW_DIRS = (
     "CodingTools",
+    "Code/CodingTools",
     "MCP/MCPs",
     "Claw/Claws",
     "ZK/ZKs",
@@ -115,6 +116,8 @@ CONTENT_POLICY = os.environ.get("CODESS_CONTENT_POLICY")
 MAX_SOURCE_BYTES = env_int("CODESS_MAX_SOURCE_BYTES", 8 * 1024**3)
 MAX_EVENTS_PER_SOURCE = env_int("CODESS_MAX_EVENTS_PER_SOURCE", 500_000)
 MAX_EVENTS_PER_SESSION = env_int("CODESS_MAX_EVENTS_PER_SESSION", 250_000)
+MAX_CODESS_DB_BYTES = env_int("CODESS_MAX_CODESS_DB_BYTES", 2 * 1024**3)
+MAX_CURSOR_DB_BYTES = env_int("CODESS_MAX_CURSOR_DB_BYTES", 10 * 1024**3)
 
 # --- Batch / resilience: stop entire command on first error (otherwise log and continue) ---
 STOP = env_bool("CODESS_STOP")
@@ -172,6 +175,8 @@ def validate_config() -> list[str]:
         ("CODESS_MAX_SOURCE_BYTES", MAX_SOURCE_BYTES),
         ("CODESS_MAX_EVENTS_PER_SOURCE", MAX_EVENTS_PER_SOURCE),
         ("CODESS_MAX_EVENTS_PER_SESSION", MAX_EVENTS_PER_SESSION),
+        ("CODESS_MAX_CODESS_DB_BYTES", MAX_CODESS_DB_BYTES),
+        ("CODESS_MAX_CURSOR_DB_BYTES", MAX_CURSOR_DB_BYTES),
     ):
         if value <= 0:
             errs.append(f"{name}={value} must be > 0")

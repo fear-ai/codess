@@ -167,13 +167,21 @@ Useful queries:
 SELECT COUNT(*) FROM cursorDiskKV WHERE key LIKE 'bubbleId:%';
 SELECT COUNT(*) FROM cursorDiskKV WHERE key LIKE 'composerData:%';
 SELECT workspaceId, COUNT(*) FROM composerHeaders GROUP BY workspaceId;
+
+-- One composer/session: the cursorDiskKV primary-key index supports this range.
+SELECT key, value FROM cursorDiskKV
+WHERE key >= 'bubbleId:<composer-id>:'
+  AND key <  'bubbleId:<composer-id>:\U0010ffff';
 ```
 
 The main DB may have `-wal`, `-shm`, and backup companions. Do not modify or
 vacuum Cursor's live database from Codess. Codess uses URI-safe, query-only
 connections with a bounded busy timeout; committed rows still present only in
-the live WAL are visible. Global ingest issues prefix-range queries for the
-mapped composer ids rather than decoding every bubble in the global database.
+the live WAL are visible. Global ingest and project-level scan metrics issue
+prefix-range queries for the mapped composer ids rather than scanning or
+decoding unrelated bubbles in the global database. Workspace selection and SQL
+live in `codess.cursor_source`; the adapter only decodes selected values and
+normalizes events.
 
 ## 7. Current limitations
 

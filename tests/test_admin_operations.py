@@ -9,8 +9,11 @@ from pathlib import Path
 import pytest
 
 from codess.baseline_catalog import freeze_reviewed_catalogs, verify_reviewed_catalog
+from codess.baseline_operations import reset_rebuildable_working_stores
 from codess.baseline_validation import validate_project
-from codess.candidate_review import record_decision, refresh_candidates, validate_policy
+from codess.candidate_review import (
+    discover_git_roots, recommend, record_decision, refresh_candidates, validate_policy,
+)
 from codess.catalog_operations import onboard_catalog, relocate_project
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.project import parse_and_run
@@ -108,11 +111,65 @@ def test_candidate_refresh_uses_scan_and_preserves_review(tmp_path, monkeypatch)
     assert item["observations"]["git"]["commits_since"] == 1
 
 
+def test_git_discovery_stops_at_first_repository_boundary(tmp_path):
+    parent = tmp_path / "parent"
+    nested = parent / "vendor" / "nested"
+    parent.mkdir()
+    (parent / ".git").mkdir()
+    nested.mkdir(parents=True)
+    (nested / ".git").mkdir()
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    (sibling / ".git").mkdir()
+    assert discover_git_roots([tmp_path], max_depth=5) == [parent, sibling]
+
+
+def test_git_discovery_prunes_generated_dependency_and_cache_trees(tmp_path):
+    kept = tmp_path / "project"
+    kept.mkdir()
+    (kept / ".git").mkdir()
+    for name in (
+        "build", "Debug", "node_modules", ".cache", ".ccache", ".pyenv",
+        ".venv", "target", "cmake-build-release",
+    ):
+        nested = tmp_path / name / "accidental-repo"
+        nested.mkdir(parents=True)
+        (nested / ".git").mkdir()
+
+    assert discover_git_roots([tmp_path], max_depth=5) == [kept]
+
+
+def test_explicit_artifact_named_git_root_can_still_be_inspected(tmp_path):
+    explicit = tmp_path / "build"
+    explicit.mkdir()
+    (explicit / ".git").mkdir()
+    assert discover_git_roots([explicit], max_depth=1) == [explicit]
+
+
+def test_git_discovery_never_walks_a_broad_system_root():
+    assert discover_git_roots([Path("/")], max_depth=20) == []
+
+
 def test_candidate_policy_rejects_unknown_or_mistyped_fields():
     with pytest.raises(ValueError, match="unknown"):
         validate_policy({"policy_format": "codess.candidate-policy/1", "worthy": True})
     with pytest.raises(ValueError, match="nonnegative integer"):
         validate_policy({"policy_format": "codess.candidate-policy/1", "min_sessions": True})
+
+
+def test_empty_workspace_trace_is_not_cross_vendor_session_evidence(tmp_path):
+    result = recommend({
+        "path": str(tmp_path), "curation": {},
+        "observations": {
+            "session_count": 1,
+            "vendors": {
+                "Codex": {"sessions": 1},
+                "Cursor": {"sessions": 0, "workspace_trace": True},
+            },
+        },
+    })
+    assert result["outcome"] == "consider"
+    assert "cross_vendor_evidence" not in result["reasons"]
 
 
 def test_decision_and_plan_only_onboarding_do_not_ingest(tmp_path):
@@ -243,3 +300,15 @@ def test_relocation_rolls_back_catalog_and_pointer_on_verification_failure(
         relocate_project(registry, project_id, project, replacement)
     assert (registry / "projects.json").read_bytes() == before
     assert not (replacement / ".codess/current.json").exists()
+
+
+def test_fixed_point_reset_discards_only_rebuildable_working_stores(tmp_path):
+    project, _, _ = _captured_project(tmp_path)
+    working = project / ".codess/sessions_codex.db"
+    assert working.exists()
+    (Path(str(working) + "-journal")).write_bytes(b"derived")
+    removed = reset_rebuildable_working_stores(project)
+    assert removed == ["sessions_codex.db"]
+    assert not working.exists()
+    assert not Path(str(working) + "-journal").exists()
+    assert (project / ".codess/current.json").exists()

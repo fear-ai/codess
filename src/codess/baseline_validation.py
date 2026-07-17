@@ -566,9 +566,9 @@ def _validate_policy(
 
     expected_workspace_ids = policy.get("expected_cursor_workspace_ids")
     if expected_workspace_ids is not None:
-        from codess.project import get_cursor_workspace_ids
+        from codess.cursor_source import get_workspace_ids
 
-        actual_workspace_ids = get_cursor_workspace_ids(project_root)
+        actual_workspace_ids = get_workspace_ids(project_root)
         _add_check(
             report, "policy.cursor_workspace_ids",
             sorted(expected_workspace_ids) == actual_workspace_ids,

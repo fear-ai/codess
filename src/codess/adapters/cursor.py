@@ -2,13 +2,16 @@
 
 import json
 import logging
-import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
 from codess.content_processing import apply_processing
+from codess.cursor_source import (
+    connect_readonly,
+    iter_bubble_rows,
+    parse_timestamp as _parse_timestamp,
+)
 
 log = logging.getLogger(__name__)
 
@@ -16,61 +19,6 @@ _MAPPED_BUBBLE_FIELDS = frozenset({
     "type", "text", "createdAt", "timingInfo", "serverBubbleId",
     "toolFormerData", "toolResults", "modelInfo",
 })
-
-
-def _connect_readonly(db_path: Path) -> sqlite3.Connection:
-    """Open a URI-safe, query-only connection that can observe a live WAL."""
-    uri = db_path.resolve().as_uri() + "?mode=ro"
-    conn = sqlite3.connect(uri, uri=True, timeout=5)
-    conn.execute("PRAGMA query_only = ON")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    return conn
-
-
-def _table_columns(conn: sqlite3.Connection, table: str) -> dict[str, str]:
-    """Return lowercase -> actual column names for a fixed internal table."""
-    quoted = table.replace('"', '""')
-    return {
-        str(row[1]).lower(): str(row[1])
-        for row in conn.execute(f'PRAGMA table_info("{quoted}")')
-    }
-
-
-def _quoted_column(columns: dict[str, str], name: str) -> str | None:
-    actual = columns.get(name.lower())
-    if actual is None:
-        return None
-    return '"' + actual.replace('"', '""') + '"'
-
-
-def _parse_timestamp(value) -> float | None:
-    """Return a Cursor timestamp as Unix milliseconds.
-
-    Bubble ``createdAt`` is normally ISO-8601. Numeric values are accepted only
-    when they plausibly represent Unix seconds or milliseconds; small client
-    timing values are deliberately rejected.
-    """
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        number = float(value)
-        if number >= 1e12:
-            return number
-        if number >= 1e9:
-            return number * 1000
-        return None
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not stripped:
-            return None
-        try:
-            dt = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
-        except (TypeError, ValueError):
-            return None
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp() * 1000
-    return None
 
 
 def _bubble_timestamp(data: dict) -> float | None:
@@ -107,8 +55,11 @@ def get_composer_data(db_path: Path) -> list[dict]:
         return []
     out = []
     try:
-        with closing(_connect_readonly(db_path)) as conn:
-            cur = conn.execute("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'")
+        with closing(connect_readonly(db_path)) as conn:
+            cur = conn.execute(
+                "SELECT key, value FROM cursorDiskKV "
+                "WHERE key >= 'composerData:' AND key < 'composerData;'"
+            )
             for key, value in cur:
                 composer_id = key.split(":", 1)[1] if ":" in key else key
                 entry = {"composer_id": composer_id, "key": key, "value_null": value is None}
@@ -137,173 +88,6 @@ def get_composer_data(db_path: Path) -> list[dict]:
     return out
 
 
-def get_composer_headers(
-    db_path: Path,
-    workspace_ids: set[str] | None = None,
-) -> dict[str, dict]:
-    """Return composer header metadata, optionally limited to workspace ids."""
-    if not db_path.exists() or workspace_ids == set():
-        return {}
-    try:
-        conn = _connect_readonly(db_path)
-        try:
-            columns = _table_columns(conn, "composerHeaders")
-            composer_col = _quoted_column(columns, "composerId")
-            workspace_col = _quoted_column(columns, "workspaceId")
-            if composer_col is None or workspace_col is None:
-                raise sqlite3.OperationalError(
-                    "composerHeaders lacks composerId or workspaceId"
-                )
-
-            def optional(name: str) -> str:
-                column = _quoted_column(columns, name)
-                return f"{column} AS {name}" if column else f"NULL AS {name}"
-
-            sql = (
-                f"SELECT {composer_col} AS composerId, "
-                f"{workspace_col} AS workspaceId, "
-                f"{optional('createdAt')}, {optional('lastUpdatedAt')}, "
-                f"{optional('isArchived')}, {optional('isSubagent')} "
-                "FROM composerHeaders"
-            )
-            params: tuple[str, ...] = ()
-            if workspace_ids is not None:
-                ordered = tuple(sorted(workspace_ids))
-                placeholders = ",".join("?" for _ in ordered)
-                sql += f" WHERE {workspace_col} IN ({placeholders})"
-                params = ordered
-            rows = conn.execute(sql, params)
-            return {
-                str(composer_id): {
-                    "workspace_id": workspace_id,
-                    "created_at": created_at,
-                    "last_updated_at": last_updated_at,
-                    "is_archived": bool(is_archived),
-                    "is_subagent": bool(is_subagent),
-                }
-                for (
-                    composer_id,
-                    workspace_id,
-                    created_at,
-                    last_updated_at,
-                    is_archived,
-                    is_subagent,
-                ) in rows
-                if composer_id
-            }
-        finally:
-            conn.close()
-    except Exception as exc:
-        log.warning("Cannot read Cursor composer headers from %s: %s", db_path, exc)
-        return {}
-
-
-def get_db_metrics(db_path: Path) -> dict:
-    """Return bubble counts, DB size, and header time range from state.vscdb."""
-    from contextlib import closing
-
-    if not db_path.exists():
-        return {
-            "count": 0,
-            "events": 0,
-            "size_bytes": 0,
-            "invalid_keys": 0,
-            "header_count": 0,
-            "timed_header_count": 0,
-            "min_ts": None,
-            "max_ts": None,
-            "error": None,
-        }
-    try:
-        size_bytes = db_path.stat().st_size
-    except OSError:
-        size_bytes = 0
-    try:
-        with closing(_connect_readonly(db_path)) as conn:
-            cur = conn.execute(
-                "SELECT key FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
-            )
-            composers = set()
-            events = 0
-            invalid_keys = 0
-            for (key,) in cur:
-                parts = key.split(":")
-                if len(parts) >= 3:
-                    composers.add(parts[1])
-                    events += 1
-                else:
-                    invalid_keys += 1
-            min_ts = max_ts = None
-            header_count = timed_header_count = 0
-            try:
-                columns = _table_columns(conn, "composerHeaders")
-                composer_col = _quoted_column(columns, "composerId")
-                created_col = _quoted_column(columns, "createdAt")
-                updated_col = _quoted_column(columns, "lastUpdatedAt")
-                if composer_col:
-                    ordered_composers = sorted(composers)
-                    for offset in range(0, len(ordered_composers), 900):
-                        composer_chunk = tuple(
-                            ordered_composers[offset : offset + 900]
-                        )
-                        placeholders = ",".join("?" for _ in composer_chunk)
-                        created_expr = created_col or "NULL"
-                        updated_expr = updated_col or "NULL"
-                        rows = conn.execute(
-                            f"SELECT {created_expr}, {updated_expr} "
-                            "FROM composerHeaders "
-                            f"WHERE {composer_col} IN ({placeholders})",
-                            composer_chunk,
-                        )
-                        for created_at, updated_at in rows:
-                            header_count += 1
-                            parsed_min = _parse_timestamp(created_at)
-                            parsed_max = _parse_timestamp(updated_at)
-                            if parsed_max is None:
-                                parsed_max = parsed_min
-                            if parsed_min is not None or parsed_max is not None:
-                                timed_header_count += 1
-                            if parsed_min is not None:
-                                min_ts = (
-                                    parsed_min
-                                    if min_ts is None
-                                    else min(min_ts, parsed_min)
-                                )
-                            if parsed_max is not None:
-                                max_ts = (
-                                    parsed_max
-                                    if max_ts is None
-                                    else max(max_ts, parsed_max)
-                                )
-            except sqlite3.OperationalError as exc:
-                if "no such table" not in str(exc).lower():
-                    log.warning("Cannot read Cursor header metrics from %s: %s", db_path, exc)
-        return {
-            "count": len(composers),
-            "events": events,
-            "size_bytes": size_bytes,
-            "invalid_keys": invalid_keys,
-            "header_count": header_count,
-            "timed_header_count": timed_header_count,
-            "min_ts": min_ts,
-            "max_ts": max_ts,
-            "error": None,
-        }
-    except Exception as exc:
-        log.warning("Cannot read Cursor metrics from %s: %s", db_path, exc)
-        return {
-            "count": 0,
-            "events": 0,
-            "size_bytes": size_bytes,
-            "invalid_keys": 0,
-            "header_count": 0,
-            "timed_header_count": 0,
-            "min_ts": None,
-            "max_ts": None,
-            "error": str(exc),
-        }
-
-
 def _iter_bubbles(
     db_path: Path,
     stats: dict[str, int] | None = None,
@@ -312,27 +96,9 @@ def _iter_bubbles(
     """Yield (composer_id, bubble_id, message_dict) from cursorDiskKV bubbleId keys."""
     if composer_ids == set():
         return
-    conn = _connect_readonly(db_path)
+    conn = connect_readonly(db_path)
     try:
-        if composer_ids is None:
-            rows = conn.execute(
-                "SELECT key, value FROM cursorDiskKV "
-                "WHERE key LIKE 'bubbleId:%'"
-            )
-        else:
-            rows = (
-                row
-                for selected_id in sorted(composer_ids)
-                for row in conn.execute(
-                    "SELECT key, value FROM cursorDiskKV "
-                    "WHERE key >= ? AND key < ?",
-                    (
-                        f"bubbleId:{selected_id}:",
-                        f"bubbleId:{selected_id}:\U0010ffff",
-                    ),
-                )
-            )
-        for key, value in rows:
+        for key, value in iter_bubble_rows(conn, composer_ids):
             if stats is not None:
                 stats["rows"] = stats.get("rows", 0) + 1
             if value is None:

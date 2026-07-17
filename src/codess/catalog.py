@@ -10,7 +10,7 @@ from typing import Any
 
 
 CATALOG_FORMAT = "codess.catalog/1"
-REFERENCE_SEGMENTS = frozenset({"sOSS", "Claws", "ZKs"})
+REFERENCE_SEGMENTS = frozenset({"sOSS", "Claws", "ZKs", "CodingTools"})
 REQUIRED_CSV_FIELDS = frozenset({"title", "directory_path", "repo_url"})
 
 
@@ -21,7 +21,12 @@ class CatalogError(ValueError):
 def classify_project_path(path: Path, *, work_root: Path | None = None) -> dict[str, str]:
     """Return conservative initial curation, suitable for explicit review."""
     resolved = path.expanduser().resolve()
-    root = (work_root or Path.home() / "Work").expanduser().resolve()
+    default_work = (Path.home() / "Work").resolve()
+    try:
+        resolved.relative_to(default_work)
+        root = default_work
+    except ValueError:
+        root = (work_root or default_work).expanduser().resolve()
     try:
         relative = resolved.relative_to(root)
         parts = relative.parts

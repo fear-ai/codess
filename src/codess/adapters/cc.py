@@ -667,6 +667,12 @@ def normalize_user(
             _diagnostic(opts, "external_content_records")
         except (OSError, UnicodeError, ValueError, SourceCompatibilityError) as exc:
             _diagnostic(opts, "external_content_errors")
+            from codess.ingest_review import record_ingest_review
+            record_ingest_review(
+                opts, exc, source=path, vendor="Claude",
+                stage="external_content_extraction",
+                record_type="external.tool_result",
+            )
             if opts.get("strict_mapping"):
                 if isinstance(exc, SourceCompatibilityError):
                     raise

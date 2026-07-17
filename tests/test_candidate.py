@@ -33,6 +33,11 @@ def test_is_excluded_review_codingtools():
     assert is_excluded(p)
 
 
+def test_is_excluded_actual_code_codingtools_layout():
+    p = Path("/Users/walter/Work/Code/CodingTools/codex/codex-rs")
+    assert is_excluded(p)
+
+
 def test_is_excluded_review_mcp_mcps():
     p = Path("/Users/walter/Work/MCP/MCPs/fastmcp")
     assert is_excluded(p)

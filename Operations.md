@@ -9,8 +9,9 @@ state says a source is unchanged. It does not alter the Project's `.codess`,
 Project catalog, registry statistics, raw store, snapshots, or ingest state.
 
 The `codess.ingest-preflight/1` JSON result contains source/session/event counts,
-diagnostics, resource observations, limits, and temporary-store checks. This
-proves current records can normalize under the current package. It does not
+diagnostics, resource observations, limits, content-failure review records, and
+temporary-store checks. This proves current records can normalize under the
+current package. It does not
 prove raw durability, snapshot promotion, or a two-run fixed point;
 `python -m main baseline apply` is the acceptance gate for those properties;
 `tools/apply_and_verify.py` is its compatibility wrapper.
@@ -49,10 +50,131 @@ projects envelopes to mapped fields before retaining them; completed source
 buffers are explicitly deleted and garbage collection follows the transaction.
 Content excerpts retain per-record limits.
 
+A size, content-type/shape, or character-set failure is not assumed to be bad
+content. Preflight and routine reports add a
+`codess.ingest-content-review/1` record with the stage, vendor, exception class,
+safe size/type/encoding observations, candidate causes, and recommended checks.
+Review wrong source scope, wrong session boundary, container/binary content
+mistaken for text, and an unmapped vendor variant before classifying the source
+as malformed or overriding a limit. These records retain no content excerpts.
+An override is an explicit operational decision, not automatic recovery.
+
 One selected multi-session Cursor source is still the transaction buffer. If
 real evidence approaches the event maximum, use a staging table and
 composer-at-a-time writes in one transaction rather than silently raising the
 defaults.
+
+## Storage observations and retention
+
+`python -m main storage report` records a dated
+`codess.storage-observation/1` document under
+`~/.codess/observations/storage/` and returns the same JSON. Each run compares
+current totals with the preceding observation. `--no-record` is the read-only
+inspection form; `--output` writes an additional copy.
+
+The report covers current CoSchema database logical/allocated size, SQLite
+page/freelist utilization, table counts, prompt/response/tool text counts,
+largest sessions, sessions with at most two events, Cursor database size,
+current and superseded snapshot allocation, and referenced/unreferenced raw
+objects. It warns above 2 GiB for one CoSchema database and 10 GiB for Cursor;
+use `CODESS_MAX_CODESS_DB_BYTES` and `CODESS_MAX_CURSOR_DB_BYTES` for configured
+defaults or command options for one report.
+
+CoSchema v3 deliberately does not persist token observations. The storage
+report instead streams distinct current source URIs into a versioned derived
+token observation grouped by month/model/source. Claude message usage is
+deduplicated and labeled `local_observed`. Codex positive cumulative deltas are
+labeled `local_derived_provisional` until their reset/fork/interleave behavior
+is validated against the CodexBar lineage algorithm. Cursor remains explicitly
+unavailable because no verified local token field is mapped. These are usage
+observations, not billed cost, and are never inferred from text length.
+
+Storage locations and cleanup boundaries are:
+
+- immutable snapshots: `~/.codess/projects/<project-id>/snapshots/`;
+- current pointers: `~/.codess/projects/<project-id>/current.json` and the
+  project-local `.codess/current.json`;
+- content-addressed raw objects: `~/.codess/raw/codess.raw-1/objects/`;
+- pre-package working archives: `<project>/.codess/working-archives/`.
+
+The active retention policy keeps exactly the central `current.json` snapshot
+for each Project and the raw objects named by those current raw manifests. It
+does not retain a historical snapshot merely because it is old, reviewed, or
+named as a parent. A parent snapshot ID is durable lineage information, not a
+promise that the parent's bytes remain resolvable. Working archives are outside
+this policy and are never removed by the command.
+
+Pruning is mark-and-sweep and dry-run by default:
+
+```sh
+python -m main storage prune --registry ~/.codess --output /tmp/codess-prune.json
+python -m main storage prune --registry ~/.codess --apply
+```
+
+The plan validates each central current pointer and manifest, every current DB
+hash and SQLite quick-check, each raw-manifest hash, and retained raw-object
+presence and size. It then lists every superseded snapshot and every object not
+referenced by a current manifest with reclaimable allocation. `--apply`
+recomputes that plan immediately, performs only the listed removals, checks the
+zero-candidate postcondition, and writes a receipt below
+`~/.codess/receipts/retention/` (or `--receipt`). It does not delete vendor
+stores, Project working databases, working archives, or observation history.
+
+Approved/reviewed catalogs are checked before deletion. A catalog whose
+selected `snapshot_id` is superseded blocks apply: run `baseline freeze` after
+the current baselines have passed validation, or explicitly remove the stale
+catalog member if it is no longer approved. Never rewrite only its snapshot ID,
+because its semantic digest and validation evidence describe the old build. An
+old `parent_snapshot_id` is reported but does not pin storage. Active
+Project-local `.codess/current.json` pointers are also checked; a stale one
+blocks apply and should be repaired by a validated rebuild/relocation that
+updates both central and local pointers.
+
+### Full-scan boundaries
+
+Routine work should begin from selected Projects and current pointers, not from
+all vendor history:
+
+- Cursor ingestion resolves workspace IDs to composer headers, then uses
+  indexed key ranges for only those composers. Even an explicit all-composer
+  audit uses a bounded prefix range rather than `LIKE`. A full transactional
+  Cursor backup occurs only for raw capture, not querying.
+- Claude resolves the selected Project's storage directory. Candidate discovery
+  reads top-level session indexes only; feature audit is explicitly bounded by
+  `--max-files`.
+- Codex currently has no vendor Project index, so discovery and per-Project
+  lookup still scan session metadata across active/archive JSONL. The next
+  optimization is a persistent `(path, size, mtime_ns) -> session id/cwd`
+  inventory, updating only new or changed files.
+- Token accounting streams distinct source URIs referenced by current stores.
+  It avoids unrelated sources but rereads a referenced JSONL; the next
+  optimization is a fingerprinted per-file cache of monthly aggregates.
+- `storage report` enumerates current stores directly. It reads only current raw
+  manifests; it lists snapshot directories and raw object filenames once to
+  measure reclaimable storage. `storage prune` necessarily performs the same
+  one-pass mark/sweep inventory.
+- Candidate Git discovery, vendor feature audits, baseline validation, and
+  evidence gathering are explicit review operations. Their whole-set scans are
+  kept off routine ingest/query paths and bounded by selected roots, depth, file
+  limits, or current catalog membership.
+
+### Where text actually resides
+
+- Vendor Claude/Codex JSONL and Cursor `bubbleId:<composer>:*` values contain
+  the source prompt/response text that remains in the vendor store. A captured
+  or sealed raw object preserves the exact source container.
+- `events.content` contains the normalized prompt or response excerpt;
+  `tool_input` and `tool_output` contain normalized tool material. These fields
+  may be sanitized, redacted by policy, and bounded, so they are searchable
+  projections rather than exact raw text.
+- `content_objects` and relation tables type/link normalized inline content or
+  raw/derived objects; storage class determines whether the content itself is
+  inline. A content-object row is not automatically an exact vendor record.
+- `sessions`, `interactions`, and `model_turns` define identity and boundaries,
+  not prompt/response bodies. `source_records` provides locators,
+  classification, and parameters; it does not by itself contain the source
+  body. Projects, locations, and workspace bindings likewise contain no chat
+  text.
 
 ## Evidence inventory
 
@@ -100,3 +222,25 @@ without replacement, and relocating from old to new. The historical
 `retire_project.py` requires a new location and is therefore a relocation
 wrapper; the explicit operations are under `catalog location` and
 `catalog relocate`.
+
+## Current compatibility baselines
+
+The July 2026 gap pass added accepted, captured, fixed-point baselines for
+`Claw/setpack`, `Code/Misses`, `Spank/spank-rs`, `ZK/insight`, `ZK/ZeroPerf`, `WP/wp`,
+`WP/wpages`, and `WP/harduw`. Each current snapshot passes SQLite integrity and foreign keys,
+manifest counts and hashes, global-ID checks, event ordering, JSON validation,
+raw stored/content hashes, project policy, and all query-smoke modes. The only
+bounded mapping diagnostics are historical Codex results without call IDs:
+323 in `spank-rs`, 36 in `wpages`, 30 in `setpack`, and 9 in `harduw`.
+
+Routine reconciliation may pass
+`~/Work/Code/SWEmore/active_work_projects_since_2026-05.csv` directly to
+`--dirs`. Cursor's central database is measured once per multi-root scan; its
+unattributed aggregate can be displayed as `(global)` but is not a Project or a
+registry entry. Project rows use only composer IDs linked by workspace headers.
+
+Relocated projects can keep vendor-owned source data at its original local
+locator. An approved `.codess/source-links.json` maps that immutable source
+identity to the current Project location. `ZK/insight` uses this mechanism for
+Claude transcripts retained under the former `ZK/ZKs/insight` slug; neither the
+Claude store nor its source locators are rewritten.

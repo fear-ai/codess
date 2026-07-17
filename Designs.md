@@ -806,6 +806,18 @@ permissions, encryption, retention, and deletion policy to raw objects
 separately. A redacted derivative is a different object/class and must never be
 labeled exact raw evidence.
 
+Routine storage accounting is a derived observation, not part of CoSchema.
+Each invocation records database allocation/utilization, entity counts,
+content/session skew, snapshot/raw allocation, thresholds, and a delta from the
+preceding observation. Retention selection precedes garbage collection. The
+current operating policy uses one mark per Project: the central `current.json`
+snapshot. Current raw manifests form the object mark set; every other snapshot
+and unmarked raw object is reclaimable. Reviewed catalogs validate current
+selections rather than pin old bytes. A stale selected catalog or active local
+pointer blocks pruning; historical parent IDs remain lineage labels without
+retaining storage. Vendor source stores and Project working archives are never
+cleanup targets for Codess.
+
 ### Retiring or replacing a local directory
 
 Claude Code and Codex transcripts live in machine-local vendor stores, and
@@ -867,6 +879,23 @@ uses an explicit saved selection policy or selection set. Tests must always use
 an isolated registry; temporary test projects must never enter the personal
 catalog.
 
+`~/.codess/projects.json` is authoritative for stable Project identity,
+locations and their lifecycle state, path aliases, curation, and vendor
+workspace bindings. Project-local `.codess/project.json` binds the checkout to
+that identity; `.codess/source-links.json` records explicitly approved
+historical vendor identities after moves. `ingested_projects.json` remains an
+operational path-keyed summary of recent scan/ingest/query observations, not a
+second identity catalog. Each retained CoSchema snapshot projects the relevant
+Project, location, and workspace-binding facts so it remains interpretable on
+its own.
+
+Vendor discovery evidence stays vendor-specific: Claude supplies project paths
+through `sessions-index.json` and project storage slugs; Codex supplies `cwd`
+in `session_meta` under active/archive roots; Cursor joins
+`workspaceStorage/*/workspace.json` to `composerHeaders.workspaceId` and then
+selects the corresponding composer key ranges. None of those vendor locators
+alone authorizes curation or proves repository identity.
+
 ### Reference collections and topical defaults
 
 Most known OSS/reference collections are below path segments `sOSS`, `Claws`,
@@ -925,12 +954,12 @@ observations before selection:
 |---|---|
 | `ZK/Zero400` | Priority: active-work list plus meaningful Claude/Cursor evidence |
 | `ZK/zerowalletmac` | Imported compatibility candidate: one current Claude session plus two Cursor sessions linked explicitly from the former `zerowallet400` workspace; direct root/`src` Cursor traces still have no headers |
-| `Code/Misses` | Priority candidate: substantial recent work and harness markers; reconcile root identity with the previously discovered nested `petri/petri` project |
+| `Code/Misses` | Accepted Claude stress baseline: 18 main plus 105 subagent sessions, 26,658 events, 373 external artifacts, and 123 captured source revisions; root identity is the repository root |
 | `Code/CodeSess` | Priority: active implementation and `.codess`; locate/validate current sources from all three vendors |
 | `Spank/spank-py` | Priority: active-work list, harness markers, meaningful source evidence, and an old store that should be rebuilt |
-| `Spank/spank-rs` | Candidate: active-work list and Claude marker; validate whether the `perf` zero-session trace maps to this root |
+| `Spank/spank-rs` | Accepted Codex baseline: four sessions and 31,046 events; the nested `perf` Cursor workspace maps to the repository root but contains no attributable composer sessions |
 | `Claude/CContext` | Candidate/path-mapping case: active-work list, weak marker, and current zero-session trace |
-| `Claw/setpack` | Candidate: active-work list and meaningful session evidence despite no repository marker |
+| `Claw/setpack` | Accepted large-single-session Codex baseline: 8,473 normalized events from one 18,223-record source despite no repository marker |
 | `Spank/HECpoc` | Candidate/path-mapping case: substantial local work but current zero-session trace and no marker |
 | `ZK/Zebro` | Local active candidate with no harness marker yet; current configured GitHub remote was unavailable, which does not invalidate the local repository |
 | `ZK/Requihash` | Local active candidate with no harness marker yet; current configured GitHub remote was unavailable, which does not invalidate the local repository |
@@ -943,15 +972,27 @@ remote `unchecked`; remote availability is updated only by a new, dated
 observation and never inferred from an old list.
 
 Supplement the CSV with evidence-driven candidates it does not currently list:
-`Code/SWEmore` itself and `ZK/ZeroPerf` remain priority candidates because the
-fresh vendor scan found recent meaningful sessions. `WP/harduw` remains a
-deferred cross-vendor compatibility baseline. `WP/multiwp`, `WP/must-py`,
-`WP/wp`, and `WP/wpages` remain reviewable but dormant. `Code/jsonschema` is an
-external/reference fixture only.
+`Code/SWEmore` itself remains a priority baseline. `ZK/ZeroPerf` is now an
+accepted Claude baseline with eight sessions, 7,398 events, 71 artifacts, and
+nine raw revisions including one external tool-result file. Dormant `WP/wp`,
+`WP/wpages`, and `WP/harduw` are accepted compatibility baselines; their former
+working stores were preserved where present. `WP/multiwp` and `WP/must-py` were
+stale Claude-index observations and are not current candidates. `Code/jsonschema`
+is an external/reference fixture only.
+
+`Code/CodingTools`, including the upstream Codex checkout whose Rust workspace
+is `codex/codex-rs`, is third-party reference source. Git recency or local LLM
+sessions there may justify compatibility inspection, but do not make it owned
+work or authorize corpus onboarding.
 
 The remaining zero-session traces (`Github/skip` and any unresolved paths
 above) are discovery diagnostics or path-mapping work, not evidence of usable
 session ingestion.
+
+`ZK/ZKs/insight` was relocated to `ZK/insight`. Its Claude store deliberately
+retains the historical slug and is joined to the current checkout through an
+approved source link. The accepted baseline contains 14 sessions, 8,644 events,
+80 artifacts, four external tool-result sources, and 18 captured raw revisions.
 
 The old personal registry is not reused as catalog truth. The maintained CSV is
 now transformed into `catalog/active-work-review.json`, with observed CSV facts,
@@ -966,6 +1007,20 @@ Candidate review is a **curation view over observations**, not another vendor
 scanner and not ingest authorization. It consumes `run_scan()` results, an
 optional maintained candidate CSV or catalog, and bounded local repository
 observations. It must not duplicate Claude, Codex, or Cursor discovery.
+
+Recursive repository discovery prunes dependency, build-output, cache,
+environment, and VCS-internal descendants (`build`, `debug`, `dist`, `out`,
+`target`, `node_modules`, `.cache`, `.ccache`, `.pyenv`, `.git`, and comparable
+standard directories). Metadata-derived vendor paths beneath those descendants
+are excluded by the same shared policy. An explicitly supplied root remains
+eligible, permitting intentional inspection without making incidental nested
+artifacts candidates.
+
+Discovery defaults to the current directory, not the filesystem root or the
+entire home directory. Broad system roots such as `/`, `/var`, `/usr`,
+`/System`, `/Library`, `/Users`, and `/Volumes` are rejected. A deliberately
+scoped descendant (including a real project under `/var` or `/opt`) remains
+eligible.
 
 The compatibility spelling is `codess candidate-review`; its primary
 command-family location is `codess catalog candidates`. The interface is
@@ -987,6 +1042,8 @@ codess catalog candidates \
 Defaults are `--git local`, no recursive Git discovery, no network remote
 check, table output to stdout, and no catalog mutation. `--discover-git` is a
 bounded, explicit search for repositories with no vendor-session evidence; it
+stops descending a branch as soon as it finds a repository boundary, so nested
+vendored repositories and workspaces are not promoted as peer Projects. It
 never changes the index-led semantics of `scan`. `--check-remotes` records a
 dated network observation including configured and observed URLs, result, and
 credential/profile identity without secrets. A missing or inaccessible remote

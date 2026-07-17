@@ -17,14 +17,17 @@ from codess.adapters.codex import (
     get_session_metadata,
     process_file as process_codex_file,
 )
-from codess.adapters.cursor import get_composer_headers, process_db as process_cursor_db
+from codess.adapters.cursor import process_db as process_cursor_db
+from codess.cursor_source import (
+    get_composer_headers,
+    get_global_db as get_cursor_global_db,
+    get_workspace_dbs as get_cursor_workspace_dbs,
+    get_workspace_ids as get_cursor_workspace_ids,
+)
 from codess.project import RootsWhenEmpty, build_ingest_run_options, resolve_cli_roots
 from codess.project import (
     get_cc_session_dir,
     get_codex_session_files,
-    get_cursor_global_db,
-    get_cursor_workspace_dbs,
-    get_cursor_workspace_ids,
 )
 from codess.store import (
     SOURCE_PROFILES,
@@ -44,6 +47,7 @@ from codess.snapshot import create_snapshot
 from codess.store import record_processing_run, sync_project_catalog
 from codess.resources import ResourceLimitError, check_events, check_source, peak_rss_bytes
 from codess.evidence import summarize_store_evidence
+from codess.ingest_review import record_ingest_review
 
 log = logging.getLogger(__name__)
 
@@ -113,11 +117,14 @@ def _append_bounded_event(
     session_events = sessions_events.setdefault(session_id, [])
     if source_max is not None and source_total > source_max:
         raise ResourceLimitError(
-            f"source produced more than {source_max} events; maximum is {source_max}"
+            f"source produced more than {source_max} events; maximum is {source_max}",
+            limit_kind="source_events", observed=source_total, maximum=source_max,
         )
     if session_max is not None and len(session_events) >= session_max:
         raise ResourceLimitError(
-            f"session produced more than {session_max} events; maximum is {session_max}"
+            f"session produced more than {session_max} events; maximum is {session_max}",
+            limit_kind="session_events", observed=len(session_events) + 1,
+            maximum=session_max,
         )
     session_events.append(event)
     return source_total
@@ -189,9 +196,14 @@ def _ingest_cc(
             if st.st_size < min_size:
                 continue
             check_source(path, opts.get("max_source_bytes"))
-        except OSError as e:
-            log.warning("Cannot stat %s: %s", path, e)
+        except (OSError, ResourceLimitError) as e:
+            log.warning("Source validation failed for %s: %s", path, e)
+            record_ingest_review(
+                opts, e, source=path, vendor="Claude", stage="source_validation"
+            )
             failures += 1
+            if stop_on_error:
+                raise
             continue
         if not should_ingest(state_path, str(path.resolve()), mtime, force):
             continue
@@ -259,6 +271,9 @@ def _ingest_cc(
         except Exception as e:
             conn.rollback()
             log.exception("Ingest failed for %s: %s", path, e)
+            record_ingest_review(
+                opts, e, source=path, vendor="Claude", stage="record_mapping"
+            )
             failures += 1
             if stop_on_error:
                 raise
@@ -268,6 +283,10 @@ def _ingest_cc(
         state = load_ingest_state(state_path)
         state[str(path.resolve())] = mtime
         save_ingest_state(state_path, state)
+        if events_list:
+            kind = "subagent" if parent_session_id else "main"
+            kinds = opts.setdefault("claude_session_kinds", {"main": 0, "subagent": 0})
+            kinds[kind] += 1
         ingested += int(bool(events_list))
         del events_list
         gc.collect()
@@ -294,9 +313,14 @@ def _ingest_codex(
             if st.st_size < min_size:
                 continue
             check_source(path, opts.get("max_source_bytes"))
-        except OSError as e:
-            log.warning("Cannot stat %s: %s", path, e)
+        except (OSError, ResourceLimitError) as e:
+            log.warning("Source validation failed for %s: %s", path, e)
+            record_ingest_review(
+                opts, e, source=path, vendor="Codex", stage="source_validation"
+            )
             failures += 1
+            if stop_on_error:
+                raise
             continue
         if not should_ingest(state_path, str(path.resolve()), mtime, force):
             continue
@@ -345,6 +369,9 @@ def _ingest_codex(
         except Exception as e:
             conn.rollback()
             log.exception("Ingest failed for %s: %s", path, e)
+            record_ingest_review(
+                opts, e, source=path, vendor="Codex", stage="record_mapping"
+            )
             failures += 1
             if stop_on_error:
                 raise
@@ -386,9 +413,14 @@ def _ingest_cursor(
         try:
             mtime = db_path.stat().st_mtime
             check_source(db_path, opts.get("max_source_bytes"))
-        except OSError as e:
-            log.warning("Cannot stat %s: %s", db_path, e)
+        except (OSError, ResourceLimitError) as e:
+            log.warning("Source validation failed for %s: %s", db_path, e)
+            record_ingest_review(
+                opts, e, source=db_path, vendor="Cursor", stage="source_validation"
+            )
             failures += 1
+            if stop_on_error:
+                raise
             continue
         state_key = f"cursor:{db_path.resolve()}"
         if not should_ingest(state_path, state_key, mtime, force):
@@ -437,6 +469,9 @@ def _ingest_cursor(
         except Exception as e:
             conn.rollback()
             log.exception("Ingest failed for %s: %s", db_path, e)
+            record_ingest_review(
+                opts, e, source=db_path, vendor="Cursor", stage="record_mapping"
+            )
             failures += 1
             if stop_on_error:
                 raise
@@ -464,9 +499,14 @@ def _ingest_cursor(
         try:
             mtime = global_db.stat().st_mtime
             check_source(global_db, opts.get("max_source_bytes"))
-        except OSError as e:
-            log.warning("Cannot stat %s: %s", global_db, e)
+        except (OSError, ResourceLimitError) as e:
+            log.warning("Source validation failed for %s: %s", global_db, e)
+            record_ingest_review(
+                opts, e, source=global_db, vendor="Cursor", stage="source_validation"
+            )
             failures += 1
+            if stop_on_error:
+                raise
         else:
             state_key = f"cursor:global:{global_db.resolve()}"
             if should_ingest(state_path, state_key, mtime, force):
@@ -521,7 +561,8 @@ def _ingest_cursor(
                             for event in session_events
                         ],
                     )
-                    _record_raw(opts, global_db, "Cursor", conn)
+                    if sessions_events:
+                        _record_raw(opts, global_db, "Cursor", conn)
                     conn.commit()
                     total_events += sum(
                         len(events) for events in sessions_events.values()
@@ -530,6 +571,10 @@ def _ingest_cursor(
                     conn.rollback()
                     log.exception(
                         "Ingest failed for global %s: %s", global_db, e
+                    )
+                    record_ingest_review(
+                        opts, e, source=global_db, vendor="Cursor",
+                        stage="projected_record_mapping",
                     )
                     failures += 1
                     if stop_on_error:
@@ -629,6 +674,8 @@ def run(args) -> int:
         "max_events_per_source": iopt.max_events_per_source,
         "max_events_per_session": iopt.max_events_per_session,
         "resource_observations": [],
+        "content_failure_reviews": [],
+        "claude_session_kinds": {"main": 0, "subagent": 0},
     }
     if iopt.content_policy:
         policy_path = Path(iopt.content_policy).expanduser()
@@ -665,6 +712,7 @@ def run(args) -> int:
     for project_index, project_root in enumerate(roots):
         try:
             resource_start = len(opts["resource_observations"])
+            review_start = len(opts["content_failure_reviews"])
             project_root = project_root.resolve()
             if iopt.validate_only:
                 digest = hashlib.sha256(str(project_root).encode()).hexdigest()[:24]
@@ -876,6 +924,7 @@ def run(args) -> int:
                         "report_format": "codess.ingest-runtime/1",
                         "project": str(project_root), "sources": proj_stats,
                         "diagnostics": diagnostics,
+                        "content_failure_reviews": opts["content_failure_reviews"][review_start:],
                         "resource_observations": opts["resource_observations"][resource_start:],
                         "evidence_summary": _evidence_summary(evidence_paths),
                         "limits": {
@@ -920,7 +969,9 @@ def run(args) -> int:
             "sessions": total_ingested,
             "events": total_events,
             "diagnostics": diagnostics,
+            "content_failure_reviews": opts["content_failure_reviews"],
             "resource_observations": opts["resource_observations"],
+            "session_kinds": {"Claude": opts["claude_session_kinds"]},
             "store_checks": store_checks,
             "evidence_summary": _evidence_summary(sorted(staging_root.rglob("*.db"))),
             "limits": {
@@ -947,7 +998,8 @@ def run(args) -> int:
             f"known_ignored={diagnostics.get('known_ignored_records', 0)} "
             f"filtered={diagnostics.get('filtered_records', 0)} "
             f"external_content={diagnostics.get('external_content_records', 0)} "
-            f"external_errors={diagnostics.get('external_content_errors', 0)}",
+            f"external_errors={diagnostics.get('external_content_errors', 0)} "
+            f"reviewable_content_failures={diagnostics.get('reviewable_content_failures', 0)}",
             file=sys.stderr,
         )
     return 1 if had_error else 0

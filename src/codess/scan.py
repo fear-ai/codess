@@ -6,14 +6,19 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from codess.adapters.cursor import get_db_metrics
 from codess.config import AGGREGATORS, CC_PROJECTS, CODESS_DAYS, CURSOR_WS
-from codess.helpers import is_excluded, slug_to_path
+from codess.cursor_source import (
+    get_composer_headers,
+    get_db_metrics,
+    get_global_db as get_cursor_global_db,
+    get_workspace_dbs as get_cursor_workspace_dbs,
+    get_workspace_ids as get_cursor_workspace_ids,
+)
+from codess.helpers import is_excluded, local_path_from_uri, slug_to_path
 from codess.project import (
+    get_cc_session_dir,
     get_codex_session_files,
     get_codex_session_roots,
-    get_cursor_global_db,
-    get_cursor_workspace_dbs,
     read_codex_session_meta,
 )
 
@@ -53,6 +58,11 @@ def _record_invalid_keys(
     diagnostics["invalid_keys"] = diagnostics.get("invalid_keys", 0) + count
 
 
+def _record_count(diagnostics: dict | None, category: str, count: int) -> None:
+    if diagnostics is not None and count:
+        diagnostics[category] = diagnostics.get(category, 0) + count
+
+
 def _days_ago(max_ts: float) -> float | None:
     """(now - max_ts) in days. None if max_ts is 0 or invalid."""
     if not max_ts:
@@ -62,11 +72,13 @@ def _days_ago(max_ts: float) -> float | None:
 
 def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool = False) -> dict:
     """Use sessions-index.json when present; else top-level *.jsonl. Exclude subagents unless subagent. cutoff_ms: only count sessions with mtime >= cutoff."""
-    slug = "-" + str(p).lstrip("/").replace("/", "-")
-    cc_dir = CC_PROJECTS / slug
+    cc_dir = get_cc_session_dir(p)
     count, total_bytes, events, min_ts, max_ts = 0, 0, 0, float("inf"), 0.0
+    stale_index_entries = 0
+    main_sessions = 0
+    subagent_sessions = 0
     p_res = str(p.resolve())
-    if cc_dir.exists():
+    if cc_dir is not None and cc_dir.exists():
         idx = cc_dir / "sessions-index.json"
         if idx.exists():
             try:
@@ -74,18 +86,25 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool 
                 for e in data.get("entries", []):
                     if str(Path(e.get("projectPath", "")).resolve()) != p_res:
                         continue
+                    fp = e.get("fullPath")
+                    if fp and not Path(fp).is_file():
+                        stale_index_entries += 1
+                        continue
                     mtime = e.get("fileMtime") or 0
                     if cutoff_ms and mtime < cutoff_ms:
                         continue
-                    if e.get("isSidechain") and not subagent:
-                        continue
+                    if e.get("isSidechain"):
+                        subagent_sessions += 1
+                        if not subagent:
+                            continue
+                    else:
+                        main_sessions += 1
                     count += 1
                     events += e.get("messageCount", 0)
                     if mtime:
                         min_ts = min(min_ts, mtime)
                         max_ts = max(max_ts, mtime)
                     sid = e.get("sessionId", "")
-                    fp = e.get("fullPath")
                     added = False
                     if fp:
                         try:
@@ -104,19 +123,29 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool 
             except (json.JSONDecodeError, OSError, KeyError):
                 pass
         if count == 0:
-            for f in cc_dir.glob("*.jsonl"):
+            main_files = list(cc_dir.glob("*.jsonl"))
+            nested_files = list(cc_dir.glob("*/subagents/**/*.jsonl"))
+            subagent_sessions = len(nested_files)
+            selected = [(path, False) for path in main_files]
+            if subagent:
+                selected.extend((path, True) for path in nested_files)
+            for f, is_subagent in selected:
                 try:
                     mtime = f.stat().st_mtime * 1000
                     if cutoff_ms and mtime < cutoff_ms:
                         continue
                     count += 1
+                    if not is_subagent:
+                        main_sessions += 1
                     total_bytes += f.stat().st_size
                     min_ts = min(min_ts, mtime)
                     max_ts = max(max_ts, mtime)
                 except OSError:
                     pass
     span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
-    return {"count": count, "events": events, "size_mb": round(total_bytes / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts)}
+    if cc_dir is not None and not subagent_sessions:
+        subagent_sessions = len(list(cc_dir.glob("*/subagents/**/*.jsonl")))
+    return {"count": count, "events": events, "size_mb": round(total_bytes / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "stale_index_entries": stale_index_entries, "main_sessions": main_sessions, "subagent_sessions_available": subagent_sessions, "subagents_included": subagent}
 
 
 def _session_metrics_codex(p: Path, cutoff_ms: float | None = None) -> dict:
@@ -180,6 +209,24 @@ def _session_metrics_cursor(p: Path) -> dict:
             max_ts = max(max_ts, m["max_ts"])
         if m.get("error"):
             errors.append(f"{db}: {m['error']}")
+    workspace_ids = set(get_cursor_workspace_ids(p))
+    global_db = get_cursor_global_db()
+    if workspace_ids and global_db:
+        composer_ids = set(get_composer_headers(global_db, workspace_ids))
+        if composer_ids:
+            m = get_db_metrics(global_db, composer_ids)
+            count += m["count"]
+            events += m["events"]
+            total_bytes += m["size_bytes"]
+            invalid_keys += m.get("invalid_keys", 0)
+            header_count += m.get("header_count", 0)
+            timed_header_count += m.get("timed_header_count", 0)
+            if m.get("min_ts") is not None:
+                min_ts = min(min_ts, m["min_ts"])
+            if m.get("max_ts") is not None:
+                max_ts = max(max_ts, m["max_ts"])
+            if m.get("error"):
+                errors.append(f"{global_db}: {m['error']}")
     span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
     return {"count": count, "events": events, "size_mb": round(total_bytes / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts or None, "days_ago": _days_ago(max_ts), "invalid_keys": invalid_keys, "header_count": header_count, "timed_header_count": timed_header_count, "errors": errors}
 
@@ -202,6 +249,7 @@ def run_scan(
     debug: bool = False,
     subagent: bool = False,
     diagnostics: dict | None = None,
+    include_cursor_global: bool = True,
 ) -> list[dict]:
     """Discover projects with session data. Return list of dicts: path, vendor, sess, mb, span_weeks.
     recent_days: if set, only include sessions from last N days (CODESS_DAYS).
@@ -219,6 +267,13 @@ def run_scan(
             return False
 
     if "cc" in vendors and CC_PROJECTS.exists():
+        # An exact root may link to its historical Claude storage slug after
+        # the checkout itself was relocated.
+        linked_cc_dir = get_cc_session_dir(work_root)
+        if linked_cc_dir is not None:
+            cc_paths.add(work_root)
+            if debug:
+                print(f"[dir] CC source link: {linked_cc_dir} -> {work_root}", file=sys.stderr)
         for d in CC_PROJECTS.iterdir():
             if not d.is_dir():
                 continue
@@ -280,12 +335,9 @@ def run_scan(
             if wj.exists():
                 try:
                     data = json.loads(wj.read_text())
-                    f = data.get("folder") or ""
-                    f = f.get("path", f) if isinstance(f, dict) else str(f)
-                    if f.startswith("file://"):
-                        f = f[7:]
-                    if f and in_work_root(f):
-                        r = Path(f).resolve()
+                    local_folder = local_path_from_uri(data.get("folder"))
+                    if local_folder and in_work_root(str(local_folder)):
+                        r = local_folder
                         if r not in cursor_paths:
                             cursor_paths.add(r)
                             if debug:
@@ -300,7 +352,7 @@ def run_scan(
                     )
 
     cursor_global_has_data = False
-    if "cursor" in vendors:
+    if include_cursor_global and "cursor" in vendors:
         gdb = get_cursor_global_db()
         if gdb and gdb.exists():
             m = get_db_metrics(gdb)
@@ -322,6 +374,32 @@ def run_scan(
         all_paths |= codex_paths
     if "cursor" in vendors:
         all_paths |= cursor_paths
+
+    # Attribute a nested workspace to an already-observed Git-root Project
+    # unless the nested path is itself a repository. This keeps workspace
+    # granularity from hiding the repository-level Claude/Codex evidence.
+    live_paths = {path for path in all_paths if path.exists()}
+
+    def project_boundary(path: Path) -> Path:
+        candidate = path
+        while candidate == work_root or candidate.is_relative_to(work_root):
+            if (candidate / ".git").exists():
+                return candidate
+            if candidate == work_root:
+                break
+            candidate = candidate.parent
+        parents = [
+            candidate for candidate in live_paths
+            if candidate != path
+            and (candidate / ".git").exists()
+            and path.is_relative_to(candidate)
+        ]
+        return max(parents, key=lambda item: len(item.parts)) if parents else path
+
+    cc_paths = {project_boundary(path) for path in cc_paths}
+    codex_paths = {project_boundary(path) for path in codex_paths}
+    cursor_paths = {project_boundary(path) for path in cursor_paths}
+    all_paths = cc_paths | codex_paths | cursor_paths
 
     def _is_agg(p: Path) -> bool:
         try:
@@ -346,7 +424,7 @@ def run_scan(
         import time
         cutoff_ms = (time.time() - recent_days * 86400) * 1000
 
-    projects = sorted({p for p in canonicalize(all_paths) if p.exists()}, key=str)
+    projects = sorted(canonicalize({p for p in all_paths if p.exists()}), key=str)
     rows = []
     for p in projects:
         try:
@@ -354,19 +432,17 @@ def run_scan(
         except ValueError:
             rel = str(p)
         src = []
-        if "cc" in vendors and p in cc_paths:
-            src.append("CC")
-        if "codex" in vendors and p in codex_paths:
-            src.append("Codex")
-        if "cursor" in vendors and p in cursor_paths:
-            src.append("Cursor")
-        if not src:
-            continue
         sess_count, sess_mb, span_w = 0, 0.0, None
         has_recent = False
         m_cc, m_codex = {}, {}
         if p in cc_paths:
             m_cc = _session_metrics_cc(p, cutoff_ms, subagent)
+            _record_count(
+                diagnostics, "stale_index_entries",
+                int(m_cc.get("stale_index_entries", 0)),
+            )
+            if m_cc["count"]:
+                src.append("CC")
             if not cutoff_ms or m_cc.get("max_ts", 0) >= cutoff_ms:
                 has_recent = True
             sess_count += m_cc["count"]
@@ -374,6 +450,8 @@ def run_scan(
             span_w = m_cc["span_weeks"]
         if p in codex_paths:
             m_codex = _session_metrics_codex(p, cutoff_ms)
+            if m_codex["count"]:
+                src.append("Codex")
             if not cutoff_ms or m_codex.get("max_ts", 0) >= cutoff_ms:
                 has_recent = True
             sess_count += m_codex["count"]
@@ -382,6 +460,9 @@ def run_scan(
         m_cursor = {}
         if p in cursor_paths:
             m_cursor = _session_metrics_cursor(p)
+            # A workspace DB with zero recognized headers is still a useful
+            # empty/legacy detection result, unlike a missing transcript file.
+            src.append("Cursor")
             _record_invalid_keys(
                 diagnostics, p, int(m_cursor.get("invalid_keys", 0))
             )
@@ -398,7 +479,7 @@ def run_scan(
             sess_count += m_cursor["count"]
             sess_mb += m_cursor["size_mb"]
             span_w = span_w or m_cursor["span_weeks"]
-        if not debug and cutoff_ms and not has_recent:
+        if not src or (not debug and cutoff_ms and not has_recent):
             continue
         row = {
             "path": rel,
@@ -407,6 +488,32 @@ def run_scan(
             "sess": sess_count,
             "mb": sess_mb,
             "span_weeks": span_w,
+            "source_metrics": {
+                **({"Claude": {
+                    "sessions": m_cc.get("count", 0),
+                    "main_sessions": m_cc.get("main_sessions", 0),
+                    "subagent_sessions_available": m_cc.get(
+                        "subagent_sessions_available", 0
+                    ),
+                    "subagents_included": m_cc.get("subagents_included", False),
+                    "observed_records": m_cc.get("events", 0),
+                    "record_basis": "claude_index_message_count",
+                    "size_mb": m_cc.get("size_mb", 0),
+                }} if m_cc else {}),
+                **({"Codex": {
+                    "sessions": m_codex.get("count", 0),
+                    "observed_records": m_codex.get("events", 0),
+                    "record_basis": "codex_jsonl_lines",
+                    "size_mb": m_codex.get("size_mb", 0),
+                }} if m_codex else {}),
+                **({"Cursor": {
+                    "sessions": m_cursor.get("count", 0),
+                    "observed_records": m_cursor.get("events", 0),
+                    "record_basis": "cursor_raw_bubble_rows",
+                    "size_mb": m_cursor.get("size_mb", 0),
+                    "workspace_trace": True,
+                }} if m_cursor else {}),
+            },
         }
         if debug:
             print(f"[scan] project {p} path={rel}", file=sys.stderr)
@@ -418,7 +525,7 @@ def run_scan(
                 print(f"  Cursor: sess={m_cursor.get('count')} events={m_cursor.get('events', 0)} mb={m_cursor.get('size_mb')} span_weeks={m_cursor.get('span_weeks')} days_ago={m_cursor.get('days_ago')} headers={m_cursor.get('header_count', 0)} timed_headers={m_cursor.get('timed_header_count', 0)}", file=sys.stderr)
         rows.append(row)
 
-    if cursor_global_has_data and "cursor" in vendors:
+    if include_cursor_global and cursor_global_has_data and "cursor" in vendors:
         m_global = _session_metrics_cursor_global()
         global_recent = not cutoff_ms or m_global.get("max_ts") is None or m_global["max_ts"] >= cutoff_ms
         if global_recent:

@@ -19,8 +19,11 @@ from codess.codex_parent_audit import audit_parentage
 from codess.cursor_feature_audit import audit_cursor_features
 from codess.evidence import build_evidence_inventory
 from codess.fileio import read_json, write_json_atomic
+from codess.helpers import parse_dir_list, unsafe_traversal_root_reason
 from codess.project_catalog import add_project_location, load_catalog
 from codess.schema_evolution import RANK, compare, required
+from codess.storage_report import build_storage_report
+from codess.retention import apply_retention_plan, build_retention_plan
 from codess.vendor_audits.claude_features import audit_claude_features
 
 
@@ -151,6 +154,28 @@ def build_parser() -> argparse.ArgumentParser:
     compare_parser.add_argument("new", type=Path)
     compare_parser.add_argument("--declared", choices=RANK, default="same")
     compare_parser.set_defaults(handler=_schema_compare)
+
+    storage = families.add_parser("storage")
+    storage_commands = storage.add_subparsers(dest="storage_command", required=True)
+    report = storage_commands.add_parser("report")
+    report.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    report.add_argument(
+        "--cursor-db", type=Path,
+        default=Path.home() / "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+    )
+    report.add_argument("--history-dir", type=Path)
+    report.add_argument("--no-record", action="store_true")
+    report.add_argument("--codess-limit-gb", type=float, default=2.0)
+    report.add_argument("--cursor-limit-gb", type=float, default=10.0)
+    report.add_argument("--output", type=Path)
+    report.set_defaults(handler=_storage_report)
+    prune = storage_commands.add_parser("prune")
+    prune.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    prune.add_argument("--reference-catalog", type=Path, action="append", default=[])
+    prune.add_argument("--apply", action="store_true")
+    prune.add_argument("--receipt", type=Path)
+    prune.add_argument("--output", type=Path)
+    prune.set_defaults(handler=_storage_prune)
     return parser
 
 
@@ -169,21 +194,24 @@ def _apply_arguments(parser) -> None:
 
 
 def _roots(args) -> list[Path]:
-    values = [Path(value).expanduser().resolve() for value in args.dirs]
-    if args.dirs_file:
-        for line in args.dirs_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                values.append(Path(line).expanduser().resolve())
-    return values or [Path.cwd()]
+    return parse_dir_list(args.dirs_file, args.dirs) or [Path.cwd()]
 
 
 def _catalog_candidates(args) -> int:
     policy = read_json(args.policy) if args.policy else None
     if policy:
         validate_policy(policy)
+    roots = _roots(args)
+    for root in roots:
+        reason = unsafe_traversal_root_reason(root)
+        if reason:
+            print(
+                f"codess: {reason}; select a project, workspace, or home subtree",
+                file=sys.stderr,
+            )
+            return 1
     report = refresh_candidates(
-        _roots(args), vendor_filter=[item.strip() for item in args.source.split(",")],
+        roots, vendor_filter=[item.strip() for item in args.source.split(",")],
         recent_days=args.days, candidate_csv=args.candidate_csv,
         catalog_path=args.catalog, include_git=args.git == "local",
         discover_git=args.discover_git, max_depth=args.max_depth,
@@ -346,6 +374,39 @@ def _schema_compare(args) -> int:
         for level, path, message in findings
     ]})
     return 1 if need == "manual" or RANK[args.declared] < RANK[need] else 0
+
+
+def _storage_report(args) -> int:
+    if args.codess_limit_gb <= 0 or args.cursor_limit_gb <= 0:
+        raise ValueError("storage size limits must be positive")
+    report = build_storage_report(
+        args.registry,
+        cursor_db=args.cursor_db,
+        history_dir=args.history_dir,
+        record=not args.no_record,
+        codess_limit=int(args.codess_limit_gb * 1024**3),
+        cursor_limit=int(args.cursor_limit_gb * 1024**3),
+    )
+    if args.output:
+        write_json_atomic(args.output, report)
+    _json(report)
+    return 0
+
+
+def _storage_prune(args) -> int:
+    catalogs = args.reference_catalog or [
+        REPO_ROOT / "catalog/approved-baselines.json",
+        REPO_ROOT / "catalog/reviewed-baselines.json",
+    ]
+    result = (
+        apply_retention_plan(args.registry, reference_catalogs=catalogs, receipt_path=args.receipt)
+        if args.apply else
+        build_retention_plan(args.registry, reference_catalogs=catalogs)
+    )
+    if args.output:
+        write_json_atomic(args.output, result)
+    _json(result)
+    return 0 if args.apply or result["safe_to_apply"] else 1
 
 
 def run(argv: list[str]) -> int:

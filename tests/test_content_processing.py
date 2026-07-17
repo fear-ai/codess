@@ -2,9 +2,16 @@
 
 import json
 
+import pytest
+
 from codess.adapters.codex import process_file as process_codex_file
 from codess.adapters.cursor import _bubble_to_events
-from codess.content_processing import ContentContext, ContentPolicy, ContentProcessor
+from codess.content_processing import (
+    ContentContext,
+    ContentPolicy,
+    ContentProcessor,
+    ContentValidationError,
+)
 from codess.store import connect, init_db, record_processing_run
 
 
@@ -21,6 +28,21 @@ def test_preprocessing_maps_charset_normalizes_and_masks_privacy():
     assert result.content == "fullwidth:A [EMAIL]"
     assert "unicode_normalized" in result.actions
     assert "privacy_masked" in result.actions
+
+
+def test_content_type_and_charset_failures_remain_typed_for_ingest_review():
+    processor = ContentProcessor(ContentPolicy.from_mapping({}))
+    context = ContentContext(vendor="Claude", record_type="external.tool_result")
+
+    with pytest.raises(ContentValidationError) as wrong_type:
+        processor.preprocess({"text": "not mapped"}, context)  # type: ignore[arg-type]
+    assert wrong_type.value.validation_kind == "type"
+    assert wrong_type.value.observed_type == "dict"
+
+    with pytest.raises(ContentValidationError) as wrong_charset:
+        processor.decode(b"\xff", context)
+    assert wrong_charset.value.validation_kind == "charset"
+    assert wrong_charset.value.encoding == "utf-8"
 
 
 def test_scoped_rules_apply_globally_then_vendor_record_and_project():

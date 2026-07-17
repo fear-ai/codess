@@ -11,11 +11,10 @@ from codess.adapters.cursor import (
     _bubble_to_events,
     _iter_bubbles,
     _parse_timestamp,
-    get_composer_headers,
     get_composer_data,
-    get_db_metrics,
     process_db,
 )
+from codess.cursor_source import get_composer_headers, get_db_metrics
 
 
 def _make_cursor_db(tmp_path: Path, bubbles: list[tuple[str, str, dict]]) -> Path:
@@ -168,6 +167,17 @@ class TestGetDbMetrics:
         assert m["count"] == 2
         assert m["events"] == 3
         assert m["size_bytes"] > 0
+
+    def test_filters_metrics_to_selected_composers(self, tmp_path):
+        db = _make_cursor_db(tmp_path, [
+            ("c1", "b1", {"type": 1, "text": "selected"}),
+            ("c1", "b2", {"type": 2, "text": "selected"}),
+            ("c2", "b1", {"type": 1, "text": "unrelated"}),
+        ])
+        selected = get_db_metrics(db, {"c1"})
+        assert selected["count"] == 1
+        assert selected["events"] == 2
+        assert 0 < selected["size_bytes"] < db.stat().st_size
 
     def test_uses_composer_header_time_range(self, tmp_path):
         db = _make_cursor_db(tmp_path, [("c1", "b1", {"type": 1, "text": "hi"})])

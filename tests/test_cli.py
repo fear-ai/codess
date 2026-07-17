@@ -850,6 +850,9 @@ def test_ingest_validate_uses_real_adapter_without_mutation():
         report = json.loads(result.stdout.strip())
         assert report["report_format"] == "codess.ingest-preflight/1"
         assert report["events"] > 0
+        assert report["session_kinds"] == {
+            "Claude": {"main": 1, "subagent": 0}
+        }
         assert not (project / ".codess").exists()
         assert not registry.exists()
 
@@ -868,6 +871,33 @@ def test_ingest_validate_enforces_source_limit_without_mutation():
         assert result.returncode == 1
         assert "exceeds maximum" in result.stderr
         assert not (project / ".codess").exists()
+
+
+def test_ingest_validate_reports_size_failure_as_possible_misclassification():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        cc = root / "cc"
+        source_dir = cc / path_to_slug(project.resolve())
+        source_dir.mkdir(parents=True)
+        shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source_dir / "s1.jsonl")
+        env = {
+            **os.environ,
+            "CODESS_CC_PROJECTS": str(cc),
+            "CODESS_REGISTRY": str(root / "registry"),
+        }
+        result = _run([
+            "ingest", "--validate", "--dir", str(project), "--source", "cc",
+            "--min-size", "0", "--max-source-bytes", "1",
+        ], env=env)
+        assert result.returncode == 1
+        report = json.loads(result.stdout.strip())
+        assert report["status"] == "rejected"
+        assert report["diagnostics"]["reviewable_content_failures"] == 1
+        review = report["content_failure_reviews"][0]
+        assert review["failure_class"] == "source_size_limit"
+        assert "wrong_source_scope_or_container_selected" in review["candidate_causes"]
 
 
 def test_ingest_validate_enforces_event_limit_during_collection():

@@ -4,7 +4,8 @@ import json
 import sqlite3
 import time
 
-from codess.adapters.cursor import _iter_bubbles, get_db_metrics
+from codess.adapters.cursor import _iter_bubbles
+from codess.cursor_source import get_db_metrics
 from codess.project import get_codex_session_files
 
 

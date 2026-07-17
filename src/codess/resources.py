@@ -13,7 +13,20 @@ except ImportError:  # Windows has no resource module.
 
 
 class ResourceLimitError(RuntimeError):
-    pass
+    """A bounded-ingest limit failure with machine-readable observations."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        limit_kind: str | None = None,
+        observed: int | None = None,
+        maximum: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.limit_kind = limit_kind
+        self.observed = observed
+        self.maximum = maximum
 
 
 def peak_rss_bytes() -> int | None:
@@ -27,7 +40,8 @@ def check_source(path: Path, maximum: int | None) -> int:
     size = path.stat().st_size
     if maximum is not None and size > maximum:
         raise ResourceLimitError(
-            f"source size {size} exceeds maximum {maximum}: {path}"
+            f"source size {size} exceeds maximum {maximum}: {path}",
+            limit_kind="source_bytes", observed=size, maximum=maximum,
         )
     return size
 
@@ -39,7 +53,13 @@ def check_events(
     total = sum(len(events) for events in sessions_events.values())
     largest = max((len(events) for events in sessions_events.values()), default=0)
     if max_source is not None and total > max_source:
-        raise ResourceLimitError(f"source produced {total} events; maximum is {max_source}")
+        raise ResourceLimitError(
+            f"source produced {total} events; maximum is {max_source}",
+            limit_kind="source_events", observed=total, maximum=max_source,
+        )
     if max_session is not None and largest > max_session:
-        raise ResourceLimitError(f"session produced {largest} events; maximum is {max_session}")
+        raise ResourceLimitError(
+            f"session produced {largest} events; maximum is {max_session}",
+            limit_kind="session_events", observed=largest, maximum=max_session,
+        )
     return total, largest

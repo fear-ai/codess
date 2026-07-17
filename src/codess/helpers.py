@@ -3,11 +3,78 @@
 import csv
 import logging
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from codess.config import EXCLUDE_REVIEW_DIRS
 from codess.sanitize import protect_csv_row
 
 log = logging.getLogger(__name__)
+
+
+# Exact directory names that are implementation artifacts, dependency stores,
+# caches, environments, or VCS internals rather than candidate Projects. The
+# caller's explicit root remains eligible; these names prune only descendants.
+TRAVERSAL_PRUNE_DIRS = frozenset({
+    ".build", ".cache", ".ccache", ".codess", ".direnv", ".eggs", ".git",
+    ".gradle", ".hg", ".idea", ".mypy_cache", ".next", ".nox", ".npm",
+    ".nuxt", ".parcel-cache", ".pnpm-store", ".pyenv", ".pytest_cache",
+    ".ruff_cache", ".svn", ".terraform", ".tox", ".turbo", ".venv",
+    ".vscode", ".yarn", "__pycache__", "bazel-bin", "bazel-out",
+    "bazel-testlogs", "build", "coverage", "debug", "deriveddata", "dist",
+    "env", "node_modules", "out", "pods", "release", "site-packages",
+    "target", "venv",
+})
+
+_BROAD_TRAVERSAL_ROOTS = frozenset(
+    Path(value).resolve()
+    for value in (
+        "/Applications", "/Library", "/Network", "/System", "/Users",
+        "/Volumes", "/bin", "/boot", "/dev", "/etc", "/home", "/lib",
+        "/lib64", "/media", "/mnt", "/opt", "/private", "/proc", "/root",
+        "/run", "/sbin", "/srv", "/sys", "/tmp", "/usr", "/var",
+    )
+)
+
+
+def should_prune_directory(name: str) -> bool:
+    """Return whether a descendant directory is routine traversal noise."""
+    folded = name.casefold()
+    return folded in TRAVERSAL_PRUNE_DIRS or folded.startswith("cmake-build-")
+
+
+def is_under_pruned_directory(path: Path, root: Path) -> bool:
+    """Return whether ``path`` is below a pruned descendant of explicit ``root``."""
+    try:
+        relative = path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return any(should_prune_directory(part) for part in relative.parts)
+
+
+def unsafe_traversal_root_reason(path: Path) -> str | None:
+    """Explain why a root is too broad for discovery, or return ``None``."""
+    resolved = path.expanduser().resolve()
+    if resolved.parent == resolved or resolved in _BROAD_TRAVERSAL_ROOTS:
+        return f"broad system traversal root is not allowed: {resolved}"
+    return None
+
+
+def local_path_from_uri(value: object) -> Path | None:
+    """Return an absolute local path, rejecting remote/editor URI schemes."""
+    if isinstance(value, dict):
+        value = value.get("path") or ""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme:
+        if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+            return None
+        text = unquote(parsed.path)
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        return None
+    return path.resolve()
 
 
 def path_to_slug(path: Path) -> str:
@@ -48,6 +115,8 @@ def is_excluded(p: Path, work_root: Path | None = None) -> bool:
         rel = str(p.relative_to(root))
     except ValueError:
         return False
+    if is_under_pruned_directory(p, root):
+        return True
     if "/OLD/" in rel or rel.startswith("OLD/"):
         return True
     if "/Save" in rel or rel.startswith("Save"):
@@ -91,7 +160,7 @@ def user_root_string_disallowed(raw: str) -> bool:
 
 
 def validate_dirs_file(path: Path) -> str | None:
-    """If ``--dirs`` was passed, ensure the file exists, is readable, and has ≥1 path line.
+    """Validate a plain path list or a candidate CSV with ``directory_path``.
 
     Returns an error message (stderr-ready), or ``None`` if ok.
     """
@@ -103,18 +172,28 @@ def validate_dirs_file(path: Path) -> str | None:
         text = path.read_text(encoding="utf-8")
     except OSError as e:
         return f"codess: cannot read --dirs file {path}: {e}"
-    lines = [
-        ln.strip()
-        for ln in text.splitlines()
-        if ln.strip() and not ln.strip().startswith("#")
-    ]
-    if not lines:
+    if not _dirs_file_values(text):
         return f"codess: --dirs file has no path lines (empty or comments only): {path}"
     return None
 
 
+def _dirs_file_values(text: str) -> list[str]:
+    """Extract roots from a plain list or a CSV carrying ``directory_path``."""
+    lines = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if not lines:
+        return []
+    header = next(csv.reader([lines[0]]), [])
+    if "directory_path" in header:
+        return [
+            str(row.get("directory_path") or "").strip()
+            for row in csv.DictReader(lines)
+            if str(row.get("directory_path") or "").strip()
+        ]
+    return [line.strip() for line in lines]
+
+
 def parse_dir_list(dirs_file: Path | None, dir_args: list[str]) -> list[Path]:
-    """Parse ``--dirs`` file (caller validated with ``validate_dirs_file`` if required) and ``--dir`` args.
+    """Parse a path-list/candidate-CSV ``--dirs`` file and ``--dir`` args.
 
     Skips disallowed roots (``..``, relative ``.hidden`` segments); logs a warning per skip.
     """
@@ -126,10 +205,7 @@ def parse_dir_list(dirs_file: Path | None, dir_args: list[str]) -> list[Path]:
         except OSError as e:
             log.warning("Cannot read dirs file %s: %s", dirs_file, e)
             return out
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
+        for line in _dirs_file_values(text):
             if user_root_string_disallowed(line):
                 log.warning("Skipping disallowed root line: %s", line)
                 continue

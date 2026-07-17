@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from codess.config import get_stats_path
-from codess.helpers import write_csv
+from codess.helpers import unsafe_traversal_root_reason, write_csv
 from codess.sanitize import protect_csv_row
 from codess.project import (
     RootsWhenEmpty,
@@ -17,7 +17,9 @@ from codess.project import (
     resolve_registry_directory,
     validate_scan_source_for_cli,
 )
-from codess.registry_store import merge_scan_rows, update_project_entry
+from codess.registry_store import (
+    merge_scan_rows, prune_legacy_cursor_global_entries, update_project_entry,
+)
 from codess.scan import run_scan
 
 log = logging.getLogger(__name__)
@@ -51,6 +53,7 @@ def _load_registry_map(registry_root: Path) -> tuple[dict[str, dict] | None, str
 def _print_scan_diagnostics(diagnostics: dict) -> None:
     counts = {
         "malformed": diagnostics.get("malformed_sources", 0),
+        "stale_index_entries": diagnostics.get("stale_index_entries", 0),
         "invalid_keys": diagnostics.get("invalid_keys", 0),
         "failed_sources": diagnostics.get("failed_sources", 0),
         "failed_roots": diagnostics.get("failed_roots", 0),
@@ -82,6 +85,11 @@ def run(args) -> int:
     if err:
         print(err, file=sys.stderr)
         return 1
+    for root in roots:
+        reason = unsafe_traversal_root_reason(root)
+        if reason:
+            print(f"codess: {reason}; select a project, workspace, or home subtree", file=sys.stderr)
+            return 1
 
     opts = build_scan_run_options(args)
     if opts.recent_days is not None and opts.recent_days < 0:
@@ -92,7 +100,7 @@ def run(args) -> int:
     had_error = False
     diagnostics: dict = {}
 
-    for work_root in roots:
+    for root_index, work_root in enumerate(roots):
         failures_before = diagnostics.get("failed_sources", 0)
         try:
             rows = run_scan(
@@ -102,6 +110,7 @@ def run(args) -> int:
                 debug=opts.debug,
                 subagent=opts.subagent,
                 diagnostics=diagnostics,
+                include_cursor_global=root_index == 0,
             )
         except Exception:
             log.exception("Scan failed for work root %s", work_root)
@@ -117,12 +126,20 @@ def run(args) -> int:
                 _print_scan_diagnostics(diagnostics)
                 return 1
         for r in rows:
-            full = str((work_root / r["path"]).resolve())
+            # The Cursor central store is evidence awaiting attribution, not a
+            # project nested beneath whichever scan root happened to run first.
+            full = "(global)" if r["path"] == "(global)" else str((work_root / r["path"]).resolve())
             if full not in seen_paths:
                 seen_paths.add(full)
                 merged.append((full, r))
 
     write_root = resolve_registry_directory(args)
+    pruned_global = prune_legacy_cursor_global_entries(write_root)
+    if pruned_global and opts.debug:
+        print(
+            f"codess: removed {pruned_global} legacy Cursor global pseudo-projects",
+            file=sys.stderr,
+        )
     reg_arg = getattr(args, "registry", None)
     filter_active = bool(reg_arg and str(reg_arg).strip())
 
@@ -146,6 +163,8 @@ def run(args) -> int:
     for full, r in all_discovered:
         by_proj[full].append(r)
     for proj_path, rows in by_proj.items():
+        if proj_path == "(global)":
+            continue
         def mut(e: dict, rs: list[dict] = rows) -> None:
             merge_scan_rows(e, rs)
 

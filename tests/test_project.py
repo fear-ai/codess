@@ -6,13 +6,15 @@ from types import SimpleNamespace
 
 import pytest
 
+from codess.cursor_source import (
+    get_global_db as get_cursor_global_db,
+    get_workspace_dbs as get_cursor_workspace_dbs,
+    get_workspace_ids as get_cursor_workspace_ids,
+)
 from codess.project import (
     find_slug_for_project,
     get_cc_session_dir,
     get_codex_session_files,
-    get_cursor_global_db,
-    get_cursor_workspace_dbs,
-    get_cursor_workspace_ids,
     path_to_slug,
     resolve_cli_roots,
     slug_to_path,
@@ -122,6 +124,29 @@ class TestFindSlugForProject:
         found = proj_mod.find_slug_for_project(proj)
         assert found == slug
 
+    def test_approved_relocation_link_finds_historical_claude_slug(self, tmp_path, monkeypatch):
+        cc_dir = tmp_path / "cc"
+        cc_dir.mkdir()
+        old = tmp_path / "old" / "project"
+        new = tmp_path / "new" / "project"
+        new.mkdir(parents=True)
+        old_slug = path_to_slug(old.resolve())
+        (cc_dir / old_slug).mkdir(parents=True)
+        sidecar = new / ".codess"
+        sidecar.mkdir()
+        (sidecar / "source-links.json").write_text(json.dumps({
+            "format": "codess.source-links/1",
+            "links": [{
+                "source_system_id": "anthropic.claude-code",
+                "source_project_path": str(old.resolve()),
+                "target_project_path": str(new.resolve()),
+                "relation_kind": "project_relocation",
+                "selection_state": "approved",
+            }],
+        }))
+        monkeypatch.setattr("codess.project.CC_PROJECTS", cc_dir)
+        assert find_slug_for_project(new) == old_slug
+
 
 class TestGetCcSessionDir:
     """get_cc_session_dir returns None when not found."""
@@ -208,7 +233,7 @@ class TestGetCursorPaths:
     """get_cursor_workspace_dbs and get_cursor_global_db."""
 
     def test_global_db_none_when_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("codess.project.CURSOR_DATA", tmp_path / "cursor")
+        monkeypatch.setattr("codess.cursor_source.CURSOR_DATA", tmp_path / "cursor")
         assert get_cursor_global_db() is None
 
     def test_global_db_returns_path_when_exists(self, tmp_path, monkeypatch):
@@ -218,7 +243,7 @@ class TestGetCursorPaths:
         global_dir.mkdir()
         db = global_dir / "state.vscdb"
         db.touch()
-        monkeypatch.setattr("codess.project.CURSOR_DATA", base)
+        monkeypatch.setattr("codess.cursor_source.CURSOR_DATA", base)
         assert get_cursor_global_db() == db
 
     def test_approved_project_source_link_adds_renamed_cursor_workspace(
@@ -226,7 +251,7 @@ class TestGetCursorPaths:
     ):
         base = tmp_path / "cursor" / "User"
         (base / "workspaceStorage").mkdir(parents=True)
-        monkeypatch.setattr("codess.project.CURSOR_DATA", base)
+        monkeypatch.setattr("codess.cursor_source.CURSOR_DATA", base)
         project = tmp_path / "renamed-project"
         links = project / ".codess" / "source-links.json"
         links.parent.mkdir(parents=True)
@@ -247,7 +272,7 @@ class TestGetCursorPaths:
     ):
         base = tmp_path / "cursor" / "User"
         (base / "workspaceStorage").mkdir(parents=True)
-        monkeypatch.setattr("codess.project.CURSOR_DATA", base)
+        monkeypatch.setattr("codess.cursor_source.CURSOR_DATA", base)
         project = tmp_path / "project"
         links = project / ".codess" / "source-links.json"
         links.parent.mkdir(parents=True)
@@ -261,7 +286,7 @@ class TestGetCursorPaths:
         assert get_cursor_workspace_ids(project) == []
 
     def test_workspace_dbs_empty_when_no_match(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("codess.project.CURSOR_DATA", tmp_path / "cursor")
+        monkeypatch.setattr("codess.cursor_source.CURSOR_DATA", tmp_path / "cursor")
         (tmp_path / "cursor" / "workspaceStorage").mkdir(parents=True)
         proj = tmp_path / "other"
         proj.mkdir()
@@ -277,8 +302,21 @@ class TestGetCursorPaths:
             f'{{"folder":{{"path":"{proj}"}}}}'
         )
         (ws / "state.vscdb").touch()
-        monkeypatch.setattr("codess.project.CURSOR_DATA", base)
+        monkeypatch.setattr("codess.cursor_source.CURSOR_DATA", base)
         dbs = get_cursor_workspace_dbs(proj)
         assert len(dbs) == 1
         assert dbs[0].name == "state.vscdb"
         assert get_cursor_workspace_ids(proj) == ["abc123"]
+
+    def test_workspace_ids_reject_remote_editor_uri(self, tmp_path, monkeypatch):
+        project = tmp_path / "project"
+        project.mkdir()
+        base = tmp_path / "cursor" / "User"
+        ws = base / "workspaceStorage" / "remote"
+        ws.mkdir(parents=True)
+        (ws / "workspace.json").write_text(json.dumps({
+            "folder": "vscode-remote://ssh-remote+host/home/user/project"
+        }))
+        (ws / "state.vscdb").touch()
+        monkeypatch.setattr("codess.cursor_source.CURSOR_DATA", base)
+        assert get_cursor_workspace_ids(project) == []

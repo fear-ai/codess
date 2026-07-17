@@ -78,14 +78,17 @@ Codess/
 │       ├── config.py       # ENV → Path / int / bool; defaults; no other codess imports
 │       ├── helpers.py      # parse_dir_list, validate_dirs_file, write_csv, is_excluded, slug/path … ; imports config
 │       ├── registry_store.py  # ingested_projects.json merge (scan / ingest / query)
+│       ├── cursor_source.py # Cursor layout, workspace mapping, read-only selective SQL
+│       ├── storage_report.py # dated SQLite/snapshot/raw utilization and deltas
+│       ├── token_usage.py  # derived monthly vendor token observations/confidence
 │       ├── sanitize.py     # text cleanup + redact; imports config
 │       ├── store.py        # SQLite, DDL, transactional replacement, ingest state
-│       ├── project.py      # argparse, parse_and_run, roots, run-options, git root, vendor path helpers; imports config only — no walk, no scan
-│       ├── scan.py         # run_scan(); config, helpers, project, adapters.cursor.get_db_metrics
+│       ├── project.py      # argparse, roots, run-options, git/Claude/Codex helpers
+│       ├── scan.py         # run_scan(); config, helpers, project, cursor_source
 │       ├── adapters/
 │       │   ├── cc.py
 │       │   ├── codex.py
-│       │   └── cursor.py   # process_* + get_db_metrics (used by scan for metrics)
+│       │   └── cursor.py   # selected Cursor value decoding and normalization
 └── tests/                  # order mirrors src/codess + cli; full map in §8 Tests
     ├── test_config.py
     ├── test_helpers.py
@@ -127,8 +130,10 @@ a filesystem crawl. There is no recursion flag or general walk subsystem.
 - **`codess.store`:** SQLite, DDL, upsert primitives, transactional source
   replacement, and ingest state. **`ingest_cmd`** writes it; query opens the
   resulting databases read-only.
-- **`codess.project`:** **`build_parser`**, **`parse_and_run`**, **`resolve_cli_roots`**, **`build_*_run_options`**, **`get_project_root`**, vendor path helpers. Imports **`config` only** — **no** **`scan`**.
-- **`codess.scan`:** **`run_scan()`**; imports **`config`**, **`helpers`**, **`project`**, **`adapters.cursor.get_db_metrics`**.
+- **`codess.project`:** CLI parsing/root resolution and Git/Claude/Codex path helpers; no Cursor layout or SQL.
+- **`codess.cursor_source`:** Cursor installation/workspace discovery, read-only connections, composer headers, indexed bubble ranges, and metrics.
+- **`codess.scan`:** **`run_scan()`**; imports **`config`**, **`helpers`**, **`project`**, and **`cursor_source`**.
+- **`codess.storage_report`:** dated read-only CoSchema/Cursor utilization, skew, retention inventory, thresholds, and deltas.
 - **`cli/*_cmd`:** Thin **`run(args) -> int`**: roots/options, then **`run_scan`** / **`_ingest_*`** / **`store.connect`**.
 
 **Query vs ingest vs adapters:** Ingest parses sources and transactionally
@@ -149,26 +154,27 @@ on those DBs only—no vendor files or adapters.
  codess.scan.run_scan      _ingest_cc / _ingest_codex /   store.connect + SQL
         │                  _ingest_cursor                    init_db if needed
         │
-        ├──► codess.adapters.cursor.get_db_metrics   ← see Discouraged Imports / justified coupling
+        ├──► codess.cursor_source
         ▼
  codess.config   codess.helpers   codess.project  (path helpers for scan)
 
  ingest_cmd ──► codess.adapters.* ──► store.replace_* … , ingest_state JSON
 ```
 
-**Dependency sketch:** **`adapters/*`** → **`config`**, **`sanitize`**; called from **`ingest_cmd`**, and **`get_db_metrics`** from **`scan.py`**. **`scan.py`** → **`config`**, **`helpers`**, **`project`**, **`adapters.cursor`**. **`project.py`** → **`config`** only; **`cli/*`**, **`scan.py`**. **`store.py`** → no codess imports; **`ingest_cmd`**, **`query_cmd`**.
+**Dependency sketch:** Cursor layout/SQL callers use **`cursor_source`**;
+**`adapters.cursor`** consumes selected raw rows and normalizes them. **`scan.py`**
+uses **`cursor_source`**, not adapters. **`project.py`** owns common CLI plus
+Claude/Codex helpers. **`store.py`** remains independent of vendor access.
 
 ### 3.2 Discouraged Imports
 
 This subsection is **normative policy**, not a full import graph. It answers: *where must we not put parsing or store logic so layers stay thin?* A short checklist here is **not** “every allowed edge” — see **§3.1** for who calls whom.
 
-**Why it feels incomplete:** **`scan.py` → `adapters.cursor.get_db_metrics`** breaks the tidy picture “scan never touches adapters.” That is **intentional reuse** of read-only sizing SQL, documented below so we do **not** silently add more adapter imports into **`scan`**.
-
 - **`cli/*_cmd`:** do not parse vendor JSONL/SQLite inline; ingest goes through **`adapters/*`**.
 - **`adapters/cc.py`, `adapters/codex.py`:** do not import **`scan`**, **`scan_cmd`**, or **`ingest_cmd`**.
 - **`query_cmd`:** do not import **`adapters/*`**.
-
-**Justified coupling:** **`scan.py`** imports **`codess.adapters.cursor.get_db_metrics`** so scan reuses the same **read-only** Cursor DB sizing logic as elsewhere, without copying SQL or pulling in **`process_db`** event normalization.
+- **Cursor callers:** do not duplicate `state.vscdb`, workspaceStorage, table,
+  or key-range knowledge; use **`cursor_source`**.
 
 ### 3.3 Data Movement — Three Pipelines
 
@@ -247,8 +253,8 @@ Cross-checked against **`src/`** and **`tests/`** so this plan does not drift fr
 - **`run_scan(work_root, …)`:** parameters are **`vendor_filter`**, **`recent_days`**, **`debug`**, and **`subagent`**. Scan is index-led and exposes no recursion option.
 - **`validate_config()`:** invoked before work by scan, ingest, and query; errors are printed to stderr and return exit 1.
 - **`query_cmd`:** opens every selected project store read-only and aggregates report rows in Python, avoiding SQLite's attached-database limit and preserving duplicate vendor session IDs internally. It imports **`get_project_stores`**, **no** **`adapters/*`**.
-- **`scan.py`:** imports **`adapters.cursor.get_db_metrics`**; **does not** import **`walk`**.
-- **`project.py` module imports:** **`codess.config`** only at top level for the public CLI surface.
+- **`scan.py`:** imports **`cursor_source`** for Cursor discovery/metrics; **does not** import adapters or **`walk`**.
+- **`project.py` module imports:** contain no Cursor storage-layout or SQLite details.
 - **`adapters/*`:** **no** imports of **`scan`**, **`scan_cmd`**, or **`ingest_cmd`**.
 - **Central registry (`ingested_projects.json`):** **`codess.registry_store`** merges per-project records. **Scan** always upserts **`scan`** / **`last_scan`** for every discovered project path into **`resolve_registry_directory(args)`** (default **`CODESS_REGISTRY`**). **`--registry PATH`** overrides that root and, when set, **also** filters CSV to paths present in the file **before** this run + appends **`reg_*`** columns — **no** sidecar. **Ingest** merges **`sources`** / **`last_ingestion`**. **Query `--stats`** merges **`query`** / **`last_query`** into the same file (**§5**).
 - **`validate_scan_source_for_cli` / scan `--source`:** invalid tokens → **stderr + exit 1** before any scan work (**global** invocation policy — **§11.5**, **§14**).
@@ -286,9 +292,9 @@ process cwd is fragile for scan, CI, and daemons.
 
 ### 4.2 Combining `--dir` and `--dirs`
 
-1. If **`--dirs FILE`** is passed, **`helpers.validate_dirs_file`** runs first: file **must exist**, be a **regular file**, be **readable**, and contain **≥1** non-comment path line — otherwise **stderr** message and **exit 1** (scan / ingest / query).
+1. If **`--dirs FILE`** is passed, **`helpers.validate_dirs_file`** runs first: file **must exist**, be a **regular file**, be **readable**, and contain **≥1** usable root — otherwise **stderr** message and **exit 1** (scan / ingest / query). The file may be a plain one-path-per-line list or a candidate CSV with a **`directory_path`** column; this permits direct use of the maintained active-work CSV.
 2. **`helpers.parse_dir_list(dirs_file, dir_args)`** builds **one ordered list** of **resolved** `Path`s.
-3. If **`--dirs FILE`** validated, lines are read **first** (in file order).
+3. If **`--dirs FILE`** validated, plain lines or CSV **`directory_path`** values are read **first** (in file order).
 4. Each **`--dir PATH`** is **appended** in argv order.
 5. **Duplicates** (same resolved path) are **skipped**.
 6. **User root strings** (`--dir` lines, **`--dirs`** file): **`..`** in any path **component** is **disallowed** (skipped + warning). **Relative** paths: any segment **starting with `.`** except the lone segments **`.`** and **`..`** is **disallowed** — this blocks **hidden-style** relative segments (e.g. **`.venv`**, **`.private`**) while still allowing **`.`** (cwd) and paths like **`./repo`** (the **`.`** segment is explicitly allowed). **Absolute** paths may contain segments such as **`.config`** under the home tree. **Empty** lines / empty **`--dir`** arguments are skipped. Root strings are paths, not glob patterns.
@@ -316,6 +322,8 @@ Defaults in the table are when the variable is **unset**.
 | `CODESS_VERBOSE` | Python logging **DEBUG** for the process (`-v` equivalent) | `0` → false |
 | `CODESS_REDACT` | Ingest: enable redaction default (same patterns as **`--redact`**) | `0` → false |
 | `CODESS_RAW_MODE` | Ingest raw evidence policy: `none`, `reference`, `capture`, or `seal` | `reference` |
+| `CODESS_MAX_CODESS_DB_BYTES` | Storage-report warning threshold for one CoSchema DB | `2147483648` (2 GiB) |
+| `CODESS_MAX_CURSOR_DB_BYTES` | Storage-report warning threshold for Cursor's global DB | `10737418240` (10 GiB) |
 
 **Boolean ENV (`CODESS_DEBUG`, `CODESS_FORCE`, `CODESS_SUBAGENT`, `CODESS_STOP`, `CODESS_VERBOSE`, `CODESS_REDACT`):** Implemented in **`config.py`** via **`env_bool()`**: **true** only if, after **`.lower()`**, the value is exactly **`1`**, **`true`**, or **`yes`**. **Unset** uses default **`0`** → false. Values like **`y`**, **`Y`**, **`on`**, **`2`** are **false** (not generic shell truthiness). Export e.g. `CODESS_DEBUG=1` or `CODESS_DEBUG=yes`.
 
@@ -351,7 +359,7 @@ command exits 1 before doing work.
 
 | Flag | ENV | Default | Explanation |
 |------|-----|---------|-------------|
-| `--dirs PATH` | — | — | File of work roots (§4.2). |
+| `--dirs PATH` | — | — | Plain path list or candidate CSV with `directory_path` (§4.2). |
 | `--dir PATH` | — | — | Append root; repeatable. |
 | *(no dirs after merge)* | — | **`Path.cwd()`** | **Scan** only; see §4.2. |
 | `--source cc,codex,cursor` | — | all three | Comma-separated vendor subset; **order does not matter**. Tokens are compared case-insensitively after trim. **`all`** clears the filter (same as omitting **`--source`**). **Invalid token** (anything other than **`cc`**, **`codex`**, **`cursor`**, or the whole value **`all`**) is a **global** error: **stderr** message listing bad tokens and **exit 1** — no partial vendor set (**§11.5**). |
@@ -365,7 +373,7 @@ command exits 1 before doing work.
 
 **Precedence (scan):** **`--days` omitted** → **`CODESS_DAYS`**. **`--subagent`:** **`args.subagent or SUBAGENT`**. **`Registry`:** **`project.resolve_registry_directory(args)`** selects the registry **root** for **both** scan upserts and (when **`--registry PATH`** is set) filter + join columns.
 
-**Output columns:** `path,vendor,sess,mb,span_weeks` (with `dir_path` when `--debug`). With **`--registry`**, append **`reg_path`**, **`reg_updated`**, **`reg_sources`** — **§5.1** table. Metric definitions: **CCSchema** §7, **CodexSchema** §6, **CursorSchema** §5. Rows with **`path=(global)`** are unscoped Cursor central-DB scan aggregates. Project ingest imports only global composers whose header workspace maps to that project.
+**Output columns:** `path,vendor,sess,mb,span_weeks` (with `dir_path` when `--debug`). With **`--registry`**, append **`reg_path`**, **`reg_updated`**, **`reg_sources`** — **§5.1** table. Metric definitions: **CCSchema** §7, **CodexSchema** §6, **CursorSchema** §5. Rows with **`path=(global)`** are unscoped Cursor central-DB scan aggregates, emitted at most once in a multi-root run and never registered as Projects. Project metrics and ingest use only global composers whose header workspace maps to that Project.
 
 ### 5.2 `codess ingest`
 
@@ -402,8 +410,11 @@ not inferred. Omitting all mode flags exits 1.
 
 ### 5.4 `--dirs` File Format
 
-- **`--dirs` file:** one path per line; **`#`** starts a comment; if **`--dirs`** is passed, the file **must** have ≥1 path line — **§4.2**.
+- **`--dirs` file:** plain path lines (where **`#`** starts a comment) or a candidate CSV with **`directory_path`**; if **`--dirs`** is passed, it must contain ≥1 usable root — **§4.2**.
 - Paths are validated directories and act as exact project roots or scan path filters; they are not recursively expanded.
+- Explicit candidate Git discovery is the exception: it is depth-bounded and
+  prunes a branch immediately after finding its first repository. Index-led
+  vendor observations below a repository map to the nearest enclosing Git root.
 
 ### 5.5 Filter Wiring
 
@@ -535,6 +546,8 @@ work items.
 - **`test_sanitize.py`** — **`sanitize`**
 - **`test_cli.py`**, **`test_integration.py`** — **`cli/*`**, **`parse_and_run`**, replacement and end-to-end
 - **`test_scale.py`** — bounded Cursor header/prefix-query and Codex active/archive scale checks
+- **`test_storage_report.py`** — page utilization, text/session skew, thresholds, dated history, and deltas
+- **`test_token_usage.py`** — Claude deduplication, Codex cumulative deltas, and explicit Cursor unavailability
 
 **Coverage emphasis:** **`parse_dir_list`** and **`--dirs`**, scan CSV shape, adapter edge cases, and configuration validation.
 
@@ -554,6 +567,7 @@ Order work by risk and dependency.
 | **4. Reviewed v2 baseline — complete** | The sampled corpus is frozen by package, snapshot, semantic digest, policy, and raw-evidence state | Run `tools/verify_reviewed_baselines.py`; replace the set rather than editing it in place |
 | **5. Compatibility maintenance** | Vendor drift is detected early | Refresh the smallest real-shape fixture when an upstream format changes; rebuild rather than mutate derived data |
 | **6. Operational maintenance** | Preflight, bounded ingest, and evidence inventory catch drift before accepted rebuilds | Maintain implemented checks; expand machine output only for a consumer and restart enterprise scanning only on its §11.2 trigger |
+| **7. Storage and usage observations — active** | Dated size/utilization/skew/token observations and validated latest-only retention bound local growth | Maintain `storage report`/`storage prune`; validate provisional Codex token attribution and add incremental Codex/token inventories |
 
 Keep **`schema/coschema/sqlite/schema.sql`** aligned with **CoSchema.md** whenever normalized event shapes change.
 
@@ -590,6 +604,11 @@ zerowalletmac and Spank/Logs were also rebuilt as captured durable baselines.
 4. Maintain the evidence-backed Cursor `toolFormerData` and
    `modelInfo.modelName` mappings against structure-only audits.
 5. Add more projects only for a demonstrated compatibility or correlation gap.
+6. Run `storage report` after material ingestion/baseline work; review size and
+   skew deltas before accepting unexplained growth.
+7. Validate provisional Codex monthly token deltas against fork/interleave
+   evidence and the CodexBar algorithm; add fingerprinted Codex-session and
+   per-source token inventories so routine observations process only changes.
 
 Operational ingest preflight is implemented and machine-readable query output
 is prototyped. The broader enterprise PII scanner in §11.2 remains postponed.
@@ -658,8 +677,11 @@ record supplies such an identifier.
 |------|--------|-----------------|-----------------------|
 | **`ingest --validate` preflight** | Implemented | Maintain strict no-mutation tests | Real adapters and temporary CoSchema stores report counts, diagnostics, resources, integrity, and foreign keys; raw/snapshot/fixed-point checks remain in the acceptance gate. |
 | **Machine-readable query rows** | Prototype | Expand after consumers confirm row requirements | `codess.query-row/1` supports sessions/stats with an independent JSON Schema; preserve the tabular default. |
-| **Resource bounds and telemetry** | Implemented | Stage incrementally if a real source approaches event limits or retained-buffer memory is excessive | Enforce source/session event limits while collecting, record bytes/events/peak RSS, and explicitly release completed source buffers. |
+| **Resource bounds and telemetry** | Implemented | Stage incrementally if a real source approaches event limits or retained-buffer memory is excessive | Enforce source/session event limits while collecting, record bytes/events/peak RSS, explicitly release completed source buffers, and emit content-free review evidence for size/type/charset failures before treating them as malformed content or merely raising a limit. |
 | **Evidence inventory** | Implemented | Refresh during vendor-storage maintenance or corpus review | Search current catalog stores and local structural metadata; retain aggregate/identity evidence, not conversation bodies. |
+| **Storage observations** | Implemented | Run after material ingest/baseline changes and periodically | Versioned dated reports cover SQLite allocation, content/session skew, Cursor size, snapshot/raw retention, warnings, and deltas. |
+| **Monthly token observations** | Implemented with explicit Codex limitation | Validate before cost/forecast reporting | Claude usage is deduplicated/local-observed; Codex uses provisional positive cumulative deltas pending fork/interleave validation; Cursor remains unavailable until verified token evidence exists. |
+| **Retention prune/GC** | Implemented | Run a dry-run after material baseline rebuilds, then invoke explicit `storage prune --apply` when reviewed | Keeps one central current snapshot per Project and its raw references; validates selected catalogs/local pointers, re-plans on apply, and emits a receipt. Working archives and vendor stores are excluded. |
 | **Enterprise PII/secret scanner** | Postponed | A deployment threat model shows configured regex redaction is insufficient | Choose scanner, false-positive policy, and storage/output boundaries before adding a dependency. |
 
 ### 11.3 Platform
@@ -671,6 +693,7 @@ record supplies such an identifier.
 | Durable location | `~/.codess/projects/<stable-project-id>/`; immutable retained snapshots and current pointer |
 | Raw source objects | `~/.codess/raw/codess.raw-1/`; retirement requires every revision captured |
 | Project catalog | `~/.codess/projects.json`; stable IDs, location states/aliases, and workspace bindings |
+| Storage observations | `~/.codess/observations/storage/<timestamp>.json`; derived, rebuildable trend records |
 
 ### 11.4 Content and sanitize policy
 
@@ -791,8 +814,9 @@ context, viable options, and a recommendation when one is available.
 | Scan source validation | Unknown `--source` tokens fail the invocation with stderr and exit 1. | `validate_scan_source_for_cli`, `scan_cmd`, §5.1, §11.5 |
 | Central registry | Scan always upserts index metrics. Explicit `--registry PATH` also filters output to paths already present and adds `reg_*` columns. Ingest merges sources; query stats merges query data. | `registry_store`, command modules, registry tests |
 | Query SQL | Keep version-aware SQL embedded in `query_cmd` until repeated external consumers justify a stable companion library. | §11.6 |
-| Global Cursor ingest | Import only composers whose `composerHeaders.workspaceId` maps to the selected project. Preserve archived and subagent flags as metadata. Exclude unmapped composers. | Cursor adapter, project helpers, ingest integration tests |
-| Cursor scan timestamps | Use header timestamps and report header/time coverage in debug output. Do not decode large bubble payloads during index-led scan merely to fill missing dates. | Cursor adapter, scan debug output, CursorSchema §5–§7 |
+| Global Cursor ingest | Import only composers whose `composerHeaders.workspaceId` maps to the selected project. Preserve archived and subagent flags as metadata. Exclude unmapped composers. | `cursor_source`, Cursor adapter, ingest integration tests |
+| Cursor scan timestamps | Use header timestamps and report header/time coverage in debug output. Do not decode large bubble payloads during index-led scan merely to fill missing dates. | `cursor_source`, scan debug output, CursorSchema §5–§7 |
+| Storage thresholds | Record dated utilization/deltas; warn above 2 GiB for one CoSchema DB and 10 GiB for Cursor. Reporting never vacuums or deletes. | `storage_report`, `storage report`, Operations.md |
 | Discovery | Keep scan index-led. `--dir` / `--dirs` are path filters, not traversal requests; there is no recursion CLI. | `scan`, root resolution, §3.0–§3.3 |
 | Query aggregation | Open each store read-only; merge report rows in Python. Session numbering is globally recency-ordered; stats are aggregate on stdout and project-local in the registry. | `query_cmd`, CLI aggregation tests |
 | Tool lineage | Join Claude tool-use ids, Codex call ids, and Cursor `toolFormerData.toolCallId`; retain truly unlinked results explicitly. | `query --lineage`, adapter metadata, CLI tests |

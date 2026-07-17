@@ -17,7 +17,6 @@ from codess.config import (
     CC_PROJECTS,
     CODEX_ARCHIVED_SESSIONS,
     CODEX_SESSIONS,
-    CURSOR_DATA,
     VERBOSE,
 )
 
@@ -71,11 +70,32 @@ def get_cc_projects_dir() -> Path:
 
 
 def find_slug_for_project(project_root: Path) -> str | None:
-    """Encode project_root; if dir exists under projects, return slug."""
+    """Find the current or explicitly linked historical Claude project slug."""
     slug = path_to_slug(project_root.resolve())
     projects_dir = get_cc_projects_dir()
     if (projects_dir / slug).is_dir():
         return slug
+    link_path = project_root.resolve() / ".codess" / "source-links.json"
+    if link_path.exists():
+        try:
+            value = json.loads(link_path.read_text(encoding="utf-8"))
+            if value.get("format") != "codess.source-links/1":
+                raise ValueError("unsupported source-link format")
+            for link in value.get("links") or []:
+                if not isinstance(link, dict):
+                    continue
+                source_path = link.get("source_project_path")
+                if (
+                    link.get("source_system_id") == "anthropic.claude-code"
+                    and link.get("selection_state") == "approved"
+                    and isinstance(source_path, str)
+                    and Path(source_path).is_absolute()
+                ):
+                    linked_slug = path_to_slug(Path(source_path).resolve())
+                    if (projects_dir / linked_slug).is_dir():
+                        return linked_slug
+        except (OSError, json.JSONDecodeError, ValueError, AttributeError) as exc:
+            log.warning("Cannot read Claude source links from %s: %s", link_path, exc)
     return None
 
 
@@ -139,71 +159,6 @@ def get_codex_session_files(project_root: Path) -> list[Path]:
             if current is None or rank < current[0]:
                 selected[session_id] = (rank, path)
     return sorted((item[1] for item in selected.values()), key=str)
-
-
-def get_cursor_global_db() -> Path | None:
-    """Return global state.vscdb path. None if not found. Chat data in v44.9+ is here."""
-    db = CURSOR_DATA / "globalStorage" / "state.vscdb"
-    return db if db.exists() else None
-
-
-def get_cursor_workspace_dbs(project_root: Path) -> list[Path]:
-    """Return Cursor state.vscdb paths for workspaces matching project. Empty if none."""
-    ws_dir = CURSOR_DATA / "workspaceStorage"
-    return [
-        ws_dir / workspace_id / "state.vscdb"
-        for workspace_id in get_cursor_workspace_ids(project_root)
-        if (ws_dir / workspace_id / "state.vscdb").exists()
-    ]
-
-
-def get_cursor_workspace_ids(project_root: Path) -> list[str]:
-    """Return Cursor workspace ids whose workspace.json maps under project_root."""
-    project_root = project_root.resolve()
-    project_str = str(project_root)
-    ws_dir = CURSOR_DATA / "workspaceStorage"
-    if not ws_dir.exists():
-        return []
-    workspace_ids = []
-    for hash_dir in ws_dir.iterdir():
-        if not hash_dir.is_dir():
-            continue
-        ws_json = hash_dir / "workspace.json"
-        if not ws_json.exists():
-            continue
-        try:
-            data = json.loads(ws_json.read_text(encoding="utf-8"))
-            folder = data.get("folder")
-            if isinstance(folder, dict):
-                folder = folder.get("path") or ""
-            folder = str(folder or "")
-            if folder.startswith("file://"):
-                folder = folder[7:]
-            folder = str(Path(folder).resolve()) if folder else ""
-            if folder and (folder == project_str or folder.startswith(project_str + "/")):
-                workspace_ids.append(hash_dir.name)
-        except (json.JSONDecodeError, OSError):
-            continue
-    link_path = project_root / ".codess" / "source-links.json"
-    if link_path.exists():
-        try:
-            links = json.loads(link_path.read_text(encoding="utf-8"))
-            if links.get("format") != "codess.source-links/1":
-                raise ValueError("unsupported source-link format")
-            for link in links.get("links") or []:
-                if not isinstance(link, dict):
-                    continue
-                identity = link.get("source_identity") or {}
-                workspace_id = identity.get("workspace_id") if isinstance(identity, dict) else None
-                if (
-                    link.get("source_system_id") == "cursor.composer"
-                    and link.get("selection_state") == "approved"
-                    and workspace_id
-                ):
-                    workspace_ids.append(str(workspace_id))
-        except (OSError, json.JSONDecodeError, ValueError, AttributeError) as exc:
-            log.warning("Cannot read Cursor source links from %s: %s", link_path, exc)
-    return sorted(set(workspace_ids))
 
 
 # --- CLI: bool merge, roots, run options (merged from former cli_options.py) ---
@@ -418,7 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--dirs",
         type=str,
         metavar="PATH",
-        help="File with directory roots (one path per line; see CoPlan §4.2)",
+        help="Plain path list or candidate CSV with directory_path (see CoPlan §4.2)",
     )
     p.add_argument(
         "--dir",
@@ -620,7 +575,7 @@ def parse_and_run(argv: list[str] | None = None) -> int:
     Lazy-imports command modules to avoid import cycles (they import this package).
     """
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    if raw_argv and raw_argv[0] in {"catalog", "baseline", "evidence", "schema"}:
+    if raw_argv and raw_argv[0] in {"catalog", "baseline", "evidence", "schema", "storage"}:
         from cli.admin_cmd import run as run_admin
         return run_admin(raw_argv)
     if raw_argv and raw_argv[0] == "candidate-review":

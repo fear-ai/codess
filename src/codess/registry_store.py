@@ -82,6 +82,29 @@ def merge_scan_rows(entry: dict[str, Any], scan_rows: list[dict[str, Any]]) -> N
     entry["scan"] = {"by_vendor": by_vendor}
 
 
+def prune_legacy_cursor_global_entries(registry_root: Path) -> int:
+    """Remove scan-only pseudo-projects produced by the former global-row bug."""
+    data = load_registry_data(registry_root)
+    projects = list(data.get("projects") or [])
+
+    def is_legacy_global(entry: dict[str, Any]) -> bool:
+        path = entry.get("path")
+        return (
+            isinstance(path, str)
+            and path.endswith("/(global)")
+            and not entry.get("sources")
+            and not entry.get("query")
+            and set(((entry.get("scan") or {}).get("by_vendor") or {})) <= {"Cursor"}
+        )
+
+    retained = [entry for entry in projects if not is_legacy_global(entry)]
+    removed = len(projects) - len(retained)
+    if removed:
+        data["projects"] = retained
+        save_registry_data(registry_root, data)
+    return removed
+
+
 def merge_query_stats(entry: dict[str, Any], sessions: int, events: int) -> None:
     entry["last_query"] = _now_iso()
     entry["query"] = {"sessions": int(sessions), "events": int(events)}

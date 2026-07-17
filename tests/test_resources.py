@@ -11,6 +11,10 @@ def test_source_and_event_limits_are_enforced(tmp_path: Path):
     assert check_source(source, 4) == 4
     with pytest.raises(ResourceLimitError, match="source size"):
         check_source(source, 3)
+    try:
+        check_source(source, 3)
+    except ResourceLimitError as exc:
+        assert (exc.limit_kind, exc.observed, exc.maximum) == ("source_bytes", 4, 3)
     assert check_events({"s": [{}, {}]}, max_source=2, max_session=2) == (2, 2)
     with pytest.raises(ResourceLimitError, match="session produced"):
         check_events({"s": [{}, {}]}, max_source=3, max_session=1)

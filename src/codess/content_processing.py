@@ -18,6 +18,25 @@ from typing import Any
 from codess.sanitize import apply_sanitization, sanitize_text
 
 
+class ContentValidationError(ValueError):
+    """Typed validation error retained as possible mapping/ingest evidence."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        validation_kind: str,
+        expected_type: str | None = None,
+        observed_type: str | None = None,
+        encoding: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.validation_kind = validation_kind
+        self.expected_type = expected_type
+        self.observed_type = observed_type
+        self.encoding = encoding
+
+
 @dataclass(frozen=True)
 class ContentContext:
     vendor: str | None = None
@@ -96,18 +115,42 @@ class ContentProcessor:
         charset = rules.get("charset") or {}
         encoding = str(charset.get("encoding") or "utf-8")
         errors = str(charset.get("errors") or "strict")
-        text = value.decode(encoding, errors=errors)
+        if not isinstance(value, bytes):
+            raise ContentValidationError(
+                f"content decoder expected bytes, got {type(value).__name__}",
+                validation_kind="type", expected_type="bytes",
+                observed_type=type(value).__name__, encoding=encoding,
+            )
+        try:
+            text = value.decode(encoding, errors=errors)
+        except (UnicodeError, LookupError) as exc:
+            raise ContentValidationError(
+                f"cannot decode content as {encoding} with errors={errors}: {exc}",
+                validation_kind="charset", expected_type="bytes",
+                observed_type="bytes", encoding=encoding,
+            ) from exc
         result = self._process(text, context, rules)
         actions = (f"decoded:{encoding}:{errors}",) + result.actions
         return replace(result, actions=actions)
 
     def preprocess(self, value: str, context: ContentContext) -> ContentResult:
         context = replace(context, phase="pre")
-        return self._process(str(value), context, _merged_rules(self.policy, context))
+        self._require_text(value)
+        return self._process(value, context, _merged_rules(self.policy, context))
 
     def postprocess(self, value: str, context: ContentContext) -> ContentResult:
         context = replace(context, phase="post")
-        return self._process(str(value), context, _merged_rules(self.policy, context))
+        self._require_text(value)
+        return self._process(value, context, _merged_rules(self.policy, context))
+
+    @staticmethod
+    def _require_text(value: Any) -> None:
+        if not isinstance(value, str):
+            raise ContentValidationError(
+                f"content processor expected str, got {type(value).__name__}",
+                validation_kind="type", expected_type="str",
+                observed_type=type(value).__name__,
+            )
 
     @staticmethod
     def _process(
@@ -206,7 +249,7 @@ def apply_processing(
         phase=phase,
     )
     method = processor.preprocess if phase == "pre" else processor.postprocess
-    result = method(str(value), context)
+    result = method(value, context)
     actions = opts.get("content_actions")
     if actions is not None:
         input_text = str(value)
