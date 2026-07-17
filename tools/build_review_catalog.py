@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codess.catalog import CatalogError, load_candidate_csv
+from codess.fileio import write_json_atomic
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,10 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     except CatalogError as exc:
         print(f"codess: {exc}", file=sys.stderr)
         return 1
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = args.output.with_name(f".{args.output.name}.tmp")
-    temporary.write_text(json.dumps(catalog, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(args.output)
+    write_json_atomic(args.output, catalog)
     print(f"Wrote {len(catalog['projects'])} candidates to {args.output}")
     return 0
 

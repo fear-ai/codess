@@ -12,7 +12,8 @@ The `codess.ingest-preflight/1` JSON result contains source/session/event counts
 diagnostics, resource observations, limits, and temporary-store checks. This
 proves current records can normalize under the current package. It does not
 prove raw durability, snapshot promotion, or a two-run fixed point;
-`apply_and_verify.py` remains the acceptance gate for those properties.
+`python -m main baseline apply` is the acceptance gate for those properties;
+`tools/apply_and_verify.py` is its compatibility wrapper.
 
 ## Structured query rows
 
@@ -55,7 +56,7 @@ defaults.
 
 ## Evidence inventory
 
-`tools/gather_evidence.py` searches current catalog Projects and local vendor
+`python -m main evidence gather` searches current catalog Projects and local vendor
 metadata without retaining conversation bodies. It checks cross-vendor artifact
 identity, effort/speed/service settings, direct Codex parents,
 lifecycle/missing-time evidence, and Cursor tool/model shapes. Relevance-ranked
@@ -66,10 +67,10 @@ and real missing-time records. It still found no Codex parent identifier and no
 effort/speed/service settings. Expand the corpus only for a high-relevance
 missing shape; use approved active workspaces for maintenance evidence.
 
-## Planned curated workflows
+## Curated workflows
 
-These names describe the accepted implementation target in Designs.md §12 and
-CoPlan.md §5.7; they are not all current commands yet.
+These command families use shared domain operations. Old tools and scripts
+remain compatibility entry points during the removal review.
 
 Candidate review combines production scan observations with optional maintained
 CSV/catalog data and bounded local Git activity. It is read-only by default,
@@ -88,12 +89,14 @@ to each stage; ordinary users do not have to manually shuttle a scan CSV through
 several scripts. `ingest --dirs` remains available for an explicit path list.
 
 Baseline publication similarly composes safe stages: validate accepted member
-reports, atomically freeze the selected catalogs, then verify the written set.
+reports, atomically replace each selected catalog with pair rollback on a
+detected failure, then verify the written set.
 The read-only verify operation remains separately callable for CI. Evidence
 gathering runs vendor audit functions once and can emit both detailed component
 reports and the aggregate inventory.
 
 Location management distinguishes adding a second location, retiring a location
-without replacement, and relocating from old to new. The current
-`retire_project.py` requires a new location and is therefore a relocation tool;
-it remains until the replacement operations are implemented and validated.
+without replacement, and relocating from old to new. The historical
+`retire_project.py` requires a new location and is therefore a relocation
+wrapper; the explicit operations are under `catalog location` and
+`catalog relocate`.

@@ -51,6 +51,18 @@ python -m main ingest --validate --dir /path/to/project --source all
 
 # Versioned typed query rows (prototype: sessions and stats)
 python -m main query --dir /path/to/project --sessions --output-format jsonl
+
+# Review candidates, record a decision, and preflight the reviewed set
+python -m main catalog candidates --dir /path/to/work --format table
+python -m main catalog decide --catalog catalog/candidates.json \
+  --project PROJECT_ID --decision approved --reviewer NAME
+python -m main catalog onboard --catalog catalog/candidates.json \
+  --validate-only --receipt /tmp/onboard.json
+
+# Administrative verification, evidence, and schema operations
+python -m main baseline verify
+python -m main evidence gather --component-dir /tmp/codess-evidence
+python -m main schema compare OLD.json NEW.json --declared compatible
 ```
 
 ---
@@ -111,13 +123,15 @@ python tools/retire_project.py --project /old/path --registry ~/.codess \
   --new-location /new/path
 ```
 
-The tool requires captured evidence and a new location, updates the stable
+The compatibility wrapper requires captured evidence and a new location, updates the stable
 Project/location catalog, and verifies the new location can read the central
-snapshot. It does not delete the old directory. Planned catalog commands split
-add-location, retire-location, and relocation semantics; see Designs.md §12.
+snapshot. It does not delete the old directory. First-class operations are
+`catalog location add`, `catalog location retire`, and `catalog relocate`;
+see Designs.md §12.
 
-The acceptance tools process exactly one project per invocation. Validation is
-read-only. Apply-and-verify refuses unversioned legacy stores unless the
+`baseline validate` and `baseline apply` process exactly one project per
+invocation; the existing tools are compatibility wrappers. Validation is
+read-only. Apply refuses unversioned legacy stores unless the
 operator explicitly requests preservation, performs two forced ingests when
 `--repeat` is set, compares source revision identities and a canonical logical
 digest (not SQLite bytes), exercises every version-aware query path, and updates
@@ -129,5 +143,6 @@ Retained snapshot queries require an explicit immutable ID. They require the
 recorded package digest by default. `--snapshot-package-policy read-compatible`
 allows a same-format historical read only after all retained hashes and the
 current database contract pass; it prints a semantic-parity warning and never
-updates current registry counts. The frozen reviewed set is checked with
-`python tools/verify_reviewed_baselines.py`.
+updates current registry counts. Check the frozen reviewed set with
+`python -m main baseline verify` (or its compatibility wrapper,
+`python tools/verify_reviewed_baselines.py`).

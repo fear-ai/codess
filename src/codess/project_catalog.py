@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import platform
 import uuid
 from datetime import datetime, timezone
@@ -11,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from codess.identity import location_id
+from codess.fileio import write_json_atomic
 
 
 CATALOG_FORMAT = "codess.project-catalog/1"
@@ -21,11 +21,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+_write_json_atomic = write_json_atomic
 
 
 def _catalog_path(registry_root: Path) -> Path:
@@ -44,9 +40,9 @@ def _machine_id(registry_root: Path) -> str:
             return value
     value = f"machine:{uuid.uuid4()}"
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
     temporary.write_text(value + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    temporary.replace(path)
     return value
 
 
@@ -176,6 +172,96 @@ def get_project_entry(registry_root: Path, project_id: str) -> dict[str, Any]:
         if item.get("project_id") == project_id:
             return dict(item)
     raise ValueError(f"project is absent from catalog: {project_id}")
+
+
+def add_project_location(
+    registry_root: Path, project_id: str, project_root: Path,
+) -> dict[str, Any]:
+    """Explicitly bind an existing directory to a known Project identity."""
+    registry_root = registry_root.expanduser().resolve()
+    project_root = project_root.expanduser().resolve()
+    if not project_root.is_dir():
+        raise ValueError(f"location is not a directory: {project_root}")
+    catalog = load_catalog(registry_root)
+    resolved = str(project_root)
+    entry = next(
+        (item for item in catalog["projects"] if item.get("project_id") == project_id),
+        None,
+    )
+    if entry is None:
+        raise ValueError(f"project is absent from catalog: {project_id}")
+    for other in catalog["projects"]:
+        if other.get("project_id") != project_id and any(
+            location.get("path") == resolved
+            for location in other.get("locations", [])
+        ):
+            raise ValueError(
+                f"location is already bound to another Project: {resolved}"
+            )
+    machine = _machine_id(registry_root)
+    observed_location_id = location_id(machine, project_root)
+    locations = {
+        item.get("location_id"): dict(item)
+        for item in entry.get("locations", [])
+        if item.get("location_id")
+    }
+    locations[observed_location_id] = {
+        "location_id": observed_location_id,
+        "machine_id": machine,
+        "path": resolved,
+        "state": "active",
+        "observed_at": _now(),
+        "platform": platform.system().lower(),
+    }
+    entry["locations"] = sorted(
+        locations.values(), key=lambda item: item["location_id"]
+    )
+    entry["path_aliases"] = sorted(set(entry.get("path_aliases", [])) | {resolved})
+    entry["updated_at"] = _now()
+    catalog["updated_at"] = _now()
+    _write_json_atomic(_catalog_path(registry_root), catalog)
+    binding = {
+        "binding_format": PROJECT_BINDING_FORMAT,
+        "project_id": project_id,
+        "location_id": observed_location_id,
+        "registry_root": str(registry_root),
+    }
+    _write_json_atomic(_binding_path(project_root), binding)
+    return {**binding, "path": resolved, "state": "active"}
+
+
+def retire_project_location(
+    registry_root: Path,
+    project_id: str,
+    project_root: Path,
+    *,
+    allow_last_active: bool = False,
+) -> dict[str, Any]:
+    """Retire one known Project location without requiring a replacement."""
+    registry_root = registry_root.expanduser().resolve()
+    resolved = str(project_root.expanduser().resolve())
+    catalog = load_catalog(registry_root)
+    entry = next(
+        (item for item in catalog["projects"] if item.get("project_id") == project_id),
+        None,
+    )
+    if entry is None:
+        raise ValueError(f"project is absent from catalog: {project_id}")
+    target = next(
+        (item for item in entry.get("locations", []) if item.get("path") == resolved),
+        None,
+    )
+    if target is None:
+        raise ValueError(f"location is absent from Project: {resolved}")
+    active = [item for item in entry.get("locations", []) if item.get("state") == "active"]
+    if target.get("state") == "active" and len(active) == 1 and not allow_last_active:
+        raise ValueError("refusing to retire the last active location")
+    target["state"] = "retired"
+    target["retired_at"] = _now()
+    entry["updated_at"] = _now()
+    catalog["updated_at"] = _now()
+    _write_json_atomic(_catalog_path(registry_root), catalog)
+    return {"project_id": project_id, "path": resolved, "state": "retired"}
 
 
 def register_workspace_bindings(

@@ -1,0 +1,22 @@
+{
+  "selection_format": "codess.baseline-selection/1",
+  "projects": [
+    {
+      "path": "/Users/walter/Work/Code/SWEmore",
+      "policy": "catalog/policies/swemore.json"
+    },
+    {
+      "path": "/Users/walter/Work/Spank/spank-py",
+      "policy": "catalog/policies/spank-py.json"
+    },
+    {
+      "path": "/Users/walter/Work/ZK/Zero400",
+      "policy": "catalog/policies/zero400.json"
+    }
+  ],
+  "known_gaps": [
+    "lifecycle abort remains fixture-only; real missing-time records are present",
+    "reasoning effort, speed tier, and service tier are absent from selected source records",
+    "Codex parent-session identifiers are absent across the metadata-only local audit"
+  ]
+}

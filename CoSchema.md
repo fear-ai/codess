@@ -194,8 +194,8 @@ state without requiring a replacement and must not strand the last reproducible
 evidence. **Relocate** composes add, durable-pointer installation, read
 verification, and retirement. The current `retire_project.py` requires
 `--new-location`, so its behavior is relocation despite its historical name;
-keep it as a compatibility wrapper until the catalog location operations in
-Designs.md §12 are implemented and tested.
+keep it as a compatibility wrapper through the removal checkpoint. The catalog
+location operations in Designs.md §12 are implemented and tested.
 
 `tools/validate_snapshot.py` verifies the current package and immutable-file
 hashes, SQLite integrity and foreign keys, manifest counts, event ordering,

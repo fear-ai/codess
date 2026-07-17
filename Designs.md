@@ -967,7 +967,7 @@ scanner and not ingest authorization. It consumes `run_scan()` results, an
 optional maintained candidate CSV or catalog, and bounded local repository
 observations. It must not duplicate Claude, Codex, or Cursor discovery.
 
-The planned compatibility spelling is `codess candidate-review`; its durable
+The compatibility spelling is `codess candidate-review`; its primary
 command-family location is `codess catalog candidates`. The interface is
 read-only unless an explicit output/update option is given:
 
@@ -1065,8 +1065,8 @@ report containing per-stage results; focused commands expose the same stages.
 Baseline freeze and verification follow this rule. Keep `baseline verify` as a
 read-only CI and diagnostic command. `baseline freeze --selection FILE`
 verifies proposed members and package/policy identities before writing,
-atomically replaces approved and reviewed catalogs, then verifies the written
-set before success. `baseline apply` remains the expensive per-Project rebuild
+atomically replaces each catalog, rolls the pair back on a detected failure,
+then verifies the written set before success. `baseline apply` remains the expensive per-Project rebuild
 and fixed-point operation. A future `baseline refresh` may compose apply for
 each selected Project followed by freeze, but must expose every Project result.
 
@@ -1093,9 +1093,9 @@ Project-location lifecycle needs explicit complementary operations:
 
 Current ingest can ensure a binding for its path, while `retire_project.py`
 actually performs relocation because `--new-location` is required. Neither is
-a safe explicit “add this second location to the known Project” command. Name
-the eventual public operation around relocation and retain the old script as a
-compatibility wrapper until replacement commands and tests are complete.
+a safe explicit “add this second location to the known Project” command. The
+public catalog operations now provide add, retire, and relocation; retain the
+old script as a compatibility wrapper through the removal checkpoint.
 
 ### Code partition for operations and wrappers
 
@@ -1117,8 +1117,8 @@ Prefer cohesive modules over a generic `utils` bucket:
 ```text
 codess.candidate_review       scan composition, Git observations, policy reasons
 codess.catalog_operations     decisions, selection, locations, onboard receipts
-codess.baseline_operations    validate/apply/fixed-point/freeze/verify orchestration
-codess.baseline_catalog       catalog entry construction and atomic replacement
+codess.baseline_operations    preserve/archive/apply/fixed-point orchestration
+codess.baseline_catalog       catalog construction, freeze, rollback, and verification
 codess.evidence               common store summaries and aggregate inventory
 codess.vendor_audits.*        capability-specific Claude/Codex/Cursor audits
 codess.schema_evolution       contract comparison and declared-change gate

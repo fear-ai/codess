@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from codess import __version__
+from codess.fileio import hash_file
 from codess.raw_store import RAW_FORMAT, RawStore
 from codess.project_catalog import durable_project_root
 from codess.schema_contract import (
@@ -28,12 +29,7 @@ class SnapshotError(RuntimeError):
     """Snapshot construction or verification failed."""
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+_sha256 = hash_file
 
 
 def _software_revision() -> str | None:

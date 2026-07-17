@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codess.local/schema/baseline-selection-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["selection_format", "projects"],
+  "properties": {
+    "selection_format": {"const": "codess.baseline-selection/1"},
+    "projects": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "policy"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "policy": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "known_gaps": {"type": "array", "items": {"type": "string"}}
+  }
+}

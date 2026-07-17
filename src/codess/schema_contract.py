@@ -9,6 +9,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from codess.fileio import hash_file
+
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "schema" / "coschema"
@@ -32,12 +35,7 @@ class UnsupportedStoreError(SchemaContractError):
     """A database is not writable/readable by this software contract."""
 
 
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
+_sha256 = hash_file
 
 
 @lru_cache(maxsize=1)

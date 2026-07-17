@@ -55,7 +55,7 @@ Cross-cutting doc rules (ToC, no transient links from core docs, etc.): **Codess
 
 ## 2. Repository Layout
 
-**Terms:** **scan** = discover projects that have vendor session data from vendor indexes. Current `CMD` is `scan` \| `ingest` \| `query` in **`build_parser()`**; the administrative families in §5.7 are planned, not yet accepted CLI.
+**Terms:** **scan** = discover projects that have vendor session data from vendor indexes. Daily commands are `scan` | `ingest` | `query`; implemented administrative families are summarized in §5.7.
 
 ```
 Codess/
@@ -426,11 +426,10 @@ summarizes **`malformed`**, **`invalid_keys`**, **`failed_sources`**, and
 
 Further CLI semantics → **Improvement Backlog**.
 
-### 5.7 Planned administrative command surface
+### 5.7 Administrative command surface
 
-This is the accepted implementation target, not a claim about current parser
-support. Preserve `scan`, `ingest`, and `query`; add administrative families
-whose focused commands and orchestrators call the same domain operations:
+These implemented families preserve `scan`, `ingest`, and `query`. Focused
+commands and orchestrators call the same domain operations:
 
 ```text
 codess catalog candidates|decide|onboard
@@ -717,32 +716,32 @@ for a specific uncovered contract or reproduced defect.
 
 ### 11.7 Administrative workflow repartition
 
-Implement in this dependency order; keep the old scripts until the final
+Implemented in this dependency order. Keep the old scripts until the removal
 checkpoint:
 
-1. Add `codess.fileio` for file hashing and atomic versioned JSON writes;
+1. **Complete:** `codess.fileio` provides file hashing and atomic versioned JSON writes;
    replace exact copies without changing formats.
-2. Add `codess.evidence` store summaries and inventory construction; make
+2. **Complete:** `codess.evidence` owns store summaries and inventory construction; make
    routine ingest and evidence gathering use the same SQL/aggregation.
-3. Add `codess.candidate_review` using `run_scan()` plus bounded Git observers
+3. **Complete:** `codess.candidate_review` uses `run_scan()` plus bounded Git observers
    and a versioned recommendation policy. Do not copy vendor discovery.
-4. Add `codess.catalog_operations` for decisions, immutable selection
+4. **Complete:** `codess.catalog_operations` owns decisions, immutable selection
    resolution, onboarding receipts, location add/retire, and relocation.
-5. Add `codess.baseline_catalog` and `codess.baseline_operations`; move
-   preserve/archive/apply/fixed-point/catalog-entry/freeze/verify rules out of
-   scripts. Freeze performs verification before and after its atomic write;
+5. **Complete:** `codess.baseline_catalog` and `codess.baseline_operations` own
+   preserve/archive/apply/fixed-point/catalog-entry/freeze/verify rules formerly
+   held in scripts. Freeze validates before writing, atomically replaces each
+   catalog, rolls both back on a detected failure, and verifies afterward;
    verify remains a read-only public operation.
-6. Add `codess.schema_evolution`; leave the schema comparison script as a thin
+6. **Complete:** `codess.schema_evolution` owns comparison; the schema script is a thin
    wrapper. Place vendor capability audits under `codess.vendor_audits` and add
    Claude feature audit only with the bounded scope in Designs.md §12.
-7. Add CLI adapters and versioned JSON reports for the §5.7 families. Unit-test
-   domain operations; integration-test focused commands and orchestrators,
-   including no-mutation plan/preflight, catalog decision preservation,
-   selection digest stability, partial failure, freeze rollback, and location
-   conflicts.
-8. Run the full suite plus representative real candidate, onboarding, evidence,
-   baseline, and relocation workflows. Update README only for commands that now
-   exist.
+7. **Complete:** CLI adapters and versioned JSON reports expose the §5.7
+   families. Tests cover domain operations, no-mutation planning, catalog
+   decision preservation, freeze rollback, relocation rollback, and location
+   conflicts; representative command checks cover preflight and selection
+   receipts.
+8. **Current validation:** keep the full suite plus representative real candidate,
+   onboarding, evidence, baseline, and relocation workflows green.
 9. **Removal checkpoint:** report replacement coverage and remind the operator
    that `scripts/find_candidate.py` and `scripts/batch_ingest.py` can then be
    removed; do not delete them earlier.

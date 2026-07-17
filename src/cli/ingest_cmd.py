@@ -43,6 +43,7 @@ from codess.artifact_correlation import correlate_external_artifacts
 from codess.snapshot import create_snapshot
 from codess.store import record_processing_run, sync_project_catalog
 from codess.resources import ResourceLimitError, check_events, check_source, peak_rss_bytes
+from codess.evidence import summarize_store_evidence
 
 log = logging.getLogger(__name__)
 
@@ -567,31 +568,7 @@ def _write_runtime_report(project_root: Path, report: dict) -> None:
 
 
 def _evidence_summary(paths: list[Path]) -> dict:
-    artifact_sources: dict[str, set[str]] = {}
-    totals = {"tool_invocations": 0, "tool_results": 0, "model_configurations": 0, "events_missing_time": 0, "correlation_assertions": 0}
-    settings = {"reasoning_effort": 0, "speed_tier": 0, "service_tier": 0}
-    for path in paths:
-        if not path.exists():
-            continue
-        conn = connect(path, read_only=True)
-        try:
-            for key in ("tool_invocations", "tool_results", "model_configurations", "correlation_assertions"):
-                totals[key] += conn.execute(f"SELECT COUNT(*) FROM {key}").fetchone()[0]
-            totals["events_missing_time"] += conn.execute("SELECT COUNT(*) FROM events WHERE event_at IS NULL").fetchone()[0]
-            for row in conn.execute("SELECT reasoning_effort,speed_tier,service_tier FROM model_configurations"):
-                for key in settings:
-                    settings[key] += int(row[key] is not None)
-            for row in conn.execute("""
-                SELECT COALESCE(a.relative_path,a.uri,a.observed_absolute_path) locator,s.source
-                FROM artifacts a JOIN event_artifacts ea ON ea.artifact_id=a.id
-                JOIN events e ON e.id=ea.event_id JOIN sessions s ON s.id=e.session_id
-                WHERE COALESCE(a.relative_path,a.uri,a.observed_absolute_path) IS NOT NULL
-            """):
-                artifact_sources.setdefault(row["locator"], set()).add(row["source"])
-        finally:
-            conn.close()
-    shared = sorted(locator for locator, sources in artifact_sources.items() if len(sources) > 1)
-    return {**totals, "model_setting_counts": settings, "cross_vendor_artifact_count": len(shared), "cross_vendor_artifact_examples": shared[:20]}
+    return summarize_store_evidence(paths)
 
 
 def run(args) -> int:

@@ -619,8 +619,15 @@ def parse_and_run(argv: list[str] | None = None) -> int:
 
     Lazy-imports command modules to avoid import cycles (they import this package).
     """
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv and raw_argv[0] in {"catalog", "baseline", "evidence", "schema"}:
+        from cli.admin_cmd import run as run_admin
+        return run_admin(raw_argv)
+    if raw_argv and raw_argv[0] == "candidate-review":
+        from cli.admin_cmd import run as run_admin
+        return run_admin(["catalog", "candidates", *raw_argv[1:]])
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
 
     if args.command is None:
         parser.print_help(sys.stderr)

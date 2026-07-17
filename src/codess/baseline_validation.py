@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from codess.raw_store import RawStore
+from codess.fileio import hash_file, write_json_atomic
 from codess.schema_contract import FORMAT_VERSION, require_store, verify_package
 from codess.snapshot import SnapshotError, current_store_paths
 
@@ -35,12 +36,7 @@ REQUIRED_ARTIFACT_INDEXES = {
 }
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+_sha256 = hash_file
 
 
 def load_policy(path: Path | None) -> dict[str, Any]:
@@ -765,12 +761,3 @@ def run_query_smoke(project_root: Path) -> dict[str, Any]:
                 "stdout_lines": len(result.stdout.splitlines()),
             }
     return results
-
-
-def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    temporary.write_text(
-        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    os.replace(temporary, path)

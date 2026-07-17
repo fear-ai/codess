@@ -1,0 +1,5 @@
+{
+  "policy_format": "codess.candidate-policy/1",
+  "min_sessions": 1,
+  "consider_active_git_without_sessions": true
+}
