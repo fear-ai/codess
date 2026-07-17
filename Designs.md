@@ -960,6 +960,177 @@ curation, and an empty human-review decision kept in separate objects. Refresh
 it with `tools/build_review_catalog.py`; then merge current vendor scan evidence
 and explicit review decisions without overwriting observations.
 
+### Candidate review, selection, and batch onboarding
+
+Candidate review is a **curation view over observations**, not another vendor
+scanner and not ingest authorization. It consumes `run_scan()` results, an
+optional maintained candidate CSV or catalog, and bounded local repository
+observations. It must not duplicate Claude, Codex, or Cursor discovery.
+
+The planned compatibility spelling is `codess candidate-review`; its durable
+command-family location is `codess catalog candidates`. The interface is
+read-only unless an explicit output/update option is given:
+
+```text
+codess catalog candidates \
+  [--dir ROOT ... | --dirs ROOTS_FILE] \
+  [--candidate-csv FILE] [--catalog FILE] \
+  [--source cc,codex,cursor] [--days N] \
+  [--git none|local] [--since DATE] \
+  [--discover-git --max-depth N] [--check-remotes] \
+  [--policy FILE] [--selection STATE] \
+  [--ownership VALUE] [--topic VALUE] \
+  [--format table|jsonl|catalog] [--out FILE] \
+  [--update-catalog FILE]
+```
+
+Defaults are `--git local`, no recursive Git discovery, no network remote
+check, table output to stdout, and no catalog mutation. `--discover-git` is a
+bounded, explicit search for repositories with no vendor-session evidence; it
+never changes the index-led semantics of `scan`. `--check-remotes` records a
+dated network observation including configured and observed URLs, result, and
+credential/profile identity without secrets. A missing or inaccessible remote
+never excludes a local Project.
+
+Each candidate keeps facts and decisions separate:
+
+- identity: Project ID when known, observed path, logical name, and topic;
+- vendor evidence: sources, sessions, events, bytes, time range, harness/source
+  shape, mapping diagnostics, and last observation;
+- local Git evidence: repository root, HEAD, last commit time, commits since
+  cutoff, dirty state, configured remote URL, and observation time;
+- curation: ownership, activity, selection state, review decision
+  (`approved`, `deferred`, or `excluded`), reviewer, notes, and reviewed time;
+  and
+- policy result: `consider`, `defer`, or `exclude`, with named rules and reasons.
+
+Policy results are recommendations. They never overwrite a human decision or
+become equivalent to `approved`. This replaces the opaque historical
+`worthy = sessions >= 2 or MiB >= 1` rule with a versioned policy whose inputs,
+outcome, and rationale are inspectable. A default policy should prioritize
+owned active work, meaningful recent sessions, cross-vendor evidence, mapping
+coverage, and explicit compatibility gaps. Size alone is insufficient.
+
+Git/activity review is worth retaining because vendor-session recency and code
+activity answer different questions. It can reveal an active owned repository
+whose session path is missing or misattributed, distinguish a dormant corpus
+member from current work, and expose code changes after the last captured
+session. It cannot prove model involvement, ownership, remote existence, or
+suitability for ingestion. It therefore belongs in candidate review, not
+`scan`, the normalized database, or the ingest acceptance gate.
+
+Dropping the old automatic worthy filter prevents unreviewed size-based bulk
+ingest but loses a one-command heuristic. Preserve the useful convenience by
+making recommendations reproducible and decisions explicit, then consume the
+decision directly:
+
+```text
+codess catalog onboard --catalog FILE --review-decision approved \
+  [--validate-only | --apply] [--source all] [--raw-mode MODE] \
+  [--stop-after plan|preflight]
+```
+
+`onboard` resolves entries with the saved review decision, emits the exact Project/path/source
+plan, runs non-mutating preflight, and, only with `--apply`, ingests that same
+resolved plan. Its receipt contains the catalog digest, selected Project IDs
+and locations, preflight results, package identity, and apply results. The
+selection is not re-evaluated between preflight and apply. Existing
+`ingest --dirs` remains the simple explicit-path mechanism and escape hatch;
+catalog onboarding is the curated mechanism.
+
+This reduces normal catalog onboarding to two human actions—review/decide,
+then onboard—while retaining direct access to discovery, plan, preflight, and
+apply for troubleshooting, CI, and audit. A first-time curator may seed a
+catalog from CSV; ordinary refreshes do not rebuild that seed.
+
+### Users, command families, and composition
+
+Keep `scan`, `ingest`, and `query` as short daily data commands. Cluster
+administrative commands by the object and decision they manage:
+
+| User / purpose | Command family | Normal operation |
+|---|---|---|
+| Developer or analyst | `scan`, `query`, `candidate-review` alias | Explore without changing curation |
+| Project operator | `ingest`; `catalog location ...` | Preflight/apply one Project; manage locations |
+| Corpus curator | `catalog candidates|decide|onboard` | Refresh observations, decide, onboard a set |
+| Release maintainer | `baseline validate|apply|freeze|verify` | Rebuild and publish a verified reviewed set |
+| Evidence maintainer | `evidence gather|audit` | Refresh aggregate and vendor structural evidence |
+| Schema developer | `schema compare` | Classify a proposed contract change |
+| CI | `baseline verify`, preflight, versioned JSON | Run read-only or explicitly staged gates |
+
+Users need visibility into each stage but should not have to invoke every stage
+separately. Orchestrators call public operations and return one structured
+report containing per-stage results; focused commands expose the same stages.
+
+Baseline freeze and verification follow this rule. Keep `baseline verify` as a
+read-only CI and diagnostic command. `baseline freeze --selection FILE`
+verifies proposed members and package/policy identities before writing,
+atomically replaces approved and reviewed catalogs, then verifies the written
+set before success. `baseline apply` remains the expensive per-Project rebuild
+and fixed-point operation. A future `baseline refresh` may compose apply for
+each selected Project followed by freeze, but must expose every Project result.
+
+Evidence audits are capability-specific rather than symmetrical wrappers for
+their own sake. Cursor currently has a broad structural feature audit; Codex
+has a bounded parentage audit. A Claude wrapper is justified when it answers a
+maintained question such as raw role/source shapes, tool outcome and permission
+fields, compaction, sidechain parentage, model fields, or harness-version drift.
+Implement it as `evidence audit claude-features` over reusable
+`audit_claude_features()`, retaining counts and field population but no
+conversation bodies. `evidence gather` calls vendor audits once and may emit
+their full component reports plus the aggregate inventory; sequential wrapper
+runs are not the normal refresh procedure.
+
+Project-location lifecycle needs explicit complementary operations:
+
+- `catalog location add --project-id ID --path PATH` associates an additional
+  location after identity and conflict checks;
+- `catalog location retire --project-id ID --path PATH` retires a location
+  without inventing a replacement, requiring captured durable evidence when it
+  would remove the last reproducible source location; and
+- `catalog relocate --project-id ID --from OLD --to NEW` composes add, pointer
+  installation, retained-snapshot read verification, and retirement.
+
+Current ingest can ensure a binding for its path, while `retire_project.py`
+actually performs relocation because `--new-location` is required. Neither is
+a safe explicit “add this second location to the known Project” command. Name
+the eventual public operation around relocation and retain the old script as a
+compatibility wrapper until replacement commands and tests are complete.
+
+### Code partition for operations and wrappers
+
+Partition by semantic ownership and reuse, not command count:
+
+- `src/codess/`: domain operations returning typed dictionaries/dataclasses;
+  no argument parsing or terminal rendering;
+- `src/cli/`: parsing, dispatch, rendering, exit-code mapping, and composition;
+- `tools/`: temporary developer entry points and compatibility wrappers only;
+  no unique business rules or SQL;
+- `scripts/`: deprecated compatibility surface, removed only after replacement
+  commands pass tests and documented workflows are updated;
+- `catalog/`: versioned policy, selection, review, and accepted-baseline data;
+  never Python policy hidden in a script; and
+- `schema/`: machine-readable contracts for those data formats.
+
+Prefer cohesive modules over a generic `utils` bucket:
+
+```text
+codess.candidate_review       scan composition, Git observations, policy reasons
+codess.catalog_operations     decisions, selection, locations, onboard receipts
+codess.baseline_operations    validate/apply/fixed-point/freeze/verify orchestration
+codess.baseline_catalog       catalog entry construction and atomic replacement
+codess.evidence               common store summaries and aggregate inventory
+codess.vendor_audits.*        capability-specific Claude/Codex/Cursor audits
+codess.schema_evolution       contract comparison and declared-change gate
+codess.fileio                 file hashing and atomic versioned JSON writes
+```
+
+Adapters continue to own vendor parsing; candidate review calls `scan` rather
+than adapters. Catalog operations may call baseline validation but never parse
+vendor sources. CLI layers may compose operations but contain no SQL, catalog
+policy, hashing, or snapshot semantics. Compatibility wrappers import one
+public operation and should normally remain below roughly 50 lines.
+
 ### Cross-vendor work on the same code or document
 
 Project-level overlap is only the first signal. To identify code or documents
@@ -1039,10 +1210,10 @@ remotes to invalidate local work.
 The frozen SWEmore, spank-py, and Zero400 set covers Claude, Codex, Cursor, tool
 cycles for Claude/Codex, subagents, compaction, mixed-vendor project timing, and
 current mapping hazards. Golden fixtures cover same-artifact multi-vendor
-queries and shapes absent from the real corpus. Current real evidence contains
-Cursor `toolFormerData` call/result lineage and `modelInfo.modelName` selections
-in approved workspaces. A shared cross-vendor artifact remains absent and is
-not a reason for broad historical ingest.
+queries and shapes absent from the frozen corpus. Current real evidence contains
+Cursor `toolFormerData` call/result lineage, `modelInfo.modelName` selections,
+and Claude/Cursor references to the same normalized artifact paths in an
+approved workspace. This is evidence of shared files, not authorship.
 
 ### 7. Deliver useful mixed queries — implemented
 
@@ -1059,8 +1230,9 @@ authorship.
 2. Keep Codex parentage unsupported until a direct referential field appears.
 3. Monitor mapped Cursor `toolFormerData` and `modelInfo.modelName`; keep empty
    `toolResults` arrays non-evidentiary.
-4. Add a real same-artifact multi-vendor corpus member or effort/speed settings
-   only when current source evidence supplies them.
+4. Add effort/speed/service settings or lifecycle-abort evidence only when
+   current source records supply them; maintain shared-artifact evidence with
+   the structure-only inventory.
 5. Re-run fixed-point and semantic sampling, then replace the frozen reviewed
    set atomically whenever a mapping or corpus member changes.
 

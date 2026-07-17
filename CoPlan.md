@@ -55,7 +55,7 @@ Cross-cutting doc rules (ToC, no transient links from core docs, etc.): **Codess
 
 ## 2. Repository Layout
 
-**Terms:** **scan** = discover projects that have vendor session data from vendor indexes. `CMD` is `scan` \| `ingest` \| `query` in **`build_parser()`**.
+**Terms:** **scan** = discover projects that have vendor session data from vendor indexes. Current `CMD` is `scan` \| `ingest` \| `query` in **`build_parser()`**; the administrative families in §5.7 are planned, not yet accepted CLI.
 
 ```
 Codess/
@@ -103,7 +103,9 @@ Codess/
     └── test_integration.py
 ```
 
-Legacy **`scripts/`** (if present): obsolete vs CLI; remove when unused.
+Legacy **`scripts/`** currently remain compatibility evidence. Do not remove
+them until §11.7 replacements, workflow tests, and documentation validation are
+complete; then remind the operator and remove them in a separate reviewed step.
 
 ---
 
@@ -424,6 +426,44 @@ summarizes **`malformed`**, **`invalid_keys`**, **`failed_sources`**, and
 
 Further CLI semantics → **Improvement Backlog**.
 
+### 5.7 Planned administrative command surface
+
+This is the accepted implementation target, not a claim about current parser
+support. Preserve `scan`, `ingest`, and `query`; add administrative families
+whose focused commands and orchestrators call the same domain operations:
+
+```text
+codess catalog candidates|decide|onboard
+codess catalog location add|retire
+codess catalog relocate
+codess baseline validate|apply|freeze|verify
+codess evidence gather|audit
+codess schema compare
+```
+
+`codess candidate-review` may remain as a discoverable alias for
+`catalog candidates`. Candidate output is read-only by default and combines
+production scan results with optional catalog/CSV and bounded local Git
+observations. Git recursion and remote network checks require explicit flags.
+Recommendations are `consider|defer|exclude`; only an explicit catalog decision
+may be selected for curated ingest.
+
+`catalog onboard` is the normal curated batch interface. It resolves entries
+with one saved review decision, prints and records the plan, runs
+`ingest --validate`, and applies
+only when explicitly requested. `--stop-after plan|preflight` exposes stages;
+the receipt preserves every stage. `ingest --dirs` remains the direct explicit
+path interface.
+
+`baseline freeze` must reuse read-only reviewed-set verification before and
+after atomic catalog replacement. `baseline verify` remains separately
+callable for CI and diagnosis. `evidence gather` invokes capability-specific
+vendor audit functions once and may emit their detailed component reports;
+vendor wrappers are focused aliases, not separate implementations.
+
+Full semantics, user types, Git/activity justification, location lifecycle,
+and code boundaries are in **Designs.md §12**.
+
 ---
 
 ## 6. Feature → Implementation Map
@@ -514,7 +554,7 @@ Order work by risk and dependency.
 | **3. Compatibility corpus — complete with recorded gaps** | The bounded Claude/Codex/Cursor corpus proves represented mappings and distinguishes real from fixture-only evidence | Maintain `CompatibilityReview.md` and add candidates only for demonstrated gaps |
 | **4. Reviewed v2 baseline — complete** | The sampled corpus is frozen by package, snapshot, semantic digest, policy, and raw-evidence state | Run `tools/verify_reviewed_baselines.py`; replace the set rather than editing it in place |
 | **5. Compatibility maintenance** | Vendor drift is detected early | Refresh the smallest real-shape fixture when an upstream format changes; rebuild rather than mutate derived data |
-| **6. Postponed work** | Speculative surfaces stay out of the active queue | Restart preflight, machine output, or PII scanning only on the triggers in §11.2 |
+| **6. Operational maintenance** | Preflight, bounded ingest, and evidence inventory catch drift before accepted rebuilds | Maintain implemented checks; expand machine output only for a consumer and restart enterprise scanning only on its §11.2 trigger |
 
 Keep **`schema/coschema/sqlite/schema.sql`** aligned with **CoSchema.md** whenever normalized event shapes change.
 
@@ -552,8 +592,8 @@ zerowalletmac and Spank/Logs were also rebuilt as captured durable baselines.
    `modelInfo.modelName` mappings against structure-only audits.
 5. Add more projects only for a demonstrated compatibility or correlation gap.
 
-The content preflight, machine-readable output, and enterprise PII scanner in
-§11.2 remain intentionally postponed.
+Operational ingest preflight is implemented and machine-readable query output
+is prototyped. The broader enterprise PII scanner in §11.2 remains postponed.
 
 For each item: settle any product contract, change code and schema docs together,
 then add representative tests in the same change set.
@@ -571,11 +611,12 @@ deduplicated stable Cursor server-bubble identities within each composer, and
 separated external file URIs from project-relative artifacts. All three
 projects were rebuilt and accepted at a semantic fixed point afterward.
 
-Remaining evidence gaps are deliberately narrow: a real same-artifact
-multi-vendor project, lifecycle/missing-time shapes outside fixtures, and
-explicit effort/speed/service settings. These do not
-justify broad project discovery. Add a candidate or mapping only when one of
-those source shapes is observed.
+Remaining evidence gaps are deliberately narrow: real lifecycle-abort source
+records, explicit effort/speed/service settings, and a direct Codex parent
+identifier. Real Claude/Cursor shared artifacts, missing-time records, and a
+Claude compaction are now available. The remaining gaps do not justify broad
+project discovery; add a candidate or mapping only when one of those source
+shapes is observed.
 
 Next maintenance actions:
 
@@ -585,7 +626,8 @@ Next maintenance actions:
    ordinary rebuilds.
 3. Re-run `audit_cursor_features.py` when Cursor storage changes. Map populated
    `toolFormerData`; do not treat empty `toolResults` arrays as outcomes.
-4. Keep real same-artifact and effort/speed/service additions evidence-triggered.
+4. Keep effort/speed/service and lifecycle-abort additions evidence-triggered;
+   maintain shared-artifact evidence through the structure-only inventory.
 
 ### 11.1 Codex parent-session evidence — audited; unsupported
 
@@ -611,12 +653,14 @@ bodies. Its reusable procedure is:
 document Codex parentage as unsupported and stop. Reopen only when an upstream
 record supplies such an identifier.
 
-### 11.2 Postponed work
+### 11.2 Prototypes and postponed work
 
 | Item | Status | Restart trigger | Contract if restarted |
 |------|--------|-----------------|-----------------------|
-| **`ingest --validate` preflight** | Postponed | A named operator workflow needs to answer “what would ingest change?” before mutation | Parse selected sources and report planned counts/diagnostics without creating or modifying `.codess`, ingest state, or registry. |
-| **Machine-readable query rows** | Postponed | A named automation consumer accepts a versioned row schema | Prefer JSON Lines, preserve tabular default, and verify exact parity with `--limit` output. |
+| **`ingest --validate` preflight** | Implemented | Maintain strict no-mutation tests | Real adapters and temporary CoSchema stores report counts, diagnostics, resources, integrity, and foreign keys; raw/snapshot/fixed-point checks remain in the acceptance gate. |
+| **Machine-readable query rows** | Prototype | Expand after consumers confirm row requirements | `codess.query-row/1` supports sessions/stats with an independent JSON Schema; preserve the tabular default. |
+| **Resource bounds and telemetry** | Implemented | Stage incrementally if a real source approaches event limits or retained-buffer memory is excessive | Enforce source/session event limits while collecting, record bytes/events/peak RSS, and explicitly release completed source buffers. |
+| **Evidence inventory** | Implemented | Refresh during vendor-storage maintenance or corpus review | Search current catalog stores and local structural metadata; retain aggregate/identity evidence, not conversation bodies. |
 | **Enterprise PII/secret scanner** | Postponed | A deployment threat model shows configured regex redaction is insufficient | Choose scanner, false-positive policy, and storage/output boundaries before adding a dependency. |
 
 ### 11.3 Platform
@@ -671,6 +715,43 @@ for a specific uncovered contract or reproduced defect.
 |------|--------|
 | Optional **`queries.sql`** companion | Add only when repeated external consumers need a stable SQL library; current version-aware reads remain in `query_cmd`. |
 
+### 11.7 Administrative workflow repartition
+
+Implement in this dependency order; keep the old scripts until the final
+checkpoint:
+
+1. Add `codess.fileio` for file hashing and atomic versioned JSON writes;
+   replace exact copies without changing formats.
+2. Add `codess.evidence` store summaries and inventory construction; make
+   routine ingest and evidence gathering use the same SQL/aggregation.
+3. Add `codess.candidate_review` using `run_scan()` plus bounded Git observers
+   and a versioned recommendation policy. Do not copy vendor discovery.
+4. Add `codess.catalog_operations` for decisions, immutable selection
+   resolution, onboarding receipts, location add/retire, and relocation.
+5. Add `codess.baseline_catalog` and `codess.baseline_operations`; move
+   preserve/archive/apply/fixed-point/catalog-entry/freeze/verify rules out of
+   scripts. Freeze performs verification before and after its atomic write;
+   verify remains a read-only public operation.
+6. Add `codess.schema_evolution`; leave the schema comparison script as a thin
+   wrapper. Place vendor capability audits under `codess.vendor_audits` and add
+   Claude feature audit only with the bounded scope in Designs.md §12.
+7. Add CLI adapters and versioned JSON reports for the §5.7 families. Unit-test
+   domain operations; integration-test focused commands and orchestrators,
+   including no-mutation plan/preflight, catalog decision preservation,
+   selection digest stability, partial failure, freeze rollback, and location
+   conflicts.
+8. Run the full suite plus representative real candidate, onboarding, evidence,
+   baseline, and relocation workflows. Update README only for commands that now
+   exist.
+9. **Removal checkpoint:** report replacement coverage and remind the operator
+   that `scripts/find_candidate.py` and `scripts/batch_ingest.py` can then be
+   removed; do not delete them earlier.
+
+The former batch `worthy` rule is not retained as authorization. A policy may
+reproduce its signals for comparison, but size/session thresholds yield a
+reasoned recommendation only. Curated batch apply consumes `approved` decisions
+or an explicit path list.
+
 ---
 
 ## 12. Change Routing
@@ -681,6 +762,14 @@ artifact boundaries:
 - Vendor format change → ***Schema.md** first → adapters → tests.
 - New CLI flag → **`codess/project.py`** (`build_parser`), **`_*_cmd.py`**, **§5** here, **Codess.md** if user-visible.
 - New DB column → **CoSchema.md** + **`schema/coschema/sqlite/schema.sql`** + **`store.py`**.
+- Candidate/Git/batch-selection change → **Designs.md §12** policy first →
+  `candidate_review` / `catalog_operations` → §5.7 → tests.
+- Baseline freeze/verify composition change → **Designs.md §2 and §12** →
+  `baseline_operations` / `baseline_catalog` → **CoSchema.md** compatibility
+  procedure if retained-baseline semantics change → tests.
+- Evidence gather/vendor-audit change → **Designs.md §12** and the applicable
+  vendor schema → `evidence` / `vendor_audits` → **CompatibilityReview.md** only
+  when actual corpus evidence changes → tests.
 
 ---
 
@@ -711,7 +800,7 @@ context, viable options, and a recommendation when one is available.
 | Source replacement | A changed or forced Claude/Codex transcript replaces its normalized session atomically; a Cursor database refresh replaces only events owned by that database. | `store`, ingest adapters, replacement tests |
 | Empty sources | A valid empty transcript removes its stale normalized session and records a nonfatal `empty_sources` diagnostic. | `ingest_cmd`, replacement tests |
 | Codex duplicate sources | When the same session exists in active and archived trees, ingest one canonical source rather than duplicating the session. | Codex discovery/ingest tests |
-| Report formats | Human-readable tabular output remains the default. Machine-readable output is not a contract until a consumer and stable row schema are defined. | §11.2 |
+| Report formats | Human-readable tabular output remains the default. Versioned JSON Lines prototypes sessions and bounded per-Project/total stats rows; expand only after a consumer validates the row contract. | `query_cmd`, `schema/query-row-v1.json`, §11.2 |
 | Audit events | Normalize only direct evidence in the CoSchema support matrix. Claude supplies denials/failures and compaction; Codex supplies failed calls and turn aborts; Cursor supplies `toolFormerData` failure/cancellation status. | adapters, `query --audit`, vendor fixtures |
 | Query row limit | Apply `--limit` after deterministic global ordering for sessions, permissions, lineage, and audit reports. Zero emits no rows; negative values fail before store access. | `query_cmd`, CLI tests |
 
@@ -719,9 +808,9 @@ context, viable options, and a recommendation when one is available.
 
 The reviewed corpus is accepted and frozen. Cursor tool/model mapping,
 external-artifact/project correlation, and the evidence-negative Codex
-parentage audit are complete (**§11.0–§11.1**). Preflight validation,
-machine-readable output, and enterprise PII scanning are postponed with
-explicit restart triggers in **§11.2**.
+parentage audit are complete (**§11.0–§11.1**). Preflight validation is
+implemented and machine-readable output is prototyped; enterprise PII scanning
+remains postponed with an explicit restart trigger in **§11.2**.
 
 ---
 
@@ -733,4 +822,4 @@ explicit restart triggers in **§11.2**.
 |-------|----------------|----------------------|---------------|
 | **Compatibility maintenance** | Does current evidence add a shared cross-vendor artifact or effort/speed/service setting? | Add only the bounded source shape or correlation asserted by evidence; then replace the reviewed set after fixed-point validation. | Keeps the accepted corpus useful without turning historical discovery into the critical path. |
 | **Codex parentage** | Has a direct, referential parent-session id appeared upstream? | Keep unsupported until the metadata-only §11.1 audit finds one. | Prevents plausible-looking but false parent links based on time, path, or content. |
-| **Postponed surfaces** | Has a named operator, automation consumer, or deployment threat model triggered validation, JSON Lines, or PII scanning? | Keep all three postponed until their documented trigger exists. | Avoids speculative CLI/schema/dependency commitments. |
+| **Postponed surfaces** | Has a deployment threat model triggered enterprise PII scanning, or a consumer justified more JSON Lines reports? | Keep enterprise scanning postponed; validate the existing JSON Lines contract before expanding it. | Avoids speculative dependencies while retaining operational preflight and bounded automation output. |

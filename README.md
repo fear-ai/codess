@@ -44,6 +44,13 @@ python tools/apply_and_verify.py --project /path/to/project --source all \
 # Structure-only vendor evidence audits (do not retain conversation bodies)
 python tools/audit_codex_parentage.py --output catalog/codex-parent-audit.json
 python tools/audit_cursor_features.py --output catalog/cursor-feature-audit.json
+python tools/gather_evidence.py --output catalog/evidence-inventory.json
+
+# Non-mutating parse/map/integrity preflight
+python -m main ingest --validate --dir /path/to/project --source all
+
+# Versioned typed query rows (prototype: sessions and stats)
+python -m main query --dir /path/to/project --sessions --output-format jsonl
 ```
 
 ---
@@ -96,16 +103,18 @@ home tree. Stable Project identities, locations, and workspace bindings live in
 
 **Do not delete or replace an ingested project directory as though it were only
 a Git checkout.** Claude, Codex, and Cursor sources are machine-local. Before
-retirement, ingest with `capture` or `seal` and validate twice, then run:
+replacing a checkout, ingest with `capture` or `seal` and validate twice, then
+run the current relocation wrapper:
 
 ```bash
 python tools/retire_project.py --project /old/path --registry ~/.codess \
   --new-location /new/path
 ```
 
-The tool requires captured evidence, updates the stable Project/location
-catalog, and verifies the new location can read the central snapshot. It does
-not delete the old directory.
+The tool requires captured evidence and a new location, updates the stable
+Project/location catalog, and verifies the new location can read the central
+snapshot. It does not delete the old directory. Planned catalog commands split
+add-location, retire-location, and relocation semantics; see Designs.md §12.
 
 The acceptance tools process exactly one project per invocation. Validation is
 read-only. Apply-and-verify refuses unversioned legacy stores unless the

@@ -203,6 +203,12 @@ def run(args) -> int:
         )
 
     try:
+        if getattr(args, "output_format", "table") == "jsonl":
+            return _jsonl_output(
+                scope, args, resolved_roots, limit,
+                resolve_registry_directory(args),
+                update_registry=not bool(snapshot_id),
+            )
         if getattr(args, "stats", False):
             return _stats(
                 scope, resolved_roots, resolve_registry_directory(args),
@@ -238,18 +244,19 @@ def run(args) -> int:
         scope.close()
 
 
-def _stats(
-    scope: QueryScope,
-    project_roots: list[Path],
-    registry_root: Path,
-    *,
-    update_registry: bool = True,
-) -> int:
-    """Print aggregate stats and merge per-project counts into the registry."""
-    counts = {
-        str(root.resolve()): {"sessions": 0, "events": 0}
-        for root in project_roots
+def _emit_jsonl(report: str, data: dict, *, project_path: str | None = None, row_number: int | None = None) -> None:
+    envelope = {
+        "schema": "codess.query-row/1",
+        "report": report,
+        "project_path": project_path,
+        "row_number": row_number,
+        "data": data,
     }
+    print(json.dumps(envelope, sort_keys=True, separators=(",", ":")))
+
+
+def _project_counts(scope: QueryScope, roots: list[Path]) -> dict[str, dict[str, int]]:
+    counts = {str(root.resolve()): {"sessions": 0, "events": 0} for root in roots}
     for store in scope.stores:
         project = str(store["project_root"])
         counts[project]["sessions"] += store["conn"].execute(
@@ -258,24 +265,80 @@ def _stats(
         counts[project]["events"] += store["conn"].execute(
             "SELECT COUNT(*) FROM events"
         ).fetchone()[0]
+    return counts
+
+
+def _merge_stats_into_registry(
+    counts: dict[str, dict[str, int]], roots: list[Path], registry_root: Path,
+) -> None:
+    for project_root in roots:
+        project = str(project_root.resolve())
+
+        def mut(e: dict, values: dict = counts[project]) -> None:
+            merge_query_stats(e, values["sessions"], values["events"])
+
+        try:
+            update_project_entry(registry_root, project, mut)
+        except OSError as exc:
+            log.warning("Registry update failed for %s: %s", project, exc)
+
+
+def _jsonl_output(
+    scope: QueryScope,
+    args,
+    roots: list[Path],
+    limit: int | None,
+    registry_root: Path,
+    *,
+    update_registry: bool,
+) -> int:
+    """Versioned typed prototype for reports with settled row semantics."""
+    if args.sessions:
+        for number, row in enumerate(_get_sessions_ordered(scope, limit), 1):
+            _emit_jsonl("sessions", {
+                "session_id": row["id"], "global_session_id": row["global_id"],
+                "source": row["source"], "release": row["release"],
+                "started_at": row["started_at"], "ended_at": row["ended_at"],
+                "source_project_path": row["project_path"],
+                "metadata": _json_metadata(row["metadata"]),
+            }, project_path=row["query_project"], row_number=number)
+        return 0
+    if getattr(args, "stats", False):
+        counts = _project_counts(scope, roots)
+        for number, root in enumerate(roots, 1):
+            project = str(root.resolve())
+            _emit_jsonl(
+                "stats.project", counts[project],
+                project_path=project, row_number=number,
+            )
+        _emit_jsonl("stats.total", {
+            "projects": len(counts),
+            "sessions": sum(item["sessions"] for item in counts.values()),
+            "events": sum(item["events"] for item in counts.values()),
+        })
+        if update_registry:
+            _merge_stats_into_registry(counts, roots, registry_root)
+        return 0
+    print("codess: JSON Lines prototype currently supports --sessions and --stats", file=sys.stderr)
+    return 1
+
+
+def _stats(
+    scope: QueryScope,
+    project_roots: list[Path],
+    registry_root: Path,
+    *,
+    update_registry: bool = True,
+) -> int:
+    """Print aggregate stats and merge per-project counts into the registry."""
+    counts = _project_counts(scope, project_roots)
     sessions = sum(item["sessions"] for item in counts.values())
     events = sum(item["events"] for item in counts.values())
     print(f"Sessions: {sessions}")
     print(f"Events: {events}")
     if not update_registry:
         return 0
-    for project_root in project_roots:
-        proj_str = str(project_root.resolve())
-        project_sessions = counts[proj_str]["sessions"]
-        project_events = counts[proj_str]["events"]
-
-        def mut(e: dict, s: int = project_sessions, ev: int = project_events) -> None:
-            merge_query_stats(e, s, ev)
-
-        try:
-            update_project_entry(registry_root, proj_str, mut)
-        except OSError as ex:
-            log.warning("Registry update failed for %s: %s", proj_str, ex)
+    _merge_stats_into_registry(counts, project_roots, registry_root)
     return 0
 
 

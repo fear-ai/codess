@@ -535,6 +535,16 @@ def test_cursor_global_ingest_is_scoped_by_composer_headers():
                     ),
                 ),
                 (
+                    "bubbleId:mapped:b2",
+                    json.dumps(
+                        {
+                            "type": 2,
+                            "text": "second mapped event",
+                            "createdAt": "2026-07-10T00:00:02Z",
+                        }
+                    ),
+                ),
+                (
                     "bubbleId:other:b1",
                     json.dumps(
                         {
@@ -585,7 +595,7 @@ def test_cursor_global_ingest_is_scoped_by_composer_headers():
         assert [row[0] for row in sessions] == ["mapped"]
         assert sessions[0][1] == str(proj.resolve())
         assert json.loads(sessions[0][2])["workspace_id"] == "ws-project"
-        assert events == [("mapped",)]
+        assert events == [("mapped",), ("mapped",)]
 
 
 def test_incremental_skip_unchanged():

@@ -482,8 +482,9 @@ Next maintenance, in order:
 2. Keep Codex parentage unsupported until a direct identifier appears.
 3. Monitor the evidence-backed Cursor `toolFormerData` and
    `modelInfo.modelName` mappings; empty `toolResults` remains non-evidentiary.
-4. Add a real same-artifact multi-vendor corpus member or effort/speed settings
-   only when current source evidence supplies them.
+4. Add effort/speed/service settings or lifecycle-abort evidence only when
+   current source records supply them; maintain shared-artifact evidence with
+   the structure-only inventory.
 5. Verify the frozen set after source refreshes and replace it atomically when
    a newly sampled set is accepted.
 

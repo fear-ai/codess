@@ -72,7 +72,8 @@ without stable call identifiers remain explicit diagnostics rather than guessed
 lineage. The Claude stores have complete call/result rows after the correction:
 1,063 / 1,063 in spank-py and 437 / 437 in Zero400. One real compaction and two
 real subagent parent links are represented. Every selected session and event has
-a source timestamp; missing-time behavior remains fixture-covered.
+a source timestamp; the wider current-store inventory contains real Cursor
+missing-time records while the frozen selected baseline uses its edge fixture.
 
 Ordinary Claude results now retain the source's explicit non-error evidence as
 `succeeded`: spank-py has 1,030 succeeded, 29 failed, and 4 denied outcomes;
@@ -81,9 +82,10 @@ quickly by another call to the same tool: 20/25 Bash, 9/10 Edit, 2/5 Read, and
 2/2 WebFetch failures were retried within five normalized events.
 
 The searches found substantial concurrent Claude/Cursor work windows in
-Zero400 (approximately 784 and 516 minutes for the two main Claude sessions),
-but no exact shared message text and no shared artifact identity. This is
-evidence of temporal overlap, not proof of shared authorship. External artifact
+Zero400 (approximately 784 and 516 minutes for the two main Claude sessions)
+and shared normalized artifact paths across the two vendors. This supports
+cross-vendor work on the same files; it does not by itself prove shared
+authorship or causal handoff. External artifact
 evidence shows spank-py sessions working heavily on Code/Misses material and
 also touching spank-rs; this is now queryable without assigning those files to
 spank-py itself.
@@ -98,13 +100,13 @@ spank-py itself.
 | Compaction | Claude | adapter audit fixture | Covered |
 | Lifecycle abort | None | Codex audit fixture | Fixture-only |
 | Subagent linkage | Claude | adapter/store tests | Covered |
-| Missing timestamps | None | `edge/null-session-times.json` | Fixture-only |
+| Missing timestamps | Cursor records in current stores | `edge/null-session-times.json` | Covered |
 | Unknown/unmapped semantics | None | rejection/diagnostic tests | Fixture-only |
 | Cursor project scoping and inferred turns | Zero400 | policy invariants and adapter tests | Covered |
 | Cursor non-message envelopes and stable bubble deduplication | Zero400 | `hazard/cursor-nonmessage-copies.json` | Covered |
 | Cursor tool lineage and source status | Zero400 | adapter/store tests and `catalog/cursor-feature-audit.json` | Covered |
 | External versus project-scoped artifact identity | spank-py, Zero400 | store/query tests | Covered |
-| Same artifact across vendors | None | `golden/cross-vendor-artifact.json` | Fixture-only |
+| Same artifact across vendors | Claude/Cursor paths in Zero400 | `golden/cross-vendor-artifact.json` and evidence inventory | Covered |
 | Exact model selection | Cursor `modelInfo.modelName` | model-turn configuration tests | Covered |
 | Effort, speed, service settings | None | model-configuration storage tests | Source-data gap |
 | Exact raw recovery | SWEmore, spank-py, Zero400 | hash/decompression checks | Covered |
@@ -144,8 +146,8 @@ not presented as semantic identity.
    `catalog/codex-parent-audit.json` found none across 28 sessions/16 releases.
 3. Monitor the mapped Cursor `toolFormerData` and `modelInfo.modelName` shapes
    with `catalog/cursor-feature-audit.json`; empty `toolResults` is not evidence.
-4. Add a real same-artifact multi-vendor project only when current scoped data
-   supplies one; keep the golden fixture as the contract meanwhile.
+4. Maintain real Claude/Cursor shared-artifact evidence through the structural
+   inventory; keep the golden fixture as the stable query contract.
 5. Capture effort/speed/service only when the vendor source explicitly provides
    them.
 6. Re-run the reviewed-baseline verifier after source refreshes and freeze a new

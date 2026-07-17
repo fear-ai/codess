@@ -85,8 +85,7 @@ def main() -> int:
         "registry": registry,
         "projects": reviewed_projects,
         "known_gaps": [
-            "same-artifact multi-vendor correlation is fixture-proven rather than selected-real-project evidence",
-            "lifecycle abort and missing timestamp behavior remain fixture-only",
+            "lifecycle abort remains fixture-only; real missing-time records are present",
             "reasoning effort, speed tier, and service tier are absent from selected source records",
             "Codex parent-session identifiers are absent across the metadata-only local audit"
         ],

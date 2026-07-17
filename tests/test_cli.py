@@ -832,3 +832,135 @@ def test_ingest_stop_environment_is_fail_fast():
 from codess.raw_store import RawStore
 from codess.snapshot import create_snapshot
 from codess.store import connect, init_db, replace_session_events
+
+
+def test_ingest_validate_uses_real_adapter_without_mutation():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        cc = root / "cc"
+        source_dir = cc / path_to_slug(project.resolve())
+        source_dir.mkdir(parents=True)
+        shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source_dir / "s1.jsonl")
+        registry = root / "registry"
+        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_REGISTRY": str(registry)}
+        result = _run(["ingest", "--validate", "--dir", str(project), "--source", "cc", "--min-size", "0"], env=env)
+        assert result.returncode == 0, result.stderr
+        report = json.loads(result.stdout.strip())
+        assert report["report_format"] == "codess.ingest-preflight/1"
+        assert report["events"] > 0
+        assert not (project / ".codess").exists()
+        assert not registry.exists()
+
+
+def test_ingest_validate_enforces_source_limit_without_mutation():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        cc = root / "cc"
+        source_dir = cc / path_to_slug(project.resolve())
+        source_dir.mkdir(parents=True)
+        shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source_dir / "s1.jsonl")
+        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_REGISTRY": str(root / "registry")}
+        result = _run(["ingest", "--validate", "--stop", "--dir", str(project), "--source", "cc", "--min-size", "0", "--max-source-bytes", "1"], env=env)
+        assert result.returncode == 1
+        assert "exceeds maximum" in result.stderr
+        assert not (project / ".codess").exists()
+
+
+def test_ingest_validate_enforces_event_limit_during_collection():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        cc = root / "cc"
+        source_dir = cc / path_to_slug(project.resolve())
+        source_dir.mkdir(parents=True)
+        shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source_dir / "s1.jsonl")
+        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_REGISTRY": str(root / "registry")}
+        result = _run([
+            "ingest", "--validate", "--stop", "--dir", str(project),
+            "--source", "cc", "--min-size", "0", "--max-events-per-source", "1",
+        ], env=env)
+        assert result.returncode == 1
+        assert "maximum is 1" in result.stderr
+        assert not (project / ".codess").exists()
+
+
+def test_ingest_validate_content_policy_does_not_touch_live_store():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        live_store = project / ".codess/sessions_cc.db"
+        init_db(live_store)
+        cc = root / "cc"
+        source_dir = cc / path_to_slug(project.resolve())
+        source_dir.mkdir(parents=True)
+        shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source_dir / "s1.jsonl")
+        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_REGISTRY": str(root / "registry")}
+        before = live_store.stat().st_mtime_ns
+        result = _run([
+            "ingest", "--validate", "--dir", str(project), "--source", "cc",
+            "--min-size", "0", "--content-policy", str(Path("schema/content-policy.example.json").resolve()),
+        ], env=env)
+        assert result.returncode == 0, result.stderr
+        assert live_store.stat().st_mtime_ns == before
+        conn = sqlite3.connect(live_store)
+        try:
+            assert conn.execute("SELECT COUNT(*) FROM processing_runs").fetchone()[0] == 0
+        finally:
+            conn.close()
+
+
+def test_routine_ingest_writes_resource_and_evidence_report():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        cc = root / "cc"
+        source_dir = cc / path_to_slug(project.resolve())
+        source_dir.mkdir(parents=True)
+        source = source_dir / "s1.jsonl"
+        shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source)
+        env = {
+            **os.environ,
+            "CODESS_CC_PROJECTS": str(cc),
+            "CODESS_REGISTRY": str(root / "registry"),
+        }
+        result = _run(
+            ["ingest", "--dir", str(project), "--source", "cc", "--min-size", "0"],
+            env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        report = json.loads(
+            (project / ".codess/last-ingest-report.json").read_text(encoding="utf-8")
+        )
+        assert report["report_format"] == "codess.ingest-runtime/1"
+        assert report["resource_observations"][0]["source_bytes"] == source.stat().st_size
+        assert report["resource_observations"][0]["events"] > 0
+        assert report["evidence_summary"]["tool_invocations"] >= 0
+        assert report["limits"]["max_source_bytes"] > 0
+
+
+def test_query_jsonl_sessions_and_stats_are_typed():
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        store = project / ".codess/sessions_cc.db"
+        init_db(store)
+        conn = sqlite3.connect(store)
+        conn.execute("INSERT INTO sessions(id,source,type,started_at,project_path) VALUES('s1','Claude','Code',12.5,?)", (str(project),))
+        conn.commit()
+        conn.close()
+        sessions = _run(["query", "--dir", str(project), "--sessions", "--output-format", "jsonl"])
+        row = json.loads(sessions.stdout)
+        assert row["schema"] == "codess.query-row/1"
+        assert row["data"]["started_at"] == 12.5
+        stats = _run(["query", "--dir", str(project), "--stats", "--output-format", "jsonl"])
+        rows = [json.loads(line) for line in stats.stdout.splitlines()]
+        assert rows[0]["report"] == "stats.project"
+        assert rows[0]["data"]["sessions"] == 1
+        assert rows[-1]["report"] == "stats.total"
+        assert rows[-1]["data"] == {"events": 0, "projects": 1, "sessions": 1}

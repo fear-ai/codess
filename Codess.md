@@ -18,7 +18,9 @@ Material is ordered **outcomes → capabilities → audiences → traceable requ
 
 ### 2.1 Outcomes and constraints
 
-- **Inclusion:** Path exists; session data present; typically git root; not under backup/review dirs.
+- **Inclusion:** Path exists; session data present or explicit curator interest;
+  typically a Git root; not under backup/review dirs. Candidate observations
+  recommend consideration but never authorize ingest by themselves.
 - **Exclusion:** Invalid paths; slug-decode ambiguity; backup trees (`OLD`, `Save`); review dirs (CodingTools, MCPs, etc.).
 - **Filters:** Scan supports source and recency filters. Ingest supports source
   selection and a run-wide minimum source-file size; it does not define
@@ -34,6 +36,8 @@ Material is ordered **outcomes → capabilities → audiences → traceable requ
 | Ingest CC, Codex, Cursor | P0 |
 | Query sessions, tool counts, content | P0 |
 | Batch / multi-root (`--dirs`, `--dir`) | P0 |
+| Review candidates using session, local Git, activity, ownership, and topic evidence | P1 |
+| Execute an explicit reviewed selection without a hidden “worthy” heuristic | P1 |
 | Per-source filters (`--source`) | P1 |
 | Redaction | P1 |
 
@@ -46,8 +50,12 @@ active backlog only if the product revives them.
 |-----|----------|
 | Developer | Tool usage across sessions |
 | Researcher | Model behavior, prompt adherence |
-| Curator | Discover/prioritize projects to ingest |
-| Auditor | Permissions, cost review |
+| Project operator | Safely ingest, capture, relocate, or retire one owned Project |
+| Curator | Discover, compare, decide, and onboard a reviewed Project set |
+| Release maintainer | Rebuild, freeze, and verify accepted baselines |
+| Schema developer | Compare contracts and investigate vendor-format drift |
+| Auditor | Permissions, evidence coverage, and reproducibility review |
+| Automation / CI | Run noninteractive preflight and verification with versioned reports |
 
 ### 2.4 Requirements summary (traceability)
 
@@ -56,6 +64,9 @@ active backlog only if the product revives them.
 | Multi-vendor inputs | CC projects dir, Codex `sessions`, Cursor `state.vscdb` | **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md** |
 | Normalized store | SQLite under `<project>/.codess/` | **CoSchema.md**, `schema/coschema/sqlite/schema.sql` |
 | Incremental ingest | mtime state plus transactional source replacement | **CoPlan.md** §3.4, §5.2; **store** / adapters |
+| Candidate selection | Separate observations, recommendations, and explicit decisions; local Git review is complementary evidence | **Designs.md** §12; **CoPlan.md** §5.7 |
+| Curated batch ingest | Consume an explicit reviewed selection; preserve stage visibility and receipts | **Designs.md** §12; **CoPlan.md** §5.7, §11.7 |
+| Baseline/evidence administration | Keep read-only stages callable while safe orchestrators compose them | **Designs.md** §12; **CoPlan.md** §5.7, §11.7 |
 | CLI & configuration | Flags, ENV, defaults, and root resolution | **CoPlan.md** §4–§5 |
 
 ---

@@ -3,6 +3,9 @@
 import json
 import logging
 import sys
+import gc
+import hashlib
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,6 +42,7 @@ from codess.project_catalog import load_catalog, register_workspace_bindings
 from codess.artifact_correlation import correlate_external_artifacts
 from codess.snapshot import create_snapshot
 from codess.store import record_processing_run, sync_project_catalog
+from codess.resources import ResourceLimitError, check_events, check_source, peak_rss_bytes
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +84,52 @@ def _record_raw(opts: dict, path: Path, source: str, conn=None) -> None:
                 profile["source_system_id"], str(path),
             ),
         )
+
+
+def _observe_resource(opts: dict, path: Path, sessions_events: dict[str, list[dict]]) -> None:
+    total, largest = check_events(
+        sessions_events, max_source=opts.get("max_events_per_source"),
+        max_session=opts.get("max_events_per_session"),
+    )
+    opts["resource_observations"].append({
+        "source": str(path), "source_bytes": path.stat().st_size,
+        "events": total, "largest_session_events": largest,
+        "peak_rss_bytes": peak_rss_bytes(),
+    })
+
+
+def _append_bounded_event(
+    opts: dict,
+    sessions_events: dict[str, list[dict]],
+    session_id: str,
+    event: dict,
+    source_total: int,
+) -> int:
+    """Append one event, rejecting before a configured buffer is exceeded."""
+    source_total += 1
+    source_max = opts.get("max_events_per_source")
+    session_max = opts.get("max_events_per_session")
+    session_events = sessions_events.setdefault(session_id, [])
+    if source_max is not None and source_total > source_max:
+        raise ResourceLimitError(
+            f"source produced more than {source_max} events; maximum is {source_max}"
+        )
+    if session_max is not None and len(session_events) >= session_max:
+        raise ResourceLimitError(
+            f"session produced more than {session_max} events; maximum is {session_max}"
+        )
+    session_events.append(event)
+    return source_total
+
+
+def _collect_bounded_events(opts: dict, events, session_id: str) -> list[dict]:
+    sessions_events: dict[str, list[dict]] = {}
+    total = 0
+    for event in events:
+        total = _append_bounded_event(
+            opts, sessions_events, session_id, event, total
+        )
+    return sessions_events.get(session_id, [])
 
 
 def _record_related_raw(
@@ -137,6 +187,7 @@ def _ingest_cc(
             mtime = st.st_mtime
             if st.st_size < min_size:
                 continue
+            check_source(path, opts.get("max_source_bytes"))
         except OSError as e:
             log.warning("Cannot stat %s: %s", path, e)
             failures += 1
@@ -154,7 +205,10 @@ def _ingest_cc(
                 "project_path": str(project_root),
                 "repo_path": str(project_root),
             }
-            events_list = list(process_cc_file(path, session_id, source_opts))
+            events_list = _collect_bounded_events(
+                opts, process_cc_file(path, session_id, source_opts), session_id,
+            )
+            _observe_resource(opts, path, {session_id: events_list})
             session = None
             if events_list:
                 timestamps = [e["timestamp"] for e in events_list if e.get("timestamp") is not None]
@@ -214,6 +268,8 @@ def _ingest_cc(
         state[str(path.resolve())] = mtime
         save_ingest_state(state_path, state)
         ingested += int(bool(events_list))
+        del events_list
+        gc.collect()
     return ingested, total_events, failures
 
 
@@ -236,6 +292,7 @@ def _ingest_codex(
             mtime = st.st_mtime
             if st.st_size < min_size:
                 continue
+            check_source(path, opts.get("max_source_bytes"))
         except OSError as e:
             log.warning("Cannot stat %s: %s", path, e)
             failures += 1
@@ -246,9 +303,10 @@ def _ingest_codex(
         session_metadata = get_session_metadata(path)
         conn = connect(store_path)
         try:
-            events_list = list(
-                process_codex_file(path, session_id, proj_path, opts)
+            events_list = _collect_bounded_events(
+                opts, process_codex_file(path, session_id, proj_path, opts), session_id,
             )
+            _observe_resource(opts, path, {session_id: events_list})
             session = None
             if events_list:
                 timestamps = [e["timestamp"] for e in events_list if e.get("timestamp") is not None]
@@ -296,6 +354,8 @@ def _ingest_codex(
         state[str(path.resolve())] = mtime
         save_ingest_state(state_path, state)
         ingested += int(bool(events_list))
+        del events_list
+        gc.collect()
     return ingested, total_events, failures
 
 
@@ -313,7 +373,7 @@ def _ingest_cursor(
     ingested, total_events, failures = 0, 0, 0
 
     workspace_ids = set(get_cursor_workspace_ids(project_root))
-    if workspace_ids and opts.get("registry_root") and opts.get("project_id"):
+    if workspace_ids and opts.get("registry_root") and opts.get("project_id") and not opts.get("validate_only"):
         register_workspace_bindings(
             Path(opts["registry_root"]), str(opts["project_id"]),
             str(opts["location_id"]), workspace_ids,
@@ -324,6 +384,7 @@ def _ingest_cursor(
     for db_path in dbs:
         try:
             mtime = db_path.stat().st_mtime
+            check_source(db_path, opts.get("max_source_bytes"))
         except OSError as e:
             log.warning("Cannot stat %s: %s", db_path, e)
             failures += 1
@@ -333,11 +394,13 @@ def _ingest_cursor(
             continue
         conn = connect(store_path)
         sessions_events: dict[str, list[dict]] = {}
+        source_total = 0
         try:
             for session_id, event in process_cursor_db(db_path, proj_str, opts):
-                if session_id not in sessions_events:
-                    sessions_events[session_id] = []
-                sessions_events[session_id].append(event)
+                source_total = _append_bounded_event(
+                    opts, sessions_events, session_id, event, source_total
+                )
+            _observe_resource(opts, db_path, sessions_events)
             sessions = {}
             for session_id, evs in sessions_events.items():
                 timestamps = [e["timestamp"] for e in evs if e.get("timestamp") is not None]
@@ -383,6 +446,8 @@ def _ingest_cursor(
         state[state_key] = mtime
         save_ingest_state(state_path, state)
         ingested += len(sessions_events)
+        del sessions_events
+        gc.collect()
 
     global_db = get_cursor_global_db()
     if global_db is not None:
@@ -397,6 +462,7 @@ def _ingest_cursor(
             return ingested, total_events, failures
         try:
             mtime = global_db.stat().st_mtime
+            check_source(global_db, opts.get("max_source_bytes"))
         except OSError as e:
             log.warning("Cannot stat %s: %s", global_db, e)
             failures += 1
@@ -405,6 +471,7 @@ def _ingest_cursor(
             if should_ingest(state_path, state_key, mtime, force):
                 conn = connect(store_path)
                 sessions_events: dict[str, list[dict]] = {}
+                source_total = 0
                 try:
                     for session_id, event in process_cursor_db(
                         global_db,
@@ -412,9 +479,10 @@ def _ingest_cursor(
                         opts,
                         composer_ids=set(headers),
                     ):
-                        if session_id not in sessions_events:
-                            sessions_events[session_id] = []
-                        sessions_events[session_id].append(event)
+                        source_total = _append_bounded_event(
+                            opts, sessions_events, session_id, event, source_total
+                        )
+                    _observe_resource(opts, global_db, sessions_events)
                     sessions = {}
                     for session_id, evs in sessions_events.items():
                         timestamps = [
@@ -470,6 +538,8 @@ def _ingest_cursor(
                     state[state_key] = mtime
                     save_ingest_state(state_path, state)
                     ingested += len(sessions_events)
+                    del sessions_events
+                    gc.collect()
                 finally:
                     conn.close()
 
@@ -486,6 +556,42 @@ def _save_stats(project_root: Path, registry_root: Path, source_stats: dict) -> 
         merge_ingest_sources(e, source_stats)
 
     update_project_entry(registry_root, proj_str, mut)
+
+
+def _write_runtime_report(project_root: Path, report: dict) -> None:
+    path = project_root / ".codess" / "last-ingest-report.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _evidence_summary(paths: list[Path]) -> dict:
+    artifact_sources: dict[str, set[str]] = {}
+    totals = {"tool_invocations": 0, "tool_results": 0, "model_configurations": 0, "events_missing_time": 0, "correlation_assertions": 0}
+    settings = {"reasoning_effort": 0, "speed_tier": 0, "service_tier": 0}
+    for path in paths:
+        if not path.exists():
+            continue
+        conn = connect(path, read_only=True)
+        try:
+            for key in ("tool_invocations", "tool_results", "model_configurations", "correlation_assertions"):
+                totals[key] += conn.execute(f"SELECT COUNT(*) FROM {key}").fetchone()[0]
+            totals["events_missing_time"] += conn.execute("SELECT COUNT(*) FROM events WHERE event_at IS NULL").fetchone()[0]
+            for row in conn.execute("SELECT reasoning_effort,speed_tier,service_tier FROM model_configurations"):
+                for key in settings:
+                    settings[key] += int(row[key] is not None)
+            for row in conn.execute("""
+                SELECT COALESCE(a.relative_path,a.uri,a.observed_absolute_path) locator,s.source
+                FROM artifacts a JOIN event_artifacts ea ON ea.artifact_id=a.id
+                JOIN events e ON e.id=ea.event_id JOIN sessions s ON s.id=e.session_id
+                WHERE COALESCE(a.relative_path,a.uri,a.observed_absolute_path) IS NOT NULL
+            """):
+                artifact_sources.setdefault(row["locator"], set()).add(row["source"])
+        finally:
+            conn.close()
+    shared = sorted(locator for locator, sources in artifact_sources.items() if len(sources) > 1)
+    return {**totals, "model_setting_counts": settings, "cross_vendor_artifact_count": len(shared), "cross_vendor_artifact_examples": shared[:20]}
 
 
 def run(args) -> int:
@@ -526,6 +632,14 @@ def run(args) -> int:
         sources = ["cc", "codex", "cursor"]
 
     iopt = build_ingest_run_options(args)
+    for name, value in (
+        ("--max-source-bytes", iopt.max_source_bytes),
+        ("--max-events-per-source", iopt.max_events_per_source),
+        ("--max-events-per-session", iopt.max_events_per_session),
+    ):
+        if value is not None and value <= 0:
+            print(f"codess: {name} must be > 0", file=sys.stderr)
+            return 1
     diagnostics: dict[str, int] = {}
     opts = {
         "debug": iopt.debug,
@@ -533,6 +647,11 @@ def run(args) -> int:
         "diagnostics": diagnostics,
         "raw_mode": iopt.raw_mode,
         "strict_mapping": iopt.strict_mapping,
+        "validate_only": iopt.validate_only,
+        "max_source_bytes": iopt.max_source_bytes,
+        "max_events_per_source": iopt.max_events_per_source,
+        "max_events_per_session": iopt.max_events_per_session,
+        "resource_observations": [],
     }
     if iopt.content_policy:
         policy_path = Path(iopt.content_policy).expanduser()
@@ -547,7 +666,7 @@ def run(args) -> int:
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             print(f"codess: invalid content policy {policy_path}: {exc}", file=sys.stderr)
             return 1
-    force = iopt.force
+    force = True if iopt.validate_only else iopt.force
     min_size = iopt.min_size
 
     total_ingested = 0
@@ -556,23 +675,42 @@ def run(args) -> int:
     had_error = False
 
     def _store_path(proj: Path, src: str) -> Path:
+        if iopt.validate_only:
+            key = hashlib.sha256(str(proj).encode()).hexdigest()[:16]
+            proj = staging_root / key
         return get_store_path(proj, {"cc": "Claude", "codex": "Codex", "cursor": "Cursor"}[src])
 
-    for project_root in roots:
+    temporary = tempfile.TemporaryDirectory(prefix="codess-preflight-") if iopt.validate_only else None
+    staging_root = Path(temporary.name) if temporary else None
+    if iopt.validate_only:
+        opts["raw_mode"] = "none"
+
+    for project_index, project_root in enumerate(roots):
         try:
+            resource_start = len(opts["resource_observations"])
             project_root = project_root.resolve()
-            binding = ensure_project_binding(registry_root, project_root)
-            project_entry = get_project_entry(registry_root, binding["project_id"])
+            if iopt.validate_only:
+                digest = hashlib.sha256(str(project_root).encode()).hexdigest()[:24]
+                binding = {"project_id": f"codess:preflight-project:{digest}", "location_id": f"preflight:{digest}"}
+                project_entry = {
+                    "project_id": binding["project_id"], "logical_name": project_root.name,
+                    "locations": [{"location_id": binding["location_id"], "machine_id": "preflight", "path": str(project_root), "state": "active", "platform": sys.platform}],
+                    "workspace_bindings": [], "path_aliases": [str(project_root)],
+                }
+            else:
+                binding = ensure_project_binding(registry_root, project_root)
+                project_entry = get_project_entry(registry_root, binding["project_id"])
             opts["project_id"] = binding["project_id"]
             opts["location_id"] = binding["location_id"]
             opts["registry_root"] = str(registry_root)
             opts["content_actions"] = []
-            state_path = get_state_path(project_root)
+            work_root = (staging_root / str(project_index)) if staging_root else project_root
+            state_path = get_state_path(work_root)
             proj_stats = {}
             project_raw_records: list[dict] = []
-            raw_store = RawStore(registry_root / "raw")
+            raw_store = RawStore((staging_root / "raw") if staging_root else registry_root / "raw")
             opts["raw_records"] = project_raw_records
-            opts["raw_store"] = raw_store
+            opts["raw_store"] = None if iopt.validate_only else raw_store
             opts["external_sources"] = []
 
             if "cc" in sources:
@@ -697,9 +835,11 @@ def run(args) -> int:
 
             if proj_stats:
                 catalog = load_catalog(registry_root)
-                project_entry = get_project_entry(registry_root, binding["project_id"])
+                if not iopt.validate_only:
+                    project_entry = get_project_entry(registry_root, binding["project_id"])
                 for vendor in ("Claude", "Codex", "Cursor"):
-                    path = get_store_path(project_root, vendor)
+                    source_key = {"Claude": "cc", "Codex": "codex", "Cursor": "cursor"}[vendor]
+                    path = _store_path(project_root, source_key)
                     if not path.exists():
                         continue
                     conn = connect(path)
@@ -715,7 +855,10 @@ def run(args) -> int:
                         )
                 if opts.get("content_policy_data"):
                     for vendor in ("Claude", "Codex", "Cursor"):
-                        path = get_store_path(project_root, vendor)
+                        source_key = {
+                            "Claude": "cc", "Codex": "codex", "Cursor": "cursor"
+                        }[vendor]
+                        path = _store_path(project_root, source_key)
                         if not path.exists():
                             continue
                         conn = connect(path)
@@ -729,7 +872,7 @@ def run(args) -> int:
                             conn.commit()
                         finally:
                             conn.close()
-                if project_raw_records:
+                if project_raw_records and not iopt.validate_only:
                     working_stores = [
                         get_store_path(project_root, vendor)
                         for vendor in ("Claude", "Codex", "Cursor")
@@ -749,7 +892,21 @@ def run(args) -> int:
                         registry_root=registry_root,
                         project_id=binding["project_id"],
                     )
-                _save_stats(project_root, registry_root, proj_stats)
+                if not iopt.validate_only:
+                    _save_stats(project_root, registry_root, proj_stats)
+                    evidence_paths = [_store_path(project_root, key) for key in ("cc", "codex", "cursor")]
+                    _write_runtime_report(project_root, {
+                        "report_format": "codess.ingest-runtime/1",
+                        "project": str(project_root), "sources": proj_stats,
+                        "diagnostics": diagnostics,
+                        "resource_observations": opts["resource_observations"][resource_start:],
+                        "evidence_summary": _evidence_summary(evidence_paths),
+                        "limits": {
+                            "max_source_bytes": iopt.max_source_bytes,
+                            "max_events_per_source": iopt.max_events_per_source,
+                            "max_events_per_session": iopt.max_events_per_session,
+                        },
+                    })
                 for k, v in proj_stats.items():
                     if k not in source_stats:
                         source_stats[k] = {"sessions": 0, "events": 0}
@@ -764,6 +921,42 @@ def run(args) -> int:
     overall_sessions = sum(s["sessions"] for s in source_stats.values())
     overall_events = sum(s["events"] for s in source_stats.values())
 
+    if iopt.validate_only:
+        store_checks = []
+        for path in sorted(staging_root.rglob("*.db")):
+            conn = connect(path, read_only=True)
+            try:
+                store_checks.append({
+                    "store": path.name,
+                    "integrity_check": conn.execute("PRAGMA integrity_check").fetchone()[0],
+                    "foreign_key_violations": len(conn.execute("PRAGMA foreign_key_check").fetchall()),
+                    "sessions": conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0],
+                    "events": conn.execute("SELECT COUNT(*) FROM events").fetchone()[0],
+                })
+            finally:
+                conn.close()
+        report = {
+            "report_format": "codess.ingest-preflight/1",
+            "status": "rejected" if had_error else "accepted",
+            "projects": [str(root.resolve()) for root in roots],
+            "sources": source_stats,
+            "sessions": total_ingested,
+            "events": total_events,
+            "diagnostics": diagnostics,
+            "resource_observations": opts["resource_observations"],
+            "store_checks": store_checks,
+            "evidence_summary": _evidence_summary(sorted(staging_root.rglob("*.db"))),
+            "limits": {
+                "max_source_bytes": iopt.max_source_bytes,
+                "max_events_per_source": iopt.max_events_per_source,
+                "max_events_per_session": iopt.max_events_per_session,
+            },
+            "mutation_boundary": "temporary stores only; project, registry, raw store, snapshots, and ingest state unchanged",
+        }
+        print(json.dumps(report, sort_keys=True))
+        if temporary:
+            temporary.cleanup()
+        return 1 if had_error else 0
     print(f"Ingested {total_ingested} session(s), {total_events} event(s)")
     print(f"Added: {total_ingested} sessions, {total_events} events | Overall: {overall_sessions} sessions, {overall_events} events")
     if any(diagnostics.values()):

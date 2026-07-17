@@ -181,10 +181,21 @@ the retained baseline no longer depends on survival of the checkout.
 
 `projects.json` is the stable catalog. A minted Project ID owns multiple
 locations and vendor workspace bindings. `tools/retire_project.py` requires a
-fully accepted captured baseline, marks the old location retired, optionally
+fully accepted captured baseline, marks the old location retired, requires and
 binds a replacement, and verifies the replacement can read the durable
 snapshot. It never deletes the old directory. Reference mode remains useful
 for exploration but cannot authorize retirement.
+
+The lifecycle separates three operations. **Add location** binds another
+observed/active path to an existing Project after identity and conflict checks;
+ordinary ingest can ensure a binding for its own path but is not an explicit
+cross-location assertion. **Retire location** changes one known location's
+state without requiring a replacement and must not strand the last reproducible
+evidence. **Relocate** composes add, durable-pointer installation, read
+verification, and retirement. The current `retire_project.py` requires
+`--new-location`, so its behavior is relocation despite its historical name;
+keep it as a compatibility wrapper until the catalog location operations in
+Designs.md §12 are implemented and tested.
 
 `tools/validate_snapshot.py` verifies the current package and immutable-file
 hashes, SQLite integrity and foreign keys, manifest counts, event ordering,

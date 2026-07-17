@@ -1,0 +1,169 @@
+{
+  "inventory_format": "codess.evidence-inventory/1",
+  "privacy_boundary": "structural metadata and aggregate counts only; conversation bodies not retained",
+  "recommendation": "expand the corpus only for a high-relevance unavailable shape; otherwise maintain audits against approved active workspaces",
+  "reviewed_stores": 9,
+  "wanted": {
+    "codex_parent_identifier": {
+      "available": false,
+      "candidate_fields": [],
+      "relevance": "medium"
+    },
+    "cross_vendor_shared_artifact": {
+      "available": true,
+      "matches": [
+        {
+          "locator": "src/wallet/gtest/test_wallet.cpp",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "src/wallet/wallet.cpp",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "UpdateZero.md",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "src/test/equihash_tests.cpp",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/rest.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/spentindex.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/getrawtransaction_insight.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/timestampindex.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/addressindex.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/smartfees.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/txindex.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/httpbasics.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/test_framework/test_framework.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/test_framework/util.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/p2p-acceptblock.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        },
+        {
+          "locator": "qa/rpc-tests/keypool.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
+          "sources": [
+            "Claude",
+            "Cursor"
+          ]
+        }
+      ],
+      "relevance": "high"
+    },
+    "cursor_tool_and_model_shapes": {
+      "available": true,
+      "evidence": {
+        "modelInfo_modelName_records": 2530,
+        "nonempty_toolResults_records": 0,
+        "populated_toolFormerData_records": 87767
+      },
+      "relevance": "maintenance"
+    },
+    "inference_effort_speed_service": {
+      "available": false,
+      "counts": {},
+      "relevance": "medium"
+    },
+    "real_lifecycle_and_missing_time": {
+      "available": true,
+      "events_missing_time": 1026,
+      "lifecycle": {
+        "context_compaction": 1
+      },
+      "relevance": "low-to-medium"
+    }
+  }
+}
