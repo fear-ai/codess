@@ -719,6 +719,29 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(tmp_path):
     assert "Cursor cohort: unchanged" in unchanged.stdout
     assert "cursor.cohort.unchanged" in unchanged.stderr
     assert "cursor.project.unchanged" in unchanged.stderr
+    assert "artifact_correlation.start" not in unchanged.stderr
+    assert [
+        (project / ".codess" / "current.json").read_bytes()
+        for project in projects
+    ] == pointers_before
+
+    cached = subprocess.run(
+        command,
+        cwd=str(Path(__file__).parent.parent),
+        env={
+            **os.environ,
+            "CODESS_REGISTRY": str(registry),
+            "CODESS_CURSOR_DATA": str(cursor_base),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert cached.returncode == 0, cached.stderr
+    marker_line = next(
+        line for line in cached.stderr.splitlines()
+        if "cursor.marker.done" in line
+    )
+    assert "status=reused" in marker_line
     assert [
         (project / ".codess" / "current.json").read_bytes()
         for project in projects
@@ -832,4 +855,4 @@ def test_incremental_skip_unchanged():
             text=True,
         )
         assert r3.returncode == 0
-        assert "0 file(s)" in r3.stdout or "Ingested 0" in r3.stdout
+        assert "0 file(s)" in r3.stdout or "Processed: 0" in r3.stdout

@@ -241,65 +241,90 @@ def _fingerprint_value(digest, value: Any) -> None:
     digest.update(b"\0")
 
 
-def get_selection_marker(
-    db_path: Path, workspace_ids: set[str],
-) -> dict[str, Any]:
-    """Fingerprint only Cursor rows consumed by one Project ingest.
+def get_sqlite_container_marker(db_path: Path) -> dict[str, Any]:
+    """Return a cheap non-authenticating main/WAL change prefilter."""
+    files = []
+    for role, path in (("main", db_path), ("wal", Path(str(db_path) + "-wal"))):
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            files.append({"role": role, "exists": False})
+            continue
+        files.append({
+            "role": role,
+            "exists": True,
+            "inode": stat.st_ino,
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        })
+    return {
+        "method": "sqlite-main-wal-inode-size-mtime-ns",
+        "files": files,
+    }
 
-    Header fields are hashed exactly. Every selected bubble contributes its
-    key, byte length, and bounded leading/trailing value bytes. This is a fast
-    non-authenticating invalidation guard, not raw-object integrity evidence.
-    All fields come from one SQLite read transaction, including live WAL state.
-    """
+
+def _selection_marker(
+    conn: sqlite3.Connection,
+    workspace_ids: set[str],
+    *,
+    all_headers: dict[str, dict] | None = None,
+) -> dict[str, Any]:
+    """Fingerprint one Project selection inside an existing transaction."""
+    headers = (
+        _composer_headers(conn, workspace_ids)
+        if all_headers is None
+        else {
+            composer_id: header
+            for composer_id, header in all_headers.items()
+            if header.get("workspace_id") in workspace_ids
+        }
+    )
+
     digest = _fingerprint_digest()
     selected_bytes = bubble_count = 0
     latest_timestamp: float | None = None
-    with closing(connect_readonly(db_path)) as conn:
-        conn.execute("BEGIN")
-        headers = _composer_headers(conn, workspace_ids)
-        for workspace_id in sorted(workspace_ids):
-            _fingerprint_value(digest, "workspace")
-            _fingerprint_value(digest, workspace_id)
-        for composer_id in sorted(headers):
-            header = headers[composer_id]
-            _fingerprint_value(digest, "header")
-            _fingerprint_value(digest, composer_id)
-            for name in (
-                "workspace_id", "created_at", "last_updated_at",
-                "is_archived", "is_subagent",
-            ):
-                _fingerprint_value(digest, name)
-                _fingerprint_value(digest, header.get(name))
-            for candidate in (
-                parse_timestamp(header.get("created_at")),
-                parse_timestamp(header.get("last_updated_at")),
-            ):
-                if candidate is not None:
-                    latest_timestamp = (
-                        candidate if latest_timestamp is None
-                        else max(latest_timestamp, candidate)
-                    )
-            lower = f"bubbleId:{composer_id}:"
-            upper = f"bubbleId:{composer_id}:\U0010ffff"
-            rows = conn.execute(
-                "SELECT key, length(value), "
-                "CAST(substr(value, 1, ?) AS BLOB), "
-                "CAST(substr(value, -?) AS BLOB) "
-                "FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key",
-                (
-                    CURSOR_SELECTION_EDGE_BYTES, CURSOR_SELECTION_EDGE_BYTES,
-                    lower, upper,
-                ),
-            )
-            for key, value_size, leading, trailing in rows:
-                bubble_count += 1
-                selected_bytes += int(value_size or 0)
-                _fingerprint_value(digest, "bubble")
-                _fingerprint_value(digest, key)
-                _fingerprint_value(digest, value_size)
-                _fingerprint_value(digest, leading)
-                _fingerprint_value(digest, trailing)
-        conn.rollback()
+    for workspace_id in sorted(workspace_ids):
+        _fingerprint_value(digest, "workspace")
+        _fingerprint_value(digest, workspace_id)
+    for composer_id in sorted(headers):
+        header = headers[composer_id]
+        _fingerprint_value(digest, "header")
+        _fingerprint_value(digest, composer_id)
+        for name in (
+            "workspace_id", "created_at", "last_updated_at",
+            "is_archived", "is_subagent",
+        ):
+            _fingerprint_value(digest, name)
+            _fingerprint_value(digest, header.get(name))
+        for candidate in (
+            parse_timestamp(header.get("created_at")),
+            parse_timestamp(header.get("last_updated_at")),
+        ):
+            if candidate is not None:
+                latest_timestamp = (
+                    candidate if latest_timestamp is None
+                    else max(latest_timestamp, candidate)
+                )
+        lower = f"bubbleId:{composer_id}:"
+        upper = f"bubbleId:{composer_id}:\U0010ffff"
+        rows = conn.execute(
+            "SELECT key, length(value), "
+            "CAST(substr(value, 1, ?) AS BLOB), "
+            "CAST(substr(value, -?) AS BLOB) "
+            "FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key",
+            (
+                CURSOR_SELECTION_EDGE_BYTES, CURSOR_SELECTION_EDGE_BYTES,
+                lower, upper,
+            ),
+        )
+        for key, value_size, leading, trailing in rows:
+            bubble_count += 1
+            selected_bytes += int(value_size or 0)
+            _fingerprint_value(digest, "bubble")
+            _fingerprint_value(digest, key)
+            _fingerprint_value(digest, value_size)
+            _fingerprint_value(digest, leading)
+            _fingerprint_value(digest, trailing)
     return {
         "source_revision": (
             f"cursor-selection-md5-fingerprint:{digest.hexdigest()}"
@@ -315,6 +340,44 @@ def get_selection_marker(
         "bubble_count": bubble_count,
         "edge_bytes": CURSOR_SELECTION_EDGE_BYTES,
     }
+
+
+def get_selection_markers(
+    db_path: Path,
+    selections: dict[str, set[str]],
+) -> dict[str, dict[str, Any]]:
+    """Fingerprint several Project selections in one SQLite read snapshot."""
+    if not selections:
+        return {}
+    with closing(connect_readonly(db_path)) as conn:
+        conn.execute("BEGIN")
+        all_headers = _composer_headers(
+            conn, set().union(*selections.values())
+        )
+        try:
+            return {
+                project: _selection_marker(
+                    conn, workspace_ids, all_headers=all_headers,
+                )
+                for project, workspace_ids in selections.items()
+            }
+        finally:
+            conn.rollback()
+
+
+def get_selection_marker(
+    db_path: Path, workspace_ids: set[str],
+) -> dict[str, Any]:
+    """Fingerprint only Cursor rows consumed by one Project ingest.
+
+    Header fields are hashed exactly. Every selected bubble contributes its
+    key, byte length, and bounded leading/trailing value bytes. This is a fast
+    non-authenticating invalidation guard, not raw-object integrity evidence.
+    All fields come from one SQLite read transaction, including live WAL state.
+    """
+    return get_selection_markers(
+        db_path, {"selection": workspace_ids}
+    )["selection"]
 
 
 def iter_bubble_rows(

@@ -779,6 +779,15 @@ skip, and failure boundaries; fields are restricted to identifiers, phase
 durations, counts, sizes, status, and exception class. They must not carry
 transcript or raw-source content.
 
+Interactive progress is enabled by default. `--no-progress` suppresses the
+stderr renderer without disabling collection, so automation can reserve stderr
+for exceptional conditions while retaining the same structured evidence.
+Retention is a rolling bounded window, not a first-events buffer: failures and
+the latest Project remain diagnosable in large batches. Project reports isolate
+status and diagnostic deltas, and processed counts are named separately from
+stored totals. Runtime evidence summaries are explicitly bound to a snapshot
+ID and may be reused only for an unchanged matching snapshot.
+
 Cursor needs finer boundaries because a selected composer is read, decoded,
 ordered, and deduplicated before its normalized events are written. The trace
 therefore distinguishes selection-marker work, raw SQLite backup/restore and
@@ -786,6 +795,10 @@ compression, composer read-buffer heartbeats, composer writes, and snapshot
 promotion. This makes a slow but advancing run distinguishable from a stopped
 one without making DEBUG logging mandatory. The bounded event list is evidence
 for performance diagnosis, not authoritative source or normalization lineage.
+Routine no-op ingest does not refresh derived artifact assertions or rewrite
+identical catalog projections. Derived processing is triggered by normalized
+vendor changes or material catalog-binding changes and participates in the
+same snapshot decision.
 
 ## 11. Raw evidence and sidecars
 
@@ -1005,8 +1018,13 @@ selected change during or after capture therefore causes a later mismatch and
 conservative recapture. Main-file mtime/size is both insufficient in WAL mode
 and too sensitive to unrelated Cursor state. Content addressing deduplicates
 stored bytes after backup, while the metadata-only cohort cache avoids backup
-entirely when the combined selected marker is already represented. The bounded
-capture design is a chunked
+entirely when the combined selected marker is already represented. The
+selected-marker cache is a narrower prefilter: it may reuse the last markers
+only for the identical Project/workspace selection when main and WAL inode,
+size, and nanosecond mtime remain stable across the cache check. A difference,
+unstable observation, cache miss, or `--force` returns to one shared SQLite read
+transaction and the complete bounded header/key/length/edge scan. Neither cache
+is evidence or a second source copy. The bounded capture design is a chunked
 pipeline: SQLite backup or stable source file → incremental content hash →
 streaming zstd writer → incremental stored hash → atomic content-addressed
 rename. Temporary output lives on the destination filesystem, is removed on

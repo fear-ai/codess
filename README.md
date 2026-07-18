@@ -51,6 +51,29 @@ pyenv exec python -m main query --dir /path/to/project \
   --session-id 'codess:session:sha256:…' --show pr tool
 ```
 
+### Observing ingest
+
+Ingest prints UTC-timestamped, content-free progress to stderr while stdout is
+reserved for its final result. Interactive runs show Project, vendor, source,
+raw-capture, Cursor composer, derived-correlation, snapshot, skip, and failure
+phases. Large source/composer and SQLite-backup phases emit periodic
+heartbeats. The final line distinguishes work processed during this invocation
+from the totals stored in the selected scope.
+
+For cron or CI that treats any stderr output as exceptional, add
+`--no-progress`. This suppresses live lines but still retains the bounded
+structured trace in each Project's `.codess/last-ingest-report.json`; preflight
+returns it in the JSON result. Each Project report has its own `status` and
+diagnostic deltas, so an earlier batch failure does not mark later successful
+Projects as failed. Routine reports name the immutable `snapshot_id`; an
+unchanged repeat may reuse the evidence summary only for that same snapshot.
+
+```sh
+pyenv exec python -m main ingest --dirs selected-projects.csv --source cursor
+pyenv exec python -m main ingest --dirs selected-projects.csv --source cursor \
+  --no-progress
+```
+
 ## Data and safety
 
 The working store is `<project>/.codess/`; accepted immutable snapshots and
@@ -104,6 +127,10 @@ active-work registers in **CoPlan.md §§8.2–8.3**.
 | **UC8 — correlate work across vendors/artifacts** | Direct aggregate plus read-only SQL drill-down | `--artifacts --source ...`; SQL through `event_artifacts` to sessions/events | Aggregate output omits constituent event IDs: **L-O2**, **L-P1** |
 | **UC9 — export and compose** | Sessions/stats support table, versioned JSONL, and spreadsheet-safe CSV | `--output-format jsonl`; `--output-format csv > result.csv`; external `jq`, SQLite, or Python | Only sessions/stats have structured formats; no saved selection input: **L-O1–L-O3** |
 | **UC10 — verify exact source evidence** | Raw/live source identities and locators exist; manual resolver needed | Inspect `sources`, `source_records`, raw manifest, then the local or captured source | No record resolver; captured containers may require streaming decode: **L-C2–L-C3** |
+
+Operationally, UC1–UC10 may be run interactively with live progress or under
+automation with `--no-progress`; both modes retain the same per-Project trace
+and status evidence.
 
 “All sessions” means all sessions currently ingested and attributed to the
 selected Project snapshot. It does not mean every vendor file on the machine,

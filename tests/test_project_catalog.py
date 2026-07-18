@@ -102,6 +102,21 @@ def test_ingest_discovered_workspace_binding_is_stable(tmp_path):
     }]
 
 
+def test_store_catalog_sync_does_not_rewrite_identical_projection(tmp_path):
+    registry = tmp_path / "registry"
+    project = tmp_path / "project"
+    project.mkdir()
+    binding = ensure_project_binding(registry, project)
+    entry = get_project_entry(registry, binding["project_id"])
+    store = project / ".codess" / "sessions_codex.db"
+    init_db(store)
+
+    with connect(store) as conn:
+        assert sync_project_catalog(conn, entry)
+        conn.commit()
+        assert not sync_project_catalog(conn, entry)
+
+
 def test_snapshot_is_central_and_relocation_preserves_query_access(tmp_path):
     project, registry, project_id = _captured_project(tmp_path)
     pointer = json.loads((project / ".codess/current.json").read_text())

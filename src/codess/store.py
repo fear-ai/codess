@@ -24,7 +24,6 @@ from codess.schema_contract import (
     FORMAT_ID,
     FORMAT_VERSION,
     UnsupportedStoreError,
-    database_identity,
     has_legacy_schema,
     load_ddl,
     require_store,
@@ -183,8 +182,13 @@ def _ensure_project(conn: sqlite3.Connection, session: dict[str, Any]) -> str | 
 def sync_project_catalog(
     conn: sqlite3.Connection,
     project: dict[str, Any],
-) -> None:
-    """Project catalog identity and bindings projected into one vendor store."""
+) -> bool:
+    """Project catalog identity and bindings projected into one vendor store.
+
+    Return whether any row changed.  Null-safe conflict predicates avoid
+    rewriting identical catalog projections on every incremental ingest.
+    """
+    changes_before = conn.total_changes
     project_id = project["project_id"]
     active = next(
         (item for item in project.get("locations", []) if item.get("state") == "active"),
@@ -201,6 +205,11 @@ def sync_project_catalog(
           source_cwd=excluded.source_cwd,
           activity_state=excluded.activity_state,
           metadata=excluded.metadata
+        WHERE projects.logical_name IS NOT excluded.logical_name
+           OR projects.root_path IS NOT excluded.root_path
+           OR projects.source_cwd IS NOT excluded.source_cwd
+           OR projects.activity_state IS NOT excluded.activity_state
+           OR projects.metadata IS NOT excluded.metadata
         """,
         (
             project_id, project.get("logical_name"),
@@ -217,7 +226,9 @@ def sync_project_catalog(
               observed_at, metadata)
             VALUES (?, ?, ?, ?, 'directory', ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET state=excluded.state,
-              observed_at=excluded.observed_at, metadata=excluded.metadata
+              metadata=excluded.metadata
+            WHERE project_locations.state IS NOT excluded.state
+               OR project_locations.metadata IS NOT excluded.metadata
             """,
             (
                 location["location_id"], project_id, location["machine_id"],
@@ -243,6 +254,11 @@ def sync_project_catalog(
               location_id=excluded.location_id,
               source_project_path=excluded.source_project_path,
               selection_state=excluded.selection_state
+            WHERE workspace_bindings.location_id IS NOT excluded.location_id
+               OR workspace_bindings.source_project_path
+                  IS NOT excluded.source_project_path
+               OR workspace_bindings.selection_state
+                  IS NOT excluded.selection_state
             """,
             (
                 binding_id, project_id, workspace.get("target_location_id"),
@@ -252,6 +268,7 @@ def sync_project_catalog(
                 workspace.get("selection_state") or "approved",
             ),
         )
+    return conn.total_changes != changes_before
 
 
 def _source_revision(

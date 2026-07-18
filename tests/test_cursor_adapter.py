@@ -20,6 +20,8 @@ from codess.cursor_source import (
     get_composer_headers,
     get_db_metrics,
     get_selection_marker,
+    get_selection_markers,
+    get_sqlite_container_marker,
     has_bubble_rows,
 )
 from codess.schema_contract import validate_mapped_event
@@ -211,6 +213,35 @@ class TestSelectionMarker:
         changed = get_selection_marker(db, {"ws1"})
         assert changed["source_revision"] != first["source_revision"]
         assert changed["source_mtime"] == 1700000002000
+
+    def test_batch_markers_share_snapshot_and_container_marker_changes(self, tmp_path):
+        db = _make_cursor_db(tmp_path, [
+            ("c1", "one", {"type": 1, "text": "first"}),
+            ("c2", "one", {"type": 1, "text": "second"}),
+        ])
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "CREATE TABLE composerHeaders ("
+                "composerId TEXT PRIMARY KEY, workspaceId TEXT)"
+            )
+            conn.executemany(
+                "INSERT INTO composerHeaders VALUES (?, ?)",
+                [("c1", "ws1"), ("c2", "ws2")],
+            )
+        container_before = get_sqlite_container_marker(db)
+
+        markers = get_selection_markers(
+            db, {"one": {"ws1"}, "two": {"ws2"}}
+        )
+
+        assert markers["one"] == get_selection_marker(db, {"ws1"})
+        assert markers["two"] == get_selection_marker(db, {"ws2"})
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE cursorDiskKV SET value=? WHERE key=?",
+                (json.dumps({"type": 1, "text": "changed"}), "bubbleId:c1:one"),
+            )
+        assert get_sqlite_container_marker(db) != container_before
 
     def test_sidecar_free_wal_workspace_uses_immutable_fallback(self, tmp_path):
         db = tmp_path / "state.vscdb"

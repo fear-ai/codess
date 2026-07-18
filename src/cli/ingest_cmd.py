@@ -25,7 +25,8 @@ from codess.adapters.cursor import process_db as process_cursor_db
 from codess.cursor_source import (
     get_composer_headers,
     get_global_db as get_cursor_global_db,
-    get_selection_marker as get_cursor_selection_marker,
+    get_selection_markers as get_cursor_selection_markers,
+    get_sqlite_container_marker as get_cursor_container_marker,
     has_bubble_rows as cursor_has_bubble_rows,
     get_workspace_dbs as get_cursor_workspace_dbs,
     get_workspace_ids as get_cursor_workspace_ids,
@@ -34,7 +35,9 @@ from codess.cursor_cohort import (
     combine_selection_markers,
     cohort_needed,
     cohort_state_key,
+    load_selection_marker_cache,
     prepare_cursor_cohort,
+    save_selection_marker_cache,
 )
 from codess.project import (
     RootsWhenEmpty,
@@ -259,12 +262,12 @@ def _ingest_cc(
     min_size: int,
     *,
     stop_on_error: bool,
-) -> tuple[int, int, int]:
-    """Ingest CC. Return (sessions_added, events_added, failed_sources)."""
+) -> tuple[int, int, int, bool]:
+    """Return processed sessions/events, failures, and normalized-store change."""
     cc_dir = get_cc_session_dir(project_root)
     if cc_dir is None:
-        return 0, 0, 0
-    ingested, total_events, failures = 0, 0, 0
+        return 0, 0, 0, False
+    ingested, total_events, failures, changed = 0, 0, 0, False
     for path, parent_session_id in _cc_session_files(cc_dir):
         try:
             st = path.stat()
@@ -366,6 +369,7 @@ def _ingest_cc(
                     relation_kind=external["relation_kind"],
                 )
             conn.commit()
+            changed = True
             total_events += len(events_list)
         except Exception as e:
             conn.rollback()
@@ -400,7 +404,7 @@ def _ingest_cc(
         )
         del events_list
         gc.collect()
-    return ingested, total_events, failures
+    return ingested, total_events, failures, changed
 
 
 def _ingest_codex(
@@ -412,12 +416,12 @@ def _ingest_codex(
     min_size: int,
     *,
     stop_on_error: bool,
-) -> tuple[int, int, int]:
-    """Ingest Codex. Return (sessions_added, events_added, failed_sources)."""
+) -> tuple[int, int, int, bool]:
+    """Return processed sessions/events, failures, and normalized-store change."""
     files = get_codex_session_files(
         project_root, index=opts.get("codex_session_index")
     )
-    ingested, total_events, failures = 0, 0, 0
+    ingested, total_events, failures, changed = 0, 0, 0, False
     for path in files:
         try:
             st = path.stat()
@@ -489,6 +493,7 @@ def _ingest_codex(
             )
             _record_raw(opts, path, "Codex", conn)
             conn.commit()
+            changed = True
             total_events += len(events_list)
         except Exception as e:
             conn.rollback()
@@ -519,7 +524,7 @@ def _ingest_codex(
         )
         del events_list
         gc.collect()
-    return ingested, total_events, failures
+    return ingested, total_events, failures, changed
 
 
 def _ingest_cursor(
@@ -530,10 +535,10 @@ def _ingest_cursor(
     force: bool,
     *,
     stop_on_error: bool,
-) -> tuple[int, int, int]:
-    """Ingest Cursor. Return (sessions_added, events_added, failed_sources)."""
+) -> tuple[int, int, int, bool]:
+    """Return processed sessions/events, failures, and normalized-store change."""
     proj_str = str(project_root.resolve())
-    ingested, total_events, failures = 0, 0, 0
+    ingested, total_events, failures, changed = 0, 0, 0, False
 
     workspace_ids = set(get_cursor_workspace_ids(project_root))
     if workspace_ids and opts.get("registry_root") and opts.get("project_id") and not opts.get("validate_only"):
@@ -724,6 +729,7 @@ def _ingest_cursor(
             db_sessions, db_events = ingest_db_stream(conn, db_path, mtime)
             _record_raw(opts, db_path, "Cursor", conn)
             conn.commit()
+            changed = True
             total_events += db_events
         except Exception as e:
             conn.rollback()
@@ -771,7 +777,7 @@ def _ingest_cursor(
                 opts, "cursor.project.unchanged", project=proj_str,
                 source=str(global_source.resolve()),
             )
-            return ingested, total_events, failures
+            return ingested, total_events, failures, changed
         headers = get_composer_headers(global_db, workspace_ids)
         if not headers:
             if opts.get("debug"):
@@ -784,7 +790,7 @@ def _ingest_cursor(
                 opts, "cursor.project.no_composers", project=proj_str,
                 workspace_ids=len(workspace_ids),
             )
-            return ingested, total_events, failures
+            return ingested, total_events, failures, changed
         try:
             marker_mtime = detection_marker.get("source_mtime")
             mtime = (
@@ -821,6 +827,7 @@ def _ingest_cursor(
                         source_uri=str(global_source),
                     )
                     conn.commit()
+                    changed = True
                     total_events += db_events
                 except Exception as e:
                     conn.rollback()
@@ -850,9 +857,10 @@ def _ingest_cursor(
 
     _progress(
         opts, "cursor.project.done", project=proj_str,
-        sessions=ingested, events=total_events, failures=failures,
+        processed_sessions=ingested, processed_events=total_events,
+        failed_sources=failures,
     )
-    return ingested, total_events, failures
+    return ingested, total_events, failures, changed
 
 
 def _save_stats(project_root: Path, registry_root: Path, source_stats: dict) -> None:
@@ -873,6 +881,28 @@ def _write_runtime_report(project_root: Path, report: dict) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def _load_runtime_report(project_root: Path) -> dict:
+    path = project_root / ".codess" / "last-ingest-report.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _current_snapshot_id(project_root: Path) -> str | None:
+    try:
+        value = json.loads(
+            (project_root / ".codess" / "current.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        snapshot_id = value.get("snapshot_id")
+        return str(snapshot_id) if snapshot_id else None
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
 
 
 def _evidence_summary(paths: list[Path]) -> dict:
@@ -958,7 +988,7 @@ def run(args) -> int:
         "content_failure_reviews": [],
         "claude_session_kinds": {"main": 0, "subagent": 0},
     }
-    progress_trace = ProgressTrace()
+    progress_trace = ProgressTrace(enabled=iopt.live_progress)
     opts["progress"] = progress_trace
     progress_trace(
         "ingest.start", projects=len(roots), sources=",".join(sources),
@@ -1011,6 +1041,13 @@ def run(args) -> int:
         )
 
     cursor_cohort_temp = None
+    raw_records_cache: dict[Path, list[dict]] = {}
+
+    def load_current_raw_records(project: Path) -> list[dict]:
+        resolved = project.resolve()
+        if resolved not in raw_records_cache:
+            raw_records_cache[resolved] = current_raw_records(resolved)
+        return raw_records_cache[resolved]
 
     def cleanup_cursor_cohort() -> None:
         nonlocal cursor_cohort_temp
@@ -1034,17 +1071,55 @@ def run(args) -> int:
                     "cursor.marker.start", source=str(live_global.resolve()),
                     projects=len(cursor_roots),
                 )
-                project_markers = {
-                    str(root): get_cursor_selection_marker(
-                        live_global, cursor_workspace_ids[root]
-                    )
+                selections = {
+                    str(root): cursor_workspace_ids[root]
                     for root in cursor_roots
                 }
+                selection_cache_path = (
+                    registry_root / "cache" / "cursor-selection-v1.json"
+                )
+                container_marker = get_cursor_container_marker(live_global)
+                project_markers = None
+                marker_status = "scanned"
+                if not force:
+                    project_markers = load_selection_marker_cache(
+                        selection_cache_path,
+                        source=live_global,
+                        container_marker=container_marker,
+                        selections=selections,
+                    )
+                    if (
+                        project_markers is not None
+                        and get_cursor_container_marker(live_global)
+                        != container_marker
+                    ):
+                        project_markers = None
+                    elif project_markers is not None:
+                        marker_status = "reused"
+                if project_markers is None:
+                    for _attempt in range(2):
+                        container_before = get_cursor_container_marker(live_global)
+                        project_markers = get_cursor_selection_markers(
+                            live_global, selections
+                        )
+                        container_after = get_cursor_container_marker(live_global)
+                        if container_before == container_after:
+                            save_selection_marker_cache(
+                                selection_cache_path,
+                                source=live_global,
+                                container_marker=container_after,
+                                selections=selections,
+                                project_markers=project_markers,
+                            )
+                            break
+                    else:
+                        marker_status = "scanned-unstable"
                 marker = combine_selection_markers(project_markers)
                 marker_elapsed = round(time.monotonic() - marker_started, 6)
                 progress_trace(
                     "cursor.marker.done", source=str(live_global.resolve()),
-                    projects=len(cursor_roots), phase_seconds=round(marker_elapsed, 3),
+                    projects=len(cursor_roots), status=marker_status,
+                    phase_seconds=round(marker_elapsed, 3),
                 )
                 opts.update({
                     "cursor_cohort_source": live_global,
@@ -1085,7 +1160,7 @@ def run(args) -> int:
                                 is not None
                             )
                             and object_path.is_file()
-                            for record in current_raw_records(root)
+                            for record in load_current_raw_records(root)
                         )
                     }
                     opts["cursor_cohort_evidence_projects"] = evidence_projects
@@ -1162,6 +1237,10 @@ def run(args) -> int:
                     error_type=type(exc).__name__,
                 )
                 cleanup_cursor_cohort()
+                progress_trace(
+                    "ingest.failed", stage="cursor.cohort",
+                    error_type=type(exc).__name__,
+                )
                 print(f"codess: Cursor cohort capture failed: {exc}", file=sys.stderr)
                 return 1
 
@@ -1169,6 +1248,7 @@ def run(args) -> int:
         try:
             resource_start = len(opts["resource_observations"])
             review_start = len(opts["content_failure_reviews"])
+            diagnostic_start = dict(diagnostics)
             project_root = project_root.resolve()
             project_started = time.monotonic()
             progress_trace(
@@ -1194,7 +1274,8 @@ def run(args) -> int:
             state_path = get_state_path(work_root)
             proj_stats = {}
             project_raw_records: list[dict] = (
-                [] if iopt.validate_only else current_raw_records(project_root)
+                [] if iopt.validate_only
+                else load_current_raw_records(project_root)
             )
             raw_store = RawStore((staging_root / "raw") if staging_root else registry_root / "raw")
             opts["raw_records"] = project_raw_records
@@ -1202,6 +1283,10 @@ def run(args) -> int:
             opts["raw_records_changed"] = False
             opts["external_sources"] = []
             project_ingested = 0
+            project_processed_events = 0
+            project_had_error = False
+            changed_vendors: set[str] = set()
+            catalog_changed_vendors: set[str] = set()
             seal_upgrade = (
                 iopt.raw_mode == "seal"
                 and not _current_snapshot_is_sealed(project_root)
@@ -1216,7 +1301,8 @@ def run(args) -> int:
                 init_db(store_path)
                 conn = connect(store_path)
                 try:
-                    sync_project_catalog(conn, project_entry)
+                    if sync_project_catalog(conn, project_entry):
+                        catalog_changed_vendors.add("Claude")
                     conn.commit()
                 finally:
                     conn.close()
@@ -1224,11 +1310,16 @@ def run(args) -> int:
                 if cc_dir is None and source == "cc":
                     print(f"No CC project dir for {project_root}", file=sys.stderr)
                     had_error = True
+                    project_had_error = True
                     if iopt.stop_on_error:
                         cleanup_cursor_cohort()
+                        progress_trace(
+                            "ingest.failed", stage="project.source_selection",
+                            project=str(project_root), error_type="SourceNotFound",
+                        )
                         return 1
                 if cc_dir is not None:
-                    n, e, failed = _ingest_cc(
+                    n, e, failed, store_changed = _ingest_cc(
                         project_root,
                         store_path,
                         state_path,
@@ -1240,11 +1331,17 @@ def run(args) -> int:
                     total_ingested += n
                     total_events += e
                     project_ingested += n
+                    project_processed_events += e
+                    if store_changed:
+                        changed_vendors.add("Claude")
                     if failed:
                         diagnostics["failed_sources"] = (
                             diagnostics.get("failed_sources", 0) + failed
                         )
                         had_error = True
+                        project_had_error = True
+                else:
+                    n = e = failed = 0
                 if store_path.exists():
                     conn = connect(store_path)
                     try:
@@ -1259,8 +1356,10 @@ def run(args) -> int:
                         conn.close()
                 progress_trace(
                     "vendor.done", project=str(project_root), vendor="Claude",
-                    sessions=proj_stats.get("Claude", {}).get("sessions", 0),
-                    events=proj_stats.get("Claude", {}).get("events", 0),
+                    processed_sessions=n, processed_events=e,
+                    failed_sources=failed,
+                    stored_sessions=proj_stats.get("Claude", {}).get("sessions", 0),
+                    stored_events=proj_stats.get("Claude", {}).get("events", 0),
                     phase_seconds=round(time.monotonic() - vendor_started, 3),
                 )
 
@@ -1273,11 +1372,12 @@ def run(args) -> int:
                 init_db(store_path)
                 conn = connect(store_path)
                 try:
-                    sync_project_catalog(conn, project_entry)
+                    if sync_project_catalog(conn, project_entry):
+                        catalog_changed_vendors.add("Codex")
                     conn.commit()
                 finally:
                     conn.close()
-                n, e, failed = _ingest_codex(
+                n, e, failed, store_changed = _ingest_codex(
                     project_root,
                     store_path,
                     state_path,
@@ -1289,11 +1389,15 @@ def run(args) -> int:
                 total_ingested += n
                 total_events += e
                 project_ingested += n
+                project_processed_events += e
+                if store_changed:
+                    changed_vendors.add("Codex")
                 if failed:
                     diagnostics["failed_sources"] = (
                         diagnostics.get("failed_sources", 0) + failed
                     )
                     had_error = True
+                    project_had_error = True
                 if store_path.exists():
                     conn = connect(store_path)
                     try:
@@ -1308,8 +1412,10 @@ def run(args) -> int:
                         conn.close()
                 progress_trace(
                     "vendor.done", project=str(project_root), vendor="Codex",
-                    sessions=proj_stats.get("Codex", {}).get("sessions", 0),
-                    events=proj_stats.get("Codex", {}).get("events", 0),
+                    processed_sessions=n, processed_events=e,
+                    failed_sources=failed,
+                    stored_sessions=proj_stats.get("Codex", {}).get("sessions", 0),
+                    stored_events=proj_stats.get("Codex", {}).get("events", 0),
                     phase_seconds=round(time.monotonic() - vendor_started, 3),
                 )
 
@@ -1322,11 +1428,12 @@ def run(args) -> int:
                 init_db(store_path)
                 conn = connect(store_path)
                 try:
-                    sync_project_catalog(conn, project_entry)
+                    if sync_project_catalog(conn, project_entry):
+                        catalog_changed_vendors.add("Cursor")
                     conn.commit()
                 finally:
                     conn.close()
-                n, e, failed = _ingest_cursor(
+                n, e, failed, store_changed = _ingest_cursor(
                     project_root,
                     store_path,
                     state_path,
@@ -1337,11 +1444,15 @@ def run(args) -> int:
                 total_ingested += n
                 total_events += e
                 project_ingested += n
+                project_processed_events += e
+                if store_changed:
+                    changed_vendors.add("Cursor")
                 if failed:
                     diagnostics["failed_sources"] = (
                         diagnostics.get("failed_sources", 0) + failed
                     )
                     had_error = True
+                    project_had_error = True
                 if store_path.exists():
                     conn = connect(store_path)
                     try:
@@ -1356,13 +1467,14 @@ def run(args) -> int:
                         conn.close()
                 progress_trace(
                     "vendor.done", project=str(project_root), vendor="Cursor",
-                    sessions=proj_stats.get("Cursor", {}).get("sessions", 0),
-                    events=proj_stats.get("Cursor", {}).get("events", 0),
+                    processed_sessions=n, processed_events=e,
+                    failed_sources=failed,
+                    stored_sessions=proj_stats.get("Cursor", {}).get("sessions", 0),
+                    stored_events=proj_stats.get("Cursor", {}).get("events", 0),
                     phase_seconds=round(time.monotonic() - vendor_started, 3),
                 )
 
             if proj_stats:
-                catalog = load_catalog(registry_root)
                 if not iopt.validate_only:
                     project_entry = get_project_entry(registry_root, binding["project_id"])
                 for vendor in ("Claude", "Codex", "Cursor"):
@@ -1372,17 +1484,51 @@ def run(args) -> int:
                         continue
                     conn = connect(path)
                     try:
-                        sync_project_catalog(conn, project_entry)
+                        if sync_project_catalog(conn, project_entry):
+                            catalog_changed_vendors.add(vendor)
+                        conn.commit()
+                    finally:
+                        conn.close()
+                derived_changed = False
+                correlation_vendors = changed_vendors | catalog_changed_vendors
+                if correlation_vendors:
+                    catalog = load_catalog(registry_root)
+                for vendor in sorted(correlation_vendors):
+                    source_key = {
+                        "Claude": "cc", "Codex": "codex", "Cursor": "cursor"
+                    }[vendor]
+                    path = _store_path(project_root, source_key)
+                    if not path.exists():
+                        continue
+                    correlation_started = time.monotonic()
+                    progress_trace(
+                        "artifact_correlation.start",
+                        project=str(project_root), vendor=vendor,
+                    )
+                    conn = connect(path)
+                    try:
                         outcome = correlate_external_artifacts(conn, catalog)
                         conn.commit()
+                        derived_changed = True
                     finally:
                         conn.close()
                     for key, value in outcome.items():
                         diagnostics[f"artifact_correlation_{key}"] = (
                             diagnostics.get(f"artifact_correlation_{key}", 0) + value
                         )
+                    progress_trace(
+                        "artifact_correlation.done",
+                        project=str(project_root), vendor=vendor,
+                        external_artifacts=outcome.get("external_artifacts", 0),
+                        matched=outcome.get("matched", 0),
+                        ambiguous=outcome.get("ambiguous", 0),
+                        unmatched=outcome.get("unmatched", 0),
+                        phase_seconds=round(
+                            time.monotonic() - correlation_started, 3
+                        ),
+                    )
                 if opts.get("content_policy_data"):
-                    for vendor in ("Claude", "Codex", "Cursor"):
+                    for vendor in sorted(changed_vendors):
                         source_key = {
                             "Claude": "cc", "Codex": "codex", "Cursor": "cursor"
                         }[vendor]
@@ -1391,23 +1537,32 @@ def run(args) -> int:
                             continue
                         conn = connect(path)
                         try:
+                            vendor_actions = [
+                                action for action in opts.get("content_actions", [])
+                                if action.get("vendor") == vendor
+                            ]
                             record_processing_run(
                                 conn,
                                 project_id=binding["project_id"],
                                 policy=opts["content_policy_data"],
-                                actions=opts.get("content_actions", []),
+                                actions=vendor_actions,
                             )
                             conn.commit()
+                            derived_changed = True
                         finally:
                             conn.close()
+                snapshot_required = (
+                    bool(changed_vendors)
+                    or bool(catalog_changed_vendors)
+                    or derived_changed
+                    or opts["raw_records_changed"]
+                    or seal_upgrade
+                )
+                snapshot_id = _current_snapshot_id(project_root)
                 if (
                     project_raw_records
                     and not iopt.validate_only
-                    and (
-                        project_ingested
-                        or opts["raw_records_changed"]
-                        or seal_upgrade
-                    )
+                    and snapshot_required
                 ):
                     working_stores = [
                         get_store_path(project_root, vendor)
@@ -1435,6 +1590,7 @@ def run(args) -> int:
                         registry_root=registry_root,
                         project_id=binding["project_id"],
                     )
+                    snapshot_id = snapshot_path.name
                     progress_trace(
                         "snapshot.done", project=str(project_root),
                         snapshot_id=snapshot_path.name,
@@ -1445,27 +1601,73 @@ def run(args) -> int:
                         "snapshot.skip", project=str(project_root),
                         reason="unchanged",
                     )
-                progress_trace(
-                    "project.done", project=str(project_root),
-                    sessions=sum(value["sessions"] for value in proj_stats.values()),
-                    events=sum(value["events"] for value in proj_stats.values()),
-                    phase_seconds=round(time.monotonic() - project_started, 3),
-                )
+                evidence_summary = None
+                evidence_summary_reused = False
                 if not iopt.validate_only:
                     _save_stats(project_root, registry_root, proj_stats)
                     evidence_paths = [_store_path(project_root, key) for key in ("cc", "codex", "cursor")]
+                    previous_report = _load_runtime_report(project_root)
+                    previous_summary = previous_report.get("evidence_summary")
+                    if (
+                        not snapshot_required
+                        and snapshot_id is not None
+                        and previous_report.get("report_format")
+                        == "codess.ingest-runtime/1"
+                        and previous_report.get("project") == str(project_root)
+                        and previous_report.get("snapshot_id") == snapshot_id
+                        and isinstance(previous_summary, dict)
+                    ):
+                        evidence_summary = previous_summary
+                        evidence_summary_reused = True
+                        progress_trace(
+                            "evidence_summary.reused",
+                            project=str(project_root), snapshot_id=snapshot_id,
+                        )
+                    else:
+                        evidence_started = time.monotonic()
+                        progress_trace(
+                            "evidence_summary.start", project=str(project_root),
+                            stores=len([path for path in evidence_paths if path.exists()]),
+                        )
+                        evidence_summary = _evidence_summary(evidence_paths)
+                        progress_trace(
+                            "evidence_summary.done", project=str(project_root),
+                            phase_seconds=round(
+                                time.monotonic() - evidence_started, 3
+                            ),
+                        )
+                progress_trace(
+                    "project.done", project=str(project_root),
+                    status=("completed_with_errors" if project_had_error else "accepted"),
+                    processed_sessions=project_ingested,
+                    processed_events=project_processed_events,
+                    stored_sessions=sum(value["sessions"] for value in proj_stats.values()),
+                    stored_events=sum(value["events"] for value in proj_stats.values()),
+                    phase_seconds=round(time.monotonic() - project_started, 3),
+                )
+                if not iopt.validate_only:
                     _write_runtime_report(project_root, {
                         "report_format": "codess.ingest-runtime/1",
                         "progress_format": "codess.progress/1",
+                        "progress_live": iopt.live_progress,
+                        "status": (
+                            "completed_with_errors" if project_had_error else "accepted"
+                        ),
                         "project": str(project_root), "sources": proj_stats,
-                        "diagnostics": diagnostics,
+                        "snapshot_id": snapshot_id,
+                        "evidence_summary_reused": evidence_summary_reused,
+                        "diagnostics": {
+                            key: value - diagnostic_start.get(key, 0)
+                            for key, value in diagnostics.items()
+                            if value != diagnostic_start.get(key, 0)
+                        },
                         "content_failure_reviews": opts["content_failure_reviews"][review_start:],
                         "resource_observations": opts["resource_observations"][resource_start:],
                         "cursor_cohort": opts.get("cursor_cohort"),
                         "progress_events": progress_trace.records_for(
                             str(project_root)
                         ),
-                        "evidence_summary": _evidence_summary(evidence_paths),
+                        "evidence_summary": evidence_summary,
                         "limits": {
                             "max_source_bytes": iopt.max_source_bytes,
                             "max_events_per_source": iopt.max_events_per_source,
@@ -1486,6 +1688,13 @@ def run(args) -> int:
             had_error = True
             if iopt.stop_on_error:
                 cleanup_cursor_cohort()
+                progress_trace(
+                    "ingest.failed", stage="project",
+                    project=str(project_root),
+                    error_type=(
+                        sys.exc_info()[0].__name__ if sys.exc_info()[0] else None
+                    ),
+                )
                 return 1
 
     overall_sessions = sum(s["sessions"] for s in source_stats.values())
@@ -1512,6 +1721,7 @@ def run(args) -> int:
         report = {
             "report_format": "codess.ingest-preflight/1",
             "progress_format": "codess.progress/1",
+            "progress_live": iopt.live_progress,
             "status": "rejected" if had_error else "accepted",
             "projects": [str(root.resolve()) for root in roots],
             "sources": source_stats,
@@ -1544,8 +1754,10 @@ def run(args) -> int:
         cohort = opts["cursor_cohort"]
         elapsed = cohort.get("cohort_seconds", cohort.get("marker_seconds", 0))
         print(f"Cursor cohort: {cohort['status']} ({elapsed:.3f}s)")
-    print(f"Ingested {total_ingested} session(s), {total_events} event(s)")
-    print(f"Added: {total_ingested} sessions, {total_events} events | Overall: {overall_sessions} sessions, {overall_events} events")
+    print(
+        f"Processed: {total_ingested} session(s), {total_events} event(s) | "
+        f"Stored: {overall_sessions} session(s), {overall_events} event(s)"
+    )
     if any(diagnostics.values()):
         print(
             "codess: ingest diagnostics: "

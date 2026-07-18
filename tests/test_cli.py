@@ -563,7 +563,7 @@ def test_idempotent_same_data():
 
 
 def test_ingest_shows_stats():
-    """Ingest prints added and overall stats."""
+    """Ingest distinguishes processed work from stored totals."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         proj = tmp / "proj"
@@ -578,7 +578,7 @@ def test_ingest_shows_stats():
         env["CODESS_CC_PROJECTS"] = str(cc_dir)
         r = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         assert r.returncode == 0
-        assert "Added:" in r.stdout and "Overall:" in r.stdout
+        assert "Processed:" in r.stdout and "Stored:" in r.stdout
 
 
 def test_query_stats():
@@ -760,8 +760,57 @@ def test_ingest_partial_source_failure_continues_and_exits_1():
         )
 
         assert r.returncode == 1
-        assert "Ingested 1 session" in r.stdout
+        assert "Processed: 1 session" in r.stdout
         assert "failed_sources=1" in r.stderr
+        report = json.loads(
+            (proj / ".codess/last-ingest-report.json").read_text(encoding="utf-8")
+        )
+        assert report["status"] == "completed_with_errors"
+        assert report["diagnostics"]["failed_sources"] == 1
+
+
+def test_multi_project_reports_isolate_status_and_diagnostics():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        failed_project = root / "failed"
+        accepted_project = root / "accepted"
+        failed_project.mkdir()
+        accepted_project.mkdir()
+        cc_projects = root / "cc"
+        failed_sources = cc_projects / path_to_slug(failed_project.resolve())
+        accepted_sources = cc_projects / path_to_slug(accepted_project.resolve())
+        failed_sources.mkdir(parents=True)
+        accepted_sources.mkdir(parents=True)
+        (failed_sources / "broken.jsonl").mkdir()
+        shutil.copy(
+            Path(__file__).parent / "fixtures" / "sample.jsonl",
+            accepted_sources / "good.jsonl",
+        )
+
+        result = _run(
+            [
+                "ingest", "--dir", str(failed_project),
+                "--dir", str(accepted_project), "--source", "cc",
+                "--force", "--min-size", "0",
+            ],
+            env={
+                **os.environ,
+                "CODESS_CC_PROJECTS": str(cc_projects),
+                "CODESS_REGISTRY": str(root / "registry"),
+            },
+        )
+
+        assert result.returncode == 1
+        failed_report = json.loads(
+            (failed_project / ".codess/last-ingest-report.json").read_text()
+        )
+        accepted_report = json.loads(
+            (accepted_project / ".codess/last-ingest-report.json").read_text()
+        )
+        assert failed_report["status"] == "completed_with_errors"
+        assert failed_report["diagnostics"]["failed_sources"] == 1
+        assert accepted_report["status"] == "accepted"
+        assert "failed_sources" not in accepted_report["diagnostics"]
 
 
 def test_ingest_stop_aborts_before_later_sources():
@@ -976,6 +1025,7 @@ def test_routine_ingest_writes_resource_and_evidence_report():
         )
         assert report["report_format"] == "codess.ingest-runtime/1"
         assert report["progress_format"] == "codess.progress/1"
+        assert report["progress_live"] is True
         assert report["resource_observations"][0]["source_bytes"] == source.stat().st_size
         assert report["resource_observations"][0]["events"] > 0
         assert report["evidence_summary"]["tool_invocations"] >= 0
@@ -983,9 +1033,86 @@ def test_routine_ingest_writes_resource_and_evidence_report():
         assert "codess: progress " in result.stderr
         assert [event["event"] for event in report["progress_events"]] == [
             "ingest.start", "project.start", "vendor.start", "source.start",
-            "source.done", "vendor.done", "snapshot.start", "snapshot.done",
-            "project.done",
+            "source.done", "vendor.done", "artifact_correlation.start",
+            "artifact_correlation.done", "snapshot.start", "snapshot.done",
+            "evidence_summary.start", "evidence_summary.done", "project.done",
         ]
+
+
+def test_unchanged_ingest_reuses_snapshot_evidence_summary():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        cc = root / "cc"
+        source_dir = cc / path_to_slug(project.resolve())
+        source_dir.mkdir(parents=True)
+        shutil.copy(
+            Path(__file__).parent / "fixtures/sample.jsonl",
+            source_dir / "s1.jsonl",
+        )
+        command = [
+            "ingest", "--dir", str(project), "--source", "cc", "--min-size", "0",
+        ]
+        env = {
+            **os.environ,
+            "CODESS_CC_PROJECTS": str(cc),
+            "CODESS_REGISTRY": str(root / "registry"),
+        }
+        first = _run(command, env=env)
+        assert first.returncode == 0, first.stderr
+        pointer_before = (project / ".codess/current.json").read_bytes()
+        first_report = json.loads(
+            (project / ".codess/last-ingest-report.json").read_text()
+        )
+
+        second = _run(command, env=env)
+
+        assert second.returncode == 0, second.stderr
+        assert "evidence_summary.reused" in second.stderr
+        assert (project / ".codess/current.json").read_bytes() == pointer_before
+        second_report = json.loads(
+            (project / ".codess/last-ingest-report.json").read_text()
+        )
+        assert second_report["snapshot_id"] == first_report["snapshot_id"]
+        assert second_report["evidence_summary_reused"] is True
+        assert second_report["evidence_summary"] == first_report["evidence_summary"]
+
+
+def test_no_progress_suppresses_live_lines_but_retains_trace():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        cc = root / "cc"
+        source_dir = cc / path_to_slug(project.resolve())
+        source_dir.mkdir(parents=True)
+        shutil.copy(
+            Path(__file__).parent / "fixtures/sample.jsonl",
+            source_dir / "s1.jsonl",
+        )
+        result = _run(
+            [
+                "ingest", "--dir", str(project), "--source", "cc",
+                "--min-size", "0", "--no-progress",
+            ],
+            env={
+                **os.environ,
+                "CODESS_CC_PROJECTS": str(cc),
+                "CODESS_REGISTRY": str(root / "registry"),
+            },
+        )
+
+        assert result.returncode == 0
+        assert "codess: progress " not in result.stderr
+        report = json.loads(
+            (project / ".codess/last-ingest-report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert report["progress_live"] is False
+        assert report["progress_events"][0]["event"] == "ingest.start"
+        assert report["progress_events"][-1]["event"] == "project.done"
 
 
 def test_query_jsonl_sessions_and_stats_are_typed():

@@ -255,6 +255,7 @@ class IngestRunOptions:
     max_source_bytes: int | None
     max_events_per_source: int | None
     max_events_per_session: int | None
+    live_progress: bool
 
 
 def build_ingest_run_options(args: Any) -> IngestRunOptions:
@@ -281,6 +282,7 @@ def build_ingest_run_options(args: Any) -> IngestRunOptions:
         max_source_bytes=(None if getattr(args, "no_resource_limits", False) else int(getattr(args, "max_source_bytes", None) or MAX_SOURCE_BYTES)),
         max_events_per_source=(None if getattr(args, "no_resource_limits", False) else int(getattr(args, "max_events_per_source", None) or MAX_EVENTS_PER_SOURCE)),
         max_events_per_session=(None if getattr(args, "no_resource_limits", False) else int(getattr(args, "max_events_per_session", None) or MAX_EVENTS_PER_SESSION)),
+        live_progress=not bool(getattr(args, "no_progress", False)),
     )
 
 
@@ -413,6 +415,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-events-per-source", type=int, metavar="N", help="ingest: maximum normalized events per source")
     p.add_argument("--max-events-per-session", type=int, metavar="N", help="ingest: maximum normalized events per session")
     p.add_argument("--no-resource-limits", action="store_true", help="ingest: explicitly disable source/event maximums")
+    p.add_argument(
+        "--no-progress", action="store_true",
+        help="ingest: suppress live progress on stderr; retain structured trace",
+    )
 
     p.add_argument(
         "--tool",

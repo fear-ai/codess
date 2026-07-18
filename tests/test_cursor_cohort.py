@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import sqlite3
 
-from codess.cursor_cohort import cohort_needed, prepare_cursor_cohort
+from codess.cursor_cohort import (
+    cohort_needed,
+    load_selection_marker_cache,
+    prepare_cursor_cohort,
+    save_selection_marker_cache,
+)
 from codess.raw_store import RawStore
 from codess.store import ingest_state_marker, save_ingest_state
 
@@ -13,6 +18,34 @@ def _cursor_db(path) -> None:
     with sqlite3.connect(path) as conn:
         conn.execute("CREATE TABLE values_for_test(value TEXT)")
         conn.execute("INSERT INTO values_for_test VALUES ('captured')")
+
+
+def test_selection_marker_cache_requires_exact_container_and_scope(tmp_path):
+    source = tmp_path / "state.vscdb"
+    _cursor_db(source)
+    cache = tmp_path / "selection-cache.json"
+    container = {"method": "stat", "files": [{"role": "main", "size": 1}]}
+    selections = {"/project": {"workspace"}}
+    markers = {"/project": {"source_revision": "marker"}}
+
+    save_selection_marker_cache(
+        cache, source=source, container_marker=container,
+        selections=selections, project_markers=markers,
+    )
+
+    assert load_selection_marker_cache(
+        cache, source=source, container_marker=container,
+        selections=selections,
+    ) == markers
+    assert load_selection_marker_cache(
+        cache, source=source,
+        container_marker={"method": "stat", "files": []},
+        selections=selections,
+    ) is None
+    assert load_selection_marker_cache(
+        cache, source=source, container_marker=container,
+        selections={"/other": {"workspace"}},
+    ) is None
 
 
 def test_cursor_cohort_cache_restores_without_recapturing(tmp_path, monkeypatch):

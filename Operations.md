@@ -39,13 +39,23 @@ backup progress, compression/object verification, composer read-buffer
 heartbeats, composer writes, and unchanged skips. All vendors expose Project,
 vendor, snapshot, completion, and failure boundaries. A long operation should
 therefore show its current phase; `-v/--verbose` remains separate DEBUG logging.
+Use `--no-progress` when cron/CI reserves stderr for warnings and errors; event
+collection and report retention remain enabled.
 
 Routine ingest writes `.codess/last-ingest-report.json` with
 `progress_format: codess.progress/1`, the same bounded `progress_events`, source
 bytes, event counts, largest buffered session, peak process RSS, limits, and
 diagnostics. Preflight includes the trace in its JSON result. Progress records
 never contain prompt, response, tool, attachment, or raw-source bodies. The
-trace retains at most 5,000 events and explicitly reports any dropped count.
+trace retains the most recent 5,000 events and explicitly reports the number of
+older events dropped. This rolling window preserves the point of failure in a
+large batch; earlier completed Projects already have their own reports.
+`vendor.done` and `project.done` distinguish `processed_*` counts for this run
+from `stored_*` totals. Runtime reports use per-Project status and diagnostic
+deltas rather than cumulative values from earlier Projects. They also name the
+current immutable `snapshot_id`. An unchanged run may reuse the preceding
+evidence summary only when that snapshot ID matches; otherwise it recomputes
+the summary and traces the phase.
 Cursor runs add `cursor_cohort.status` (`unchanged`, `reused`, or `captured`),
 bounded-marker/capture elapsed time, source/materialized/stored byte counts when
 available, and the process RSS high-water mark.
@@ -54,6 +64,13 @@ limit rejects before the complete oversized buffer is retained. Cursor decoding
 projects envelopes to mapped fields before retaining them; completed source
 buffers are explicitly deleted and garbage collection follows the transaction.
 Content excerpts retain per-record limits.
+
+Unchanged runs still synchronize catalog identity with null-safe updates, but
+do not rewrite identical Project/location/workspace rows or rerun derived
+artifact correlation. Correlation runs only for a vendor whose normalized
+store changed or whose projected catalog bindings changed, and it has its own
+progress boundary. This prevents derived-store writes and snapshot churn on a
+true no-op.
 
 A size, content-type/shape, or character-set failure is not assumed to be bad
 content. Preflight and routine reports add a
@@ -164,6 +181,14 @@ performance only. The pre-capture selection marker is deliberately retained as
 the state guard: if selected header or bubble evidence changes after the marker
 was read, the next invocation revisits that Project instead of treating the
 backup as current.
+
+`~/.codess/cache/cursor-selection-v1.json` is a separate metadata-only
+prefilter for immediate repeat runs. It retains the latest exact
+Project-to-workspace selection, main/WAL inode-size-mtime observations, and
+selected markers—never SQLite rows or content. Stable before/after container
+observations permit marker reuse; any difference performs the full bounded
+selected scan. `--force` also bypasses this cache. Deleting either cache is
+always safe and changes only performance.
 
 SQLite backups are normalized to `journal_mode=DELETE` before capture so the
 standalone object remains queryable through a strict read-only connection

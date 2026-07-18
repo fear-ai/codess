@@ -33,6 +33,6 @@ def test_progress_trace_bounds_persisted_events() -> None:
 
     records = trace.records_for()
     assert [record["event"] for record in records] == [
-        "first", "progress.events_dropped",
+        "second", "progress.events_dropped",
     ]
     assert records[-1]["count"] == 1

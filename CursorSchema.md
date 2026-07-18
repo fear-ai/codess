@@ -177,6 +177,14 @@ length, and the first/last 512 bytes of each value. A changed selected marker
 triggers one exact transactional backup for the cohort; unrelated table changes
 do not. Exact captured evidence remains fully SHA-256 addressed and verified.
 
+An immediate repeat may reuse those selected markers only when a metadata-only
+cache matches the exact Project-to-workspace selection and two observations of
+the SQLite main/WAL inode, byte size, and nanosecond mtime are unchanged. This
+is a cheap non-authenticating prefilter, not a replacement for the bounded
+marker: any main/WAL or selection difference performs the full selected-row
+scan in one shared SQLite read transaction. A changing container is rescanned;
+`--force` bypasses marker-cache reuse.
+
 Some sidecar-free workspace databases cannot be opened with ordinary SQLite
 `mode=ro` even though they are valid standalone files. Codess retries those
 only with `immutable=1` after confirming that neither `-wal` nor `-shm` exists.

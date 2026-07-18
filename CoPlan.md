@@ -66,6 +66,7 @@ a filesystem crawl. There is no recursion flag or general walk subsystem.
 - **`codess.project`:** CLI parsing/root resolution and Git/Claude-slug helpers; no Codex/Cursor storage layout or SQL.
 - **`codess.codex_source`:** active/archive roots, session metadata, fingerprinted inventory, Project selection, and active-over-archive deduplication.
 - **`codess.cursor_source`:** Cursor installation/workspace discovery, read-only connections, composer headers, indexed bubble ranges, and metrics.
+- **`codess.progress`:** bounded rolling operational trace plus the live stderr renderer; no transcript content or logging-level ownership.
 - **`codess.scan`:** **`run_scan()`**; shares one `codex_source` inventory and uses selective `cursor_source` metrics.
 - **`codess.storage_report`:** dated read-only CoSchema/Cursor utilization, skew, retention inventory, thresholds, and deltas.
 - **`cli/*_cmd`:** Thin **`run(args) -> int`**: roots/options, then **`run_scan`** / **`_ingest_*`** / **`store.connect`**.
@@ -327,6 +328,7 @@ command exits 1 before doing work.
 | `--force` | `CODESS_FORCE` | **`FORCE`** from ENV if flag omitted | **`args.force or FORCE`**; argparse **`default=False`**. Ignores **`ingest_state.json`** mtime skips when true. |
 | `--redact` | `CODESS_REDACT` | off | **`args.redact or INGEST_REDACT`**; patterns in **`config.REDACT_PATTERNS`**. |
 | `--debug` | `CODESS_DEBUG` | **`DEBUG`** from ENV | **`args.debug or DEBUG`** — see **§3.3**. |
+| `--no-progress` | — | live progress on | Suppress timestamped ingest progress on stderr while retaining `codess.progress/1` events in runtime/preflight reports. |
 | `--registry PATH` | `CODESS_REGISTRY` | **`~/.codess`** | Central registry dir (`ingested_projects.json`). **`PATH`** overrides default. |
 
 ### 4.3 `codess query`
@@ -584,10 +586,14 @@ compare/rebuild/freeze sequence rather than mutating these stores.
 The current shared Cursor object is `sha256:ae3c2380…`. Two successive exact
 global revisions differed while all three Project selection markers and
 normalization digests matched. Per-Project workspace/header/bubble-edge markers
-therefore replace whole-DB invalidation. A post-instrumentation unchanged run
-over all three Projects completed in 1.97 seconds (0.685 seconds for marker
-selection), ingested 0 records, retained the same three snapshot IDs, and
-recorded 11–14 progress events per Project. A changed full run remains dominated
+therefore replace whole-DB invalidation. After suppressing unchanged derived
+correlation and identical catalog rewrites, a three-Project no-op with a full
+selected-marker scan completed in about one second (0.667 seconds for marker
+selection). An immediate repeat with the stable 2.3-KiB main/WAL selection
+cache and snapshot-bound evidence-summary reuse completed in 0.066 seconds with
+effectively zero marker-scan time. Both
+processed 0 records, retained the same three snapshot IDs, and recorded 11–14
+progress events plus independent accepted status per Project. A changed full run remains dominated
 by Zero400 composer normalization at about 7.5 minutes and 559 MB peak RSS;
 composer read buffers and writes now have separate live and retained progress
 events for the next profile. Retention has a zero-candidate postcondition after
@@ -607,11 +613,11 @@ queries and future correlation can group them explicitly.
 | 2 | **A2** | Orientation and utilization overview: sessions, Interactions, turns, events, content volume, tools, artifacts, models, elapsed span, active days/time estimate, and time buckets | Golden reports cover empty, tiny, multi-vendor, long-idle, many-small-session, and one-huge-session stores |
 | 3 | **A3** | Event and Interaction drill-down: typed event rows, stable event lookup, complete Interaction/Model Turn, sequence windows, source locators, and completeness | Known Claude, Codex, and Cursor exchanges reconstruct in canonical order |
 | 4 | **A4** | Bounded search by Project/vendor/time/type with completeness warnings and product-state facets; benchmark a rebuildable FTS5 derivative only afterward | Known hits, truncated false-negative warnings, repeated-state noise tests, and bounded resource evidence |
-| 5 | **A5** | Complete failure/resource validation for exact raw capture and bounded fingerprints. Transactional standalone SQLite backup, per-Project selected Cursor markers, metadata-only cohort cache, direct fresh-backup queries, staged level-3 zstd, content-addressed reuse across valid encodings, bounded restore/verification, no-op snapshot suppression, atomic promotion, and retention apply are implemented | Add injected partial-failure/no-promotion cases and measure cache restoration for a newly selected Project; retain the documented 512-byte edge/header false-negative boundary |
+| 5 | **A5** | Complete failure/resource validation for exact raw capture and bounded fingerprints. Transactional standalone SQLite backup, per-Project selected Cursor markers, metadata-only container/selection prefilter and cohort cache, direct fresh-backup queries, staged level-3 zstd, content-addressed reuse across valid encodings, bounded restore/verification, no-op snapshot suppression, atomic promotion, and retention apply are implemented | Add injected partial-failure/no-promotion cases and measure cache restoration for a newly selected Project; retain the documented stat-prefilter and 512-byte edge/header false-negative boundaries |
 | 6 | **A6** | Exact evidence resolver from event to source record to verified live, captured, or sealed evidence | The same record resolves from live and captured evidence; changed or unavailable sources are explicit |
 | 7 | **A7** | Reusable results and automation: `codess.query-result/1`, saved selections, result-set input, hashes, prior-result comparison, stable exit codes, and derivation records | A multi-step investigation replays against the same snapshots and cites every evidence row |
 | 8 | **A8** | Guided investigation and optional question-to-typed-request formulation | Project → overview → search → Interaction → exact evidence → cited summary works without handwritten SQL |
-| 9 | **A9** | Performance and ecosystem: predicate/limit pushdown, heap merge, allocation profiling, justified read-only views, and Datasette/notebook/DuckDB recipes. Live/persisted `codess.progress/1` phase tracing and Cursor buffer/backup heartbeats are implemented | Use traces plus allocation profiles to bound rows, bytes, phase time, and RSS in scale fixtures; external recipes remain read-only |
+| 9 | **A9** | Performance and ecosystem: predicate/limit pushdown, heap merge, allocation profiling, justified read-only views, and Datasette/notebook/DuckDB recipes. Live/persisted rolling `codess.progress/1` tracing, Cursor buffer/backup heartbeats, no-op derived-correlation suppression, null-safe catalog synchronization, and snapshot-bound evidence-summary reuse are implemented | Use traces plus allocation profiles to bound rows, bytes, phase time, and RSS in scale fixtures; external recipes remain read-only |
 | parallel | **A10** | Resolve Codex token counter reset/model/fork/interleave attribution, or formally limit it to non-billing evidence | The diagnostic either proves a stable attribution rule or records a permanent confidence boundary |
 | maintenance | **A11** | Consolidate duplicated Claude/Codex ingest control flow and review remaining compatibility aliases/wrappers, including `retire_project.py` | Shared control flow has one tested owner; retained wrappers are thin, documented, and have an explicit keep/remove decision |
 

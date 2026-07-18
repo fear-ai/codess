@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, TextIO
 
@@ -28,7 +29,7 @@ class ProgressTrace:
         self.enabled = enabled
         self.max_events = max_events
         self.started = time.monotonic()
-        self.events: list[dict[str, Any]] = []
+        self.events: deque[dict[str, Any]] = deque(maxlen=max_events)
         self.dropped_events = 0
 
     def __call__(self, event: str, **fields: Any) -> dict[str, Any]:
@@ -38,10 +39,9 @@ class ProgressTrace:
             "event": event,
             **fields,
         }
-        if len(self.events) < self.max_events:
-            self.events.append(record)
-        else:
+        if len(self.events) == self.max_events:
             self.dropped_events += 1
+        self.events.append(record)
         if self.enabled:
             rendered = " ".join(
                 f"{key}={self._format(value)}"

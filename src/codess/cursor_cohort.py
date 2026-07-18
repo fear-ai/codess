@@ -14,6 +14,60 @@ from codess.store import load_ingest_state
 
 
 CACHE_FORMAT = "codess.cursor-cohort-cache/1"
+SELECTION_CACHE_FORMAT = "codess.cursor-selection-cache/1"
+
+
+def _canonical_selections(
+    selections: dict[str, set[str]],
+) -> dict[str, list[str]]:
+    return {
+        project: sorted(workspace_ids)
+        for project, workspace_ids in sorted(selections.items())
+    }
+
+
+def load_selection_marker_cache(
+    cache_path: Path,
+    *,
+    source: Path,
+    container_marker: dict[str, Any],
+    selections: dict[str, set[str]],
+) -> dict[str, dict[str, Any]] | None:
+    """Reuse selected markers only for the same unchanged main/WAL container."""
+    try:
+        value = json.loads(cache_path.read_text(encoding="utf-8"))
+        markers = value["project_markers"]
+        if (
+            value.get("cache_format") != SELECTION_CACHE_FORMAT
+            or value.get("source_locator") != str(source.resolve())
+            or value.get("container_marker") != container_marker
+            or value.get("selections") != _canonical_selections(selections)
+            or not isinstance(markers, dict)
+            or set(markers) != set(selections)
+            or not all(isinstance(marker, dict) for marker in markers.values())
+        ):
+            return None
+        return markers
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def save_selection_marker_cache(
+    cache_path: Path,
+    *,
+    source: Path,
+    container_marker: dict[str, Any],
+    selections: dict[str, set[str]],
+    project_markers: dict[str, dict[str, Any]],
+) -> None:
+    """Atomically retain only the latest metadata-only selected-marker set."""
+    write_json_atomic(cache_path, {
+        "cache_format": SELECTION_CACHE_FORMAT,
+        "source_locator": str(source.resolve()),
+        "container_marker": container_marker,
+        "selections": _canonical_selections(selections),
+        "project_markers": project_markers,
+    })
 
 
 def combine_selection_markers(
