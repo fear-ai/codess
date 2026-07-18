@@ -1,5 +1,6 @@
 """CLI edge cases: no store, no mode, empty dir, idempotent."""
 
+import csv
 import json
 import os
 import shutil
@@ -994,3 +995,137 @@ def test_query_jsonl_sessions_and_stats_are_typed():
         assert rows[0]["data"]["sessions"] == 1
         assert rows[-1]["report"] == "stats.total"
         assert rows[-1]["data"] == {"events": 0, "projects": 1, "sessions": 1}
+
+
+def test_query_vendor_filter_stable_session_id_sequence_and_csv():
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        store = project / ".codess/sessions_cc.db"
+        init_db(store)
+        conn = sqlite3.connect(store)
+        conn.executemany(
+            "INSERT INTO sessions(id,global_id,source_system_id,source,type,started_at,project_path) "
+            "VALUES(?,?,?,?,?,?,?)",
+            [
+                ("claude-1", "global-claude", "anthropic.claude-code", "Claude", "Code", 1, str(project)),
+                ("cursor-1", "global-cursor", "cursor.composer", "Cursor", "Code", 2, str(project)),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO events(session_id,event_id,sequence_no,event_type,subtype,content,timestamp) "
+            "VALUES(?,?,?,?,?,?,?)",
+            [
+                ("claude-1", "c1", 1, "user_message", "prompt", "claude", 1),
+                ("cursor-1", "u2", 2, "user_message", "prompt", "SECOND", 1),
+                ("cursor-1", "u1", 1, "user_message", "prompt", "FIRST", 2),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        registry = project / "registry"
+        env = {**os.environ, "CODESS_REGISTRY": str(registry)}
+
+        sessions = _run([
+            "query", "--dir", str(project), "--source", "cursor",
+            "--sessions", "--output-format", "jsonl",
+        ], env=env)
+        rows = [json.loads(line) for line in sessions.stdout.splitlines()]
+        assert sessions.returncode == 0
+        assert [row["data"]["session_id"] for row in rows] == ["cursor-1"]
+
+        stats = _run([
+            "query", "--dir", str(project), "--source", "cursor",
+            "--stats", "--output-format", "csv",
+        ], env=env)
+        csv_rows = list(csv.DictReader(stats.stdout.splitlines()))
+        assert stats.returncode == 0
+        assert csv_rows[-1]["report"] == "stats.total"
+        assert csv_rows[-1]["sessions"] == "1"
+        assert csv_rows[-1]["events"] == "2"
+        assert not (registry / "ingested_projects.json").exists()
+
+        detail = _run([
+            "query", "--dir", str(project), "--source", "cursor",
+            "--session-id", "global-cursor", "--show", "prompt",
+        ], env=env)
+        assert detail.returncode == 0
+        assert detail.stdout.index("FIRST") < detail.stdout.index("SECOND")
+
+
+def test_query_rejects_invalid_source_and_ambiguous_modes():
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        init_db(project / ".codess/sessions_cc.db")
+        invalid = _run([
+            "query", "--dir", str(project), "--source", "windsurf", "--sessions",
+        ])
+        assert invalid.returncode == 1
+        assert "invalid --source" in invalid.stderr
+        ambiguous = _run([
+            "query", "--dir", str(project), "--sessions", "--stats",
+        ])
+        assert ambiguous.returncode == 1
+        assert "exactly one query report mode" in ambiguous.stderr
+
+
+def test_query_ambiguous_vendor_session_id_requests_global_id():
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        for index, name in enumerate(("sessions_cc.db", "sessions_cursor.db")):
+            store = project / ".codess" / name
+            init_db(store)
+            conn = sqlite3.connect(store)
+            conn.execute(
+                "INSERT INTO sessions(id,global_id,source_system_id,source,type) "
+                "VALUES('same',?,?,?, 'Code')",
+                (
+                    f"global-{index}",
+                    "anthropic.claude-code" if index == 0 else "cursor.composer",
+                    "Claude" if index == 0 else "Cursor",
+                ),
+            )
+            conn.commit()
+            conn.close()
+        result = _run([
+            "query", "--dir", str(project), "--session-id", "same",
+        ])
+        assert result.returncode == 1
+        assert "ambiguous" in result.stderr
+        assert "global session ID" in result.stderr
+        assert "Traceback" not in result.stderr
+
+
+def test_query_pipeline_close_has_no_broken_pipe_traceback():
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        store = project / ".codess/sessions_cc.db"
+        init_db(store)
+        conn = sqlite3.connect(store)
+        conn.execute(
+            "INSERT INTO sessions(id,global_id,source_system_id,source,type,started_at) "
+            "VALUES('s1','global-s1','anthropic.claude-code','Claude','Code',1)"
+        )
+        conn.executemany(
+            "INSERT INTO events(session_id,event_id,sequence_no,event_type,subtype,content,timestamp) "
+            "VALUES('s1',?,?, 'assistant_message','response',?,?)",
+            [(f"e{i}", i, "x" * 2000, i) for i in range(1, 300)],
+        )
+        conn.commit()
+        conn.close()
+        proc = subprocess.Popen(
+            [
+                sys.executable, "-m", "main", "query", "--dir", str(project),
+                "--session-id", "global-s1", "--show", "pr",
+            ],
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc.stdout is not None and proc.stderr is not None
+        proc.stdout.readline()
+        proc.stdout.close()
+        stderr = proc.stderr.read()
+        proc.wait(timeout=10)
+        assert "BrokenPipeError" not in stderr
+        assert "Traceback" not in stderr

@@ -2,8 +2,71 @@
   "inventory_format": "codess.evidence-inventory/1",
   "privacy_boundary": "structural metadata and aggregate counts only; conversation bodies not retained",
   "recommendation": "expand the corpus only for a high-relevance unavailable shape; otherwise maintain audits against approved active workspaces",
-  "reviewed_stores": 9,
+  "reviewed_stores": 33,
   "wanted": {
+    "claude_source_shapes": {
+      "available": true,
+      "evidence": {
+        "content_block_types": {
+          "document": 2,
+          "fallback": 2,
+          "image": 161,
+          "text": 13565,
+          "thinking": 2923,
+          "tool_result": 19456,
+          "tool_use": 19459
+        },
+        "files_reviewed": 200,
+        "parent_links": 64701,
+        "record_types": {
+          "agent-name": 1,
+          "ai-title": 3340,
+          "assistant": 35725,
+          "attachment": 4516,
+          "custom-title": 2925,
+          "file-history-snapshot": 825,
+          "fork-context-ref": 3,
+          "last-prompt": 3867,
+          "mode": 2595,
+          "permission-mode": 818,
+          "queue-operation": 3170,
+          "system": 2338,
+          "user": 22402
+        },
+        "sidechain_records": 2818,
+        "versions": {
+          "2.1.111": 4551,
+          "2.1.119": 557,
+          "2.1.121": 1114,
+          "2.1.128": 1047,
+          "2.1.138": 425,
+          "2.1.146": 459,
+          "2.1.148": 327,
+          "2.1.149": 3922,
+          "2.1.156": 3932,
+          "2.1.160": 97,
+          "2.1.161": 3003,
+          "2.1.165": 153,
+          "2.1.170": 3198,
+          "2.1.177": 2432,
+          "2.1.181": 1596,
+          "2.1.183": 1168,
+          "2.1.185": 2012,
+          "2.1.186": 1383,
+          "2.1.187": 3,
+          "2.1.191": 2146,
+          "2.1.193": 749,
+          "2.1.196": 31,
+          "2.1.197": 5149,
+          "2.1.198": 2325,
+          "2.1.202": 842,
+          "2.1.204": 839,
+          "2.1.205": 11207,
+          "2.1.209": 10314
+        }
+      },
+      "relevance": "maintenance"
+    },
     "codex_parent_identifier": {
       "available": false,
       "candidate_fields": [],
@@ -13,132 +76,68 @@
       "available": true,
       "matches": [
         {
-          "locator": "src/wallet/gtest/test_wallet.cpp",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
-        },
-        {
-          "locator": "src/wallet/wallet.cpp",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
-        },
-        {
           "locator": "UpdateZero.md",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
-        },
-        {
-          "locator": "src/test/equihash_tests.cpp",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
-        },
-        {
-          "locator": "qa/rpc-tests/rest.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
-        },
-        {
-          "locator": "qa/rpc-tests/spentindex.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
-        },
-        {
-          "locator": "qa/rpc-tests/getrawtransaction_insight.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
-        },
-        {
-          "locator": "qa/rpc-tests/timestampindex.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
         },
         {
           "locator": "qa/rpc-tests/addressindex.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
         },
         {
-          "locator": "qa/rpc-tests/smartfees.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
-        },
-        {
-          "locator": "qa/rpc-tests/txindex.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
+          "locator": "qa/rpc-tests/getrawtransaction_insight.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
         },
         {
           "locator": "qa/rpc-tests/httpbasics.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
-        },
-        {
-          "locator": "qa/rpc-tests/test_framework/test_framework.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
-        },
-        {
-          "locator": "qa/rpc-tests/test_framework/util.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
-        },
-        {
-          "locator": "qa/rpc-tests/p2p-acceptblock.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
         },
         {
           "locator": "qa/rpc-tests/keypool.py",
-          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-          "sources": [
-            "Claude",
-            "Cursor"
-          ]
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
+        },
+        {
+          "locator": "qa/rpc-tests/p2p-acceptblock.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
+        },
+        {
+          "locator": "qa/rpc-tests/rest.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
+        },
+        {
+          "locator": "qa/rpc-tests/smartfees.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
+        },
+        {
+          "locator": "qa/rpc-tests/spentindex.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
+        },
+        {
+          "locator": "qa/rpc-tests/test_framework/test_framework.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
+        },
+        {
+          "locator": "qa/rpc-tests/test_framework/util.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
+        },
+        {
+          "locator": "qa/rpc-tests/timestampindex.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
+        },
+        {
+          "locator": "qa/rpc-tests/txindex.py",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
+        },
+        {
+          "locator": "src/test/equihash_tests.cpp",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
+        },
+        {
+          "locator": "src/wallet/gtest/test_wallet.cpp",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
+        },
+        {
+          "locator": "src/wallet/wallet.cpp",
+          "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a"
         }
       ],
       "relevance": "high"
@@ -153,15 +152,80 @@
       "relevance": "maintenance"
     },
     "inference_effort_speed_service": {
-      "available": false,
-      "counts": {},
+      "available": true,
+      "claude_setting_provenance": {
+        "assistant.message.model": 35725,
+        "assistant.message.usage.service_tier": 35566
+      },
+      "claude_source_evidence": {
+        "model": {
+          "<synthetic>": 159,
+          "claude-fable-5": 8030,
+          "claude-haiku-4-5-20251001": 260,
+          "claude-opus-4-7": 3946,
+          "claude-opus-4-8": 15323,
+          "claude-sonnet-4-6": 815,
+          "claude-sonnet-5": 7192
+        },
+        "service_tier": {
+          "standard": 35566
+        }
+      },
+      "codex_setting_provenance": {
+        "active:event_msg.thread_settings_applied.payload.thread_settings.collaboration_mode.mode": 143,
+        "active:event_msg.thread_settings_applied.payload.thread_settings.model": 143,
+        "active:event_msg.thread_settings_applied.payload.thread_settings.model_provider_id": 143,
+        "active:event_msg.thread_settings_applied.payload.thread_settings.reasoning_effort": 143,
+        "active:event_msg.thread_settings_applied.payload.thread_settings.service_tier": 143,
+        "active:session_meta.payload.model_provider": 332,
+        "active:turn_context.payload.collaboration_mode.mode": 4267,
+        "active:turn_context.payload.effort": 7627,
+        "active:turn_context.payload.model": 7755,
+        "archive:session_meta.payload.model_provider": 2,
+        "archive:turn_context.payload.collaboration_mode.mode": 352,
+        "archive:turn_context.payload.effort": 352,
+        "archive:turn_context.payload.model": 352
+      },
+      "codex_source_evidence": {
+        "mode": {
+          "default": 4762
+        },
+        "model": {
+          "gpt-5.1-codex": 128,
+          "gpt-5.1-codex-max": 122,
+          "gpt-5.2-codex": 3700,
+          "gpt-5.3": 2,
+          "gpt-5.3-codex": 1831,
+          "gpt-5.4": 990,
+          "gpt-5.5": 1183,
+          "gpt-5.6-luna": 1,
+          "gpt-5.6-sol": 260,
+          "gpt-5.6-terra": 33
+        },
+        "model_provider": {
+          "openai": 477
+        },
+        "reasoning_effort": {
+          "high": 7388,
+          "medium": 734
+        },
+        "service_tier": {
+          "default": 143
+        }
+      },
+      "normalized_counts": {
+        "reasoning_effort": 0,
+        "service_tier": 0,
+        "speed_tier": 0
+      },
       "relevance": "medium"
     },
     "real_lifecycle_and_missing_time": {
       "available": true,
-      "events_missing_time": 1026,
+      "events_missing_time": 9312,
       "lifecycle": {
-        "context_compaction": 1
+        "context_compaction": 40,
+        "turn_aborted": 30
       },
       "relevance": "low-to-medium"
     }

@@ -1,9 +1,9 @@
--- codess.coschema format 3
+-- codess.coschema format 4
 -- Functional meanings live in schema/coschema/contract.json and Schemas.md.
 -- This file contains only the SQLite layout, constraints, and access paths.
 
 PRAGMA application_id = 1129268293; -- 0x434F4445, "CODE"
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE store_meta (
@@ -19,7 +19,7 @@ CREATE TABLE projects (
   ownership TEXT CHECK (ownership IN ('own','reference','external','mixed','unknown') OR ownership IS NULL),
   activity_state TEXT CHECK (activity_state IN ('active','dormant','archived','unknown') OR activity_state IS NULL),
   selection_state TEXT CHECK (selection_state IN ('priority','candidate','fixture','deferred','excluded','needs_review') OR selection_state IS NULL),
-  metadata TEXT
+  metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata))
 );
 
 CREATE TABLE project_locations (
@@ -30,7 +30,7 @@ CREATE TABLE project_locations (
   location_kind TEXT NOT NULL DEFAULT 'directory',
   state TEXT NOT NULL CHECK (state IN ('active','retired','missing','unknown')),
   observed_at TEXT NOT NULL,
-  metadata TEXT,
+  metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
   UNIQUE(machine_id, observed_path)
 );
 
@@ -43,7 +43,7 @@ CREATE TABLE workspace_bindings (
   relation_kind TEXT NOT NULL,
   source_project_path TEXT,
   selection_state TEXT NOT NULL,
-  metadata TEXT,
+  metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
   UNIQUE(source_system_id, workspace_id, project_id)
 );
 
@@ -63,7 +63,7 @@ CREATE TABLE sources (
   capture_method TEXT,
   consistency TEXT,
   content_sha256 TEXT,
-  metadata TEXT,
+  metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
   UNIQUE(source_system_id, source_uri, source_revision)
 );
 
@@ -77,8 +77,8 @@ CREATE TABLE model_configurations (
   speed_tier TEXT,
   service_tier TEXT,
   mode TEXT,
-  source_config TEXT,
-  UNIQUE(provider, model_name_exact, model_revision, reasoning_effort, speed_tier, service_tier, mode)
+  source_config TEXT CHECK (source_config IS NULL OR json_valid(source_config)),
+  UNIQUE(provider, model_family, model_name_exact, model_revision, reasoning_effort, speed_tier, service_tier, mode)
 );
 
 CREATE TABLE sessions (
@@ -108,7 +108,7 @@ CREATE TABLE sessions (
   archive_state TEXT CHECK (archive_state IN ('active','archived','unknown') OR archive_state IS NULL),
   archive_source TEXT,
   default_model_config_id INTEGER REFERENCES model_configurations(id),
-  metadata TEXT,
+  metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
 
   -- Read compatibility for the 0.1 query surface. These are projections, not
   -- the v2 functional identity model.
@@ -162,7 +162,7 @@ CREATE TABLE events (
   content TEXT,
   content_len INTEGER CHECK (content_len IS NULL OR content_len >= 0),
   tool_name TEXT,
-  tool_input TEXT,
+  tool_input TEXT CHECK (tool_input IS NULL OR json_valid(tool_input)),
   tool_output TEXT,
   event_at REAL,
   event_at_basis TEXT,
@@ -171,8 +171,8 @@ CREATE TABLE events (
   source_file TEXT,
   artifact_path TEXT,
   mapping_rule TEXT,
-  mapping_trace TEXT,
-  metadata TEXT,
+  mapping_trace TEXT CHECK (mapping_trace IS NULL OR json_valid(mapping_trace)),
+  metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
 
   -- Read compatibility for existing queries.
   event_type TEXT,
@@ -194,7 +194,7 @@ CREATE TABLE source_records (
   parent_locator TEXT,
   record_at REAL,
   classification TEXT,
-  parameters_json TEXT,
+  parameters_json TEXT CHECK (parameters_json IS NULL OR json_valid(parameters_json)),
   UNIQUE(source_id, source_locator)
 );
 
@@ -209,7 +209,7 @@ CREATE TABLE content_objects (
   inline_content TEXT,
   raw_object_id TEXT,
   privacy_class TEXT,
-  metadata TEXT,
+  metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
   UNIQUE(content_sha256, storage_class, raw_object_id)
 );
 
@@ -257,8 +257,8 @@ CREATE TABLE processing_runs (
   policy_sha256 TEXT NOT NULL,
   processor_name TEXT NOT NULL,
   software_version TEXT NOT NULL,
-  scope_json TEXT,
-  actions_json TEXT,
+  scope_json TEXT CHECK (scope_json IS NULL OR json_valid(scope_json)),
+  actions_json TEXT CHECK (actions_json IS NULL OR json_valid(actions_json)),
   rejection_reason TEXT,
   started_at TEXT NOT NULL,
   completed_at TEXT NOT NULL
@@ -269,7 +269,7 @@ CREATE TABLE content_derivations (
   input_content_id TEXT NOT NULL REFERENCES content_objects(id),
   output_content_id TEXT REFERENCES content_objects(id),
   sequence_no INTEGER NOT NULL CHECK (sequence_no > 0),
-  actions_json TEXT,
+  actions_json TEXT CHECK (actions_json IS NULL OR json_valid(actions_json)),
   rejection_reason TEXT,
   PRIMARY KEY(processing_run_id, sequence_no)
 ) WITHOUT ROWID;
@@ -285,7 +285,7 @@ CREATE TABLE tool_invocations (
   canonical_tool_name TEXT,
   tool_namespace TEXT,
   invocation_kind TEXT,
-  input_json TEXT,
+  input_json TEXT CHECK (input_json IS NULL OR json_valid(input_json)),
   source_status TEXT,
   normalized_status TEXT,
   started_at REAL,
@@ -300,7 +300,7 @@ CREATE TABLE tool_results (
   sequence_no INTEGER NOT NULL DEFAULT 1 CHECK (sequence_no > 0),
   producing_actor_kind TEXT,
   output_text TEXT,
-  output_json TEXT,
+  output_json TEXT CHECK (output_json IS NULL OR json_valid(output_json)),
   is_error INTEGER CHECK (is_error IN (0,1) OR is_error IS NULL),
   source_status TEXT,
   normalized_status TEXT,
@@ -316,7 +316,7 @@ CREATE TABLE artifacts (
   uri TEXT,
   repository_object_id TEXT,
   content_sha256 TEXT,
-  metadata TEXT,
+  metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
   UNIQUE(project_id, artifact_kind, relative_path, uri, repository_object_id, content_sha256)
 );
 
@@ -351,7 +351,7 @@ CREATE TABLE correlation_assertions (
   object_id TEXT NOT NULL,
   relation_kind TEXT NOT NULL,
   method TEXT NOT NULL,
-  evidence TEXT,
+  evidence TEXT CHECK (evidence IS NULL OR json_valid(evidence)),
   confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
   asserted_at TEXT NOT NULL,
   reviewer TEXT
@@ -378,6 +378,13 @@ CREATE INDEX idx_source_records_source ON source_records(source_id, source_seque
 CREATE INDEX idx_content_sha256 ON content_objects(content_sha256);
 CREATE INDEX idx_tools_name ON tool_invocations(canonical_tool_name);
 CREATE INDEX idx_artifacts_project_path ON artifacts(project_id, relative_path);
+CREATE UNIQUE INDEX idx_model_configurations_identity
+  ON model_configurations(
+    coalesce(provider,''), coalesce(model_family,''),
+    coalesce(model_name_exact,''), coalesce(model_revision,''),
+    coalesce(reasoning_effort,''), coalesce(speed_tier,''),
+    coalesce(service_tier,''), coalesce(mode,'')
+  );
 CREATE UNIQUE INDEX idx_artifacts_identity_path
   ON artifacts(project_id, artifact_kind, relative_path)
   WHERE relative_path IS NOT NULL;

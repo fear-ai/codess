@@ -1,16 +1,20 @@
 """Store and state edge cases."""
 
+import os
 from pathlib import Path
 
 import pytest
 
 from codess.store import (
     init_db,
+    ingest_state_marker,
     load_ingest_state,
     save_ingest_state,
     should_ingest,
     connect,
     replace_session_events,
+    ensure_source,
+    prune_unreferenced_source_revisions,
     replace_source_sessions,
     upsert_event,
     upsert_session,
@@ -66,6 +70,36 @@ class TestShouldIngest:
         save_ingest_state(p, {"/f": 123.0})
         assert not should_ingest(p, "/f", 123.0, force=False)
 
+    def test_content_change_with_same_mtime_and_size_is_detected(self, tmp_path):
+        source = tmp_path / "source.jsonl"
+        source.write_text("aaaa\n", encoding="utf-8")
+        original = source.stat()
+        state_path = tmp_path / "state.json"
+        marker = ingest_state_marker(source)
+        assert marker["source_revision"].startswith("md5-fingerprint:")
+        assert marker["fingerprint_method"] == "full-md5-fingerprint"
+        save_ingest_state(state_path, {"source": marker})
+        assert not should_ingest(
+            state_path, "source", original.st_mtime, False, path=source
+        )
+        source.write_text("bbbb\n", encoding="utf-8")
+        os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+        assert should_ingest(
+            state_path, "source", original.st_mtime, False, path=source
+        )
+
+    def test_sqlite_wal_only_change_is_detected(self, tmp_path):
+        source = tmp_path / "state.vscdb"
+        source.write_bytes(b"sqlite-main")
+        wal = Path(str(source) + "-wal")
+        wal.write_bytes(b"wal-one")
+        state_path = tmp_path / "state.json"
+        save_ingest_state(state_path, {"cursor": ingest_state_marker(source)})
+        wal.write_bytes(b"wal-two")
+        assert should_ingest(
+            state_path, "cursor", source.stat().st_mtime, False, path=source
+        )
+
 
 class TestInitDb:
     """init_db creates schema."""
@@ -78,6 +112,38 @@ class TestInitDb:
         cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = {r[0] for r in cur.fetchall()}
         assert "sessions" in tables and "events" in tables
+        conn.close()
+
+    def test_explicit_source_observation_uses_captured_revision(self, tmp_path):
+        db = tmp_path / "source.db"
+        init_db(db)
+        conn = connect(db)
+        source_id = ensure_source(
+            conn,
+            source="Cursor",
+            source_file="/original/Cursor/state.vscdb",
+            observation={
+                "source_revision_id": "sha256:captured",
+                "source_mtime_ns": 1_750_000_000_000_000_000,
+                "source_size": 1234,
+                "capture_method": "sqlite-backup",
+                "consistency": "transactional",
+                "availability": "captured",
+            },
+        )
+        row = conn.execute(
+            "SELECT source_uri, source_revision, source_size, availability, "
+            "capture_method, consistency FROM sources WHERE id=?",
+            (source_id,),
+        ).fetchone()
+        assert tuple(row) == (
+            "/original/Cursor/state.vscdb",
+            "sha256:captured",
+            1234,
+            "captured",
+            "sqlite-backup",
+            "transactional",
+        )
         conn.close()
 
 
@@ -187,6 +253,45 @@ class TestUpsert:
         conn.commit()
         assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+        conn.close()
+
+    def test_reingest_prunes_superseded_source_revision_records(self, tmp_path):
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        session = {"id": "s1", "source": "Cursor", "type": "IDE"}
+
+        def replace(revision: str) -> None:
+            current = {
+                **session,
+                "source_observation": {
+                    "source_revision_id": revision,
+                    "source_size": 100,
+                    "capture_method": "sqlite-backup",
+                    "consistency": "transactional-snapshot",
+                    "availability": "captured",
+                },
+            }
+            replace_session_events(
+                conn,
+                current,
+                [{
+                    "session_id": "s1", "event_id": "one",
+                    "source_file": "/Cursor/state.vscdb",
+                    "source_record_locator": "bubble:one", "content": "same",
+                }],
+                session_id="s1",
+            )
+            conn.commit()
+
+        replace("sha256:first")
+        replace("sha256:second")
+        assert conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM source_records").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT source_revision FROM sources"
+        ).fetchone()[0] == "sha256:second"
+        assert prune_unreferenced_source_revisions(conn) == 0
         conn.close()
 
     def test_replace_source_removes_only_orphaned_sessions(self, tmp_path):

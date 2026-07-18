@@ -15,6 +15,8 @@ from codess.config import (
     TRUNCATE_TOOL_RESULT,
 )
 from codess.sanitize import apply_sanitization, sanitize_value
+from codess.bounded_jsonl import iter_bounded_jsonl
+from codess.mapping import annotate_mapping
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +59,36 @@ def iter_cc_records(
                 if warn:
                     log.warning("JSON error at %s:%d: %s", path, line_num, e)
                 continue
+
+
+def get_session_metadata(path: Path) -> dict:
+    """Return bounded session facts observed directly in Claude records."""
+    for _line_num, record, _raw in iter_cc_records(path, warn=False):
+        version = record.get("version") or record.get("claudeCodeVersion")
+        if version is not None:
+            return {"harness_version": str(version)}
+    return {}
+
+
+def get_session_lineage(path: Path) -> dict:
+    """Return direct Claude fork evidence without reading unbounded records."""
+    try:
+        for _line, record, error in iter_bounded_jsonl(path):
+            if error or record is None or record.get("type") != "fork-context-ref":
+                continue
+            parent = record.get("parentSessionId")
+            if not parent:
+                continue
+            return {
+                "parent_session_id": str(parent),
+                "session_relation_kind": "fork",
+                "lineage_provenance": "fork-context-ref.parentSessionId",
+                "agent_id": record.get("agentId"),
+                "parent_last_uuid": record.get("parentLastUuid"),
+            }
+    except OSError:
+        pass
+    return {}
 
 
 def should_skip(record: dict) -> bool:
@@ -107,6 +139,53 @@ def _normalize_compaction(
         "metadata": json.dumps(metadata, separators=(",", ":")),
         "source_raw": None,
     }
+
+
+def _mapping_rule(event: dict) -> str:
+    """Return the declared primary rule for one Claude-derived event."""
+    event_type = event.get("event_type")
+    subtype = event.get("subtype")
+    if event_type == "system_event" and subtype == "context_compaction":
+        return "claude.compaction"
+    if event_type == "external_content":
+        return "claude.persisted-tool-result"
+    if event_type == "tool_call":
+        return "claude.tool-use"
+    if subtype in {"tool_result", "tool_failure", "permission_denied"}:
+        return "claude.tool-result"
+    if event_type == "product_state":
+        return "claude.product-state"
+    if subtype == "fork_context_reference":
+        return "claude.fork-context"
+    if event_type == "lifecycle_event":
+        return "claude.lifecycle"
+    if event_type == "user_message" and subtype in {"prompt", "slash_command"}:
+        return "claude.typed-prompt"
+    return "claude.message"
+
+
+def _annotate_source(event: dict, record: dict, line_num: int) -> dict:
+    rule = _mapping_rule(event)
+    applied = [rule]
+    if record.get("parentUuid") or record.get("tool_use_id"):
+        applied.append("claude.lineage")
+    metadata = event.get("metadata")
+    if metadata:
+        try:
+            if json.loads(metadata).get("configuration_provenance"):
+                applied.append("claude.configuration")
+        except (AttributeError, json.JSONDecodeError, TypeError):
+            pass
+    return annotate_mapping(
+        event,
+        source_record_type=str(record.get("type") or "unknown"),
+        source_record_subtype=(
+            str(record["subtype"]) if record.get("subtype") is not None else None
+        ),
+        source_record_locator=str(line_num),
+        mapping_rule=rule,
+        applied_rules=applied,
+    )
 
 
 def extract_tool_input(tool_name: str, input_obj: dict) -> dict:
@@ -247,6 +326,38 @@ def _event_metadata(record: dict, tool_use_id=None, extra: dict | None = None) -
     return json.dumps(metadata, separators=(",", ":")) if metadata else None
 
 
+def _assistant_configuration(record: dict) -> dict:
+    """Retain verified Claude model settings with their exact source fields."""
+    message = record.get("message") or {}
+    if not isinstance(message, dict):
+        return {}
+    values = {}
+    provenance = {}
+
+    def keep(common: str, source_field: str, value) -> None:
+        if value is None or isinstance(value, (dict, list)):
+            return
+        text = str(value).strip()
+        if text:
+            values[common] = text
+            provenance[common] = {
+                "source_record_type": "assistant",
+                "source_record_locator": str(record.get("uuid") or "line"),
+                "source_field": source_field,
+            }
+
+    keep("model", "message.model", message.get("model"))
+    usage = message.get("usage")
+    if isinstance(usage, dict):
+        keep(
+            "service_tier", "message.usage.service_tier",
+            usage.get("service_tier"),
+        )
+    if provenance:
+        values["configuration_provenance"] = provenance
+    return values
+
+
 def _diagnostic(opts: dict, name: str, count: int = 1) -> None:
     diagnostics = opts.get("diagnostics")
     if diagnostics is not None:
@@ -293,6 +404,25 @@ def normalize_product_state(
         title = _process_text(record.get("aiTitle") or "", opts, phase="pre", record_type="ai-title")
         if title is not None:
             event["content"], event["content_len"] = truncate_content(title, 512)
+    elif rtype == "custom-title":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="custom_title", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        title = _process_text(record.get("customTitle") or "", opts, phase="pre", record_type="custom-title")
+        if title is not None:
+            event["content"], event["content_len"] = truncate_content(title, 512)
+    elif rtype == "agent-name":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="agent_name", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        name = _process_text(record.get("agentName") or "", opts, phase="pre", record_type="agent-name")
+        if name is not None:
+            event["content"], event["content_len"] = truncate_content(name, 512)
+    elif rtype == "fork-context-ref":
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="fork_context_reference", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        metadata = {
+            "parent_session_id": record.get("parentSessionId"),
+            "parent_last_uuid": record.get("parentLastUuid"),
+            "agent_id": record.get("agentId"),
+            "context_length": record.get("contextLength"),
+            "lineage_provenance": "fork-context-ref.parentSessionId",
+        }
     elif rtype == "attachment":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="context_attachment", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
         attachment = record.get("attachment") or {}
@@ -344,6 +474,7 @@ def normalize_assistant(
     role = record.get("message", {}).get("role", "assistant")
     ts = _get_timestamp(record)
     redact_enabled = opts.get("redact", False)
+    model_configuration = _assistant_configuration(record)
     # Build tool_map from tool_use blocks
     for block in content:
         if isinstance(block, dict) and block.get("type") == "tool_use":
@@ -398,7 +529,7 @@ def normalize_assistant(
                 "timestamp": ts,
                 "file_path": None,
                 "source_file": source_file,
-                "metadata": _event_metadata(record),
+                "metadata": _event_metadata(record, extra=model_configuration),
                 "source_raw": None,
             })
             emitted_index += 1
@@ -427,7 +558,9 @@ def normalize_assistant(
                     if isinstance(tool_input, dict) else None
                 ),
                 "source_file": source_file,
-                "metadata": _event_metadata(record, tool_use_id),
+                "metadata": _event_metadata(
+                    record, tool_use_id, extra=model_configuration
+                ),
                 "source_raw": None,
             })
             emitted_index += 1
@@ -695,14 +828,18 @@ def process_file(
 
     for line_num, record, raw_line in iter_cc_records(path, diagnostics):
         if record.get("type") == "system" and record.get("subtype") == "compact_boundary":
-            yield _normalize_compaction(record, line_num, session_id, source_file)
+            yield _annotate_source(
+                _normalize_compaction(record, line_num, session_id, source_file),
+                record,
+                line_num,
+            )
             continue
         product_state = normalize_product_state(
             record, line_num, session_id, source_file, opts
         )
         if product_state is not None:
             if opts.get("include_product_state", True):
-                yield product_state
+                yield _annotate_source(product_state, record, line_num)
                 _diagnostic(opts, "product_state_records")
             else:
                 _diagnostic(opts, "known_ignored_records")
@@ -727,7 +864,7 @@ def process_file(
             for ev in evs:
                 if source_raw is not None:
                     ev["source_raw"] = source_raw
-                yield ev
+                yield _annotate_source(ev, record, line_num)
         elif rtype == "user":
             evs = normalize_user(
                 record, line_num, session_id, source_file, tool_map, opts
@@ -739,7 +876,7 @@ def process_file(
             for ev in evs:
                 if source_raw is not None:
                     ev["source_raw"] = source_raw
-                yield ev
+                yield _annotate_source(ev, record, line_num)
         elif diagnostics is not None:
             diagnostics["unsupported_records"] = (
                 diagnostics.get("unsupported_records", 0) + 1

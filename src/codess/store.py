@@ -1,4 +1,4 @@
-"""Versioned CoSchema v3 SQLite store and incremental ingest state."""
+"""Versioned CoSchema v4 SQLite store and incremental ingest state."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from codess import __version__
+from codess.fileio import source_fingerprint
 from codess.identity import (
     global_event_id,
     global_session_id,
@@ -29,6 +30,7 @@ from codess.schema_contract import (
     require_store,
     verify_package,
 )
+from codess.mapping import canonical_json, structured_json
 
 
 SOURCE_PROFILES = {
@@ -101,7 +103,7 @@ def _project_id(path: str | None) -> str | None:
 
 
 def init_db(db_path: Path) -> None:
-    """Create a new CoSchema v3 store; refuse mutation of legacy/unknown stores."""
+    """Create a new CoSchema v4 store; refuse mutation of legacy/unknown stores."""
     verify_package()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -112,7 +114,7 @@ def init_db(db_path: Path) -> None:
         if has_tables:
             if has_legacy_schema(conn):
                 raise UnsupportedStoreError(
-                    f"{db_path} is a legacy store; preserve it and rebuild CoSchema v3"
+                    f"{db_path} is a legacy store; preserve it and rebuild CoSchema v4"
                 )
             require_store(conn, write=True)
             return
@@ -252,12 +254,10 @@ def sync_project_catalog(
         )
 
 
-def _source_revision(path: Path) -> tuple[str, float | None, int | None]:
-    try:
-        stat = path.stat()
-    except OSError:
-        return "unavailable", None, None
-    return f"mtime-ns:{stat.st_mtime_ns}:size:{stat.st_size}", stat.st_mtime * 1000, stat.st_size
+def _source_revision(
+    path: Path,
+) -> tuple[str, float | None, int | None, str, str]:
+    return source_fingerprint(path)
 
 
 def ensure_source(
@@ -266,13 +266,32 @@ def ensure_source(
     source: str,
     source_file: str | None,
     availability: str = "reference",
+    observation: dict[str, Any] | None = None,
 ) -> int | None:
     """Create/locate one observed Source revision for a transcript/database."""
     if not source_file:
         return None
     profile = _profile(source)
-    path = Path(source_file)
-    revision, mtime, size = _source_revision(path)
+    if observation is None:
+        path = Path(source_file)
+        revision, mtime, size, capture_method, consistency = _source_revision(path)
+    else:
+        revision = str(
+            observation.get("source_revision")
+            or observation.get("source_revision_id")
+            or ""
+        )
+        if not revision:
+            raise ValueError("source observation lacks a revision identity")
+        mtime_ns = observation.get("source_mtime_ns")
+        mtime = (
+            float(mtime_ns) / 1_000_000
+            if isinstance(mtime_ns, int) else observation.get("source_mtime")
+        )
+        size = observation.get("source_size")
+        capture_method = str(observation.get("capture_method") or "observed")
+        consistency = str(observation.get("consistency") or "observed")
+        availability = str(observation.get("availability") or availability)
     global_id = global_source_revision_id(
         profile["source_system_id"], source_file, revision
     )
@@ -281,8 +300,9 @@ def ensure_source(
         """
         INSERT INTO sources(
           global_id, source_system_id, source_uri, storage_format, source_revision,
-          source_mtime, source_size, observed_at, ingested_at, availability)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          source_mtime, source_size, observed_at, ingested_at, availability,
+          capture_method, consistency)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_system_id, source_uri, source_revision) DO UPDATE SET
           observed_at=excluded.observed_at,
           ingested_at=excluded.ingested_at,
@@ -299,6 +319,8 @@ def ensure_source(
             now,
             now,
             availability,
+            capture_method,
+            consistency,
         ),
     )
     row = conn.execute(
@@ -327,11 +349,15 @@ def _ensure_model_configuration(
         """
         SELECT id FROM model_configurations
         WHERE provider IS ? AND model_name_exact IS ? AND model_revision IS ?
+          AND model_family IS ?
           AND reasoning_effort IS ? AND speed_tier IS ? AND service_tier IS ?
           AND mode IS ?
         ORDER BY id LIMIT 1
         """,
-        (provider, exact, metadata.get("model_revision"), effort, speed, service, mode),
+        (
+            provider, exact, metadata.get("model_revision"), family,
+            effort, speed, service, mode,
+        ),
     ).fetchone()
     if existing is not None:
         return int(existing[0])
@@ -351,7 +377,7 @@ def _ensure_model_configuration(
             speed,
             service,
             mode,
-            json.dumps(metadata, separators=(",", ":")) if metadata else None,
+            canonical_json(metadata) if metadata else None,
         ),
     )
     return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
@@ -366,7 +392,9 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
     model_config_id = _ensure_model_configuration(conn, metadata)
     parent = session.get("parent_session_id") or metadata.get("parent_session_id")
     relation = session.get("session_relation_kind")
-    if relation is None and metadata.get("is_sidechain"):
+    if relation is None and (
+        metadata.get("is_sidechain") or metadata.get("is_subagent")
+    ):
         relation = "subagent"
     archive_state = session.get("archive_state")
     archive_source = session.get("archive_source")
@@ -521,27 +549,38 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
         "SELECT source, source_system_id, project_id, global_id FROM sessions WHERE id=?",
         (event.get("session_id"),),
     ).fetchone()
-    source_name = session["source"] if session else "Unknown"
-    profile = _profile(source_name)
     semantics = _resolved_event_semantics(event)
     metadata = _json_dict(event.get("metadata"))
     source_status, normalized_status = _normalized_status(event, metadata)
-    trace = {
-        "source_event_type": event.get("event_type"),
-        "source_subtype": event.get("subtype"),
-        "source_role": event.get("role"),
-    }
-    mapping_rule = event.get("mapping_rule") or (
-        f"{profile['mapping']}.{event.get('event_type') or 'record'}.{event.get('subtype') or 'default'}"
-    )
+    mapping_rule = event.get("mapping_rule")
+    mapping_trace = event.get("mapping_trace")
+    if mapping_trace is None:
+        mapping_trace = canonical_json({
+            "mapping_status": "source-provenance-unavailable",
+            "normalized_input": {
+                "event_type": event.get("event_type"),
+                "role": event.get("role"),
+                "subtype": event.get("subtype"),
+            },
+        })
+    elif not isinstance(mapping_trace, str):
+        mapping_trace = canonical_json(mapping_trace)
+    else:
+        try:
+            json.loads(mapping_trace)
+        except json.JSONDecodeError as exc:
+            raise ValueError("mapping_trace must be valid JSON") from exc
+    tool_input = structured_json(event.get("tool_input"))
+    event["tool_input"] = tool_input
+    event["mapping_trace"] = mapping_trace
     event_global_id = global_event_id(
         session["global_id"], str(event.get("event_id"))
     )
     values = (
         event_global_id, event.get("session_id"), event.get("source_id"), event.get("event_id"),
         event.get("sequence_no"), event.get("source_record_locator") or event.get("event_id"),
-        event.get("source_record_type") or event.get("event_type"),
-        event.get("source_record_subtype") or event.get("subtype"),
+        event.get("source_record_type"),
+        event.get("source_record_subtype"),
         event.get("event_kind") or semantics["event_kind"],
         event.get("actor_kind") or semantics["actor_kind"],
         event.get("content_role") or semantics["content_role"],
@@ -549,11 +588,11 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
         event.get("interaction_id"), event.get("model_turn_id"),
         event.get("parent_event_id"), event.get("caused_by_event_id"),
         event.get("content"), event.get("content_len"), event.get("tool_name"),
-        event.get("tool_input"), event.get("tool_output"),
+        tool_input, event.get("tool_output"),
         event.get("event_at", event.get("timestamp")), event.get("event_at_basis") or "vendor",
         source_status, normalized_status, event.get("source_file"),
         event.get("artifact_path") or event.get("file_path"), mapping_rule,
-        event.get("mapping_trace") or json.dumps(trace, separators=(",", ":")),
+        mapping_trace,
         event.get("metadata"), event.get("event_type"), event.get("subtype"),
         event.get("role"), event.get("timestamp"), event.get("file_path"),
     )
@@ -654,8 +693,8 @@ def _record_source_and_content(
                 """,
                 (
                     source_record_id, source_id, locator, event.get("sequence_no"),
-                    event.get("source_record_type") or event.get("event_type"),
-                    event.get("source_record_subtype") or event.get("subtype"),
+                    event.get("source_record_type"),
+                    event.get("source_record_subtype"),
                     event.get("parent_event_id"),
                     event.get("event_at", event.get("timestamp")),
                     event.get("event_kind"), event.get("mapping_trace"),
@@ -689,6 +728,47 @@ def _record_source_and_content(
                 """,
                 (source_record_id, content_id, relation_kind),
             )
+
+
+def prune_unreferenced_source_revisions(conn: sqlite3.Connection) -> int:
+    """Remove superseded normalized Source revisions and their orphan content.
+
+    Raw manifests retain immutable source history.  A mutable normalized store
+    represents its current projection, so a revision no longer referenced by a
+    session or event must not leave duplicate source records behind.
+    """
+    stale = [
+        int(row[0]) for row in conn.execute(
+            """
+            SELECT s.id FROM sources s
+            WHERE NOT EXISTS (SELECT 1 FROM sessions x WHERE x.source_id=s.id)
+              AND NOT EXISTS (SELECT 1 FROM events e WHERE e.source_id=s.id)
+            """
+        )
+    ]
+    if not stale:
+        return 0
+    placeholders = ",".join("?" for _ in stale)
+    conn.execute(
+        f"DELETE FROM mapping_diagnostics WHERE source_id IN ({placeholders})",
+        stale,
+    )
+    conn.execute(f"DELETE FROM sources WHERE id IN ({placeholders})", stale)
+    conn.execute(
+        """
+        DELETE FROM content_objects
+        WHERE NOT EXISTS (
+          SELECT 1 FROM event_content x WHERE x.content_id=content_objects.id
+        ) AND NOT EXISTS (
+          SELECT 1 FROM source_record_content x WHERE x.content_id=content_objects.id
+        ) AND NOT EXISTS (
+          SELECT 1 FROM tool_result_content x WHERE x.content_id=content_objects.id
+        ) AND NOT EXISTS (
+          SELECT 1 FROM artifact_content x WHERE x.content_id=content_objects.id
+        )
+        """
+    )
+    return len(stale)
 
 
 def _link_specialized_content(conn: sqlite3.Connection, row_id: int) -> None:
@@ -1055,6 +1135,11 @@ def _prepare_event_groups(
             )
         event["interaction_id"] = current_interaction
         if semantics["actor_kind"] == "model":
+            observed_model_config_id = _ensure_model_configuration(
+                conn, _json_dict(event.get("metadata"))
+            )
+            if observed_model_config_id is not None:
+                current_model_config_id = observed_model_config_id
             if session_source == "Cursor":
                 if current_interaction is None:
                     prepared.append(event)
@@ -1062,8 +1147,14 @@ def _prepare_event_groups(
                 record_key = current_interaction
                 boundary_source = "inferred"
             else:
-                record_key = str(event.get("event_id") or sequence).split(":", 1)[0]
-                boundary_source = "mapping"
+                event_metadata = _json_dict(event.get("metadata"))
+                source_turn_id = event_metadata.get("source_turn_id")
+                record_key = (
+                    str(source_turn_id)
+                    if source_turn_id is not None
+                    else str(event.get("event_id") or sequence).split(":", 1)[0]
+                )
+                boundary_source = "vendor" if source_turn_id is not None else "mapping"
             turn_id = turn_by_record.get(record_key)
             if turn_id is None:
                 model_turn_counter += 1
@@ -1120,7 +1211,9 @@ def replace_session_events(
         return
     source_file = next((e.get("source_file") for e in events if e.get("source_file")), None)
     source_id = ensure_source(
-        conn, source=str(session.get("source") or "Unknown"), source_file=source_file
+        conn, source=str(session.get("source") or "Unknown"),
+        source_file=source_file,
+        observation=session.get("source_observation"),
     )
     enriched_session = dict(session)
     enriched_session["source_id"] = source_id
@@ -1140,6 +1233,7 @@ def replace_session_events(
         _record_tool(conn, event, row_id)
         _record_artifact(conn, event, row_id)
         _link_specialized_content(conn, row_id)
+    prune_unreferenced_source_revisions(conn)
 
 
 def replace_source_sessions(
@@ -1171,7 +1265,7 @@ def replace_source_sessions(
             conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
 
 
-def load_ingest_state(state_path: Path) -> dict[str, float]:
+def load_ingest_state(state_path: Path) -> dict[str, Any]:
     """Read ingest_state.json; return {} if missing/invalid."""
     if not state_path.exists():
         return {}
@@ -1181,7 +1275,7 @@ def load_ingest_state(state_path: Path) -> dict[str, float]:
         return {}
 
 
-def save_ingest_state(state_path: Path, state: dict[str, float]) -> None:
+def save_ingest_state(state_path: Path, state: dict[str, Any]) -> None:
     """Atomically write incremental state."""
     state_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = state_path.with_name(f".{state_path.name}.tmp-{os.getpid()}")
@@ -1194,7 +1288,25 @@ def should_ingest(
     source_file: str,
     mtime: float,
     force: bool,
+    *,
+    path: Path | None = None,
 ) -> bool:
     if force:
         return True
-    return load_ingest_state(state_path).get(source_file) != mtime
+    previous = load_ingest_state(state_path).get(source_file)
+    if path is None:
+        return previous != mtime
+    current = ingest_state_marker(path)
+    return previous != current
+
+
+def ingest_state_marker(path: Path) -> dict[str, Any]:
+    """Return a dated, versioned marker used to detect source updates."""
+    revision, mtime, size, method, consistency = _source_revision(path)
+    return {
+        "source_revision": revision,
+        "source_mtime": mtime,
+        "source_size": size,
+        "fingerprint_method": method,
+        "consistency": consistency,
+    }

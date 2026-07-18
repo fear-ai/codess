@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from codess.raw_store import RawStore
-from codess.fileio import hash_file, write_json_atomic
+from codess.raw_store import RawCaptureError, RawStore, verify_captured_object
+from codess.fileio import hash_file, source_fingerprint, write_json_atomic
 from codess.schema_contract import FORMAT_VERSION, require_store, verify_package
 from codess.snapshot import SnapshotError, current_store_paths
 
@@ -486,22 +486,28 @@ def _validate_raw(
                 )
                 continue
             try:
-                stored = object_path.read_bytes()
-                stored_ok = hashlib.sha256(stored).hexdigest() == record.get("stored_sha256")
-                _add_check(report, f"{label}.stored_hash", stored_ok, str(object_path))
-                if stored_ok:
-                    try:
-                        import zstandard
-
-                        raw = zstandard.ZstdDecompressor().decompress(stored)
-                        content_ok = (
-                            "sha256:" + hashlib.sha256(raw).hexdigest()
-                            == record.get("object_id")
-                        )
-                        _add_check(report, f"{label}.content_hash", content_ok, len(raw))
-                    except Exception as exc:
-                        _add_check(report, f"{label}.decompress", False, str(exc))
-            except (OSError, KeyError) as exc:
+                observed = verify_captured_object(object_path, record)
+                _add_check(
+                    report, f"{label}.stored_size",
+                    observed["stored_size"] == record.get("stored_size"),
+                    observed["stored_size"],
+                )
+                _add_check(
+                    report, f"{label}.stored_hash",
+                    observed["stored_sha256"] == record.get("stored_sha256"),
+                    str(object_path),
+                )
+                _add_check(
+                    report, f"{label}.uncompressed_size",
+                    observed["uncompressed_size"] == record.get("uncompressed_size"),
+                    observed["uncompressed_size"],
+                )
+                _add_check(
+                    report, f"{label}.content_hash",
+                    observed["object_id"] == record.get("object_id"),
+                    observed["uncompressed_size"],
+                )
+            except (OSError, KeyError, RawCaptureError) as exc:
                 _add_check(report, f"{label}.object", False, str(exc))
         elif availability == "reference":
             report["limitations"].append(
@@ -510,11 +516,8 @@ def _validate_raw(
             locator = record.get("source_locator")
             if locator and verify_reference_current:
                 try:
-                    stat = Path(locator).stat()
-                    matches = (
-                        stat.st_mtime_ns == record.get("source_mtime_ns")
-                        and stat.st_size == record.get("source_size")
-                    )
+                    current_revision = source_fingerprint(Path(locator))[0]
+                    matches = current_revision == record.get("source_revision_id")
                     _add_check(report, f"{label}.current_reference", matches, locator)
                 except OSError as exc:
                     report["limitations"].append(f"{label}: source unavailable: {exc}")

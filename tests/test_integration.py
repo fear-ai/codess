@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 from codess.project import path_to_slug, slug_to_path
+from codess.snapshot import current_raw_records
 
 
 def test_path_to_slug_roundtrip():
@@ -596,6 +597,173 @@ def test_cursor_global_ingest_is_scoped_by_composer_headers():
         assert sessions[0][1] == str(proj.resolve())
         assert json.loads(sessions[0][2])["workspace_id"] == "ws-project"
         assert events == [("mapped",), ("mapped",)]
+
+
+def test_cursor_multi_project_capture_reuses_one_consistent_cohort(tmp_path):
+    projects = [tmp_path / "first", tmp_path / "second"]
+    for project in projects:
+        project.mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    workspace_root = cursor_base / "workspaceStorage"
+    for index, project in enumerate(projects, 1):
+        workspace = workspace_root / f"ws-{index}"
+        workspace.mkdir(parents=True)
+        (workspace / "workspace.json").write_text(
+            json.dumps({"folder": project.resolve().as_uri()}), encoding="utf-8"
+        )
+    global_dir = cursor_base / "globalStorage"
+    global_dir.mkdir(parents=True)
+    global_db = global_dir / "state.vscdb"
+    with sqlite3.connect(global_db) as conn:
+        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "CREATE TABLE composerHeaders ("
+            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+        )
+        for index in (1, 2):
+            conn.execute(
+                "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+                (f"composer-{index}", f"ws-{index}", 1, 2, 0, 0),
+            )
+            conn.execute(
+                "INSERT INTO cursorDiskKV VALUES (?, ?)",
+                (
+                    f"bubbleId:composer-{index}:prompt",
+                    json.dumps({"type": 1, "text": f"prompt {index}"}),
+                ),
+            )
+    registry = tmp_path / "registry"
+    command = [sys.executable, "-m", "main", "ingest"]
+    for project in projects:
+        command.extend(["--dir", str(project)])
+    command.extend([
+        "--source", "cursor", "--raw-mode", "capture",
+    ])
+    result = subprocess.run(
+        command,
+        cwd=str(Path(__file__).parent.parent),
+        env={
+            **os.environ,
+            "CODESS_REGISTRY": str(registry),
+            "CODESS_CURSOR_DATA": str(cursor_base),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    records = []
+    source_rows = []
+    for project in projects:
+        pointer = json.loads(
+            (project / ".codess" / "current.json").read_text(encoding="utf-8")
+        )
+        snapshot = Path(pointer["path"])
+        with (snapshot / "raw-manifest.jsonl").open(encoding="utf-8") as stream:
+            records.append([
+                json.loads(line) for line in stream
+                if '"record_type":"header"' not in line
+                and '"record_type": "header"' not in line
+            ])
+        with sqlite3.connect(project / ".codess" / "sessions_cursor.db") as conn:
+            source_rows.append(conn.execute(
+                "SELECT source_uri, source_revision, capture_method, consistency "
+                "FROM sources WHERE source_uri=?",
+                (str(global_db.resolve()),),
+            ).fetchone())
+    global_records = [
+        next(record for record in project_records
+             if record.get("source_locator") == str(global_db.resolve()))
+        for project_records in records
+    ]
+    assert global_records[0]["object_id"] == global_records[1]["object_id"]
+    assert global_records[0]["object_relpath"] == global_records[1]["object_relpath"]
+    assert source_rows[0] == source_rows[1]
+    assert source_rows[0][0] == str(global_db.resolve())
+    assert source_rows[0][2:] == ("sqlite-backup", "transactional-snapshot")
+
+    pointers_before = [
+        (project / ".codess" / "current.json").read_bytes()
+        for project in projects
+    ]
+    unchanged = subprocess.run(
+        command,
+        cwd=str(Path(__file__).parent.parent),
+        env={
+            **os.environ,
+            "CODESS_REGISTRY": str(registry),
+            "CODESS_CURSOR_DATA": str(cursor_base),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert unchanged.returncode == 0, unchanged.stderr
+    assert "Cursor cohort: unchanged" in unchanged.stdout
+    assert [
+        (project / ".codess" / "current.json").read_bytes()
+        for project in projects
+    ] == pointers_before
+
+
+def test_cursor_capture_upgrades_an_unchanged_reference_snapshot(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    workspace = cursor_base / "workspaceStorage" / "ws-project"
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"folder": project.resolve().as_uri()}), encoding="utf-8"
+    )
+    global_dir = cursor_base / "globalStorage"
+    global_dir.mkdir(parents=True)
+    global_db = global_dir / "state.vscdb"
+    with sqlite3.connect(global_db) as conn:
+        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "CREATE TABLE composerHeaders ("
+            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+        )
+        conn.execute(
+            "INSERT INTO composerHeaders VALUES ('composer', 'ws-project', 1, 2, 0, 0)"
+        )
+        conn.execute(
+            "INSERT INTO cursorDiskKV VALUES (?, ?)",
+            ("bubbleId:composer:prompt", json.dumps({"type": 1, "text": "prompt"})),
+        )
+    registry = tmp_path / "registry"
+    base_command = [
+        sys.executable, "-m", "main", "ingest", "--dir", str(project),
+        "--source", "cursor",
+    ]
+    env = {
+        **os.environ,
+        "CODESS_REGISTRY": str(registry),
+        "CODESS_CURSOR_DATA": str(cursor_base),
+    }
+    reference = subprocess.run(
+        [*base_command, "--raw-mode", "reference"],
+        cwd=str(Path(__file__).parent.parent), env=env,
+        capture_output=True, text=True,
+    )
+    assert reference.returncode == 0, reference.stderr
+    pointer_before = (project / ".codess" / "current.json").read_bytes()
+
+    capture = subprocess.run(
+        [*base_command, "--raw-mode", "capture"],
+        cwd=str(Path(__file__).parent.parent), env=env,
+        capture_output=True, text=True,
+    )
+    assert capture.returncode == 0, capture.stderr
+    assert "Cursor cohort: captured" in capture.stdout
+    assert (project / ".codess" / "current.json").read_bytes() != pointer_before
+    records = current_raw_records(project)
+    global_record = next(
+        record for record in records
+        if record.get("source_locator") == str(global_db.resolve())
+    )
+    assert global_record["availability"] == "captured"
 
 
 def test_incremental_skip_unchanged():

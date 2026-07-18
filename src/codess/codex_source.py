@@ -21,6 +21,15 @@ def get_session_roots() -> list[Path]:
     return list(dict.fromkeys(path.resolve() for path in roots))
 
 
+def session_archive_evidence(path: Path) -> tuple[str, str]:
+    """Classify archive state solely from the configured source root."""
+    resolved = path.resolve()
+    archived = CODEX_ARCHIVED_SESSIONS
+    if archived is not None and resolved.is_relative_to(archived.resolve()):
+        return "archived", "configured-archive-root"
+    return "active", "configured-active-root"
+
+
 def read_session_meta(path: Path) -> dict | None:
     """Return the first session_meta record, tolerating malformed prefixes."""
     try:

@@ -4,6 +4,7 @@
   "decisions": {
     "modelInfo.modelName": "store non-default values as vendor-reported exact model selection; default remains source metadata only",
     "toolFormerData": "supported as paired tool call/result evidence with source call and status fields",
+    "toolFormerData.userDecision": "accepted/rejected is retained as explicit permission evidence; rejected maps to denied independently of status",
     "toolResults": "do not treat empty arrays as outcomes; retain existing nonempty-array compatibility mapping"
   },
   "evidence": {
@@ -11,6 +12,13 @@
     "nonempty_toolResults_records": 0,
     "populated_toolFormerData_records": 87767
   },
+  "modelInfo_field_shapes": [
+    {
+      "field": "modelName",
+      "observations": 2530,
+      "value_type": "text"
+    }
+  ],
   "model_name_values": [
     {
       "model_selection": "composer-1.5",
@@ -286,6 +294,38 @@
     {
       "observations": 57,
       "source_status": "cancelled"
+    }
+  ],
+  "tool_user_decisions": [
+    {
+      "decision": "accepted",
+      "observations": 2713,
+      "source_status": "completed"
+    },
+    {
+      "decision": "accepted",
+      "observations": 221,
+      "source_status": "error"
+    },
+    {
+      "decision": "rejected",
+      "observations": 15,
+      "source_status": "cancelled"
+    },
+    {
+      "decision": "rejected",
+      "observations": 2,
+      "source_status": "completed"
+    },
+    {
+      "decision": "accepted",
+      "observations": 1,
+      "source_status": "cancelled"
+    },
+    {
+      "decision": "accepted",
+      "observations": 1,
+      "source_status": "loading"
     }
   ],
   "workspace_evidence": [

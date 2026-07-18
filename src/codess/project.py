@@ -317,7 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--dirs",
         type=str,
         metavar="PATH",
-        help="Plain path list or candidate CSV with directory_path (see CoPlan §4.2)",
+        help="Plain path list or candidate CSV with directory_path (see README: Selecting Project and vendor scope)",
     )
     p.add_argument(
         "--dir",
@@ -442,6 +442,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="query: show session content by number from --id list",
     )
     p.add_argument(
+        "--session-id",
+        dest="session_identifier",
+        help="query: show one session by stable global ID or exact vendor session ID",
+    )
+    p.add_argument(
         "--show",
         nargs="*",
         choices=["prompt", "pr", "agent", "tool", "perm"],
@@ -507,8 +512,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="query: require matching package, or explicitly allow same-format historical reads",
     )
     p.add_argument(
-        "--output-format", choices=("table", "jsonl"), default="table",
-        help="query: table output or versioned JSON Lines rows",
+        "--output-format", choices=("table", "jsonl", "csv"), default="table",
+        help="query: human table, versioned JSON Lines, or CSV rows",
     )
     return p
 

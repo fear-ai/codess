@@ -1,5 +1,6 @@
-"""session-query CLI command."""
+"""Read-only, cross-store session query CLI command."""
 
+import csv
 import json
 import logging
 import re
@@ -11,7 +12,9 @@ from codess.config import get_project_stores, validate_config
 from codess.identity import global_session_id
 from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
 from codess.registry_store import merge_query_stats, update_project_entry
-from codess.sanitize import sanitize_for_display, sanitize_tabular, sanitize_text
+from codess.sanitize import (
+    protect_csv_row, sanitize_for_display, sanitize_tabular, sanitize_text,
+)
 from codess.schema_contract import SchemaContractError
 from codess.snapshot import SnapshotError, snapshot_store_paths
 from codess.store import connect as connect_store
@@ -24,12 +27,19 @@ STANDARD_TOOLS = frozenset({
     "TaskCreate", "TaskUpdate", "TaskStop", "TaskList", "TaskOutput",
 })
 
+QUERY_SOURCE_FILTERS = {
+    "cc": ("anthropic.claude-code", "claude"),
+    "codex": ("openai.codex", "codex"),
+    "cursor": ("cursor.composer", "cursor"),
+}
+
 
 class QueryScope:
     """Read-only stores selected for one logical query."""
 
-    def __init__(self) -> None:
+    def __init__(self, source_tokens: set[str] | None = None) -> None:
         self.stores: list[dict] = []
+        self.source_tokens = source_tokens
 
     def close(self) -> None:
         for store in self.stores:
@@ -41,9 +51,10 @@ def _open_query_scope(
     *,
     snapshot_id: str | None = None,
     allow_package_mismatch: bool = False,
+    source_tokens: set[str] | None = None,
 ) -> tuple[QueryScope, list[Path]]:
     """Open every existing project store read-only without an attachment limit."""
-    scope = QueryScope()
+    scope = QueryScope(source_tokens)
     roots_without_stores = []
     try:
         for root in roots:
@@ -78,6 +89,37 @@ def _open_query_scope(
         raise
 
 
+def _source_predicate(scope: QueryScope, alias: str = "s") -> tuple[str, tuple[str, ...]]:
+    """Return a compatibility-aware session-source predicate and parameters."""
+    if not scope.source_tokens:
+        return "1", ()
+    clauses = []
+    params: list[str] = []
+    for token in sorted(scope.source_tokens):
+        source_system_id, legacy_label = QUERY_SOURCE_FILTERS[token]
+        clauses.append(
+            f"({alias}.source_system_id=? OR "
+            f"({alias}.source_system_id='legacy.unknown' "
+            f"AND lower({alias}.source)=?))"
+        )
+        params.extend((source_system_id, legacy_label))
+    return "(" + " OR ".join(clauses) + ")", tuple(params)
+
+
+def _parse_source_tokens(value: str | None) -> tuple[set[str] | None, str | None]:
+    if value is None or not value.strip() or value.strip().lower() == "all":
+        return None, None
+    tokens = {item.strip().lower() for item in value.split(",") if item.strip()}
+    bad = sorted(tokens - set(QUERY_SOURCE_FILTERS))
+    if bad:
+        return None, (
+            "codess: invalid --source token(s) for query: "
+            + ", ".join(repr(item) for item in bad)
+            + " (allowed: cc, codex, cursor, all; comma-separated)"
+        )
+    return tokens or None, None
+
+
 def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[dict]:
     """Return sessions across stores, globally ordered by recency."""
     sessions = []
@@ -86,12 +128,15 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
             row[1] for row in store["conn"].execute("PRAGMA table_info(sessions)")
         }
         global_projection = "global_id," if "global_id" in session_columns else "NULL AS global_id,"
+        predicate, params = _source_predicate(scope)
         rows = store["conn"].execute(
             f"""
             SELECT id, {global_projection} source_system_id, vendor_session_id, source, release, started_at, ended_at,
                    project_path, metadata
-            FROM sessions
-            """
+            FROM sessions s
+            WHERE {predicate}
+            """,
+            params,
         )
         for row in rows:
             source_system_id = row["source_system_id"]
@@ -155,6 +200,19 @@ def _session_by_number(scope: QueryScope, n: int) -> dict | None:
     return rows[n - 1]
 
 
+def _session_by_identifier(scope: QueryScope, identifier: str) -> dict | None:
+    matches = [
+        row for row in _get_sessions_ordered(scope)
+        if row["global_id"] == identifier or row["id"] == identifier
+    ]
+    if len(matches) > 1:
+        raise ValueError(
+            f"session ID {identifier!r} is ambiguous across selected stores; "
+            "use the global session ID"
+        )
+    return matches[0] if matches else None
+
+
 def run(args) -> int:
     """Run session-query. Returns exit code."""
     config_errors = validate_config()
@@ -166,6 +224,43 @@ def run(args) -> int:
     limit = getattr(args, "limit", None)
     if limit is not None and limit < 0:
         print("codess: --limit must be >= 0", file=sys.stderr)
+        return 1
+    source_tokens, source_error = _parse_source_tokens(
+        getattr(args, "source", None)
+    )
+    if source_error:
+        print(source_error, file=sys.stderr)
+        return 1
+    if getattr(args, "sess", None) is not None and getattr(
+        args, "session_identifier", None
+    ):
+        print("codess: -sess and --session-id are mutually exclusive", file=sys.stderr)
+        return 1
+    primary_modes = [
+        getattr(args, "tool", None) is not None,
+        bool(getattr(args, "sessions", False)),
+        getattr(args, "sess", None) is not None
+        or bool(getattr(args, "session_identifier", None)),
+        bool(getattr(args, "permissions", False)),
+        bool(getattr(args, "task_review", False)),
+        bool(getattr(args, "lineage", False)),
+        bool(getattr(args, "audit", False)),
+        bool(getattr(args, "diagnostics", False)),
+        bool(getattr(args, "artifacts", False)),
+        bool(getattr(args, "stats", False)),
+        bool(getattr(args, "taxonomy", False)),
+    ]
+    if sum(primary_modes) > 1:
+        print("codess: select exactly one query report mode", file=sys.stderr)
+        return 1
+    if getattr(args, "show", None) is not None and not (
+        getattr(args, "sess", None) is not None
+        or getattr(args, "session_identifier", None)
+    ):
+        print("codess: --show requires -sess or --session-id", file=sys.stderr)
+        return 1
+    if getattr(args, "sess_id", False) and not getattr(args, "sessions", False):
+        print("codess: --id requires --sessions", file=sys.stderr)
         return 1
 
     roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.PROJECT_ROOT)
@@ -183,6 +278,7 @@ def run(args) -> int:
             resolved_roots,
             snapshot_id=snapshot_id,
             allow_package_mismatch=package_policy == "read-compatible",
+            source_tokens=source_tokens,
         )
     except (sqlite3.Error, SchemaContractError, SnapshotError) as exc:
         print(f"codess: cannot open query stores: {exc}", file=sys.stderr)
@@ -207,12 +303,18 @@ def run(args) -> int:
             return _jsonl_output(
                 scope, args, resolved_roots, limit,
                 resolve_registry_directory(args),
-                update_registry=not bool(snapshot_id),
+                update_registry=not bool(snapshot_id) and not bool(source_tokens),
+            )
+        if getattr(args, "output_format", "table") == "csv":
+            return _csv_output(
+                scope, args, resolved_roots, limit,
+                resolve_registry_directory(args),
+                update_registry=not bool(snapshot_id) and not bool(source_tokens),
             )
         if getattr(args, "stats", False):
             return _stats(
                 scope, resolved_roots, resolve_registry_directory(args),
-                update_registry=not bool(snapshot_id),
+                update_registry=not bool(snapshot_id) and not bool(source_tokens),
             )
         if getattr(args, "taxonomy", False):
             return _taxonomy(scope)
@@ -222,6 +324,11 @@ def run(args) -> int:
             return _sessions(scope, getattr(args, "sess_id", False), limit)
         if getattr(args, "sess", None) is not None:
             return _show_session(scope, args.sess, getattr(args, "show", None))
+        if getattr(args, "session_identifier", None):
+            return _show_session(
+                scope, None, getattr(args, "show", None),
+                session_identifier=args.session_identifier,
+            )
         if args.permissions:
             return _permissions(scope, limit)
         if args.task_review:
@@ -235,7 +342,7 @@ def run(args) -> int:
         if getattr(args, "artifacts", False):
             return _artifacts(scope, limit)
         print(
-            "Specify --tool, --sessions, -sess, --permissions, --task-review, "
+            "Specify --tool, --sessions, -sess, --session-id, --permissions, --task-review, "
             "--lineage, --audit, --diagnostics, --artifacts, --stats, or --taxonomy",
             file=sys.stderr,
         )
@@ -259,11 +366,13 @@ def _project_counts(scope: QueryScope, roots: list[Path]) -> dict[str, dict[str,
     counts = {str(root.resolve()): {"sessions": 0, "events": 0} for root in roots}
     for store in scope.stores:
         project = str(store["project_root"])
+        predicate, params = _source_predicate(scope)
         counts[project]["sessions"] += store["conn"].execute(
-            "SELECT COUNT(*) FROM sessions"
+            f"SELECT COUNT(*) FROM sessions s WHERE {predicate}", params
         ).fetchone()[0]
         counts[project]["events"] += store["conn"].execute(
-            "SELECT COUNT(*) FROM events"
+            f"SELECT COUNT(*) FROM events e JOIN sessions s ON s.id=e.session_id "
+            f"WHERE {predicate}", params
         ).fetchone()[0]
     return counts
 
@@ -323,6 +432,55 @@ def _jsonl_output(
     return 1
 
 
+def _csv_output(
+    scope: QueryScope,
+    args,
+    roots: list[Path],
+    limit: int | None,
+    registry_root: Path,
+    *,
+    update_registry: bool,
+) -> int:
+    """Emit spreadsheet-safe CSV for settled sessions and stats reports."""
+    writer = csv.writer(sys.stdout, lineterminator="\n")
+    if args.sessions:
+        writer.writerow([
+            "session_id", "global_session_id", "row_number", "source",
+            "release", "started_at", "ended_at", "source_project_path",
+            "query_project_path", "metadata_json",
+        ])
+        for number, row in enumerate(_get_sessions_ordered(scope, limit), 1):
+            writer.writerow(protect_csv_row([
+                row["id"], row["global_id"], number, row["source"],
+                row["release"], row["started_at"], row["ended_at"],
+                row["project_path"], row["query_project"],
+                json.dumps(_json_metadata(row["metadata"]), sort_keys=True),
+            ]))
+        return 0
+    if getattr(args, "stats", False):
+        writer.writerow([
+            "report", "project_path", "row_number", "projects", "sessions",
+            "events",
+        ])
+        counts = _project_counts(scope, roots)
+        for number, root in enumerate(roots, 1):
+            project = str(root.resolve())
+            writer.writerow(protect_csv_row([
+                "stats.project", project, number, "",
+                counts[project]["sessions"], counts[project]["events"],
+            ]))
+        writer.writerow(protect_csv_row([
+            "stats.total", "", "", len(counts),
+            sum(item["sessions"] for item in counts.values()),
+            sum(item["events"] for item in counts.values()),
+        ]))
+        if update_registry:
+            _merge_stats_into_registry(counts, roots, registry_root)
+        return 0
+    print("codess: CSV currently supports --sessions and --stats", file=sys.stderr)
+    return 1
+
+
 def _stats(
     scope: QueryScope,
     project_roots: list[Path],
@@ -355,14 +513,32 @@ def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
         conn = store["conn"]
         if not _has_table(conn, "mapping_diagnostics"):
             continue
+        where = ""
+        params: tuple[str, ...] = ()
+        if scope.source_tokens:
+            session_predicate, session_params = _source_predicate(scope)
+            source_ids = tuple(
+                QUERY_SOURCE_FILTERS[token][0]
+                for token in sorted(scope.source_tokens)
+            )
+            placeholders = ",".join("?" for _ in source_ids)
+            where = (
+                f"WHERE ({session_predicate} OR "
+                f"src.source_system_id IN ({placeholders}))"
+            )
+            params = (*session_params, *source_ids)
         for row in conn.execute(
-            """
+            f"""
             SELECT d.level, d.reason_code, d.source_field, d.source_value,
                    d.mapping_rule, d.detail, d.created_at, d.session_id,
                    e.event_id
             FROM mapping_diagnostics d
             LEFT JOIN events e ON e.id = d.event_id
-            """
+            LEFT JOIN sessions s ON s.id = COALESCE(d.session_id, e.session_id)
+            LEFT JOIN sources src ON src.id = d.source_id
+            {where}
+            """,
+            params,
         ):
             item = dict(row)
             item["project"] = str(store["project_root"])
@@ -403,8 +579,9 @@ def _artifacts(scope: QueryScope, limit: int | None = None) -> int:
                     correlations.setdefault(uri, []).append(
                         (assertion["object_id"], assertion["relation_kind"], assertion["confidence"])
                     )
+        predicate, params = _source_predicate(scope)
         rows = conn.execute(
-            """
+            f"""
             SELECT a.artifact_kind,
                    COALESCE(a.relative_path, a.uri, a.observed_absolute_path) AS locator,
                    ea.operation, s.source, e.session_id
@@ -413,7 +590,9 @@ def _artifacts(scope: QueryScope, limit: int | None = None) -> int:
             JOIN events e ON e.id = ea.event_id
             JOIN sessions s ON s.id = e.session_id
             WHERE COALESCE(a.relative_path, a.uri, a.observed_absolute_path) IS NOT NULL
-            """
+              AND {predicate}
+            """,
+            params,
         )
         project = str(store["project_root"])
         for row in rows:
@@ -539,11 +718,26 @@ def _normalize_response(s: str) -> str:
     return "\n".join(lines)
 
 
-def _show_session(scope: QueryScope, sess_num: int, show_modes: list | None) -> int:
-    """Show session content by number. show_modes: prompt, pr, agent, tool, perm; None/empty=all."""
-    session = _session_by_number(scope, sess_num)
+def _show_session(
+    scope: QueryScope,
+    sess_num: int | None,
+    show_modes: list | None,
+    *,
+    session_identifier: str | None = None,
+) -> int:
+    """Show session content by ordinal or stable global/vendor identifier."""
+    try:
+        session = (
+            _session_by_identifier(scope, session_identifier)
+            if session_identifier is not None
+            else _session_by_number(scope, int(sess_num))
+        )
+    except ValueError as exc:
+        print(f"codess: {exc}", file=sys.stderr)
+        return 1
     if not session:
-        print(f"No session {sess_num}", file=sys.stderr)
+        display = session_identifier if session_identifier is not None else sess_num
+        print(f"No session {display}", file=sys.stderr)
         return 1
 
     modes = show_modes if show_modes else ["prompt", "pr", "agent", "tool", "perm"]
@@ -558,7 +752,8 @@ def _show_session(scope: QueryScope, sess_num: int, show_modes: list | None) -> 
         SELECT event_type, subtype, role, content, tool_name, tool_input
         FROM events
         WHERE session_id = ?
-        ORDER BY timestamp, id
+        ORDER BY CASE WHEN sequence_no IS NULL THEN 1 ELSE 0 END,
+                 sequence_no, COALESCE(event_at, timestamp), id
         """,
         (session["id"],),
     )
@@ -674,17 +869,20 @@ def _lineage(scope: QueryScope, limit: int | None = None) -> int:
     """Print tool calls joined to results using vendor lineage identifiers."""
     rows = []
     for store_index, store in enumerate(scope.stores):
+        predicate, params = _source_predicate(scope)
         events = [
             dict(row)
             for row in store["conn"].execute(
-                """
-                SELECT session_id, event_id, event_type, subtype, tool_name,
-                       content_len, timestamp, metadata
-                FROM events
-                WHERE event_type = 'tool_call'
-                   OR subtype IN ('tool_result', 'permission_denied', 'tool_failure')
-                ORDER BY timestamp, id
-                """
+                f"""
+                SELECT e.session_id, e.event_id, e.event_type, e.subtype,
+                       e.tool_name, e.content_len, e.timestamp, e.metadata
+                FROM events e JOIN sessions s ON s.id=e.session_id
+                WHERE (e.event_type = 'tool_call'
+                   OR e.subtype IN ('tool_result', 'permission_denied', 'tool_failure'))
+                  AND {predicate}
+                ORDER BY e.timestamp, e.id
+                """,
+                params,
             )
         ]
         results: dict[tuple[str, str], list[dict]] = {}
@@ -788,13 +986,16 @@ def _task_review(scope: QueryScope) -> int:
     # Tool counts by category
     all_tools = {}
     for store in scope.stores:
+        predicate, params = _source_predicate(scope)
         cur = store["conn"].execute(
-            """
-            SELECT tool_name, COUNT(*) as cnt
-            FROM events
-            WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
-            GROUP BY tool_name
-            """
+            f"""
+            SELECT e.tool_name, COUNT(*) as cnt
+            FROM events e JOIN sessions s ON s.id=e.session_id
+            WHERE e.event_type = 'tool_call' AND e.tool_name IS NOT NULL
+              AND {predicate}
+            GROUP BY e.tool_name
+            """,
+            params,
         )
         for row in cur:
             all_tools[row["tool_name"]] = (
@@ -819,13 +1020,16 @@ def _task_review(scope: QueryScope) -> int:
     # Task/Agent invocations: description, prompt, outcome
     task_calls = []
     for store in scope.stores:
+        predicate, params = _source_predicate(scope)
         cur = store["conn"].execute(
-            """
-            SELECT session_id, event_id, tool_name, tool_input, timestamp
-            FROM events
-            WHERE event_type = 'tool_call'
-              AND (tool_name LIKE '%Task%' OR tool_name IN ('mcp_task', 'Task'))
-            """
+            f"""
+            SELECT e.session_id, e.event_id, e.tool_name, e.tool_input, e.timestamp
+            FROM events e JOIN sessions s ON s.id=e.session_id
+            WHERE e.event_type = 'tool_call'
+              AND (e.tool_name LIKE '%Task%' OR e.tool_name IN ('mcp_task', 'Task'))
+              AND {predicate}
+            """,
+            params,
         )
         task_calls.extend(dict(row) for row in cur)
     task_calls.sort(
@@ -860,15 +1064,18 @@ def _task_review(scope: QueryScope) -> int:
     # Tool results (outcomes): match by session + tool_name, infer outcome from content
     results = []
     for store in scope.stores:
+        predicate, params = _source_predicate(scope)
         cur = store["conn"].execute(
-            """
-            SELECT session_id, tool_name, content, content_len
-            FROM events
-            WHERE event_type = 'user_message' AND subtype = 'tool_result'
-              AND tool_name IS NOT NULL
-              AND (tool_name LIKE '%Task%' OR tool_name IN ('mcp_task', 'Task'))
-            ORDER BY session_id, id
-            """
+            f"""
+            SELECT e.session_id, e.tool_name, e.content, e.content_len
+            FROM events e JOIN sessions s ON s.id=e.session_id
+            WHERE e.event_type = 'user_message' AND e.subtype = 'tool_result'
+              AND e.tool_name IS NOT NULL
+              AND (e.tool_name LIKE '%Task%' OR e.tool_name IN ('mcp_task', 'Task'))
+              AND {predicate}
+            ORDER BY e.session_id, e.id
+            """,
+            params,
         )
         results.extend(dict(row) for row in cur)
     if results:
@@ -894,12 +1101,14 @@ def _permissions(scope: QueryScope, limit: int | None = None) -> int:
     """Print permission_denied events."""
     rows = []
     for store in scope.stores:
+        predicate, params = _source_predicate(scope)
         cur = store["conn"].execute(
-            """
-            SELECT session_id, timestamp, tool_name
-            FROM events
-            WHERE subtype = 'permission_denied'
-            """
+            f"""
+            SELECT e.session_id, e.timestamp, e.tool_name
+            FROM events e JOIN sessions s ON s.id=e.session_id
+            WHERE e.subtype = 'permission_denied' AND {predicate}
+            """,
+            params,
         )
         for row in cur:
             item = dict(row)
@@ -937,15 +1146,16 @@ def _audit(scope: QueryScope, limit: int | None = None) -> int:
     )
     placeholders = ",".join("?" for _ in supported)
     for store_index, store in enumerate(scope.stores):
+        predicate, source_params = _source_predicate(scope)
         cur = store["conn"].execute(
             f"""
             SELECT e.session_id, e.event_id, e.timestamp, e.subtype,
                    e.tool_name, e.metadata, s.source
             FROM events e
             JOIN sessions s ON s.id = e.session_id
-            WHERE e.subtype IN ({placeholders})
+            WHERE e.subtype IN ({placeholders}) AND {predicate}
             """,
-            supported,
+            (*supported, *source_params),
         )
         for row in cur:
             item = dict(row)

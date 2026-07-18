@@ -196,12 +196,13 @@ def iter_bubble_rows(
     if composer_ids is None:
         yield from conn.execute(
             "SELECT key, value FROM cursorDiskKV "
-            "WHERE key >= 'bubbleId:' AND key < 'bubbleId;'"
+            "WHERE key >= 'bubbleId:' AND key < 'bubbleId;' ORDER BY key"
         )
         return
     for composer_id in sorted(composer_ids):
         yield from conn.execute(
-            "SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ?",
+            "SELECT key, value FROM cursorDiskKV "
+            "WHERE key >= ? AND key < ? ORDER BY key",
             (f"bubbleId:{composer_id}:", f"bubbleId:{composer_id}:\U0010ffff"),
         )
 

@@ -71,7 +71,7 @@ assembled dynamically and are not recoverable from normalized message events.
 |---------|--------|
 | **Main session** | `user` / `assistant`; typed user content may be a string while assistant and tool content commonly use blocks (`text`, `tool_use`, `tool_result`) |
 | **Subagent** | Messages may carry `isSidechain: true`, `agentId`; linking to parent session not always in file (see GitHub CC issues on `parentSessionId`) |
-| **Product state** | Records can include `system`, `mode`, `permission-mode`, `attachment`, `file-history-snapshot`, `queue-operation`, `ai-title`, and `last-prompt` |
+| **Product state** | Records can include `system`, `mode`, `permission-mode`, `attachment`, `file-history-snapshot`, `queue-operation`, AI/custom titles, agent names, fork context, and `last-prompt` |
 
 Common record-envelope fields include `sessionId`, `uuid`, `parentUuid`,
 `timestamp`, `cwd`, `gitBranch`, `version`, and `isSidechain`. Field presence
@@ -135,15 +135,35 @@ supported events, Codess removes the prior normalized session and reports an
 
 - Index may omit `fullPath` → size uses directory rglob (may mix subagent files).
 - Ingest deliberately recurses only below `{parent}/subagents/`; unrelated nested JSONL fragments are not treated as sessions.
-- CC package version not stored in these files; use your installed `claude-code` version separately.
+- Top-level `version` or `claudeCodeVersion` is present on observed releases but
+  is not guaranteed on every record. Ingest retains the first observed exact
+  value as `sessions.harness_version`; absence remains `NULL` rather than being
+  replaced with the currently installed Claude version.
 - **Slug decode (implementation impact):** `slug_to_path` is lossy (e.g. hyphen vs path segment). Discovery prefers `projectPath` from `sessions-index.json` when present; `project.py` / scan fall back to slug-derived paths.
 
-## 9. Open implementation gaps (Codess)
+## 9. Codess mapping boundaries
 
-| Gap | Detail |
-|-----|--------|
-| Product-state specialization | Mode, permission, attachment, snapshot, title, queue, duration, and scheduled-task facts have bounded common events; richer vendor fields remain raw or metadata pending the central content/source-record decision. |
-| Runtime-context snapshots | Memory, skills, tool schemas, instructions, compaction summaries, and token usage need a separate model if context analysis becomes a goal; audit events do not represent runtime context faithfully. |
+Mode, permission, attachment, snapshot, AI/custom title, agent name, queue,
+duration, scheduled-task, and direct `fork-context-ref` facts have bounded
+common events. A direct `parentSessionId` overrides directory-inferred
+parentage and records its source field. Assistant `message.model` and
+`message.usage.service_tier` configure model turns with exact field
+provenance. The bounded July 2026 audit found model values on 35,724 reviewed
+assistant records and `service_tier=standard` on 35,565; no Claude effort or
+speed tier was inferred.
+
+Every emitted event retains its exact Claude record type/subtype and line
+locator. The scalar `mapping_rule` names the primary rule in
+`schema/mappings/claude.json`; JSON `mapping_trace` records the source path and
+additional lineage/configuration rules. Common event/configuration names are
+the cross-vendor query surface, while original Claude names and values remain
+available for release-specific investigation.
+
+Richer product state remains raw or metadata. Memory, skills, tool schemas,
+instructions, compaction summaries, and token usage are not represented as one
+generic audit event because they have different runtime semantics. The
+authoritative gap classifications and dispositions are **CoPlan.md §8.3**,
+rows **V-CC2**, **V-CTX1**, and **E-2**.
 
 ---
 
@@ -154,4 +174,4 @@ supported events, Codess removes the prior normalized session and reports an
 | Unified DB columns | **CoSchema.md** |
 | Cursor storage | **CursorSchema.md** |
 | Codex storage | **CodexSchema.md** |
-| Features & code plan | **CoPlan.md** |
+| Implementation, tests, and work queue | **CoPlan.md** |

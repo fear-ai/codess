@@ -63,6 +63,24 @@ def observe_git(
             return observed
         root = Path(root_result.stdout.strip()).resolve()
         observed.update({"is_repository": True, "root": str(root)})
+        git_dir_result = _git_run(root, ["rev-parse", "--absolute-git-dir"])
+        common_dir_result = _git_run(root, ["rev-parse", "--git-common-dir"])
+
+        def resolved_git_path(result: subprocess.CompletedProcess[str]) -> str | None:
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+            value = Path(result.stdout.strip())
+            return str((value if value.is_absolute() else root / value).resolve())
+
+        git_dir = resolved_git_path(git_dir_result)
+        common_dir = resolved_git_path(common_dir_result)
+        branch = _git_run(root, ["branch", "--show-current"])
+        observed["worktree"] = {
+            "git_dir": git_dir,
+            "common_git_dir": common_dir,
+            "is_linked": bool(git_dir and common_dir and git_dir != common_dir),
+            "branch": branch.stdout.strip() if branch.returncode == 0 else None,
+        }
         head = _git_run(root, ["rev-parse", "HEAD"])
         observed["head"] = head.stdout.strip() if head.returncode == 0 else None
         last = _git_run(root, ["log", "-1", "--format=%cI"])

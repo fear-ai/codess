@@ -1,100 +1,109 @@
 {
   "catalog_format": "codess.approved-baselines/1",
-  "coschema_format": 3,
-  "package_digest": "110c3132a9aaa4085002ceb6f20a912de0a293c943b3a316706b5c3f9cd5b55a",
+  "coschema_format": 4,
+  "package_digest": "503bc95059247f0fbfc596295ead26226e288f2e73347028fba0d85cf426ca47",
   "projects": [
     {
-      "fixed_point": {
-        "normalization_digest_match": true,
-        "passed": true,
-        "semantic_digest_match": true,
-        "source_revisions_match": true
+      "last_automated_validation": {
+        "fixed_point": {
+          "normalization_digest_match": true,
+          "passed": true,
+          "semantic_digest_match": true,
+          "source_revisions_match": true
+        },
+        "query_smoke": {
+          "artifacts": true,
+          "audit": true,
+          "diagnostics": true,
+          "lineage": true,
+          "sessions": true,
+          "stats": true
+        },
+        "validated_at": "2026-07-18T08:05:47.287231+00:00"
       },
       "mapping_diagnostics": {
         "missing_tool_call_id": 19
       },
-      "parent_snapshot_id": "20260716T131255.767204Z-coschema3-a645ae6d88fc",
+      "parent_snapshot_id": "20260718T074632.166316Z-coschema4-f3bed07f1595",
       "path": "/Users/walter/Work/Code/SWEmore",
       "project_id": "codess:project:d0294926-1b64-42a0-9d1b-2ff2d0332401",
-      "query_smoke": {
-        "artifacts": true,
-        "audit": true,
-        "diagnostics": true,
-        "lineage": true,
-        "sessions": true,
-        "stats": true
-      },
       "raw_mode": "capture",
       "raw_records": 1,
       "selection_state": "approved",
-      "semantic_digest": "4181d88ddea7b7e255658a63b84ee7a78300e9a9e147703c29891b75a30eb77c",
-      "snapshot_id": "20260716T131255.983164Z-coschema3-34f664e8d84e",
+      "semantic_digest": "7bd0a00c33704f2df28e7cef0e8c5abdaae9d2b722bade65caf4da5bc41b3321",
+      "snapshot_id": "20260718T074632.498190Z-coschema4-063fadc92862",
       "sources": {
         "Codex": {
           "events": 275,
           "sessions": 1
         }
       },
-      "validation_policy": "catalog/policies/swemore.json",
+      "validation_policy": "/Users/walter/Work/Code/CodeSess/catalog/policies/swemore.json",
       "validation_state": "accepted"
     },
     {
-      "fixed_point": {
-        "normalization_digest_match": true,
-        "passed": true,
-        "semantic_digest_match": true,
-        "source_revisions_match": true
+      "last_automated_validation": {
+        "fixed_point": {
+          "normalization_digest_match": true,
+          "passed": true,
+          "semantic_digest_match": true,
+          "source_revisions_match": true
+        },
+        "query_smoke": {
+          "artifacts": true,
+          "audit": true,
+          "diagnostics": true,
+          "lineage": true,
+          "sessions": true,
+          "stats": true
+        },
+        "validated_at": "2026-07-18T08:05:47.333685+00:00"
       },
       "mapping_diagnostics": {},
-      "parent_snapshot_id": "20260716T131309.595469Z-coschema3-2692dd7248c7",
+      "parent_snapshot_id": "20260718T074634.298457Z-coschema4-69cd18da6c59",
       "path": "/Users/walter/Work/Spank/spank-py",
       "project_id": "codess:project:5be64477-9245-47a7-9c5b-254e583826b0",
-      "query_smoke": {
-        "artifacts": true,
-        "audit": true,
-        "diagnostics": true,
-        "lineage": true,
-        "sessions": true,
-        "stats": true
-      },
       "raw_mode": "capture",
       "raw_records": 6,
       "selection_state": "approved",
-      "semantic_digest": "87e87c0f83b990a886b2c869c2d126eaf4d1bce8649df1e22a6548b82c3db820",
-      "snapshot_id": "20260716T131311.774346Z-coschema3-aba96284fd87",
+      "semantic_digest": "cdeb3f2278062a367995a631baa043be382546a9aebad6cc755905e76082ec55",
+      "snapshot_id": "20260718T074635.695308Z-coschema4-9edea1b8645f",
       "sources": {
         "Claude": {
-          "events": 3958,
+          "events": 4187,
           "sessions": 6
         }
       },
-      "validation_policy": "catalog/policies/spank-py.json",
+      "validation_policy": "/Users/walter/Work/Code/CodeSess/catalog/policies/spank-py.json",
       "validation_state": "accepted"
     },
     {
-      "fixed_point": {
-        "normalization_digest_match": true,
-        "passed": true,
-        "semantic_digest_match": false,
-        "source_revisions_match": false
+      "last_automated_validation": {
+        "fixed_point": {
+          "normalization_digest_match": true,
+          "passed": true,
+          "semantic_digest_match": false,
+          "source_revisions_match": false
+        },
+        "query_smoke": {
+          "artifacts": true,
+          "audit": true,
+          "diagnostics": true,
+          "lineage": true,
+          "sessions": true,
+          "stats": true
+        },
+        "validated_at": "2026-07-18T08:05:47.621235+00:00"
       },
       "mapping_diagnostics": {},
-      "parent_snapshot_id": "20260716T131401.153266Z-coschema3-5bed02371ec8",
+      "parent_snapshot_id": "20260718T075337.516480Z-coschema4-4e7869dffdbf",
       "path": "/Users/walter/Work/ZK/Zero400",
       "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-      "query_smoke": {
-        "artifacts": true,
-        "audit": true,
-        "diagnostics": true,
-        "lineage": true,
-        "sessions": true,
-        "stats": true
-      },
       "raw_mode": "capture",
       "raw_records": 6,
       "selection_state": "approved",
-      "semantic_digest": "c325f76161df85eee019d1152fae21b22769236c31d547c65d2669e4363115d6",
-      "snapshot_id": "20260716T132140.567619Z-coschema3-fbf3945dce7f",
+      "semantic_digest": "cbca1ac48486007e507c4dd43e41404b504014f3c13c1a34f2becd71ad96c529",
+      "snapshot_id": "20260718T080434.659521Z-coschema4-06fbe686f744",
       "sources": {
         "Claude": {
           "events": 1932,
@@ -105,7 +114,7 @@
           "sessions": 17
         }
       },
-      "validation_policy": "catalog/policies/zero400.json",
+      "validation_policy": "/Users/walter/Work/Code/CodeSess/catalog/policies/zero400.json",
       "validation_state": "accepted"
     }
   ],

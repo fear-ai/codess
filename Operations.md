@@ -1,4 +1,11 @@
-# Operations — preflight, structured output, resource bounds, and evidence
+# Operations — maintainer runbook
+
+**Audience:** corpus curators, release maintainers, evidence maintainers, and
+operators responsible for accepted baselines and retained storage.
+
+Daily user investigation belongs in **README.md**. This runbook covers
+non-mutating preflight, processing limits, storage and retention, bounded source
+access, evidence refresh, curation, and compatibility baselines.
 
 ## Ingest preflight
 
@@ -16,25 +23,6 @@ prove raw durability, snapshot promotion, or a two-run fixed point;
 `python -m main baseline apply` is the acceptance gate for those properties;
 `tools/apply_and_verify.py` is its compatibility wrapper.
 
-## Structured query rows
-
-`query --output-format jsonl` is a versioned prototype for `--sessions` and
-`--stats`. Stats stream one bounded record per Project followed by one total.
-Each line is a `codess.query-row/1` envelope with report, Project scope,
-optional row number, and typed data. Its independent contract is
-`schema/query-row-v1.json`, not the CoSchema database version.
-
-Requirements are deterministic ordering, JSON-native numbers/nulls/objects,
-stable global identities, explicit report and Project scope, bounded lines, no
-terminal sanitization, and additive evolution within a row version. Incompatible
-row meaning requires a new row version.
-
-SQLite JSON functions, `.mode json`, Datasette, sqlite-utils, pandas, or generic
-row dictionaries help exploration but are not the API: they expose physical
-layout, omit cross-store report semantics, and turn DB migrations into output
-breakage. JSON Schema is a lightweight boundary validator. Pydantic is not yet
-needed because there is one producer emitting already typed values.
-
 ## Resource bounds and processing
 
 Defaults are 8 GiB per source, 500,000 normalized events per source, and 250,000
@@ -44,6 +32,9 @@ per session. Override with `--max-source-bytes`,
 
 Routine ingest writes `.codess/last-ingest-report.json` with source bytes, event
 counts, largest buffered session, peak process RSS, limits, and diagnostics.
+Cursor runs add `cursor_cohort.status` (`unchanged`, `reused`, or `captured`),
+bounded-marker/capture elapsed time, source/materialized/stored byte counts when
+available, and the process RSS high-water mark.
 Event counts are checked while normalized records are collected, so a configured
 limit rejects before the complete oversized buffer is retained. Cursor decoding
 projects envelopes to mapped fields before retaining them; completed source
@@ -80,7 +71,7 @@ objects. It warns above 2 GiB for one CoSchema database and 10 GiB for Cursor;
 use `CODESS_MAX_CODESS_DB_BYTES` and `CODESS_MAX_CURSOR_DB_BYTES` for configured
 defaults or command options for one report.
 
-CoSchema v3 deliberately does not persist token observations. The storage
+CoSchema v4 deliberately does not persist token observations. The storage
 report instead streams distinct current source URIs into a versioned derived
 token observation grouped by month/model/source. Claude message usage is
 deduplicated and labeled `local_observed`. Codex positive cumulative deltas are
@@ -116,9 +107,9 @@ vendor transcripts or current source evidence. `storage prune` inventories them
 but selects none by default. `--working-archives` selects only archives whose
 catalogued Project has a current central snapshot; apply remains explicit and
 the receipt records every removed path and reclaimed allocation. They are not
-silently folded into raw-object garbage collection. The reviewed July 17 sweep
-removed five such trees after validation and reclaimed 603,422,720 allocated
-bytes.
+silently folded into raw-object garbage collection. Cleanup receipts retain the
+selected paths, validation result, and reclaimed allocation; the runbook does
+not preserve dated cleanup chronology.
 
 Pruning is mark-and-sweep and dry-run by default:
 
@@ -129,9 +120,54 @@ python -m main storage prune --registry ~/.codess --working-archives --output /t
 python -m main storage prune --registry ~/.codess --working-archives --apply
 ```
 
+The default plan also rejects multiple current, distinct revisions of the same
+logical raw source when each revision is at least 1 GiB. This prevents several
+Project snapshots from silently pinning near-copies of a mutable global Cursor
+database. Use `--keep-comparison-revisions` only when those revisions are
+intentional comparison evidence. Otherwise capture one deliberate Cursor
+source cohort, rebuild the affected current Project snapshots against it, and
+run the dry-run/apply sequence; do not remove an object while an immutable
+current manifest still names it.
+
+For a multi-Project Cursor capture, a **cohort** is one transactionally
+consistent backup of the mutable global Cursor SQLite database, not a Project
+classification. Before any backup, ingest calculates one bounded main-file/WAL
+change marker and compares it with every selected Project's ingest state. If
+all markers are current, it neither backs up nor materializes the global DB and
+does not create no-op snapshots. Otherwise it captures once and applies indexed
+workspace/composer queries for every selected Project. A fresh capture is
+queried directly from its temporary standalone backup; it is not immediately
+decompressed from the raw object again. Each successful Project manifest
+therefore names the same content-addressed object and original live source
+locator.
+
+`~/.codess/cache/cursor-cohort-v1.json` is a replaceable metadata-only cache; it
+does not contain a second database copy. When another Project needs the same
+unchanged cohort, ingest verifies and streams the retained raw object into one
+temporary query database. `--force` bypasses cache reuse. Cache deletion affects
+performance only. The pre-capture marker is deliberately retained as the state
+guard: if the live DB changes after the marker was read, the next invocation
+sees a different marker and revisits the source instead of treating the backup
+as current.
+
+SQLite backups are normalized to `journal_mode=DELETE` before capture so the
+standalone object remains queryable through a strict read-only connection
+without live WAL sidecars.
+
+Raw object identity is the decompressed source digest. A valid existing zstd
+encoding is reused after streaming verification even if a different compressor
+version or level would produce different stored bytes; the manifest records the
+stored digest and size of the encoding actually retained. Incremental rebuilds
+also remove normalized Source revisions no longer referenced by any current
+session/event, preventing stale `source_records` from accumulating while raw
+snapshot history remains governed by retention.
+
 The plan validates each central current pointer and manifest, every current DB
 hash and SQLite quick-check, each raw-manifest hash, and retained raw-object
-presence and size. It then lists every superseded snapshot and every object not
+presence and size. Full raw verification separately reads the compressed
+representation and the decompressed source in fixed 1 MiB chunks, so a multi-
+gigabyte Cursor backup is never materialized in memory. It then lists every
+superseded snapshot and every object not
 referenced by a current manifest with reclaimable allocation. `--apply`
 recomputes that plan immediately, performs only the listed removals, checks the
 zero-candidate postcondition, and writes a receipt below
@@ -163,10 +199,20 @@ all vendor history:
   Counts and byte totals use `COUNT(*)` and `length(value)` without JSON decode;
   ingest decodes only selected rows. A logical export of selected rows can be a
   useful derived artifact, but it is not an exact raw copy of the vendor store.
-  Exact `capture`/`seal` still requires one SQLite backup so WAL state is
+  Exact `capture`/`seal` still requires one SQLite backup when the bounded
+  marker changes or a selected Project lacks that marker, so WAL state is
   included. Main-file size/mtime alone cannot safely cache that backup while a
-  WAL exists; any capture-reuse key must fingerprint the main file and WAL
-  before and after backup and refer to a verified raw object.
+  WAL exists; routine change detection uses the fast non-authenticating MD5
+  fingerprint of the main file plus WAL. A retained/reused cohort remains a
+  fully SHA-256-addressed raw backup and cache restoration verifies both its
+  compressed and decompressed identities; MD5 is never an authenticity or
+  retained-object integrity claim.
+  Selected bubble rows are ordered by indexed key range, normalized one
+  composer at a time, and written within one rollback-capable transaction. This
+  bounds multi-composer accumulation, but the largest composer is still the
+  unit needed for timestamp ordering, duplicate suppression, and Interaction
+  construction. The measured high-water result and remaining within-composer
+  streaming work are tracked as **CoPlan L-E3/A9**.
 - Claude resolves the selected Project's storage directory. Candidate discovery
   reads top-level session indexes only; feature audit is explicitly bounded by
   `--max-files`.
@@ -219,10 +265,25 @@ identity, effort/speed/service settings, direct Codex parents,
 lifecycle/missing-time evidence, and Cursor tool/model shapes. Relevance-ranked
 results live in `catalog/evidence-inventory.json`.
 
-The current inventory found real Claude/Cursor shared artifact paths in Zero400
-and real missing-time records. It still found no Codex parent identifier and no
-effort/speed/service settings. Expand the corpus only for a high-relevance
-missing shape; use approved active workspaces for maintenance evidence.
+The current source audits find Claude exact model/service tier, Codex exact
+model/effort and newer service tier, Cursor exact model selections, and Cursor
+accepted/rejected tool decisions. No distinct speed tier or direct Codex parent
+identifier has been observed. `available` in the inventory distinguishes raw
+source evidence from normalized-store counts so an old baseline cannot make a
+source capability look absent. Evidence-gap and corpus-expansion actions are
+governed by **CoPlan A12/T4–T5**, not by this procedure.
+
+Useful bounded component audits are:
+
+```text
+python -m main evidence audit claude-features --max-record-bytes 65536
+python -m main evidence audit codex-features --max-record-bytes 65536
+python -m main evidence audit cursor-features
+```
+
+The JSONL audits never retain message, reasoning, instruction, argument, or
+result bodies. Records above the configured ceiling are drained and counted as
+oversize rather than allocated or parsed.
 
 ## Curated workflows
 
@@ -258,24 +319,105 @@ without replacement, and relocating from old to new. The historical
 wrapper; the explicit operations are under `catalog location` and
 `catalog relocate`.
 
-## Current compatibility baselines
+## Baseline inventories
 
-The July 2026 gap pass added accepted, captured, fixed-point baselines for
-`Claw/setpack`, `Code/Misses`, `Spank/spank-rs`, `ZK/insight`, `ZK/ZeroPerf`, `WP/wp`,
-`WP/wpages`, and `WP/harduw`. Each current snapshot passes SQLite integrity and foreign keys,
-manifest counts and hashes, global-ID checks, event ordering, JSON validation,
-raw stored/content hashes, project policy, and all query-smoke modes. The only
-bounded mapping diagnostics are historical Codex results without call IDs:
-323 in `spank-rs`, 36 in `wpages`, 30 in `setpack`, and 9 in `harduw`.
+Three different records must not be conflated:
+
+- `catalog/reviewed-baselines.json` is the frozen, bounded compatibility set
+  described in **CompatibilityReview.md**.
+- `catalog/approved-baselines.json` is the explicitly published operational
+  selection.
+- `~/.codess/projects/*/current.json` points to every Project's current central
+  snapshot, including snapshots that are not members of either catalog.
+
+The JSON catalogs and current pointers are authoritative; this runbook does not
+copy their Project lists or snapshot IDs. Run `python -m main baseline verify`
+to check the published set against package identity, policy, hashes, SQLite
+integrity, global IDs, ordering, raw evidence, and query-smoke requirements.
 
 Routine reconciliation may pass
-`~/Work/Code/SWEmore/active_work_projects_since_2026-05.csv` directly to
-`--dirs`. Cursor's central database is measured once per multi-root scan; its
-unattributed aggregate can be displayed as `(global)` but is not a Project or a
-registry entry. Project rows use only composer IDs linked by workspace headers.
+`~/Work/Code/SWEmore/active_work_projects_since_2026-05.csv` to `--dirs`.
+Cursor's central database is measured once per multi-root scan; its unattributed
+aggregate may appear as `(global)`, but is not a Project or registry member.
+Project rows use only composer IDs linked by workspace headers.
 
-Relocated projects can keep vendor-owned source data at its original local
+A relocated Project can retain vendor-owned evidence at its original local
 locator. An approved `.codess/source-links.json` maps that immutable source
-identity to the current Project location. `ZK/insight` uses this mechanism for
-Claude transcripts retained under the former `ZK/ZKs/insight` slug; neither the
-Claude store nor its source locators are rewritten.
+identity to the current Project location. `ZK/insight`, for example, retains
+Claude evidence under its prior storage slug; neither the vendor store nor
+source locators are rewritten.
+
+## Claude background process recovery
+
+This appendix covers hung tests and Claude-managed background commands. It is
+an operating procedure, not a project work queue; current work remains in
+**CoPlan.md §8**.
+
+Claude's task view and the operating-system process list track different state.
+
+| State | Inspect | Stop or update |
+|---|---|---|
+| Shell process | `jobs`, `ps` | `kill`, or a timeout around the command |
+| Claude-managed background command or agent | `/tasks` | Task controls in Claude Code or `TaskStop` |
+| Claude task-list item | `~/.claude/tasks/<session>/` | Update task status; it is metadata, not a process |
+
+Stopping one layer does not prove that the others changed. Files under
+`~/.claude/tasks/` contain task descriptions and statuses, not live PIDs.
+
+### Bound commands that may hang
+
+Use the project's pyenv environment. Add GNU `gtimeout` when a command needs a
+hard deadline:
+
+```bash
+pyenv exec pytest tests/
+gtimeout --kill-after=5s 180s pyenv exec pytest tests/
+```
+
+After 180 seconds `gtimeout` sends `TERM`; five seconds later it sends `KILL` if
+the command is still alive. Do not add `--foreground` when children must also be
+timed out. Exit status `124` means the deadline expired; `137` indicates `KILL`.
+
+Claude Code may move a long Bash call into the background. The environment
+variables `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` control Bash tool
+timing, but neither proves that an external process exited.
+
+### Inspect before killing
+
+```bash
+jobs -l
+ps -o pid=,ppid=,pgid=,state=,etime=,command= -p <pid>
+ps ax -o pid=,ppid=,pgid=,etime=,command= | rg '[p]ytest|[p]ython.*specific_script'
+```
+
+Match a distinctive script, test path, or argument. Counts such as
+`pgrep -c python3` include unrelated work and are not safe cleanup criteria.
+
+Stop only a confirmed process:
+
+```bash
+kill -TERM <pid>
+ps -p <pid>
+kill -KILL <pid>  # only if the same process remains
+```
+
+Before signaling a process group, compare its PGID with the current shell:
+
+```bash
+ps -o pid=,ppid=,pgid=,command= -p <pid>
+ps -o pgid= -p $$
+```
+
+Use `kill -TERM -- -<pgid>` only when the target group is confirmed to be
+separate from the shell. Never use blanket commands such as `pkill python3`, and
+never reuse PIDs copied from an old log.
+
+### Reconcile Claude-managed work
+
+Use `/tasks` to inspect work known to the current Claude session. Stop the
+selected command or agent through Claude Code, then check `ps` if it launched
+external workers or detached a daemon. Deleting `~/.claude/tasks/` files does
+not stop an OS process.
+
+Tests that create child processes should own teardown in a fixture or `finally`
+block. The project does not need a general-purpose reaper.

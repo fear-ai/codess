@@ -83,12 +83,28 @@ def audit_cursor_features(db_path: Path, catalog: dict[str, Any]) -> dict[str, A
             GROUP BY COALESCE(json_extract(value,'$.toolFormerData.status'),'[absent]')
             ORDER BY observations DESC, source_status
         """)
+        user_decisions = _rows(conn, f"""
+            SELECT json_extract(value,'$.toolFormerData.userDecision') AS decision,
+                   json_extract(value,'$.toolFormerData.status') AS source_status,
+                   COUNT(*) AS observations
+            FROM cursorDiskKV WHERE {base}
+              AND json_type(value,'$.toolFormerData.userDecision')='text'
+            GROUP BY decision, source_status
+            ORDER BY observations DESC, decision, source_status
+        """)
         models = _rows(conn, f"""
             SELECT json_extract(value,'$.modelInfo.modelName') AS model_selection, COUNT(*) AS observations
             FROM cursorDiskKV WHERE {base}
               AND json_type(value,'$.modelInfo.modelName')='text'
             GROUP BY json_extract(value,'$.modelInfo.modelName')
             ORDER BY observations DESC, model_selection
+        """)
+        model_field_shapes = _rows(conn, f"""
+            SELECT fields.key AS field, fields.type AS value_type,
+                   COUNT(*) AS observations
+            FROM cursorDiskKV kv, json_each(kv.value,'$.modelInfo') fields
+            WHERE {join_base} AND json_type(kv.value,'$.modelInfo')='object'
+            GROUP BY fields.key, fields.type ORDER BY fields.key, fields.type
         """)
         field_shapes = _rows(conn, f"""
             SELECT fields.key AS field, fields.type AS value_type, COUNT(*) AS observations
@@ -109,12 +125,15 @@ def audit_cursor_features(db_path: Path, catalog: dict[str, Any]) -> dict[str, A
             "modelInfo_modelName_records": model_rows,
         },
         "toolFormerData_field_shapes": field_shapes,
+        "modelInfo_field_shapes": model_field_shapes,
         "tool_names_top_50": names,
         "tool_statuses": statuses,
+        "tool_user_decisions": user_decisions,
         "model_name_values": models,
         "workspace_evidence": workspace_rows,
         "decisions": {
             "toolFormerData": "supported as paired tool call/result evidence with source call and status fields",
+            "toolFormerData.userDecision": "accepted/rejected is retained as explicit permission evidence; rejected maps to denied independently of status",
             "toolResults": "do not treat empty arrays as outcomes; retain existing nonempty-array compatibility mapping",
             "modelInfo.modelName": "store non-default values as vendor-reported exact model selection; default remains source metadata only",
         },

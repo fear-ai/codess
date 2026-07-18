@@ -8,6 +8,7 @@ import pytest
 from codess.adapters.cc import (
     SourceCompatibilityError,
     extract_tool_input,
+    get_session_lineage,
     iter_cc_records,
     normalize_assistant,
     normalize_user,
@@ -15,6 +16,7 @@ from codess.adapters.cc import (
     should_skip,
     truncate_content,
 )
+from codess.schema_contract import validate_mapped_event
 
 
 class TestShouldSkip:
@@ -45,6 +47,18 @@ class TestShouldSkip:
 
     def test_unknown_type_not_skipped(self):
         assert not should_skip({"type": "unknown"})
+
+
+def test_claude_events_carry_declared_exact_mapping_evidence(tmp_path):
+    path = tmp_path / "session.jsonl"
+    path.write_text(json.dumps({
+        "type": "assistant", "version": "2.1.0", "message": {
+            "role": "assistant", "content": [{"type": "text", "text": "hi"}],
+        },
+    }) + "\n", encoding="utf-8")
+    event = list(process_file(path, "s1", {}))[0]
+    assert event["source_record_type"] == "assistant"
+    assert validate_mapped_event("claude", event) == []
 
 
 class TestTruncateContent:
@@ -351,6 +365,26 @@ class TestProcessFile:
         evs = list(process_file(fixtures, "s1", {"redact": False}))
         assert any(e.get("subtype") == "slash_command" for e in evs)
 
+    def test_assistant_model_and_service_tier_have_source_provenance(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        path.write_text(json.dumps({
+            "type": "assistant", "uuid": "record-1",
+            "message": {
+                "role": "assistant", "model": "claude-test",
+                "usage": {"service_tier": "standard"},
+                "content": [{"type": "text", "text": "hello"}],
+            },
+        }) + "\n")
+        event = list(process_file(path, "s1", {}))[0]
+        metadata = json.loads(event["metadata"])
+        assert metadata["model"] == "claude-test"
+        assert metadata["service_tier"] == "standard"
+        assert metadata["configuration_provenance"]["model"] == {
+            "source_record_type": "assistant",
+            "source_record_locator": "record-1",
+            "source_field": "message.model",
+        }
+
     def test_lineage_fixture_contract(self):
         fixture = Path(__file__).parent / "fixtures" / "claude_lineage.jsonl"
         events = list(process_file(fixture, "lineage", {"redact": False}))
@@ -431,6 +465,30 @@ class TestProcessFile:
         assert json.loads(events[2]["metadata"]) == {
             "duration_ms": 42,
             "message_count": 3,
+        }
+
+    def test_titles_agent_name_and_fork_reference_are_structured(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        records = [
+            {"type": "custom-title", "customTitle": "A title", "sessionId": "s1"},
+            {"type": "agent-name", "agentName": "Reviewer", "sessionId": "s1"},
+            {"type": "fork-context-ref", "agentId": "agent-1",
+             "parentSessionId": "parent-1", "parentLastUuid": "record-9",
+             "contextLength": 42},
+        ]
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+        events = list(process_file(path, "s1", {}))
+        assert [event["subtype"] for event in events] == [
+            "custom_title", "agent_name", "fork_context_reference",
+        ]
+        assert events[0]["content"] == "A title"
+        assert json.loads(events[2]["metadata"])["parent_session_id"] == "parent-1"
+        assert get_session_lineage(path) == {
+            "parent_session_id": "parent-1",
+            "session_relation_kind": "fork",
+            "lineage_provenance": "fork-context-ref.parentSessionId",
+            "agent_id": "agent-1",
+            "parent_last_uuid": "record-9",
         }
 
     def test_persisted_tool_result_emits_linked_external_content(self, tmp_path):

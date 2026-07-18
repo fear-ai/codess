@@ -78,16 +78,23 @@ Fields relevant to normalization:
 | `text` | Message body | Sanitized and truncated |
 | `createdAt` | ISO-8601 event timestamp | Primary normalized timestamp and sort key |
 | `timingInfo.clientStartTime` | Relative client timing, or an epoch value in some legacy shapes | Used only when it plausibly represents Unix seconds or milliseconds |
-| `toolFormerData` | One tool name/call id/model-call id, arguments, result, and status | Emitted as a linked invocation and, for final states or a result body, a result/failure event |
+| `toolFormerData` | One tool name/call id/model-call id, arguments, result, status, and optional `userDecision` | Emitted as a linked invocation and, for final states or a result body, a result/failure event; exact accepted/rejected permission evidence is retained |
 | `toolResults` | Legacy/possible tool-result array | Nonempty arrays are mapped for compatibility; the audited local store contains only empty arrays |
-| `modelInfo.modelName` | Model selection attached to a user request | Non-`default` values configure the following inferred model turn; `default` remains source metadata |
+| `modelInfo.modelName` | Model selection attached to a user request | Non-`default` values configure the following inferred model turn with exact source-field provenance; `default` remains source metadata |
 | `codeBlocks`, `fileActions`, context fields | Product state and supporting content | Not normalized |
 
 Current `toolFormerData.status` values include `completed`, `error`, `loading`,
 and `cancelled`. Codess preserves the source value and maps those to succeeded,
 failed, running, and cancelled. Cursor therefore contributes evidence-backed
-tool-failure audit rows. It still supplies no verified permission-decision,
-turn-abort, or context-compaction shape; error-looking prose is not evidence.
+tool-failure audit rows. The audited store also contains 2,936 accepted and 17
+rejected `userDecision` values. Rejection maps to normalized `denied`
+independently of the status value; acceptance does not erase an observed error.
+Cursor still supplies no verified turn-abort or context-compaction shape;
+error-looking prose is not evidence.
+
+The audited `modelInfo` objects contain only `modelName`; Codess therefore does
+not infer effort, speed, or service tier from names such as `*-fast` or
+`*-thinking`. Those labels remain exact model selections.
 
 The adapter uses parsed `createdAt` for sorting and event timestamps. Numeric
 fallback values are accepted only when they plausibly represent Unix seconds or
@@ -147,7 +154,15 @@ Scan metrics:
 The global scan row is `(global)` and is not filtered by the requested project
 root. Project-level ingest filters global bubbles to composer headers mapped to
 the selected project's workspace ids. Archived and subagent flags are preserved
-in session metadata; unmapped composers are excluded.
+in session metadata and normalized respectively to `archive_state` and
+`session_relation_kind=subagent`; unmapped composers are excluded.
+
+Each mapped event retains the `cursorDiskKV.bubble` source designation, numeric
+bubble type, exact key locator, declared mapping rule, and structured trace.
+`toolFormerData.rawArgs`/`params` are stored as valid JSON: structured values are
+serialized, already encoded JSON is retained, and plain strings become JSON
+strings. `userDecision=rejected` remains exact metadata and maps to common
+`normalized_status=denied` without replacing the source designation.
 
 Re-ingesting a Cursor database replaces events whose `source_file` is that
 database. Sessions removed from the database are deleted only when no events
@@ -199,4 +214,4 @@ normalizes events.
   tolerated.
 
 Cross-vendor normalized columns are defined in `CoSchema.md`. Implementation
-tasks and ordering are owned by `CoPlan.md` §11.
+tasks, gaps, and ordering are owned by `CoPlan.md` §8.

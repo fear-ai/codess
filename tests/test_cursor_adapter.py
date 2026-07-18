@@ -15,6 +15,7 @@ from codess.adapters.cursor import (
     process_db,
 )
 from codess.cursor_source import get_composer_headers, get_db_metrics
+from codess.schema_contract import validate_mapped_event
 
 
 def _make_cursor_db(tmp_path: Path, bubbles: list[tuple[str, str, dict]]) -> Path:
@@ -38,6 +39,22 @@ def _make_cursor_db(tmp_path: Path, bubbles: list[tuple[str, str, dict]]) -> Pat
 def _cursor_fixture() -> list[tuple[str, str, dict]]:
     path = Path(__file__).parent / "fixtures" / "cursor_bubbles.json"
     return [tuple(item) for item in json.loads(path.read_text())]
+
+
+def test_cursor_structured_tool_input_is_json_with_mapping_evidence():
+    data = {
+        "type": 2,
+        "toolFormerData": {
+            "name": "read", "toolCallId": "call-1",
+            "params": {"path": "README.md"}, "status": "completed",
+        },
+    }
+    call = next(
+        event for event in _bubble_to_events("c1", "b1", data, "/db", False)
+        if event["event_type"] == "tool_call"
+    )
+    assert json.loads(call["tool_input"]) == {"path": "README.md"}
+    assert validate_mapped_event("cursor", call) == []
 
 
 class TestGetComposerData:
@@ -329,6 +346,23 @@ class TestBubbleToEvents:
         assert evs[1]["subtype"] == "tool_failure"
         assert evs[1]["normalized_status"] == "failed"
 
+    def test_rejected_tool_decision_is_denied_even_when_status_completed(self):
+        data = {
+            "type": 2, "text": "",
+            "toolFormerData": {
+                "name": "run_terminal_command", "toolCallId": "call-3",
+                "status": "completed", "userDecision": "rejected",
+            },
+        }
+        evs = list(_bubble_to_events("c1", "b1", data, "/db", False))
+        assert len(evs) == 2
+        assert evs[0]["normalized_status"] == "denied"
+        assert evs[1]["subtype"] == "permission_denied"
+        assert evs[1]["normalized_status"] == "denied"
+        assert json.loads(evs[1]["metadata"])["permission_provenance"] == (
+            "toolFormerData.userDecision"
+        )
+
     def test_user_model_selection_is_bounded_metadata(self):
         event = list(_bubble_to_events(
             "c1", "b1",
@@ -337,6 +371,11 @@ class TestBubbleToEvents:
         ))[0]
         assert json.loads(event["metadata"]) == {
             "model_selection": "composer-2.5", "model": "composer-2.5",
+            "configuration_provenance": {"model": {
+                "source_record_type": "bubble.user",
+                "source_record_locator": "c1:b1",
+                "source_field": "modelInfo.modelName",
+            }},
         }
 
     def test_unknown_type_skipped(self):

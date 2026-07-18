@@ -1,129 +1,60 @@
-# CoPlan — Implementation Plan and Engineering Guide
+# CoPlan — engineering guide and work plan
 
-**Audience:** Contributors maintaining **Codess** (Python CLI + library).
+**Audience:** contributors and maintainers changing Codess or deciding what to
+do next.
 
-### Table of Contents
+This document owns repository architecture, configuration, CLI/runtime
+contracts, implementation mapping, coding and test guidance, delivery order,
+the actionable work queue, and engineering decisions. Product requirements
+belong in **Codess.md**; user workflows in **README.md**; design rationale in
+**Designs.md** and **Schemas.md**; operating procedures in **Operations.md**.
 
-| § | Section |
-|---|---------|
-| [§2](#2-repository-layout) | Repository Layout |
-| [§3](#3-system-architecture) | System Architecture — **§3.0–§3.6** |
-| [§4](#4-configuration) | Configuration |
-| [§5](#5-cli-and-runtime-contract) | CLI and Runtime Contract |
-| [§6](#6-feature--implementation-map) | Feature → Implementation Map |
-| [§7](#7-coding-techniques) | Coding Techniques |
-| [§8](#8-tests) | Tests |
-| [§9](#9-delivery-sequence) | Delivery Sequence |
-| [§10](#10-implementation-gaps) | Implementation Gaps |
-| [§11](#11-improvement-backlog) | Improvement Backlog |
-| [§12](#12-change-routing) | Change Routing |
-| [§13](#13-optional-splits) | Optional Splits |
-| [§14](#14-decisions) | Decisions |
-| [§15](#15-consolidated-engineering-gaps-discussion-brief) | Consolidated Engineering Gaps (discussion) |
+## Contents
 
-### Scope
+1. [Repository layout](#1-repository-layout)
+2. [System architecture](#2-system-architecture)
+3. [Configuration](#3-configuration)
+4. [CLI and runtime contract](#4-cli-and-runtime-contract)
+5. [Feature to implementation map](#5-feature--implementation-map)
+6. [Coding techniques](#6-coding-techniques)
+7. [Tests](#7-tests)
+8. [Central work registry](#8-central-work-registry)
+9. [Change routing](#9-change-routing)
 
-Repository tree; architecture (call graph, data pipelines, persistence); configuration (what, why, how); CLI contract (flags, ENV, defaults); feature → module index; coding practices; test strategy; delivery sequence; backlog, status, and review queue.
+## 1. Repository Layout
 
-### Not Here
-
-Vendor paths, filenames, DB keys, or field values — **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md**; normalized columns — **CoSchema.md**.
-
-### Documentation Boundaries
-
-Per **Codess.md §4.1** (verbatim):
-
-| Topic | Document |
-|-------|----------|
-| Why the product exists; audience; this index | **Codess.md** |
-| Repository layout, layers, data flows, configuration, **CLI tables**, coding, **§8 Tests**, **§3.5–§3.6** status and verified wiring, delivery sequence, backlog **§11**, decisions **§14**, gap themes **§15** | **CoPlan.md** |
-| Claude Code paths, index, JSONL fields, scan metrics | **CCSchema.md** |
-| Codex session files | **CodexSchema.md** |
-| Cursor `state.vscdb` keys and values | **CursorSchema.md** |
-| Our normalized `sessions` / `events` columns | **CoSchema.md** |
-| Executable DDL | **schema/coschema/sqlite/schema.sql** |
-
-Per **Codess.md §4.2**, the **CoPlan.md** row (verbatim):
-
-| Document | Goal | Include | Exclude |
-|----------|------|---------|---------|
-| **CoPlan.md** | *How* the repo implements and validates behavior | Tree, layered architecture, persistence notes, **§3.5–§3.6** status and verified wiring, **§4 configuration**, **§5 CLI**, features→modules, coding, **§8 Tests**, delivery sequence, backlog **§11**, **§14–§15** | Vendor on-disk truth (→ *Schema.md) |
-
-Cross-cutting doc rules (ToC, no transient links from core docs, etc.): **Codess.md §4.0**.
-
----
-
-## 2. Repository Layout
-
-**Terms:** **scan** = discover projects that have vendor session data from vendor indexes. Daily commands are `scan` | `ingest` | `query`; implemented administrative families are summarized in §5.7.
+**Scan** means index-led discovery of Projects that have vendor session data.
+Daily commands are `scan`, `ingest`, and `query`; administrative command
+families are summarized in §4.7.
 
 ```
-Codess/
-├── main.py                 # sys.path + codess.project.main()
-├── README.md
-├── Codess.md
-├── CoPlan.md
-├── CoSchema.md
-├── CCSchema.md
-├── CodexSchema.md
-├── CursorSchema.md
-├── sql/
-│   └── CoSchema.sql        # DDL; store.init_db() executes this file
-├── src/
-│   ├── cli/
-│   │   ├── scan_cmd.py     # run(): roots, run_scan(), CSV; registry upsert + optional --registry filter + reg_* cols
-│   │   ├── ingest_cmd.py   # run(): roots, _ingest_cc|codex|cursor; registry merge via registry_store
-│   │   └── query_cmd.py    # run(): read-only multi-root/store reports; --stats → registry merge
-│   └── codess/
-│       ├── config.py       # ENV → Path / int / bool; defaults; no other codess imports
-│       ├── helpers.py      # parse_dir_list, validate_dirs_file, write_csv, is_excluded, slug/path … ; imports config
-│       ├── registry_store.py  # ingested_projects.json merge (scan / ingest / query)
-│       ├── codex_source.py # Codex roots, metadata, fingerprinted inventory/selection
-│       ├── cursor_source.py # Cursor layout, workspace mapping, read-only selective SQL
-│       ├── storage_report.py # dated SQLite/snapshot/raw utilization and deltas
-│       ├── token_usage.py  # derived monthly vendor token observations/confidence
-│       ├── sanitize.py     # text cleanup + redact; imports config
-│       ├── store.py        # SQLite, DDL, transactional replacement, ingest state
-│       ├── project.py      # argparse, roots, run-options, Git and Claude-slug helpers
-│       ├── scan.py         # run_scan(); selected vendor source indexes and metrics
-│       ├── adapters/
-│       │   ├── cc.py
-│       │   ├── codex.py
-│       │   └── cursor.py   # selected Cursor value decoding and normalization
-└── tests/                  # order mirrors src/codess + cli; full map in §8 Tests
-    ├── test_config.py
-    ├── test_helpers.py
-    ├── test_project.py
-    ├── test_codex_source.py
-    ├── test_store.py
-    ├── test_scan.py
-    ├── test_registry_store.py
-    ├── test_cc_adapter.py
-    ├── test_codex_adapter.py
-    ├── test_cursor_adapter.py
-    ├── test_sanitize.py
-    ├── test_candidate.py
-    ├── test_subagent_detail.py
-    ├── test_cli.py
-    └── test_integration.py
+CodeSess/
+├── main.py                  # repository entry point
+├── README.md                # user/customer landing page
+├── Codess.md                # product specification and document map
+├── CoPlan.md                # engineering guide and work plan
+├── Operations.md            # maintainer runbook
+├── Designs.md / Schemas.md  # rationale and schema-evolution design
+├── *Schema.md               # common and vendor data contracts
+├── src/cli/                 # argument adaptation, rendering, exit codes
+├── src/codess/              # domain operations, adapters, persistence
+├── schema/                  # machine-readable contracts and fixtures
+│   └── coschema/sqlite/schema.sql
+├── catalog/                 # policies, reviewed evidence, accepted baselines
+├── tests/                   # unit, contract, workflow, and scale tests
+└── tools/                   # compatibility and developer entry points
 ```
 
-Legacy **`scripts/`** currently remain compatibility evidence. Do not remove
-them until §11.7 replacements, workflow tests, and documentation validation are
-complete; then remind the operator and remove them in a separate reviewed step.
+## 2. System Architecture
 
----
-
-## 3. System Architecture
-
-### 3.0 Discovery contract
+### 2.0 Discovery contract
 
 Discovery is index-led. Claude, Codex, and Cursor keep session data outside the
 project tree and record project paths in their own indexes or session metadata.
 `--dir` and `--dirs` therefore define validated path filters; they do not request
 a filesystem crawl. There is no recursion flag or general walk subsystem.
 
-### 3.1 Call Graph and Module Roles
+### 2.1 Call Graph and Module Roles
 
 - **`main.py`:** Prepends `src/` → `codess.project.main()` → `parse_and_run()` → **`cli.scan_cmd.run`** \| **`cli.ingest_cmd.run`** \| **`cli.query_cmd.run`**.
 - **`codess.config`:** ENV and constants; used by **`project`**, **`scan`**, **`helpers`**, **`adapters/*`**, **`sanitize`**, CLI.
@@ -143,7 +74,7 @@ a filesystem crawl. There is no recursion flag or general walk subsystem.
 replaces their normalized rows in **`.codess/*.db`**. Query runs read-only SQL
 on those DBs only—no vendor files or adapters.
 
-**§4 vs §5:** §4 documents **ENV** and **`config.py`**. §5 documents **CLI flags** and **`build_*_run_options`**, which merge **`Namespace`** with those defaults per run.
+**§3 vs §4:** §3 documents **ENV** and **`config.py`**. §4 documents **CLI flags** and **`build_*_run_options`**, which merge **`Namespace`** with those defaults per run.
 
 ```
                          main.py
@@ -171,9 +102,9 @@ Cursor layout/SQL callers use **`cursor_source`**;
 uses vendor source modules, not adapters. **`project.py`** owns common CLI,
 Git-root, and Claude-slug helpers. **`store.py`** remains independent of vendor access.
 
-### 3.2 Discouraged Imports
+### 2.2 Discouraged Imports
 
-This subsection is **normative policy**, not a full import graph. It answers: *where must we not put parsing or store logic so layers stay thin?* A short checklist here is **not** “every allowed edge” — see **§3.1** for who calls whom.
+This subsection is **normative policy**, not a full import graph. It answers: *where must we not put parsing or store logic so layers stay thin?* A short checklist here is **not** “every allowed edge” — see **§2.1** for who calls whom.
 
 - **`cli/*_cmd`:** do not parse vendor JSONL/SQLite inline; ingest goes through **`adapters/*`**.
 - **`adapters/cc.py`, `adapters/codex.py`:** do not import **`scan`**, **`scan_cmd`**, or **`ingest_cmd`**.
@@ -183,7 +114,7 @@ This subsection is **normative policy**, not a full import graph. It answers: *w
 - **Codex callers:** do not duplicate active/archive traversal, metadata reads,
   or active-over-archive selection; use **`codex_source`**.
 
-### 3.3 Data Movement — Three Pipelines
+### 2.3 Data Movement — Three Pipelines
 
 #### Discovery — Scan
 
@@ -214,44 +145,48 @@ This subsection is **normative policy**, not a full import graph. It answers: *w
 #### Query
 
 - **Purpose:** Read-only reporting on the local store.
-- **Mechanism:** Open **`.codess/*.db`** — see **§3.4**. **`query_cmd`** does not write vendor trees.
+- **Mechanism:** Open **`.codess/*.db`** — see **§2.4**. **`query_cmd`** does not write vendor trees.
 
-### 3.4 Persistence Layout
+### 2.4 Persistence Layout
 
-*Layout is provisional.*
+The Project-local `.codess/` directory holds the local current-snapshot pointer,
+incremental `ingest_state.json`, the last ingest report, and compatibility
+working stores when present. Current query resolution follows the retained
+snapshot pointer first and falls back to legacy working paths only when no
+current snapshot is installed.
 
-Under each **project directory**, **`STORE_DIR`** (`.codess/`) holds:
+Accepted immutable snapshots live below
+`~/.codess/projects/<project-id>/snapshots/` by default. Each snapshot contains
+per-vendor databases such as `sessions_cc.db`, `sessions_codex.db`, and
+`sessions_cursor.db`; the central and Project-local `current.json` pointers are
+promoted atomically. **CoSchema.md** owns store semantics and **Operations.md**
+owns retention and recovery procedures.
 
-- **Per-vendor DB files** (`sessions_cc.db`, `sessions_codex.db`, `sessions_cursor.db`) and/or **legacy** `sessions.db` — **`get_store_path`**, **CoSchema.md**.
+Changed or forced Claude and Codex transcripts replace one normalized session
+transactionally. Cursor refresh replaces records owned by the selected source
+database. Empty valid transcripts remove stale normalized sessions and add the
+nonfatal `empty_sources` diagnostic before ingest state advances.
 
-**Intent:** Split DBs reduce coupling while adapters differ. A merged DB would require coordinated **`store`**, **CoSchema**, and **test** changes.
-
-**`ingest_state.json`:** Per-project source mtimes for incremental ingest.
-Changed/forced Claude and Codex transcripts replace one session; Cursor refresh
-replaces events owned by that database. Empty valid transcripts remove stale
-normalized sessions and increment the nonfatal `empty_sources` diagnostic.
-
-### 3.5 Implementation vs Validation
+### 2.5 Implementation vs Validation
 
 Verification baseline is the full **`pytest tests/`** suite. **Validated** here means representative automated coverage, not every edge case.
 
-| Area | Implemented | Validated | Gaps |
-|------|-------------|-----------|------|
-| Scan (index-led) | Yes | CLI + `test_scan*`, metrics | Cursor time range covers header-indexed sessions only |
+| Area | Implemented | Validated | Registry reference |
+|------|-------------|-----------|--------------------|
+| Scan (index-led) | Yes | CLI + `test_scan*`, metrics | **V-CU2** |
 | Ingest | Yes | Adapters, replacement/store integration, CLI | Transactional replacement, empty sources, active/archive deduplication, continue/fail-fast handling, and scoped global Cursor ingest are covered |
 | Query | Yes | CLI, store, scale tests | Read-only aggregation, global numbering, session origin details, lineage, evidence-backed audit rows, and globally bounded reports across project/vendor stores |
 | **`validate_config()`** | Yes | Unit and subprocess CLI tests | Applied consistently to scan, ingest, and query |
 | Store / DDL | Yes | `test_store` | — |
-| Sanitize | Yes | Sanitizer, adapter, helper, and CLI tests | Regex redaction is intentionally limited; enterprise PII scanning is explicitly postponed |
+| Sanitize | Yes | Sanitizer, adapter, helper, and CLI tests | **P1** |
 
 **Completeness:** Main workflows, configuration validation, source replacement,
 cross-store query aggregation, lineage, audit normalization/reporting, and
-bounded row reports are covered. Cursor tool/model evidence, catalog-backed
-artifact correlation, and Codex parentage have been resolved to the extent
-supported by current sources. Speculative preflight, machine output,
-and PII scanning are postponed. See **§11** and **§15**.
+bounded row reports are covered. Preflight and versioned session/stat output
+are implemented. All incomplete coverage and deferred scope is classified in
+§§8.3 and 8.6.
 
-### 3.6 Verified wiring
+### 2.6 Verified wiring
 
 Cross-checked against **`src/`** and **`tests/`** so this plan does not drift from the repo. Re-audit after large refactors.
 
@@ -263,17 +198,17 @@ Cross-checked against **`src/`** and **`tests/`** so this plan does not drift fr
 - **`scan.py`:** imports **`codex_source`** and **`cursor_source`** for vendor discovery/metrics; **does not** import adapters or **`walk`**.
 - **`project.py` module imports:** contain no Codex/Cursor storage-layout or SQLite details.
 - **`adapters/*`:** **no** imports of **`scan`**, **`scan_cmd`**, or **`ingest_cmd`**.
-- **Central registry (`ingested_projects.json`):** **`codess.registry_store`** merges per-project records. **Scan** always upserts **`scan`** / **`last_scan`** for every discovered project path into **`resolve_registry_directory(args)`** (default **`CODESS_REGISTRY`**). **`--registry PATH`** overrides that root and, when set, **also** filters CSV to paths present in the file **before** this run + appends **`reg_*`** columns — **no** sidecar. **Ingest** merges **`sources`** / **`last_ingestion`**. **Query `--stats`** merges **`query`** / **`last_query`** into the same file (**§5**).
-- **`validate_scan_source_for_cli` / scan `--source`:** invalid tokens → **stderr + exit 1** before any scan work (**global** invocation policy — **§11.5**, **§14**).
+- **Central registry (`ingested_projects.json`):** **`codess.registry_store`** merges per-project records. **Scan** always upserts **`scan`** / **`last_scan`** for every discovered project path into **`resolve_registry_directory(args)`** (default **`CODESS_REGISTRY`**). **`--registry PATH`** overrides that root and, when set, **also** filters CSV to paths present in the file **before** this run + appends **`reg_*`** columns — **no** sidecar. **Ingest** merges **`sources`** / **`last_ingestion`**. **Query `--stats`** merges **`query`** / **`last_query`** into the same file (**§4**).
+- **`validate_scan_source_for_cli` / scan `--source`:** invalid tokens → **stderr + exit 1** before any scan work; this is the global invocation contract in §4.1.
 - **`store.init_db`:** executes **`schema/coschema/sqlite/schema.sql`** when that file exists (path resolved from **`store.py`** location).
 
 ---
 
-## 4. Configuration
+## 3. Configuration
 
-### 4.1 What Is Configurable, Why, and How
+### 3.1 What Is Configurable, Why, and How
 
-**What:** (1) **Locations** of vendor data on this machine (`CODESS_CC_PROJECTS`, …). (2) **Behavior defaults**: scan window (`CODESS_DAYS`), min ingest size (`CODESS_MIN_SIZE`), CC sidechain counts (`CODESS_SUBAGENT`), and debug/redact/force/stop/verbose flags (`CODESS_*` — see §4.3). (3) **Output/registry**: `CODESS_REGISTRY` for central **`ingested_projects.json`**. (4) Truncation limits are **code constants** in **`config.py`**.
+**What:** (1) **Locations** of vendor data on this machine (`CODESS_CC_PROJECTS`, …). (2) **Behavior defaults**: scan window (`CODESS_DAYS`), min ingest size (`CODESS_MIN_SIZE`), CC sidechain counts (`CODESS_SUBAGENT`), and debug/redact/force/stop/verbose flags (`CODESS_*` — see §3.3). (3) **Output/registry**: `CODESS_REGISTRY` for central **`ingested_projects.json`**. (4) Truncation limits are **code constants** in **`config.py`**.
 
 **Why:** Same codebase runs on **different OS paths**, **CI sandboxes**, and **user preferences** without editing Python.
 
@@ -297,7 +232,7 @@ process cwd is fragile for scan, CI, and daemons.
 - **Behavior knobs are intentionally *run-wide*:** One **`scan`** / **`ingest`** applies a **single policy** to every vendor selected by **`--source`** (`CODESS_DAYS`, `CODESS_MIN_SIZE`, `CODESS_DEBUG`, `CODESS_FORCE`, …). That keeps **one argv surface**, **one import-time config**, and shared loops in **`scan_cmd` / `ingest_cmd`** without a combinatorial matrix (`--min-size-cc`, `CODESS_DEBUG_CODEX`, …).
 - **Vendor-only semantics** stay in **code + Schema**, not parallel ENV trees: e.g. **`CODESS_SUBAGENT`** affects **CC** scan metrics only; Cursor/Codex ignore it. Per-vendor *behavior* differences that need toggles belong in ***Schema.md** + adapter options first; new **`CODESS_*`** or flags would follow a proven need.
 
-### 4.2 Combining `--dir` and `--dirs`
+### 3.2 Combining `--dir` and `--dirs`
 
 1. If **`--dirs FILE`** is passed, **`helpers.validate_dirs_file`** runs first: file **must exist**, be a **regular file**, be **readable**, and contain **≥1** usable root — otherwise **stderr** message and **exit 1** (scan / ingest / query). The file may be a plain one-path-per-line list or a candidate CSV with a **`directory_path`** column; this permits direct use of the maintained active-work CSV.
 2. **`helpers.parse_dir_list(dirs_file, dir_args)`** builds **one ordered list** of **resolved** `Path`s.
@@ -309,7 +244,7 @@ process cwd is fragile for scan, CI, and daemons.
 
 **`DEFAULT_WORK` / `is_excluded`:** There is **no** CLI flag for **`DEFAULT_WORK`** (`~/Work`). **`is_excluded(p, work_root=None)`** uses **`DEFAULT_WORK`** only as the **`relative_to`** anchor when **`work_root`** is omitted — **`scan.run_scan`** passes the real **`work_root`** into **`canonicalize`**, so exclusion is relative to the **scan root**, not **`~/Work`** unless you omit the argument in other call sites.
 
-### 4.3 Environment Variables
+### 3.3 Environment Variables
 
 Defaults in the table are when the variable is **unset**.
 
@@ -356,74 +291,82 @@ command exits 1 before doing work.
 
 ---
 
-## 5. CLI and Runtime Contract
+## 4. CLI and Runtime Contract
 
 **Purpose:** Operator-facing **flags**, **ENV**, and **defaults**. Vendor metric semantics → ***Schema.md**.
 
 **Table columns:** **Flag** | **ENV** (variable name, or **—**) | **Default** (when flag omitted / ENV unset as applicable) | **Explanation**.
 
-### 5.1 `codess scan`
+### 4.1 `codess scan`
 
 | Flag | ENV | Default | Explanation |
 |------|-----|---------|-------------|
-| `--dirs PATH` | — | — | Plain path list or candidate CSV with `directory_path` (§4.2). |
+| `--dirs PATH` | — | — | Plain path list or candidate CSV with `directory_path` (§3.2). |
 | `--dir PATH` | — | — | Append root; repeatable. |
-| *(no dirs after merge)* | — | **`Path.cwd()`** | **Scan** only; see §4.2. |
-| `--source cc,codex,cursor` | — | all three | Comma-separated vendor subset; **order does not matter**. Tokens are compared case-insensitively after trim. **`all`** clears the filter (same as omitting **`--source`**). **Invalid token** (anything other than **`cc`**, **`codex`**, **`cursor`**, or the whole value **`all`**) is a **global** error: **stderr** message listing bad tokens and **exit 1** — no partial vendor set (**§11.5**). |
+| *(no dirs after merge)* | — | **`Path.cwd()`** | **Scan** only; see §3.2. |
+| `--source cc,codex,cursor` | — | all three | Comma-separated vendor subset; **order does not matter**. Tokens are compared case-insensitively after trim. **`all`** clears the filter (same as omitting **`--source`**). **Invalid token** (anything other than **`cc`**, **`codex`**, **`cursor`**, or the whole value **`all`**) is a **global** error: **stderr** message listing bad tokens and **exit 1** — no partial vendor set. |
 | `--out PATH` | — | `codess_walk.csv` | CSV path; **`write_csv`** creates **parent directories**. |
 | `--out -` | — | — | CSV to **stdout** (not **`write_csv`**). |
 | `--days N` | `CODESS_DAYS` | **`90`** | Recent window; omitted → **`CODESS_DAYS`**. |
-| `--debug` | `CODESS_DEBUG` | off if flag omitted **and** unset ENV | Discovery trace + CSV **`dir_path`**; **`args.debug or DEBUG`** — see **§4.3**. |
-| `--subagent` | `CODESS_SUBAGENT` | **`SUBAGENT`** from ENV | **`args.subagent or SUBAGENT`** — see **§4.3**. |
+| `--debug` | `CODESS_DEBUG` | off if flag omitted **and** unset ENV | Discovery trace + CSV **`dir_path`**; **`args.debug or DEBUG`** — see **§3.3**. |
+| `--subagent` | `CODESS_SUBAGENT` | **`SUBAGENT`** from ENV | **`args.subagent or SUBAGENT`** — see **§3.3**. |
 | `--registry PATH` | `CODESS_REGISTRY` | — | **Directory** for **`ingested_projects.json`**: default **`CODESS_REGISTRY`** (`~/.codess`); **`PATH`** overrides for this invocation. **Scan:** always **writes** merged index metrics to that directory; when **`--registry`** is **passed**, **also** restricts CSV to paths already listed **before** this run and adds **`reg_*`** columns. **Argparse requires a path** — no bare **`--registry`**. |
 | `-v` / `--verbose` | `CODESS_VERBOSE` | off | Python **`logging`** level **DEBUG** (process-wide); not **`CODESS_DEBUG`**. |
 
 **Precedence (scan):** **`--days` omitted** → **`CODESS_DAYS`**. **`--subagent`:** **`args.subagent or SUBAGENT`**. **`Registry`:** **`project.resolve_registry_directory(args)`** selects the registry **root** for **both** scan upserts and (when **`--registry PATH`** is set) filter + join columns.
 
-**Output columns:** `path,vendor,sess,mb,span_weeks` (with `dir_path` when `--debug`). With **`--registry`**, append **`reg_path`**, **`reg_updated`**, **`reg_sources`** — **§5.1** table. Metric definitions: **CCSchema** §7, **CodexSchema** §6, **CursorSchema** §5. Rows with **`path=(global)`** are unscoped Cursor central-DB scan aggregates, emitted at most once in a multi-root run and never registered as Projects. Project metrics and ingest use only global composers whose header workspace maps to that Project.
+**Output columns:** `path,vendor,sess,mb,span_weeks` (with `dir_path` when `--debug`). With **`--registry`**, append **`reg_path`**, **`reg_updated`**, **`reg_sources`** — **§4.1** table. Metric definitions: **CCSchema** §7, **CodexSchema** §6, **CursorSchema** §5. Rows with **`path=(global)`** are unscoped Cursor central-DB scan aggregates, emitted at most once in a multi-root run and never registered as Projects. Project metrics and ingest use only global composers whose header workspace maps to that Project.
 
-### 5.2 `codess ingest`
+### 4.2 `codess ingest`
 
 | Flag | ENV | Default | Explanation |
 |------|-----|---------|-------------|
-| `--dirs` / `--dir` | — | **`get_project_root()`** | Same merge as scan (§4.2); empty list → git root or cwd. |
+| `--dirs` / `--dir` | — | **`get_project_root()`** | Same merge as scan (§3.2); empty list → git root or cwd. |
 | `--source` | — | **`all`** | `cc` \| `codex` \| `cursor` \| `all`. |
 | `--min-size BYTES` | `CODESS_MIN_SIZE` | **`20480`** | Skip sources smaller than N bytes. |
 | `--force` | `CODESS_FORCE` | **`FORCE`** from ENV if flag omitted | **`args.force or FORCE`**; argparse **`default=False`**. Ignores **`ingest_state.json`** mtime skips when true. |
 | `--redact` | `CODESS_REDACT` | off | **`args.redact or INGEST_REDACT`**; patterns in **`config.REDACT_PATTERNS`**. |
-| `--debug` | `CODESS_DEBUG` | **`DEBUG`** from ENV | **`args.debug or DEBUG`** — see **§4.3**. |
+| `--debug` | `CODESS_DEBUG` | **`DEBUG`** from ENV | **`args.debug or DEBUG`** — see **§3.3**. |
 | `--registry PATH` | `CODESS_REGISTRY` | **`~/.codess`** | Central registry dir (`ingested_projects.json`). **`PATH`** overrides default. |
 
-### 5.3 `codess query`
+### 4.3 `codess query`
 
 | Flag | ENV | Default | Explanation |
 |------|-----|---------|-------------|
-| `--dirs` / `--dir` | — | **`get_project_root()`** | Same merge as §4.2; empty → git root or cwd. |
+| `--dirs` / `--dir` | — | **`get_project_root()`** | Same merge as §3.2; empty → git root or cwd. |
 | *(multiple roots)* | — | aggregated | Sessions are globally ordered across selected projects. Roots without stores warn and contribute zero; all roots without stores exit 1. |
 | *(multiple vendor DBs)* | — | aggregated | Every existing legacy or per-vendor store returned by `get_project_stores` participates in one logical report. |
+| `--source SPEC` | — | all | Query-side vendor scope: `cc`, `codex`, `cursor`, comma-separated union, or `all`. Applied inside stores to every data-bearing report; invalid tokens fail globally. |
 | `--limit N` | — | unlimited | Globally limit rows after deterministic cross-project/vendor ordering for `--sessions`, `--permissions`, `--lineage`, and `--audit`. `0` emits no rows; negative values fail before stores are opened. |
+| `--session-id ID` | — | — | Show a session by stable global ID or an unambiguous vendor session ID; preferable to recency ordinal in composed workflows. |
+| `--output-format table\|jsonl\|csv` | — | table | Sessions/stats have versioned JSONL and spreadsheet-safe CSV; redirect CSV stdout to a file. Other reports currently require table output. |
 
 **Modes:** **`--stats`**, **`--sessions`**, **`--tool`**, **`-sess`**,
-**`--show`**, **`--permissions`**, **`--task-review`**, **`--lineage`**,
-**`--audit`**, and **`--taxonomy`**. Session numbers form one global recency order with
+**`--session-id`**,
+**`--permissions`**, **`--task-review`**, **`--lineage`**, **`--audit`**,
+**`--diagnostics`**, **`--artifacts`**, and **`--taxonomy`**. Exactly one report
+mode is accepted; **`--show`** modifies `-sess` or `--session-id`. Session
+numbers form one global recency order with
 deterministic project/source/id tie-breakers; duplicate original IDs remain
 distinct internally. Session rows include release and concise
 origin/storage/parent details. **`--lineage`** joins Claude tool-use ids and
 Codex call ids to results, and reports missing, orphaned, unlinked, or denied
-outcomes. **`--stats`** prints aggregate totals and merges each project's own
-counts into **`ingested_projects.json`**. **`--audit`** reports only the
+outcomes. **`--stats`** prints aggregate totals. Current all-source stats merge
+each Project's complete counts into **`ingested_projects.json`**;
+vendor-filtered or historical stats do not overwrite that registry summary.
+**`--audit`** reports only the
 evidence-backed contract in **CoSchema.md**; unsupported vendor/state pairs are
 not inferred. Omitting all mode flags exits 1.
 
-### 5.4 `--dirs` File Format
+### 4.4 `--dirs` File Format
 
-- **`--dirs` file:** plain path lines (where **`#`** starts a comment) or a candidate CSV with **`directory_path`**; if **`--dirs`** is passed, it must contain ≥1 usable root — **§4.2**.
+- **`--dirs` file:** plain path lines (where **`#`** starts a comment) or a candidate CSV with **`directory_path`**; if **`--dirs`** is passed, it must contain ≥1 usable root — **§3.2**.
 - Paths are validated directories and act as exact project roots or scan path filters; they are not recursively expanded.
 - Explicit candidate Git discovery is the exception: it is depth-bounded and
   prunes a branch immediately after finding its first repository. Index-led
   vendor observations below a repository map to the nearest enclosing Git root.
 
-### 5.5 Filter Wiring
+### 4.5 Filter Wiring
 
 Vendor-specific **meaning** of timestamps, sidechains, and sizes lives in **\*Schema.md** — this file only ties **which knob** hits **which code**.
 
@@ -431,7 +374,7 @@ Vendor-specific **meaning** of timestamps, sidechains, and sizes lives in **\*Sc
 - **CC sidechains:** `scan.py` with **`--subagent`** / **`CODESS_SUBAGENT`**; detail in **CCSchema**.
 - **Min source size:** ingest with **`--min-size`** / **`CODESS_MIN_SIZE`**; bytes on **source** files before parse.
 
-### 5.6 Operational quick check
+### 4.6 Operational quick check
 
 `python -m main scan --dir . --out -`
 
@@ -442,9 +385,9 @@ summarizes **`malformed`**, **`invalid_keys`**, **`failed_sources`**, and
 **`empty_sources`**, and **`failed_sources`**; the first three are nonfatal.
 **`--stop`** or **`CODESS_STOP`** makes source failures fail fast.
 
-Further CLI semantics → **Improvement Backlog**.
+Incomplete CLI semantics and their dispositions are registered in §8.
 
-### 5.7 Administrative command surface
+### 4.7 Administrative command surface
 
 These implemented families preserve `scan`, `ingest`, and `query`. Focused
 commands and orchestrators call the same domain operations:
@@ -484,9 +427,9 @@ and code boundaries are in **Designs.md §12**.
 
 ---
 
-## 6. Feature → Implementation Map
+## 5. Feature → Implementation Map
 
-**Purpose:** Index of **where** features live in code (not a second copy of **§3**).
+**Purpose:** Index of **where** features live in code (not a second copy of **§2**).
 
 | Feature | Primary modules | Notes |
 |---------|-----------------|--------|
@@ -502,13 +445,41 @@ and code boundaries are in **Designs.md §12**.
 | Redaction | `sanitize`, adapter opts | regex list in **config** |
 | Central registry JSON | **`registry_store`**, **`ingest_cmd._save_stats`**, **`scan_cmd`**, **`query_cmd._stats`**, **`config.get_stats_path`**, **`project.resolve_registry_directory`** | **`ingested_projects.json`** is a **merged** project registry: **scan** (index metrics), **ingest** (store **`sources`**), and **query `--stats`** (counts). **`--registry PATH`** overrides **`CODESS_REGISTRY`**; **no** bare **`--registry`**. |
 
+### Investigation capability implementation
+
+The user-facing capability IDs are defined in **README.md**. Their code and
+data owners are kept here so user workflows do not expose internal module
+names.
+
+| Use cases | Main implementation and contracts |
+|-----------|-----------------------------------|
+| **UC1** | `project.resolve_cli_roots`, `config.get_project_stores`, `snapshot.snapshot_store_paths`, `query_cmd._get_sessions_ordered` |
+| **UC2** | `query_cmd._parse_source_tokens`, `_source_predicate`, `sessions.source_system_id` |
+| **UC3** | `query_cmd._project_counts`, `_tool_table`, `_artifacts`, `storage_report`, `token_usage` |
+| **UC4** | `query_cmd._session_by_identifier`, `_show_session`, canonical `events.sequence_no` ordering |
+| **UC5–UC6** | CoSchema `events`, `interactions`, `model_turns`, typed tool/artifact tables, source locators, and `schema/coschema/sqlite/schema.sql` |
+| **UC7** | `query_cmd` lineage/audit/permission/task/tool reports and normalized status tables |
+| **UC8** | `query_cmd._artifacts`, `artifact_correlation`, `correlation_assertions`, `event_artifacts` |
+| **UC9** | `query_cmd._jsonl_output`, `_csv_output`, `schema/query-row-v1.json`, `sanitize.protect_csv_row` |
+| **UC10** | `raw_store`, snapshot raw manifests, `sources`, and `source_records` |
+
+### Content processing implementation
+
+`codess.content_processing` implements byte decoding, pre-normalization, and
+post-normalization hooks from the functional contract in
+**Designs.md §10**. Claude, Codex, and Cursor message/result adapters call
+the shared pre/post path; Claude external sidecars also use the byte decoder.
+Keep action traces connected to mapping diagnostics and `processing_runs`.
+Built-in adapter bounds remain the final layer after global and matching scoped
+policy rules.
+
 ---
 
-## 7. Coding Techniques
+## 6. Coding Techniques
 
 **Audience:** People changing **`adapters/*`**, **`store.py`**, or **`cli/*_cmd.py`**.
 
-Start from the **call graph in §3.1**: ingest normalizes and replaces one source
+Start from the **call graph in §2.1**: ingest normalizes and replaces one source
 transactionally; query reads **`store`** only.
 
 - **Transaction boundary:** adapters yield normalized records; ingest buffers one
@@ -525,18 +496,17 @@ transactionally; query reads **`store`** only.
 - **CSV output:** **`helpers.write_csv`** for paths; **`scan_cmd`** writes stdout with **`csv.writer`** when **`--out -`** because stdout is not a path.
 - **DDL:** only **`schema/coschema/sqlite/schema.sql`** via **`store.init_db()`** so schema is not duplicated in Python.
 
-**Refactor candidates:** **`_ingest_codex`** and **`_ingest_cc`** share
-**stat → should_ingest → normalize → replace → commit → state** and could share
-one internal helper. Scan CSV row building remains duplicated for path/stdout.
+The remaining ingest/wrapper consolidation is registered as **A11** rather than
+maintained as an informal refactor list here.
 
 ---
 
-## 8. Tests
+## 7. Tests
 
-This section sits **after** coding practices (**§7**) because tests validate
+This section sits **after** coding practices (**§6**) because tests validate
 the implementation described above. Add backlog rows only for a specific
-uncovered contract or reproduced defect; generic calls for “more tests” are not
-work items.
+uncovered contract or reproduced defect; generic calls for “more tests” do not
+qualify for a central registry row.
 
 **Goals:** Regressions in CLI, metric math, adapters, and store — without relying on a real **`~/.claude`** tree.
 
@@ -564,303 +534,231 @@ work items.
 
 ---
 
-## 9. Delivery Sequence
+## 8. Central work registry
 
-Order work by risk and dependency.
+This is the sole registry for active work, known gaps, open decisions,
+event-triggered maintenance, and postponed topics. Other documents own product
+requirements, design rationale, vendor facts, procedures, and evidence; they
+link here instead of maintaining another queue.
 
-| Order | Outcome | Main work |
-|---|---|---|
-| **1. CoSchema v3 foundation — complete** | Versioned contract, global/observation identity, project catalog/bindings, typed content lineage, raw capture, durable snapshots, diagnostics, and mixed queries | Maintain package hashes, fixtures, and compatibility-gate tests |
-| **2. Automated baseline gate — complete** | Per-project policies make package, raw, SQLite, mapping, fixed-point, and query acceptance repeatable | Maintain `tools/validate_snapshot.py`, `tools/apply_and_verify.py`, and `catalog/policies/` |
-| **3. Compatibility corpus — complete with recorded gaps** | The bounded Claude/Codex/Cursor corpus proves represented mappings and distinguishes real from fixture-only evidence | Maintain `CompatibilityReview.md` and add candidates only for demonstrated gaps |
-| **4. Reviewed v2 baseline — complete** | The sampled corpus is frozen by package, snapshot, semantic digest, policy, and raw-evidence state | Run `tools/verify_reviewed_baselines.py`; replace the set rather than editing it in place |
-| **5. Compatibility maintenance** | Vendor drift is detected early | Refresh the smallest real-shape fixture when an upstream format changes; rebuild rather than mutate derived data |
-| **6. Operational maintenance** | Preflight, bounded ingest, and evidence inventory catch drift before accepted rebuilds | Maintain implemented checks; expand machine output only for a consumer and restart enterprise scanning only on its §11.2 trigger |
-| **7. Storage and usage observations — on demand** | Dated size/utilization/skew/token observations and validated latest-only retention bound local growth | Maintain `storage report`/`storage prune`; validate provisional Codex token attribution. Periodic scheduling is postponed. |
+### 8.1 Execution rules
 
-Keep **`schema/coschema/sqlite/schema.sql`** aligned with **CoSchema.md** whenever normalized event shapes change.
+- Work active items in dependency order unless a production defect or source
+  format change takes priority.
+- Land each feature vertically: request/contract, data operation, renderer or
+  interface, compatibility path, unit/scale tests, real-store smoke test, and
+  the affected README capability row.
+- A vendor fact or research idea becomes work only when it receives a registry
+  ID here.
+- Rebuild derived stores and replace accepted baselines rather than mutating
+  them in place.
 
----
+#### 8.1.1 Current review checkpoint
 
-## 10. Implementation Gaps
+The implementation is deliberately stopped before real-store rollout. The
+existing format-3 snapshots and approved-baseline pointers have not been
+replaced. The format-4 package is a **candidate**, not an accepted release,
+until R1 and the two parts of R3 are confirmed. R2 is decided.
 
-Vendor-specific **known holes** are documented in schema files, not duplicated here.
+Directions already established and not reopened by this checkpoint:
 
-- **CC slug / path ambiguity** — **CCSchema.md** §8–§9.
-- **Cursor event and scan time range** — **CursorSchema.md** §3, §5, and §7.
+- preserve useful vendor- and release-specific evidence even before it has a
+  common field;
+- expose normalized common names for mixed-vendor queries while retaining exact
+  source names, values, locators, and mapping evidence;
+- support documented and automated source-to-common and common-to-external
+  mappings as separate directions; and
+- retain dated, versioned snapshots and detect changed sources rather than
+  migrating accepted derived stores in place.
 
----
+| Review ID | Small decision still required | Current recommendation | Work held until decision |
+|---|---|---|---|
+| **R1** | Accept CoSchema format 4 now, or defer the complete contract/JSON correction | Accept format 4: it makes already-used functional tables/fields and JSON obligations truthful and machine-verifiable; keep formats 2/3 read-only | Release designation, real-store rebuild, baseline replacement |
+| **R2 — decided** | Routine source-update fingerprint | Use fast, non-authenticating MD5: full-file through 64 MiB and labeled bounded sampling above it, including SQLite WAL state. This is only a change detector. Captured raw objects retain complete SHA-256 because it is their content address and integrity check, not the routine fingerprint. | Measure scale/detection behavior; no further policy approval required |
+| **R3a** | Authoritative occurrence provenance | Recommend per-event JSON provenance containing source record/locator/field path and exact source value or designation. Keep reusable model-configuration columns limited to normalized configuration values. Do not rely on one representative `source_config` as occurrence history. | Decide whether `source_config` is removed, retained only as a non-authoritative example, or narrowed to configuration-level notes |
+| **R3b** | Materialized model-configuration observation table | Recommend postponing it. Add one only when direct queries need every configuration-field occurrence without JSON extraction. If approved now, it adds a row per observed field/occurrence plus event/source links and becomes part of the format-4 contract. | Final format-4 table set and query design |
 
-## 11. Improvement Backlog
+R3a and R3b solve different problems. Provenance answers “which exact source
+field justified this value on this event?” and is required even without a new
+table. An observation table answers “show and aggregate every occurrence of a
+configuration field efficiently.” The alternatives are:
 
-**Completed foundation:** CoSchema 3 now stores stable Project/location/workspace
-bindings, global and observation identities, source records, content objects and
-links, and processing derivations. Production snapshots live under the stable
-central Project catalog. The retirement/relocation tool requires captured raw
-evidence and verifies replacement access. SWEmore, spank-py, and Zero400 were
-rebuilt twice and the reviewed/approved catalogs were atomically replaced;
-zerowalletmac and Spank/Logs were also rebuilt as captured durable baselines.
-`Spank/Logs/spLogs` is explicitly skipped.
+- **Per-event JSON only (recommended now):** exact and naturally attached to
+  the event; no additional joins or row multiplication. Queries use
+  `json_extract` and repeated provenance is less compact.
+- **Observation table now:** strongest relational querying and indexing, with
+  explicit event/source/configuration foreign keys. It materially increases
+  row counts, schema surface, ingestion work, and rules for deduplication and
+  partial observations.
+- **Representative `source_config` only:** compact but ambiguous when the same
+  normalized configuration came from several releases or field paths. This is
+  not sufficient as authoritative provenance and is not recommended.
+- **Hybrid later:** keep authoritative event JSON now, then build a rebuildable
+  observation projection if real queries justify it. This preserves evidence
+  without committing the central schema prematurely.
 
-**Current execution status and order:**
+Until R1 and R3a/R3b are resolved, changes may receive tests and documentation fixes but
+must not promote a format-4 baseline, alter approved pointers, or claim a new
+Codess release.
 
-1. **Next:** replace whole-file exact raw capture with chunked
-   hashing/compression and bounded SQLite-backup streaming. Normal Cursor
-   scan/query/ingest already use indexed workspace, composer, and bubble
-   selection; the full backup is required only by explicit exact
-   `capture`/`seal`.
-2. **Complete:** working archives are a separately reported, opt-in retention
-   class. A validated July 17 apply removed five obsolete trees and retained a
-   receipt; vendor evidence was untouched.
-3. **Complete:** filesystem logical, allocated, unique-allocated, tree, and
-   file accounting is shared in `codess.resources`; retention owns selection
-   and deletion while `storage_report` remains read-only.
-4. **Prototype complete; validation continues:** `storage token-validate`
-   reports Codex counter resets, repetition, timestamp order, model changes, and
-   cross-file shared counter points. Current evidence is not billing-ready.
-5. **Now:** specify the common query catalogue, scope/plan/result contracts,
-   saved-query automation, and bounded content-search path in `Designs.md`.
-6. **Postponed by decision:** proactive baseline-maintenance work beyond the
-   existing regression gate; routine periodic storage-report automation; and
-   vendor-mapping audits. Existing safety checks remain in force. Restart only
-   for a package/source-format change, unexplained storage growth, or observed
-   unmapped vendor evidence respectively.
-7. **Evidence-triggered:** update catalog locations or add corpus members only
-   for an actual move, compatibility gap, or cross-vendor correlation need.
+The format-4 package and reviewed corpus are current. SWEmore, spank-py, and
+Zero400 passed policy, query-smoke, integrity, foreign-key, and repeat-ingest
+fixed-point checks; approved and reviewed catalogs were frozen to those
+snapshots. The retained raw set uses one shared Cursor cohort for Zero400,
+zerowalletmac, and Spank/Logs. Superseded format-3/intermediate snapshots,
+obsolete Cursor captures, and temporary working archives were pruned through a
+validated retention receipt. Future schema changes return to the same
+compare/rebuild/freeze sequence rather than mutating these stores.
 
-Operational ingest preflight is implemented and machine-readable query output
-is prototyped. The broader enterprise PII scanner in §11.2 remains postponed.
+ZeroPerf is the `perf-401` linked Git worktree of Zero400's repository, whose
+current primary worktree is on `testfix-401`; it is not an unrelated repository.
+It remains a separate CodeSess Project/session scope for now, while candidate
+Git observations record the shared common Git directory so repository-level
+queries and future correlation can group them explicitly.
 
-For each item: settle any product contract, change code and schema docs together,
-then add representative tests in the same change set.
+### 8.2 Active work
 
-Work items stay grouped by theme below. **Codess.md §4.0** requires **all** tickets to live here or in **§8** / **§14** / **§15** as specified there.
+| Order | ID | Work item | Completion evidence |
+|------:|----|-----------|---------------------|
+| 1 | **A1** | Typed selection kernel and `codess.query-request/1`: Project/catalog/vendor/session/time/event/tool/status/model/artifact scope; current and explicit historical snapshot resolution; reject ignored predicates | Cross-store tests prove identical scope across renderers and no out-of-scope rows |
+| 2 | **A2** | Orientation and utilization overview: sessions, Interactions, turns, events, content volume, tools, artifacts, models, elapsed span, active days/time estimate, and time buckets | Golden reports cover empty, tiny, multi-vendor, long-idle, many-small-session, and one-huge-session stores |
+| 3 | **A3** | Event and Interaction drill-down: typed event rows, stable event lookup, complete Interaction/Model Turn, sequence windows, source locators, and completeness | Known Claude, Codex, and Cursor exchanges reconstruct in canonical order |
+| 4 | **A4** | Bounded search by Project/vendor/time/type with completeness warnings and product-state facets; benchmark a rebuildable FTS5 derivative only afterward | Known hits, truncated false-negative warnings, repeated-state noise tests, and bounded resource evidence |
+| 5 | **A5** | Complete failure/resource validation for exact raw capture and bounded fingerprints. Transactional standalone SQLite backup, metadata-only cohort cache, all-Project marker preflight, direct fresh-backup queries, staged level-3 zstd, content-addressed reuse across valid encodings, bounded restore/verification, no-op snapshot suppression, atomic promotion, and retention apply are implemented | Add measured fresh-capture peak RSS, injected partial-failure/no-promotion cases, and documented large-source sampling false-negative bounds; measure cache restoration for a newly selected Project |
+| 6 | **A6** | Exact evidence resolver from event to source record to verified live, captured, or sealed evidence | The same record resolves from live and captured evidence; changed or unavailable sources are explicit |
+| 7 | **A7** | Reusable results and automation: `codess.query-result/1`, saved selections, result-set input, hashes, prior-result comparison, stable exit codes, and derivation records | A multi-step investigation replays against the same snapshots and cites every evidence row |
+| 8 | **A8** | Guided investigation and optional question-to-typed-request formulation | Project → overview → search → Interaction → exact evidence → cited summary works without handwritten SQL |
+| 9 | **A9** | Performance and ecosystem: predicate/limit pushdown, heap merge, profiling, justified read-only views, and Datasette/notebook/DuckDB recipes | Scale fixtures bound rows, bytes, and RSS; external recipes remain read-only |
+| parallel | **A10** | Resolve Codex token counter reset/model/fork/interleave attribution, or formally limit it to non-billing evidence | The diagnostic either proves a stable attribution rule or records a permanent confidence boundary |
+| maintenance | **A11** | Consolidate duplicated Claude/Codex ingest control flow and review remaining compatibility aliases/wrappers, including `retire_project.py` | Shared control flow has one tested owner; retained wrappers are thin, documented, and have an explicit keep/remove decision |
 
-### 11.0 CoSchema v3 corpus review — complete with known gaps
+### 8.3 Known gaps
 
-The automated gate, semantic sampling, coverage matrix, hazard/golden fixtures,
-home-independent three-vendor CI policy, retained-snapshot read boundary, and
-frozen reviewed set are implemented. See `CompatibilityReview.md` and
-`catalog/reviewed-baselines.json`. Review corrected Claude failure/denial tool
-actors and statuses, removed Cursor whitespace-only non-message envelopes,
-deduplicated stable Cursor server-bubble identities within each composer, and
-separated external file URIs from project-relative artifacts. All three
-projects were rebuilt and accepted at a semantic fixed point afterward.
+The IDs below are stable references for README use cases, vendor evidence, and
+tests. A gap is not automatically active work; the **Disposition** column names
+its active item or trigger.
 
-Remaining evidence gaps are deliberately narrow: real lifecycle-abort source
-records, explicit effort/speed/service settings, and a direct Codex parent
-identifier. Real Claude/Cursor shared artifacts, missing-time records, and a
-Claude compaction are now available. The remaining gaps do not justify broad
-project discovery; add a candidate or mapping only when one of those source
-shapes is observed.
+| ID | Known gap | Disposition |
+|----|-----------|-------------|
+| **L-S1** | No catalog-wide current selector by Project ID, topic, ownership, or curation state | **A1** |
+| **L-S2** | No common CLI selection by date/model/event/Interaction/turn/status/artifact or stable event ID | **A1–A3** |
+| **L-S3** | No historical union or semantic snapshot-diff operation | Decide under **D9**, then **A1/A7** |
+| **L-O1** | Structured JSONL/CSV covers sessions and stats only | **A2–A4**, then **A7** |
+| **L-O2** | Aggregate reports often omit constituent stable session/event identities | **A2–A3** |
+| **L-O3** | Results cannot be consumed directly as a saved or chained selection | **A7** |
+| **L-M1** | Orientation is limited to shallow session/event totals | **A2** |
+| **L-M2** | Elapsed span exists, but active-time semantics and gap sensitivity are unsettled | Decide under **D3**, implement in **A2** |
+| **L-M3** | Utilization differs by vendor: Codex attribution is provisional, Cursor lacks verified local tokens, and quota/price facts are dated external evidence | **A10**; do not infer tokens from text |
+| **L-C1** | No first-class bounded search, ranking, topic classification, or saved search | **A4**, **A7** |
+| **L-C2** | Normalized content may be sanitized, filtered, redacted, or truncated; a miss does not prove raw absence | Preserve completeness in **A3–A6** |
+| **L-C3** | No command resolves one normalized event to its exact available source record | **A5–A6** |
+| **L-P1** | Interaction, Model Turn, phase, and cross-vendor correlation confidence varies; shared evidence is not authorship | Preserve method/confidence in **A2–A8** |
+| **L-P2** | Repeated Cursor title/mode/permission/reminder state can dominate naïve text search | **A4** facets and defaults |
+| **L-E1** | Cross-store reports materialize and sort selected sessions in Python | **A9** |
+| **L-E2** | Repeated substring search has no rebuildable policy-aware index | Benchmark after **A4**; decide under **D4** |
+| **L-E3** | Cursor selection and SQLite writes are composer-streamed, but ordering/deduplication and Interaction construction still buffer one complete composer; a real 19,661-event composer reached about 531 MiB RSS | **A9**: profile allocation owners, then make event grouping/stateful writes incremental without weakening rollback or canonical ordering |
+| **L-E4** | First capture of a changed 4.78 GB Cursor DB still requires one transactional backup and streaming compression; a newly selected Project may require one verified streaming restore of an unchanged cached cohort | **A5/A9**: measure fresh-capture and cache-restore I/O/RSS; keep the unchanged all-Project path at bounded marker cost only |
+| **V-CC1** | Claude slug decoding is lossy when the index lacks an explicit Project path | Prefer indexed paths; reopen mapping only with new evidence |
+| **V-CC2** | Claude model/service settings, custom/AI titles, agent names, direct fork references, and bounded product state are mapped; richer runtime-context snapshots remain only partially specialized | Validate under **A12**; other context remains evidence-triggered |
+| **V-CTX1** | Runtime context such as memory, skills/tool schemas, reasoning/turn context, and detailed token snapshots is not represented as a first-class common model | Evidence- and use-case-triggered; define semantics before adding entities |
+| **V-CX1** | Codex supplies no direct referential parent-session identifier | Unsupported until **T4** |
+| **V-CU1** | Cursor composers without usable workspace/header mapping remain unattributed | Evidence-triggered mapping maintenance under **T1** |
+| **V-CU2** | Cursor scan time range is incomplete when headers lack usable timestamps | Preserve coverage diagnostics; do not decode all bubbles merely for dates |
+| **V-CU3** | Cursor exposes exact `modelInfo.modelName` and accepted/rejected `toolFormerData.userDecision`, but no separate observed effort, speed, or service-tier fields | Validate model/permission provenance under **A12**; retain absent settings as NULL |
+| **E-1** | Lifecycle abort is fixture-only in the reviewed corpus | Add a real shape only under **T4** |
+| **E-2** | Settings are uneven: Codex records model/effort and newer service tier; Claude records model/service tier; Cursor records model only; no distinct speed-tier evidence was observed | **A12**; preserve exact values and field provenance, never derive speed from a model label |
 
-Next maintenance actions:
+### 8.4 Decision register
 
-1. Keep longest-root artifact assertions evidence-only; never change the
-   session Project or infer authorship.
-2. Re-run the Codex metadata audit after an upstream storage change, not on
-   ordinary rebuilds.
-3. Re-run `audit_cursor_features.py` when Cursor storage changes. Map populated
-   `toolFormerData`; do not treat empty `toolResults` arrays as outcomes.
-4. Keep effort/speed/service and lifecycle-abort additions evidence-triggered;
-   maintain shared-artifact evidence through the structure-only inventory.
+Resolve a decision immediately before its first consuming work item; do not
+block unrelated work.
 
-### 11.1 Codex parent-session evidence — audited; unsupported
+**State:** D4 and D10 are adopted directions; D11's normalized identity is
+adopted while occurrence representation remains at R3a/R3b. D7 has an approved iterative
+shape but each method still needs evaluation; D1, D2, D3, D5, D6, and D9 are
+expanded recommendations awaiting acceptance; D8 remains the only unframed
+open choice.
 
-`catalog/codex-parent-audit.json` records the completed metadata-only audit: 28
-active/archive transcripts, 16 releases, zero candidate fields, and zero
-resolvable references. The audit excluded prompt, reasoning, message, and tool
-bodies. Its reusable procedure is:
+| ID | Decision | Needed by | Recommended direction |
+|----|----------|-----------|-----------------------|
+| **D1** | Query interface shape | **A1–A4** | **Recommend subcommands.** Use `query sessions|overview|events|search|show` because they have different result contracts and required arguments; keep Project/vendor/session/time and output flags shared. One typed request remains the implementation kernel. Existing flat report flags become documented compatibility aliases, then deprecate only after command parity. This reduces invalid flag combinations and makes help/completion usable without fragmenting query semantics. |
+| **D2** | Inline and saved selection representation | **A1**, **A7** | **Recommend both over one schema.** Inline requests are the inspectable/default form. A saved selection stores the canonical request, snapshot IDs, policy/package hash, and optionally materialized stable IDs; its content hash names it. Predicates support refresh, explicit IDs support exact replay, and a saved result must state which form it contains. |
+| **D3** | Derived active-time sensitivity | **A2** | **Recommend a sensitivity report, not one duration.** Always report observed elapsed span and event-bearing intervals; estimate active time with declared default gap caps of 5, 30, and 120 minutes plus configurable caps. Include the gap histogram and never call an estimate observed, billable, or charged time. |
+| **D4** | Full-source search derivative | postponed | Normalized, bounded search remains **A4**. Any full-source index remains postponed indefinitely until an explicit privacy, encryption, retention, deletion, and access design is approved; raw capture alone does not authorize indexing. |
+| **D5** | Exact evidence resolution precedence | **A6** | **Recommend evidence equality before location preference.** Resolve a hash-matching sealed/captured object first; accept live evidence only after its revision/hash matches; allow an explicitly selected immutable snapshot next. Report changed live files as mismatching candidates and unavailable sources as unavailable—never silently fall through to a different revision. |
+| **D6** | Stable SQL views and query package boundary | **A9** | **Recommend typed application queries as owner.** Add a vendor-neutral read-only SQL view only after two independent consumers repeat the same stable row contract and compatibility tests cover it. Keep exploratory SQL in documented recipes. A standalone versioned `queries.sql` package remains **P7**, not a prerequisite for ordinary reports. |
+| **D7** | Topic/phase derivation methods and composition | **A8** | **Use multiple, composed methods iteratively:** (1) deterministic lexical rules and explicit vendor events; (2) phase heuristics over ordered windows; (3) optional versioned embeddings for recall; (4) optional LLM labels only on bounded candidates; (5) an ensemble assertion that cites its inputs. Preserve every method/version/evidence/confidence separately rather than overwriting one label. Promote each stage only after a labelled evaluation set shows added value. |
+| **D8** | What result provenance is mandatory? | **A1**, **A7** | Require package/query hashes, snapshot IDs, policy, source availability, truncation, and processor identity |
+| **D9** | Historical snapshot semantics | **A1**, **A7** | **Recommend one immutable snapshot by default.** Historical reads require an explicit snapshot selector. Diff compares stable entity IDs, source revisions, and content/semantic hashes; union is a separate explicit operation retaining observation identity and duplicate diagnostics. Never combine “latest” rows from different snapshots implicitly. |
+| **D10** | Saved-result validity across Project moves | **A7** | Treat relocation separately from extraction correctness. Bind result identity and comparison to stable Project/session/event IDs plus snapshot/query hashes; retain the observed filesystem path as time-specific provenance. A move updates location bindings, not prior evidence, and must not excuse inaccurate or inconsistent extraction. |
+| **D11** | Model-configuration identity and provenance | **A2–A3**, **A12**, **R3a/R3b** | Keep provider, family, exact name, revision, effort, speed, service tier, and mode nullable and independently queryable. Use their normalized tuple as null-safe configuration identity; do not infer one setting from another. Preserve exact source values and field paths per event. R3a/R3b decide whether `source_config` remains and whether occurrences receive a relational projection. |
 
-1. Read only `session_meta` keys from a bounded sample spanning active and
-   archived roots and at least two CLI releases; record field frequencies, not
-   prompt/reasoning bodies.
-2. List candidate direct fields such as `parent_session_id`, `parent_id`, or an
-   explicit thread/fork reference. Timestamps, cwd, filenames, and content
-   similarity are not candidates.
-3. For each candidate, verify that child values resolve to an actual session id
-   and remain stable when the same session appears in active and archived roots.
-4. Add minimal parent/child and orphan fixtures from each supported shape.
-5. Only then retain `parent_session_id` in bounded session metadata, display it
-   through existing session details, and test active/archive deduplication plus
-   missing-parent behavior.
+### 8.5 Event-triggered maintenance
 
-**Exit rule:** if no direct referential identifier appears across the sample,
-document Codex parentage as unsupported and stop. Reopen only when an upstream
-record supplies such an identifier.
+| ID | Trigger | Required response |
+|----|---------|-------------------|
+| **T1** | Vendor storage or source-format change, or observed unmapped evidence | Update the vendor fact document and smallest representative fixture; run the bounded vendor audit and compatibility gate |
+| **T2** | Package/schema/mapping change or accepted source refresh | Run preflight, fixed-point rebuild, semantic sampling, query smoke tests, and atomic baseline replacement |
+| **T3** | Material ingest/rebuild or unexplained storage growth | Run storage observation and dry-run prune; apply only a reviewed selection with a receipt |
+| **T4** | Direct Codex parent ID, distinct speed tier, a new lifecycle shape, or another recorded evidence gap appears | Add the minimal source shape, mapping, fixture, and compatibility assertion; update the gap disposition |
+| **T5** | Project move, replacement checkout, or demonstrated cross-vendor correlation need | Update stable location/source bindings; add a corpus member only when the existing corpus cannot answer the compatibility question |
+| **T6** | Every implementation change | Keep the full suite and representative candidate, onboarding, evidence, baseline, relocation, and real-store smoke workflows green |
 
-### 11.2 Prototypes and postponed work
+### 8.6 Postponed topics
 
-| Item | Status | Restart trigger | Contract if restarted |
-|------|--------|-----------------|-----------------------|
-| **`ingest --validate` preflight** | Implemented | Maintain strict no-mutation tests | Real adapters and temporary CoSchema stores report counts, diagnostics, resources, integrity, and foreign keys; raw/snapshot/fixed-point checks remain in the acceptance gate. |
-| **Machine-readable query rows** | Prototype | Expand after consumers confirm row requirements | `codess.query-row/1` supports sessions/stats with an independent JSON Schema; preserve the tabular default. |
-| **Resource bounds and telemetry** | Implemented | Stage incrementally if a real source approaches event limits or retained-buffer memory is excessive | Enforce source/session event limits while collecting, record bytes/events/peak RSS, explicitly release completed source buffers, and emit content-free review evidence for size/type/charset failures before treating them as malformed content or merely raising a limit. |
-| **Streaming raw capture** | Planned; highest implementation priority | Current Cursor capture materializes a SQLite backup and compressed object in memory | Stream source/backup chunks through content hashing and zstd into an atomic temporary object; bound memory independently of source size and clean partial output on failure. |
-| **Evidence inventory** | Implemented | Refresh during vendor-storage maintenance or corpus review | Search current catalog stores and local structural metadata; retain aggregate/identity evidence, not conversation bodies. |
-| **Storage observations** | Implemented; periodic automation postponed | Run manually after material ingest/baseline changes or unexplained growth | Versioned dated reports cover SQLite allocation, content/session skew, Cursor size, snapshot/raw retention, warnings, and deltas. |
-| **Monthly token observations** | Implemented; Codex diagnostic prototype added | Resolve counter-reset/model-change attribution before cost/forecast reporting | Claude usage is deduplicated/local-observed; Codex positive deltas remain provisional and `storage token-validate` exposes ambiguity; Cursor remains unavailable until verified token evidence exists. |
-| **Retention prune/GC** | Implemented for central snapshots/raw and explicit working-archive sweeps | Run a dry-run after material baseline rebuilds; apply only a reviewed selection | Keeps one central current snapshot per Project and its raw references; validates catalogs/local pointers, re-plans on apply, and emits a receipt. `--working-archives` is separately reported and requires a current central replacement; vendor stores remain excluded. |
-| **Enterprise PII/secret scanner** | Postponed | A deployment threat model shows configured regex redaction is insufficient | Choose scanner, false-positive policy, and storage/output boundaries before adding a dependency. |
+These are intentionally outside the active product sequence. The first table
+can be composed today from Codess commands and external/system tooling; native
+implementation is justified only when orchestration, portability, provenance,
+or atomic failure semantics become product requirements.
 
-### 11.3 Platform
+#### 8.6.1 Externally orchestratable
 
-| Choice | Decision |
-|--------|----------|
-| Store | SQLite |
-| Working location | `<project>/.codess/`; disposable databases, pointer, validation report, and project/source bindings |
-| Durable location | `~/.codess/projects/<stable-project-id>/`; immutable retained snapshots and current pointer |
-| Raw source objects | `~/.codess/raw/codess.raw-1/`; retirement requires every revision captured |
-| Project catalog | `~/.codess/projects.json`; stable IDs, location states/aliases, and workspace bindings |
-| Storage observations | `~/.codess/observations/storage/<timestamp>.json`; derived, rebuildable trend records |
+| ID | Topic | Restart condition |
+|----|-------|-------------------|
+| **P1** | Enterprise PII/secret scanning beyond configured regex policy | External scanners can gate source/raw promotion now. Add native policy integration only when a deployment threat model requires uniform findings, suppression, and provenance. |
+| **P2** | Periodic storage/query scheduling and notifications | Use `launchd` on macOS, systemd timers on Linux, or cron/CI to invoke stable commands and retain outputs. Add an internal scheduler only when cross-platform lifecycle and notification state are product requirements. |
+| **P3** | Proactive baseline refreshes and vendor audits | An external scheduler may run dry-run/audit commands; promotion remains reviewed. Reopen native automation under **T1/T2** only if safe apply policy is defined. |
+| **P6** | Natural-language query execution | An external LLM can formulate a proposed typed request after **A1–A7**; Codess must validate and display it before execution. Native formulation waits for evaluation and trust requirements. |
+| **P7** | Standalone `queries.sql` package | SQLite CLI, Datasette, sqlite-utils, and notebooks can consume documented read-only recipes. Package only when **D6** has repeated external consumers and a versioned contract. |
+| **P8** | Multi-Project `baseline refresh` orchestration | Shell/Make/CI can compose preflight → apply → validate → freeze per Project now. Native orchestration waits for demonstrated cross-Project rollback and partial-failure semantics. |
+| **P9** | First-class Markdown report export | `jq`, templates, notebooks, or report tools can render typed JSONL/CSV. Add a native format only when a stable customer-facing Markdown contract is required. |
 
-### 11.4 Content and sanitize policy
+#### 8.6.2 Product functionality still postponed
 
-The policy separates normalized storage from output formatting. Vendor text may
-contain Markdown, HTML-like tags, source code, or SQL. Codess preserves those
-strings as content; it does not guess that markup is executable or strip it.
+| ID | Topic | Restart condition |
+|----|-------|-------------------|
+| **P4** | Broad historical discovery or additional vendors | A concrete compatibility, correlation, or active-work requirement appears; filesystem/Git discovery can propose candidates but cannot approve catalog membership. |
+| **P5** | FTS5 normalized-search derivative | **A4** bounded search is measured and repeated scans justify an index. This does not authorize the full-source derivative postponed by **D4**. |
 
-| Surface | Current contract |
-|---------|------------------|
-| Ingested text | Normalize CR/LF, remove ANSI escapes and C0/C1 terminal controls except tab/newline, then apply optional configured regex redaction. |
-| Claude tool input | Apply the same policy recursively to retained JSON-like values before serialization. |
-| Raw source evidence | Never embed raw records in normalized SQLite. `--raw-mode` records no retention, a reference, a content-addressed exact capture, or a sealed snapshot; redacted derivatives are distinct objects. |
-| Multi-line query display | Preserve useful line breaks in prompts/responses; sanitize and bound individual tool-result and tool-input displays. |
-| Tabular terminal output | Remove controls and replace tabs/newlines with spaces so a stored value cannot add rows or columns. |
-| CSV | Use Python's `csv.writer` for quoting/newlines and prefix risky **string** cells with a tab when the first character could trigger a spreadsheet formula (`= + - @`, full-width variants, tab, CR, or LF). Numeric values retain their type. |
+### 8.7 Completed foundation retained for follow-up
 
-The CSV prefix changes the exported string intentionally for human spreadsheet
-safety; consumers needing lossless normalized values should query SQLite.
-The implementation follows the threat categories in
-[OWASP CSV Injection](https://owasp.org/www-community/attacks/CSV_Injection)
-and the serialization behavior in the
-[Python `csv` documentation](https://docs.python.org/3/library/csv.html).
+Only completed capabilities that constrain current work are retained here:
 
-Enterprise PII/secret scanning is postponed under **§11.2**. Configured regex
-redaction remains the baseline until a deployment threat model provides a
-restart trigger.
+- CoSchema v4 package, two-way contract/DDL and JSON enforcement, canonical
+  DDL, common/vendor mappings and event-level mapping evidence, diagnostics,
+  content lineage, raw modes, immutable snapshots, and reader compatibility.
+- Automated preflight, fixed-point validation, reviewed/approved catalogs,
+  semantic/query gates, and the bounded three-vendor compatibility corpus.
+- Stable Project/location/workspace identities, source links, candidate review,
+  curated onboarding, relocation, evidence audits, and retention receipts.
+- Correct vendor filtering, stable session IDs, sequence ordering, lineage,
+  audit/diagnostic/artifact reports, sessions/stats JSONL and protected CSV,
+  single-report validation, and pipeline-safe shutdown.
+- Resource limits/telemetry, storage observations, latest-only pruning, and
+  provisional derived token observations.
 
-### 11.5 Testing and validation work
+## 9. Change routing
 
-**Contract:** **Scan `--source`** invalid tokens and **ingest `--source`** invalid token are both **global** errors (**stderr + exit 1** for that invocation) — not per-root or per-session partial apply (**§14**).
+Use **Codess.md §4.3** for documentation ownership:
 
-Current regression coverage includes numeric/day validation, global source
-validation, registry corruption/empty/filter behavior, registry merges,
-missing/empty/all-invalid directory lists, environment boolean parsing,
-symlink-root resolution, and Cursor header-time coverage. Add new rows here only
-for a specific uncovered contract or reproduced defect.
-
-### 11.6 Optional query companion
-
-| Item | Notes |
-|------|--------|
-| Optional **`queries.sql`** companion | Add only when repeated external consumers need a stable SQL library; current version-aware reads remain in `query_cmd`. |
-
-### 11.7 Administrative workflow repartition
-
-Implemented in this dependency order. The compatibility scripts reached their
-removal checkpoint and were deleted in commit `6fbf657`:
-
-1. **Complete:** `codess.fileio` provides file hashing and atomic versioned JSON writes;
-   replace exact copies without changing formats.
-2. **Complete:** `codess.evidence` owns store summaries and inventory construction; make
-   routine ingest and evidence gathering use the same SQL/aggregation.
-3. **Complete:** `codess.candidate_review` uses `run_scan()` plus bounded Git observers
-   and a versioned recommendation policy. Do not copy vendor discovery.
-4. **Complete:** `codess.catalog_operations` owns decisions, immutable selection
-   resolution, onboarding receipts, location add/retire, and relocation.
-5. **Complete:** `codess.baseline_catalog` and `codess.baseline_operations` own
-   preserve/archive/apply/fixed-point/catalog-entry/freeze/verify rules formerly
-   held in scripts. Freeze validates before writing, atomically replaces each
-   catalog, rolls both back on a detected failure, and verifies afterward;
-   verify remains a read-only public operation.
-6. **Complete:** `codess.schema_evolution` owns comparison; the schema script is a thin
-   wrapper. Place vendor capability audits under `codess.vendor_audits` and add
-   Claude feature audit only with the bounded scope in Designs.md §12.
-7. **Complete:** CLI adapters and versioned JSON reports expose the §5.7
-   families. Tests cover domain operations, no-mutation planning, catalog
-   decision preservation, freeze rollback, relocation rollback, and location
-   conflicts; representative command checks cover preflight and selection
-   receipts.
-8. **Current validation:** keep the full suite plus representative real candidate,
-   onboarding, evidence, baseline, and relocation workflows green.
-9. **Complete removal checkpoint:** replacement coverage was validated and
-   `scripts/find_candidate.py` plus `scripts/batch_ingest.py` were removed.
-
-The former batch `worthy` rule is not retained as authorization. A policy may
-reproduce its signals for comparison, but size/session thresholds yield a
-reasoned recommendation only. Curated batch apply consumes `approved` decisions
-or an explicit path list.
-
----
-
-## 12. Change Routing
-
-Use **Codess.md §4.0** for documentation rules. Code changes follow these
-artifact boundaries:
-
-- Vendor format change → ***Schema.md** first → adapters → tests.
-- New CLI flag → **`codess/project.py`** (`build_parser`), **`_*_cmd.py`**, **§5** here, **Codess.md** if user-visible.
-- New DB column → **CoSchema.md** + **`schema/coschema/sqlite/schema.sql`** + **`store.py`**.
-- Candidate/Git/batch-selection change → **Designs.md §12** policy first →
-  `candidate_review` / `catalog_operations` → §5.7 → tests.
-- Baseline freeze/verify composition change → **Designs.md §2 and §12** →
-  `baseline_operations` / `baseline_catalog` → **CoSchema.md** compatibility
-  procedure if retained-baseline semantics change → tests.
-- Evidence gather/vendor-audit change → **Designs.md §12** and the applicable
-  vendor schema → `evidence` / `vendor_audits` → **CompatibilityReview.md** only
-  when actual corpus evidence changes → tests.
-
----
-
-## 13. Optional Splits
-
-If this guide becomes hard to navigate, split the CLI contract into
-**`CoPlan-cli.md`** and keep **Codess.md §4** pointers current.
-
----
-
-## 14. Decisions
-
-Implemented decisions state the current contract. Open decisions include
-context, viable options, and a recommendation when one is available.
-
-### 14.1 Current decisions
-
-| Topic | Current decision | Implementation / owner |
-|---|---|---|
-| Scan source validation | Unknown `--source` tokens fail the invocation with stderr and exit 1. | `validate_scan_source_for_cli`, `scan_cmd`, §5.1, §11.5 |
-| Central registry | Scan always upserts index metrics. Explicit `--registry PATH` also filters output to paths already present and adds `reg_*` columns. Ingest merges sources; query stats merges query data. | `registry_store`, command modules, registry tests |
-| Query SQL | Keep version-aware SQL embedded in `query_cmd` until repeated external consumers justify a stable companion library. | §11.6 |
-| Global Cursor ingest | Import only composers whose `composerHeaders.workspaceId` maps to the selected project. Preserve archived and subagent flags as metadata. Exclude unmapped composers. | `cursor_source`, Cursor adapter, ingest integration tests |
-| Cursor scan timestamps | Use header timestamps and report header/time coverage in debug output. Do not decode large bubble payloads during index-led scan merely to fill missing dates. | `cursor_source`, scan debug output, CursorSchema §5–§7 |
-| Storage thresholds | Record dated utilization/deltas; warn above 2 GiB for one CoSchema DB and 10 GiB for Cursor. Reporting never vacuums or deletes. | `storage_report`, `storage report`, Operations.md |
-| Discovery | Keep scan index-led. `--dir` / `--dirs` are path filters, not traversal requests; there is no recursion CLI. | `scan`, root resolution, §3.0–§3.3 |
-| Query aggregation | Open each store read-only; merge report rows in Python. Session numbering is globally recency-ordered; stats are aggregate on stdout and project-local in the registry. | `query_cmd`, CLI aggregation tests |
-| Tool lineage | Join Claude tool-use ids, Codex call ids, and Cursor `toolFormerData.toolCallId`; retain truly unlinked results explicitly. | `query --lineage`, adapter metadata, CLI tests |
-| Source replacement | A changed or forced Claude/Codex transcript replaces its normalized session atomically; a Cursor database refresh replaces only events owned by that database. | `store`, ingest adapters, replacement tests |
-| Empty sources | A valid empty transcript removes its stale normalized session and records a nonfatal `empty_sources` diagnostic. | `ingest_cmd`, replacement tests |
-| Codex duplicate sources | When the same session exists in active and archived trees, ingest one canonical source rather than duplicating the session. | Codex discovery/ingest tests |
-| Report formats | Human-readable tabular output remains the default. Versioned JSON Lines prototypes sessions and bounded per-Project/total stats rows; expand only after a consumer validates the row contract. | `query_cmd`, `schema/query-row-v1.json`, §11.2 |
-| Audit events | Normalize only direct evidence in the CoSchema support matrix. Claude supplies denials/failures and compaction; Codex supplies failed calls and turn aborts; Cursor supplies `toolFormerData` failure/cancellation status. | adapters, `query --audit`, vendor fixtures |
-| Query row limit | Apply `--limit` after deterministic global ordering for sessions, permissions, lineage, and audit reports. Zero emits no rows; negative values fail before store access. | `query_cmd`, CLI tests |
-
-### 14.2 Open decisions
-
-The reviewed corpus is accepted and frozen. Cursor tool/model mapping,
-external-artifact/project correlation, and the evidence-negative Codex
-parentage audit are complete (**§11.0–§11.1**). Preflight validation is
-implemented and machine-readable output is prototyped; enterprise PII scanning
-remains postponed with an explicit restart trigger in **§11.2**.
-
----
-
-## 15. Consolidated engineering gaps (discussion brief)
-
-**Purpose:** **§15** is for **review and prioritization**, not ticket duplication. Each theme below should be read with **open questions**, **recommendation**, and **justification**; **§11** holds the actionable rows and dependencies.
-
-| Theme | Open questions | Recommendation (lean) | Justification |
-|-------|----------------|----------------------|---------------|
-| **Compatibility maintenance** | Does current evidence add a shared cross-vendor artifact or effort/speed/service setting? | Add only the bounded source shape or correlation asserted by evidence; then replace the reviewed set after fixed-point validation. | Keeps the accepted corpus useful without turning historical discovery into the critical path. |
-| **Codex parentage** | Has a direct, referential parent-session id appeared upstream? | Keep unsupported until the metadata-only §11.1 audit finds one. | Prevents plausible-looking but false parent links based on time, path, or content. |
-| **Postponed surfaces** | Has a deployment threat model triggered enterprise PII scanning, or a consumer justified more JSON Lines reports? | Keep enterprise scanning postponed; validate the existing JSON Lines contract before expanding it. | Avoids speculative dependencies while retaining operational preflight and bounded automation output. |
+- User-visible investigation behavior → **README.md** and the relevant **A/L/D**
+  registry rows.
+- Vendor source fact → the matching vendor schema; actionable status → §8.
+- Functional or research rationale → **Designs.md**; schema
+  compatibility/evolution rationale → **Schemas.md**.
+- New database shape → **CoSchema.md**,
+  `schema/coschema/sqlite/schema.sql`, mappings, store code, and fixtures.
+- Maintainer procedure → **Operations.md**; evidence result →
+  **CompatibilityReview.md** or its machine-readable catalog.
+- Every implementation change updates its registry disposition and acceptance
+  evidence without creating a second task list.

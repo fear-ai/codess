@@ -26,6 +26,7 @@ from codess.storage_report import build_storage_report, current_store_paths
 from codess.token_usage import source_paths, validate_codex_token_usage
 from codess.retention import apply_retention_plan, build_retention_plan
 from codess.vendor_audits.claude_features import audit_claude_features
+from codess.vendor_audits.codex_features import audit_codex_features
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -135,6 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     claude = audits.add_parser("claude-features")
     claude.add_argument("--root", type=Path, default=CC_PROJECTS)
     claude.add_argument("--max-files", type=int, default=200)
+    claude.add_argument("--max-record-bytes", type=int, default=2 * 1024 * 1024)
     claude.add_argument("--output", type=Path)
     claude.set_defaults(handler=_audit_claude)
     codex = audits.add_parser("codex-parentage")
@@ -142,6 +144,13 @@ def build_parser() -> argparse.ArgumentParser:
     codex.add_argument("--archive", type=Path, default=Path.home() / ".codex/archived_sessions")
     codex.add_argument("--output", type=Path)
     codex.set_defaults(handler=_audit_codex)
+    codex_features = audits.add_parser("codex-features")
+    codex_features.add_argument("--active", type=Path, default=Path.home() / ".codex/sessions")
+    codex_features.add_argument("--archive", type=Path, default=Path.home() / ".codex/archived_sessions")
+    codex_features.add_argument("--max-files", type=int, default=200)
+    codex_features.add_argument("--max-record-bytes", type=int, default=2 * 1024 * 1024)
+    codex_features.add_argument("--output", type=Path)
+    codex_features.set_defaults(handler=_audit_codex_features)
     cursor = audits.add_parser("cursor-features")
     cursor.add_argument("--db", type=Path, default=Path.home() / "Library/Application Support/Cursor/User/globalStorage/state.vscdb")
     cursor.add_argument("--registry", type=Path, default=Path.home() / ".codess")
@@ -175,6 +184,10 @@ def build_parser() -> argparse.ArgumentParser:
     prune.add_argument("--reference-catalog", type=Path, action="append", default=[])
     prune.add_argument("--apply", action="store_true")
     prune.add_argument("--working-archives", action="store_true")
+    prune.add_argument(
+        "--keep-comparison-revisions", action="store_true",
+        help="explicitly retain multiple >=1 GiB revisions of one logical source",
+    )
     prune.add_argument("--receipt", type=Path)
     prune.add_argument("--output", type=Path)
     prune.set_defaults(handler=_storage_prune)
@@ -358,12 +371,24 @@ def _write_optional(path: Path | None, report: dict) -> None:
 
 
 def _audit_claude(args) -> int:
-    _write_optional(args.output, audit_claude_features(args.root, max_files=args.max_files))
+    _write_optional(args.output, audit_claude_features(
+        args.root, max_files=args.max_files,
+        max_record_bytes=args.max_record_bytes,
+    ))
     return 0
 
 
 def _audit_codex(args) -> int:
     _write_optional(args.output, audit_parentage([("active", args.active), ("archive", args.archive)]))
+    return 0
+
+
+def _audit_codex_features(args) -> int:
+    _write_optional(args.output, audit_codex_features(
+        [("active", args.active), ("archive", args.archive)],
+        max_files=args.max_files,
+        max_record_bytes=args.max_record_bytes,
+    ))
     return 0
 
 
@@ -409,11 +434,13 @@ def _storage_prune(args) -> int:
             args.registry, reference_catalogs=catalogs,
             receipt_path=args.receipt,
             include_working_archives=args.working_archives,
+            allow_large_comparison_revisions=args.keep_comparison_revisions,
         )
         if args.apply else
         build_retention_plan(
             args.registry, reference_catalogs=catalogs,
             include_working_archives=args.working_archives,
+            allow_large_comparison_revisions=args.keep_comparison_revisions,
         )
     )
     if args.output:

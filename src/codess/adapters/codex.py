@@ -9,6 +9,7 @@ from typing import Iterator
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
 from codess.sanitize import sanitize_value
 from codess.content_processing import apply_processing
+from codess.mapping import annotate_mapping
 
 log = logging.getLogger(__name__)
 
@@ -141,6 +142,109 @@ def _metadata(payload: dict) -> str | None:
     return json.dumps(values, separators=(",", ":")) if values else None
 
 
+def _configuration_values(
+    record_type: str,
+    payload: dict,
+    line_num: int,
+) -> dict:
+    """Extract only settings whose Codex field semantics were verified."""
+    source = payload
+    prefix = "payload"
+    if record_type == "thread_settings_applied":
+        source = payload.get("thread_settings") or {}
+        prefix = "payload.thread_settings"
+    if not isinstance(source, dict):
+        return {}
+    values = {}
+    provenance = {}
+
+    def keep(common: str, source_field: str, value) -> None:
+        if value is None or isinstance(value, (dict, list)):
+            return
+        text = str(value).strip()
+        if text:
+            values[common] = text
+            provenance[common] = {
+                "source_record_type": record_type,
+                "source_record_locator": str(line_num),
+                "source_field": f"{prefix}.{source_field}",
+            }
+
+    keep("model", "model", source.get("model"))
+    keep(
+        "model_provider",
+        "model_provider_id" if "model_provider_id" in source else "model_provider",
+        source.get("model_provider_id") or source.get("model_provider"),
+    )
+    keep(
+        "reasoning_effort",
+        "reasoning_effort" if "reasoning_effort" in source else "effort",
+        source.get("reasoning_effort") or source.get("effort"),
+    )
+    keep("service_tier", "service_tier", source.get("service_tier"))
+    collaboration = source.get("collaboration_mode")
+    if isinstance(collaboration, dict):
+        keep("mode", "collaboration_mode.mode", collaboration.get("mode"))
+        keep(
+            "collaboration_mode_kind",
+            "collaboration_mode.kind",
+            collaboration.get("kind"),
+        )
+    keep("approval_policy", "approval_policy", source.get("approval_policy"))
+    if source.get("turn_id") is not None:
+        values["source_turn_id"] = str(source["turn_id"])
+    if values:
+        values["configuration_provenance"] = provenance
+    return values
+
+
+def _mapping_rule(event: dict) -> str:
+    if event.get("event_type") == "tool_call":
+        return "codex.tool-call"
+    if event.get("subtype") == "tool_result":
+        return "codex.tool-result"
+    if event.get("subtype") == "turn_aborted":
+        return "codex.abort"
+    return "codex.message"
+
+
+def _annotate_source(
+    event: dict, record_type: str, payload: dict, line_num: int,
+) -> dict:
+    rule = _mapping_rule(event)
+    applied = [rule]
+    if event.get("metadata") and record_type == "response_item":
+        applied.append("codex.configuration")
+    return annotate_mapping(
+        event,
+        source_record_type=record_type,
+        source_record_subtype=(
+            str(payload["type"]) if payload.get("type") is not None else None
+        ),
+        source_record_locator=str(line_num),
+        mapping_rule=rule,
+        source_path="$.payload",
+        applied_rules=applied,
+    )
+
+
+def _update_configuration(current: dict, observed: dict) -> None:
+    provenance = dict(current.get("configuration_provenance") or {})
+    provenance.update(observed.get("configuration_provenance") or {})
+    current.update({
+        key: value for key, value in observed.items()
+        if key != "configuration_provenance"
+    })
+    if provenance:
+        current["configuration_provenance"] = provenance
+
+
+def _merge_metadata(payload: dict, configuration: dict) -> str | None:
+    values = json.loads(_metadata(payload) or "{}")
+    values.update(configuration)
+    return json.dumps(values, separators=(",", ":")) if values else None
+
+
 def _failed_status(payload: dict) -> bool:
     return str(payload.get("status") or "").lower() in {
         "failed", "failure", "error", "incomplete",
@@ -159,6 +263,7 @@ def process_file(
     debug = opts.get("debug", False)
     diagnostics = opts.get("diagnostics")
     call_map = _build_call_map(path)
+    current_configuration: dict = {}
 
     for line_num, record, raw_line in iter_codex_records(path, diagnostics):
         rtype = record.get("type")
@@ -175,6 +280,33 @@ def process_file(
             if diagnostics is not None:
                 diagnostics["ignored_records"] = (
                     diagnostics.get("ignored_records", 0) + 1
+                )
+            continue
+
+        if rtype == "turn_context":
+            _update_configuration(
+                current_configuration,
+                _configuration_values("turn_context", payload, line_num),
+            )
+            if diagnostics is not None:
+                diagnostics["configuration_records"] = (
+                    diagnostics.get("configuration_records", 0) + 1
+                )
+            continue
+
+        if (
+            rtype == "event_msg"
+            and payload.get("type") == "thread_settings_applied"
+        ):
+            _update_configuration(
+                current_configuration,
+                _configuration_values(
+                    "thread_settings_applied", payload, line_num
+                ),
+            )
+            if diagnostics is not None:
+                diagnostics["configuration_records"] = (
+                    diagnostics.get("configuration_records", 0) + 1
                 )
             continue
 
@@ -201,7 +333,7 @@ def process_file(
                     )
                     if truncated is None:
                         continue
-                    yield {
+                    yield _annotate_source({
                         "session_id": session_id,
                         "event_id": str(line_num),
                         "event_type": "user_message",
@@ -216,9 +348,9 @@ def process_file(
                         "timestamp": timestamp,
                         "file_path": None,
                         "source_file": source_file,
-                        "metadata": None,
+                        "metadata": _merge_metadata(payload, current_configuration),
                         "source_raw": source_raw,
-                    }
+                    }, rtype, payload, line_num)
                 elif role == "assistant":
                     truncated, content_len = _truncate(text, TRUNCATE_RESPONSE)
                     truncated = apply_processing(
@@ -227,7 +359,7 @@ def process_file(
                     )
                     if truncated is None:
                         continue
-                    yield {
+                    yield _annotate_source({
                         "session_id": session_id,
                         "event_id": str(line_num),
                         "event_type": "assistant_message",
@@ -242,9 +374,9 @@ def process_file(
                         "timestamp": timestamp,
                         "file_path": None,
                         "source_file": source_file,
-                        "metadata": None,
+                        "metadata": _merge_metadata(payload, current_configuration),
                         "source_raw": source_raw,
-                    }
+                    }, rtype, payload, line_num)
                 elif diagnostics is not None:
                     diagnostics["ignored_records"] = (
                         diagnostics.get("ignored_records", 0) + 1
@@ -252,7 +384,7 @@ def process_file(
                 continue
 
             if item_type in ("function_call", "custom_tool_call"):
-                yield {
+                yield _annotate_source({
                     "session_id": session_id,
                     "event_id": str(line_num),
                     "event_type": "tool_call",
@@ -267,16 +399,16 @@ def process_file(
                     "timestamp": timestamp,
                     "file_path": None,
                     "source_file": source_file,
-                    "metadata": _metadata(payload),
+                    "metadata": _merge_metadata(payload, current_configuration),
                     "source_raw": source_raw,
-                }
+                }, rtype, payload, line_num)
                 continue
 
             if item_type == "web_search_call":
                 action = sanitize_value(
                     payload.get("action") or {}, redact_enabled
                 )
-                yield {
+                yield _annotate_source({
                     "session_id": session_id,
                     "event_id": str(line_num),
                     "event_type": "tool_call",
@@ -293,9 +425,9 @@ def process_file(
                     "timestamp": timestamp,
                     "file_path": None,
                     "source_file": source_file,
-                    "metadata": _metadata(payload),
+                    "metadata": _merge_metadata(payload, current_configuration),
                     "source_raw": source_raw,
-                }
+                }, rtype, payload, line_num)
                 continue
 
             if item_type in ("function_call_output", "custom_tool_call_output"):
@@ -318,7 +450,7 @@ def process_file(
                 )
                 if truncated is None:
                     continue
-                yield {
+                yield _annotate_source({
                     "session_id": session_id,
                     "event_id": str(line_num),
                     "event_type": "user_message",
@@ -333,9 +465,9 @@ def process_file(
                     "timestamp": timestamp,
                     "file_path": None,
                     "source_file": source_file,
-                    "metadata": _metadata(payload),
+                    "metadata": _merge_metadata(payload, current_configuration),
                     "source_raw": source_raw,
-                }
+                }, rtype, payload, line_num)
                 continue
 
             if diagnostics is not None:
@@ -384,7 +516,7 @@ def process_file(
                 "metadata": json.dumps({"event_msg_type": msg_type}) if msg_type else None,
                 "source_raw": source_raw,
             }
-            yield ev
+            yield _annotate_source(ev, rtype, payload, line_num)
         elif diagnostics is not None:
             diagnostics["ignored_records"] = (
                 diagnostics.get("ignored_records", 0) + 1

@@ -12,6 +12,7 @@ from codess.adapters.codex import (
     iter_codex_records,
     process_file,
 )
+from codess.schema_contract import validate_mapped_event
 
 
 class TestIterCodexRecords:
@@ -27,6 +28,20 @@ class TestIterCodexRecords:
         f.write_text('{"type":"session_meta"}\nnot json\n{"type":"other"}\n')
         recs = list(iter_codex_records(f))
         assert len(recs) == 2
+
+
+def test_codex_events_carry_declared_exact_mapping_evidence(tmp_path):
+    path = tmp_path / "session.jsonl"
+    path.write_text(json.dumps({
+        "type": "response_item", "payload": {
+            "type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": "hi"}],
+        },
+    }) + "\n", encoding="utf-8")
+    event = list(process_file(path, "s1", "/p", {}))[0]
+    assert event["source_record_type"] == "response_item"
+    assert event["source_record_subtype"] == "message"
+    assert validate_mapped_event("codex", event) == []
 
 
 class TestGetSessionMeta:
@@ -255,3 +270,46 @@ class TestProcessFile:
         )
         assert events
         assert all(event["source_raw"] is None for event in events)
+
+    def test_turn_settings_are_attached_with_field_provenance(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        records = [
+            {"type": "event_msg", "payload": {
+                "type": "thread_settings_applied", "thread_settings": {
+                    "model": "gpt-test", "model_provider_id": "openai",
+                    "reasoning_effort": "medium", "service_tier": "priority",
+                    "approval_policy": "on-request",
+                    "collaboration_mode": {"mode": "default"},
+                },
+            }},
+            {"type": "turn_context", "payload": {
+                "model": "gpt-test", "effort": "high",
+            }},
+            {"type": "response_item", "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            }},
+            {"type": "response_item", "payload": {
+                "type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi"}],
+            }},
+        ]
+        path.write_text("".join(json.dumps(item) + "\n" for item in records))
+        diagnostics = {}
+        events = list(process_file(
+            path, "s1", "/p", {"diagnostics": diagnostics}
+        ))
+        metadata = json.loads(events[0]["metadata"])
+        assert diagnostics["configuration_records"] == 2
+        assert metadata["model"] == "gpt-test"
+        assert metadata["reasoning_effort"] == "high"
+        assert metadata["service_tier"] == "priority"
+        assert metadata["mode"] == "default"
+        assert metadata["configuration_provenance"]["service_tier"] == {
+            "source_record_type": "thread_settings_applied",
+            "source_record_locator": "1",
+            "source_field": "payload.thread_settings.service_tier",
+        }
+        assert metadata["configuration_provenance"]["reasoning_effort"][
+            "source_record_locator"
+        ] == "2"

@@ -12,6 +12,7 @@ from codess.cursor_source import (
     iter_bubble_rows,
     parse_timestamp as _parse_timestamp,
 )
+from codess.mapping import annotate_mapping, structured_json
 
 log = logging.getLogger(__name__)
 
@@ -143,60 +144,32 @@ def process_db(
     opts: dict,
     *,
     composer_ids: set[str] | None = None,
+    source_file: str | None = None,
 ) -> Iterator[tuple[str, dict]]:
     """Stream (session_id, event) from Cursor state.vscdb. Groups by composerId."""
-    source_file = str(db_path.resolve())
+    source_file = source_file or str(db_path.resolve())
     redact_enabled = opts.get("redact", False)
     diagnostics = opts.get("diagnostics")
     stats: dict[str, int] = {}
 
-    by_composer: dict[str, list[tuple[str, dict]]] = {}
+    current_composer: str | None = None
+    bubbles: list[tuple[str, dict]] = []
     for composer_id, bubble_id, data in _iter_bubbles(
         db_path,
         stats,
         composer_ids,
     ):
-        if composer_id not in by_composer:
-            by_composer[composer_id] = []
-        by_composer[composer_id].append((bubble_id, data))
-
-    for composer_id, bubbles in by_composer.items():
-        def sort_key(item: tuple[str, dict]) -> tuple[bool, float, str]:
-            timestamp = _bubble_timestamp(item[1])
-            return timestamp is None, timestamp or 0, item[0]
-
-        canonical: dict[tuple[object, str], tuple[str, dict]] = {}
-        without_server_identity: list[tuple[str, dict]] = []
-        duplicate_count = 0
-        for item in bubbles:
-            server_bubble_id = item[1].get("serverBubbleId")
-            if not server_bubble_id:
-                without_server_identity.append(item)
-                continue
-            key = (item[1].get("type"), str(server_bubble_id))
-            previous = canonical.get(key)
-            if previous is None or sort_key(item) < sort_key(previous):
-                canonical[key] = item
-            if previous is not None:
-                duplicate_count += 1
-        if duplicate_count and diagnostics is not None:
-            diagnostics["duplicate_records"] = (
-                diagnostics.get("duplicate_records", 0) + duplicate_count
+        if current_composer is not None and composer_id != current_composer:
+            yield from _process_composer(
+                current_composer, bubbles, source_file, opts, diagnostics
             )
-        bubbles = without_server_identity + list(canonical.values())
-        bubbles.sort(key=sort_key)
-        for bubble_id, data in bubbles:
-            events = list(
-                _bubble_to_events(
-                    composer_id, bubble_id, data, source_file, opts
-                )
-            )
-            if not events and diagnostics is not None:
-                diagnostics["ignored_records"] = (
-                    diagnostics.get("ignored_records", 0) + 1
-                )
-            for ev in events:
-                yield composer_id, ev
+            bubbles.clear()
+        current_composer = composer_id
+        bubbles.append((bubble_id, data))
+    if current_composer is not None:
+        yield from _process_composer(
+            current_composer, bubbles, source_file, opts, diagnostics
+        )
 
     skipped = sum(
         stats.get(key, 0)
@@ -224,6 +197,50 @@ def process_db(
             stats.get("yielded", 0),
             db_path,
         )
+
+
+def _process_composer(
+    composer_id: str,
+    bubbles: list[tuple[str, dict]],
+    source_file: str,
+    opts: dict,
+    diagnostics: dict[str, int] | None,
+) -> Iterator[tuple[str, dict]]:
+    """Order/deduplicate one composer so other composers can be released."""
+    def sort_key(item: tuple[str, dict]) -> tuple[bool, float, str]:
+        timestamp = _bubble_timestamp(item[1])
+        return timestamp is None, timestamp or 0, item[0]
+
+    canonical: dict[tuple[object, str], tuple[str, dict]] = {}
+    without_server_identity: list[tuple[str, dict]] = []
+    duplicate_count = 0
+    for item in bubbles:
+        server_bubble_id = item[1].get("serverBubbleId")
+        if not server_bubble_id:
+            without_server_identity.append(item)
+            continue
+        key = (item[1].get("type"), str(server_bubble_id))
+        previous = canonical.get(key)
+        if previous is None or sort_key(item) < sort_key(previous):
+            canonical[key] = item
+        if previous is not None:
+            duplicate_count += 1
+    if duplicate_count and diagnostics is not None:
+        diagnostics["duplicate_records"] = (
+            diagnostics.get("duplicate_records", 0) + duplicate_count
+        )
+    ordered = without_server_identity + list(canonical.values())
+    ordered.sort(key=sort_key)
+    for bubble_id, data in ordered:
+        events = list(
+            _bubble_to_events(composer_id, bubble_id, data, source_file, opts)
+        )
+        if not events and diagnostics is not None:
+            diagnostics["ignored_records"] = (
+                diagnostics.get("ignored_records", 0) + 1
+            )
+        for event in events:
+            yield composer_id, event
 
 
 def _bubble_to_events(
@@ -261,6 +278,16 @@ def _bubble_to_events(
             "source_raw": None,
         }
 
+    def mapped(event: dict, rule: str, source_path: str = "$.bubble") -> dict:
+        return annotate_mapping(
+            event,
+            source_record_type="cursorDiskKV.bubble",
+            source_record_subtype=str(msg_type),
+            source_record_locator=f"bubbleId:{composer_id}:{bubble_id}",
+            mapping_rule=rule,
+            source_path=source_path,
+        )
+
     if msg_type == 1:
         text = apply_processing(
             text, opts, vendor="Cursor", record_type="bubble.user",
@@ -284,8 +311,15 @@ def _bubble_to_events(
                 metadata = {"model_selection": selection.strip()}
                 if selection.strip().lower() != "default":
                     metadata["model"] = selection.strip()
+                    metadata["configuration_provenance"] = {
+                        "model": {
+                            "source_record_type": "bubble.user",
+                            "source_record_locator": event_id,
+                            "source_field": "modelInfo.modelName",
+                        }
+                    }
                 event["metadata"] = json.dumps(metadata, separators=(",", ":"))
-        yield event
+        yield mapped(event, "cursor.bubble")
         return
 
     if msg_type == 2:
@@ -302,9 +336,12 @@ def _bubble_to_events(
             )
             if truncated is None:
                 return
-            yield base_ev(
-                "assistant_message", "response", "assistant",
-                truncated, content_len,
+            yield mapped(
+                base_ev(
+                    "assistant_message", "response", "assistant",
+                    truncated, content_len,
+                ),
+                "cursor.bubble",
             )
 
         tool_former = data.get("toolFormerData")
@@ -320,7 +357,10 @@ def _bubble_to_events(
                 raw_input = tool_former.get("rawArgs")
                 if raw_input in (None, ""):
                     raw_input = tool_former.get("params")
-                input_text = "" if raw_input is None else str(raw_input)
+                input_text = "" if raw_input is None else (
+                    json.dumps(raw_input, ensure_ascii=False, separators=(",", ":"))
+                    if isinstance(raw_input, (dict, list)) else str(raw_input)
+                )
                 input_text = apply_processing(
                     input_text, opts, vendor="Cursor", record_type="tool_input",
                     event_kind="tool.call", phase="pre",
@@ -331,20 +371,33 @@ def _bubble_to_events(
                     "loading": "running", "running": "running",
                     "pending": "pending", "cancelled": "cancelled",
                 }.get(status.lower(), "unknown")
-                metadata = json.dumps({
+                user_decision = str(tool_former.get("userDecision") or "").lower()
+                if user_decision == "rejected":
+                    normalized = "denied"
+                metadata_values = {
                     "call_id": str(call_id),
                     "model_call_id": tool_former.get("modelCallId"),
                     "status": status,
                     "source_field": "toolFormerData",
-                }, separators=(",", ":"))
+                }
+                if user_decision:
+                    metadata_values.update({
+                        "user_decision": user_decision,
+                        "permission_provenance": "toolFormerData.userDecision",
+                    })
+                metadata = json.dumps(metadata_values, separators=(",", ":"))
                 call = base_ev("tool_call", "tool_call", "assistant", "", 0)
                 call["event_id"] = f"{event_id}:tool-call"
                 call["tool_name"] = str(tool_name or "unknown")
-                call["tool_input"] = input_text
+                call["tool_input"] = structured_json(input_text)
                 call["metadata"] = metadata
                 call["source_status"] = status
                 call["normalized_status"] = normalized
-                yield call
+                yield mapped(
+                    call,
+                    "cursor.tool-former-invocation",
+                    "$.bubble.toolFormerData",
+                )
 
                 result_value = tool_former.get("result")
                 final_status = normalized in {"succeeded", "failed", "denied", "cancelled", "incomplete"}
@@ -363,7 +416,11 @@ def _bubble_to_events(
                         if result_text is not None:
                             result = base_ev(
                                 "user_message",
-                                "tool_failure" if normalized == "failed" else "tool_result",
+                                (
+                                    "permission_denied" if normalized == "denied"
+                                    else "tool_failure" if normalized == "failed"
+                                    else "tool_result"
+                                ),
                                 "tool", result_text, result_len,
                             )
                             result["event_id"] = f"{event_id}:tool-result"
@@ -372,7 +429,11 @@ def _bubble_to_events(
                             result["metadata"] = metadata
                             result["source_status"] = status
                             result["normalized_status"] = normalized
-                            yield result
+                            yield mapped(
+                                result,
+                                "cursor.tool-former-result",
+                                "$.bubble.toolFormerData",
+                            )
 
         tool_results = data.get("toolResults") or []
         for i, tr in enumerate(tool_results):
@@ -396,4 +457,8 @@ def _bubble_to_events(
             ev["event_id"] = f"{event_id}:tr{i}"
             ev["tool_name"] = tname
             ev["tool_output"] = ttrunc
-            yield ev
+            yield mapped(
+                ev,
+                "cursor.tool-result-legacy",
+                f"$.bubble.toolResults[{i}]",
+            )

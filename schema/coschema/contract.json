@@ -1,12 +1,23 @@
 {
   "format_id": "codess.coschema",
-  "format_version": 3,
+  "format_version": 4,
   "application_id": 1129268293,
   "compatibility_policy": {
     "unknown_change": "manual_review",
     "derived_data_upgrade": "rebuild",
     "released_package": "immutable",
     "extension_policy": "namespaced_open_core_strict"
+  },
+  "physical_contract": {
+    "excluded_tables": ["store_meta"],
+    "excluded_fields": {
+      "artifacts": ["id"],
+      "events": ["id", "event_type", "subtype", "role", "timestamp", "file_path", "source_file"],
+      "model_configurations": ["id"],
+      "sessions": ["id", "source", "type", "release", "project_path"],
+      "sources": ["id"],
+      "workspace_bindings": ["id"]
+    }
   },
   "entities": {
     "projects": {
@@ -60,8 +71,24 @@
         "observed_at": {"type": "rfc3339", "nullable": false},
         "ingested_at": {"type": "rfc3339", "nullable": false},
         "availability": {"type": "taxonomy", "nullable": false, "vocabulary": "availability"},
+        "capture_method": {"type": "open_vocabulary", "nullable": true},
+        "consistency": {"type": "open_vocabulary", "nullable": true},
         "content_sha256": {"type": "sha256", "nullable": true},
         "metadata": {"type": "json_extension", "nullable": true}
+      }
+    },
+    "model_configurations": {
+      "identity": ["provider", "model_family", "model_name_exact", "model_revision", "reasoning_effort", "speed_tier", "service_tier", "mode"],
+      "fields": {
+        "provider": {"type": "text", "nullable": true},
+        "model_family": {"type": "text", "nullable": true},
+        "model_name_exact": {"type": "text", "nullable": true},
+        "model_revision": {"type": "text", "nullable": true},
+        "reasoning_effort": {"type": "open_vocabulary", "nullable": true},
+        "speed_tier": {"type": "open_vocabulary", "nullable": true},
+        "service_tier": {"type": "open_vocabulary", "nullable": true},
+        "mode": {"type": "open_vocabulary", "nullable": true},
+        "source_config": {"type": "json", "nullable": true}
       }
     },
     "sessions": {
@@ -78,13 +105,20 @@
         "surface_kind": {"type": "taxonomy", "nullable": true, "vocabulary": "surface_kind"},
         "session_purpose": {"type": "open_vocabulary", "nullable": true},
         "harness_version": {"type": "text", "nullable": true},
+        "source_id": {"type": "reference", "nullable": true, "target": "sources"},
+        "project_id": {"type": "reference", "nullable": true, "target": "projects"},
+        "source_cwd": {"type": "text", "nullable": true},
         "started_at": {"type": "unix_ms", "nullable": true},
         "ended_at": {"type": "unix_ms", "nullable": true},
         "source_mtime": {"type": "unix_ms", "nullable": true},
+        "observed_at": {"type": "rfc3339", "nullable": true},
+        "ingested_at": {"type": "rfc3339", "nullable": true},
         "time_basis": {"type": "taxonomy", "nullable": true, "vocabulary": "time_basis"},
         "parent_session_id": {"type": "text", "nullable": true},
         "session_relation_kind": {"type": "taxonomy", "nullable": true, "vocabulary": "session_relation_kind"},
         "archive_state": {"type": "taxonomy", "nullable": true, "vocabulary": "archive_state"},
+        "archive_source": {"type": "text", "nullable": true},
+        "default_model_config_id": {"type": "reference", "nullable": true, "target": "model_configurations"},
         "metadata": {"type": "json_extension", "nullable": true}
       }
     },
@@ -107,6 +141,7 @@
         "interaction_id": {"type": "reference", "nullable": true, "target": "interactions"},
         "sequence_no": {"type": "integer", "nullable": false, "minimum": 1},
         "source_turn_id": {"type": "text", "nullable": true},
+        "model_config_id": {"type": "reference", "nullable": true, "target": "model_configurations"},
         "boundary_source": {"type": "taxonomy", "nullable": false, "vocabulary": "turn_boundary_source"}
       }
     },
@@ -128,13 +163,18 @@
         "origin_kind": {"type": "open_vocabulary", "nullable": true},
         "interaction_id": {"type": "reference", "nullable": true, "target": "interactions"},
         "model_turn_id": {"type": "reference", "nullable": true, "target": "model_turns"},
+        "parent_event_id": {"type": "text", "nullable": true},
+        "caused_by_event_id": {"type": "text", "nullable": true},
         "content": {"type": "text", "nullable": true},
         "content_len": {"type": "integer", "nullable": true, "minimum": 0},
         "tool_name": {"type": "text", "nullable": true},
         "tool_input": {"type": "json", "nullable": true},
+        "tool_output": {"type": "text", "nullable": true},
         "event_at": {"type": "unix_ms", "nullable": true},
+        "event_at_basis": {"type": "open_vocabulary", "nullable": true},
         "source_status": {"type": "text", "nullable": true},
         "normalized_status": {"type": "taxonomy", "nullable": true, "vocabulary": "normalized_status"},
+        "artifact_path": {"type": "text", "nullable": true},
         "mapping_rule": {"type": "text", "nullable": true},
         "mapping_trace": {"type": "json", "nullable": true},
         "metadata": {"type": "json_extension", "nullable": true}
@@ -170,6 +210,30 @@
         "metadata": {"type": "json_extension", "nullable": true}
       }
     },
+    "event_content": {
+      "identity": ["event_id", "relation_kind", "sequence_no"],
+      "order": ["event_id", "sequence_no"],
+      "fields": {
+        "event_id": {"type": "reference", "nullable": false, "target": "events"},
+        "content_id": {"type": "reference", "nullable": false, "target": "content_objects"},
+        "relation_kind": {"type": "open_vocabulary", "nullable": false},
+        "sequence_no": {"type": "integer", "nullable": false, "minimum": 1},
+        "start_offset": {"type": "integer", "nullable": true, "minimum": 0},
+        "end_offset": {"type": "integer", "nullable": true, "minimum": 0},
+        "integrity_state": {"type": "open_vocabulary", "nullable": false}
+      }
+    },
+    "source_record_content": {
+      "identity": ["source_record_id", "relation_kind", "sequence_no"],
+      "order": ["source_record_id", "sequence_no"],
+      "fields": {
+        "source_record_id": {"type": "reference", "nullable": false, "target": "source_records"},
+        "content_id": {"type": "reference", "nullable": false, "target": "content_objects"},
+        "relation_kind": {"type": "open_vocabulary", "nullable": false},
+        "sequence_no": {"type": "integer", "nullable": false, "minimum": 1},
+        "integrity_state": {"type": "open_vocabulary", "nullable": false}
+      }
+    },
     "processing_runs": {
       "identity": ["id"],
       "fields": {
@@ -182,6 +246,18 @@
         "rejection_reason": {"type": "text", "nullable": true},
         "started_at": {"type": "rfc3339", "nullable": false},
         "completed_at": {"type": "rfc3339", "nullable": false}
+      }
+    },
+    "content_derivations": {
+      "identity": ["processing_run_id", "sequence_no"],
+      "order": ["processing_run_id", "sequence_no"],
+      "fields": {
+        "processing_run_id": {"type": "reference", "nullable": false, "target": "processing_runs"},
+        "input_content_id": {"type": "reference", "nullable": false, "target": "content_objects"},
+        "output_content_id": {"type": "reference", "nullable": true, "target": "content_objects"},
+        "sequence_no": {"type": "integer", "nullable": false, "minimum": 1},
+        "actions_json": {"type": "json", "nullable": true},
+        "rejection_reason": {"type": "text", "nullable": true}
       }
     },
     "tool_result_content": {
@@ -208,12 +284,19 @@
       "identity": ["id"],
       "fields": {
         "session_id": {"type": "reference", "nullable": false, "target": "sessions"},
+        "interaction_id": {"type": "reference", "nullable": true, "target": "interactions"},
+        "model_turn_id": {"type": "reference", "nullable": true, "target": "model_turns"},
+        "requested_event_id": {"type": "reference", "nullable": true, "target": "events"},
         "source_call_id": {"type": "text", "nullable": true},
         "source_tool_name": {"type": "text", "nullable": true},
         "canonical_tool_name": {"type": "text", "nullable": true},
+        "tool_namespace": {"type": "text", "nullable": true},
+        "invocation_kind": {"type": "open_vocabulary", "nullable": true},
         "input_json": {"type": "json", "nullable": true},
         "source_status": {"type": "text", "nullable": true},
-        "normalized_status": {"type": "taxonomy", "nullable": true, "vocabulary": "normalized_status"}
+        "normalized_status": {"type": "taxonomy", "nullable": true, "vocabulary": "normalized_status"},
+        "started_at": {"type": "unix_ms", "nullable": true},
+        "ended_at": {"type": "unix_ms", "nullable": true}
       }
     },
     "tool_results": {
@@ -221,30 +304,52 @@
       "order": ["invocation_id", "sequence_no"],
       "fields": {
         "invocation_id": {"type": "reference", "nullable": true, "target": "tool_invocations"},
+        "result_event_id": {"type": "reference", "nullable": true, "target": "events"},
         "sequence_no": {"type": "integer", "nullable": false, "minimum": 1},
+        "producing_actor_kind": {"type": "open_vocabulary", "nullable": true},
         "output_text": {"type": "text", "nullable": true},
         "output_json": {"type": "json", "nullable": true},
-        "is_error": {"type": "boolean", "nullable": true}
+        "is_error": {"type": "boolean", "nullable": true},
+        "source_status": {"type": "text", "nullable": true},
+        "normalized_status": {"type": "taxonomy", "nullable": true, "vocabulary": "normalized_status"}
       }
     },
     "artifacts": {
       "identity": ["project_id", "artifact_kind", "relative_path", "uri", "repository_object_id", "content_sha256"],
       "fields": {
+        "project_id": {"type": "reference", "nullable": true, "target": "projects"},
         "artifact_kind": {"type": "open_vocabulary", "nullable": false},
         "relative_path": {"type": "text", "nullable": true},
         "observed_absolute_path": {"type": "text", "nullable": true},
         "uri": {"type": "text", "nullable": true},
-        "content_sha256": {"type": "sha256", "nullable": true}
+        "repository_object_id": {"type": "text", "nullable": true},
+        "content_sha256": {"type": "sha256", "nullable": true},
+        "metadata": {"type": "json_extension", "nullable": true}
+      }
+    },
+    "event_artifacts": {
+      "identity": ["event_id", "artifact_id", "operation"],
+      "fields": {
+        "event_id": {"type": "reference", "nullable": false, "target": "events"},
+        "artifact_id": {"type": "reference", "nullable": false, "target": "artifacts"},
+        "operation": {"type": "taxonomy", "nullable": false, "vocabulary": "artifact_operation"},
+        "evidence_source": {"type": "text", "nullable": true},
+        "confidence": {"type": "number", "nullable": true, "minimum": 0, "maximum": 1}
       }
     },
     "mapping_diagnostics": {
       "identity": ["id"],
       "fields": {
+        "source_id": {"type": "reference", "nullable": true, "target": "sources"},
+        "session_id": {"type": "reference", "nullable": true, "target": "sessions"},
+        "event_id": {"type": "reference", "nullable": true, "target": "events"},
         "level": {"type": "taxonomy", "nullable": false, "vocabulary": "diagnostic_level"},
         "reason_code": {"type": "text", "nullable": false},
         "source_field": {"type": "text", "nullable": true},
         "source_value": {"type": "text", "nullable": true},
-        "mapping_rule": {"type": "text", "nullable": true}
+        "mapping_rule": {"type": "text", "nullable": true},
+        "detail": {"type": "text", "nullable": true},
+        "created_at": {"type": "rfc3339", "nullable": false}
       }
     },
     "correlation_assertions": {
@@ -256,7 +361,10 @@
         "object_id": {"type": "text", "nullable": false},
         "relation_kind": {"type": "text", "nullable": false},
         "method": {"type": "text", "nullable": false},
-        "confidence": {"type": "number", "nullable": true, "minimum": 0, "maximum": 1}
+        "evidence": {"type": "json", "nullable": true},
+        "confidence": {"type": "number", "nullable": true, "minimum": 0, "maximum": 1},
+        "asserted_at": {"type": "rfc3339", "nullable": false},
+        "reviewer": {"type": "text", "nullable": true}
       }
     }
   },

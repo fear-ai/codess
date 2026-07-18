@@ -1,5 +1,6 @@
 {
   "mapping_id": "codess.cursor-composer",
+  "direction": "source_to_common",
   "vendor": "cursor",
   "product": "cursor-composer",
   "source_system_id": "cursor.composer",
@@ -8,6 +9,7 @@
     {"id": "cursor.bubble", "source": "cursorDiskKV.bubbleId:*", "target": "events", "operation": "from_each", "retention": "core"},
     {"id": "cursor.tool-former-invocation", "source": "bubble.toolFormerData", "target": "tool_invocations", "operation": "from", "retention": "specialized"},
     {"id": "cursor.tool-former-result", "source": "bubble.toolFormerData.result,status", "target": "tool_results", "operation": "from", "retention": "specialized"},
+    {"id": "cursor.permission-decision", "source": "bubble.toolFormerData.userDecision", "target": "tool_invocations.source_status+tool_invocations.normalized_status", "operation": "from", "retention": "specialized"},
     {"id": "cursor.tool-result-legacy", "source": "bubble.toolResults[]", "target": "tool_results", "operation": "from_each", "retention": "specialized"},
     {"id": "cursor.model-selection", "source": "bubble.modelInfo.modelName", "target": "model_turns.model_config_id", "operation": "from", "retention": "specialized"},
     {"id": "cursor.header", "source": "composerHeaders", "target": "sessions", "operation": "from", "retention": "extension"},

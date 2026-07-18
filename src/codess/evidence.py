@@ -13,6 +13,7 @@ from codess.project_catalog import load_catalog
 from codess.snapshot import current_store_paths
 from codess.store import connect
 from codess.vendor_audits.claude_features import audit_claude_features
+from codess.vendor_audits.codex_features import audit_codex_features
 
 
 def summarize_store_evidence(paths: Iterable[Path]) -> dict[str, Any]:
@@ -123,13 +124,15 @@ def build_evidence_inventory(
         ("archive", Path.home() / ".codex/archived_sessions"),
     ]
     codex = audit_parentage(roots)
+    codex_features = audit_codex_features(roots)
     cursor = audit_cursor_features(cursor_db, catalog)
     claude = audit_claude_features(claude_root, max_files=claude_max_files)
     if component_reports is not None:
         component_reports.update({
-            "claude-features": claude,
-            "codex-parentage": codex,
-            "cursor-features": cursor,
+            "claude-feature-audit": claude,
+            "codex-parent-audit": codex,
+            "codex-feature-audit": codex_features,
+            "cursor-feature-audit": cursor,
         })
     return {
         "inventory_format": "codess.evidence-inventory/1",
@@ -144,8 +147,15 @@ def build_evidence_inventory(
                 "matches": shared[:100],
             },
             "inference_effort_speed_service": {
-                "relevance": "medium", "available": any(settings.values()),
-                "counts": dict(settings),
+                "relevance": "medium",
+                "available": any(settings.values()) or bool(
+                    codex_features["model_settings"]
+                ),
+                "normalized_counts": dict(settings),
+                "claude_source_evidence": claude["model_settings"],
+                "claude_setting_provenance": claude["setting_provenance"],
+                "codex_source_evidence": codex_features["model_settings"],
+                "codex_setting_provenance": codex_features["setting_provenance"],
             },
             "codex_parent_identifier": {
                 "relevance": "medium",

@@ -4,7 +4,7 @@ This document records findings from the local project at
 `~/Work/Github/Schema` and applies them to Codess. It complements
 `Designs.md`: that document defines the broader system direction; this one
 governs the CoSchema contract, vendor translation, compatibility decisions,
-and conformance work.
+and conformance model.
 
 The source review covered `Schema.md`, the conformance and mapping documents,
 decision records, contract fixtures, vendor mapping specifications, schema
@@ -110,7 +110,7 @@ Descriptions and taxonomy definitions may carry functional meaning, so a
 semantic text change cannot always be dismissed as an annotation-only patch.
 The gate should require explicit review for changes it cannot classify.
 
-### 2.5 Open extension points and strict stable structures
+### 2.5 Extension points and strict stable structures
 
 The source project keeps top-level documents open to additive fields but closes
 small leaf objects to catch misspellings. This makes additive evolution possible
@@ -129,12 +129,17 @@ The exact JSON-object rule does not transfer to SQLite. The useful policy is:
 
 ### 2.6 Mapping specifications, named transforms, and hazards
 
-The source mappings are table-driven YAML interpreted by an engine. Each entry
-identifies a source path, target path, optional transform, guards, templates,
-and notes. Mapping direction is explicit. Vendor hazards are encoded in the
-specification and fixtures rather than left as institutional memory.
+Current source mappings are package-hashed JSON rule registries implemented by
+named adapter transforms. Each rule identifies its source selector, target,
+operation, retention, and direction; emitted events are automatically checked
+for exact source identity, a declared primary/applied rule, structured trace,
+and JSON tool arguments. Vendor hazards are encoded in the profile and fixtures
+rather than left as institutional memory. A general interpreted mapping engine
+is a possible later implementation, not a claim about the current code.
 
-Useful grammar for Codess includes:
+The current grammar implements `from`, `from_any`, `from_each`, `const`, target,
+retention, hazards, and direction. Candidate extensions, to add only with an
+executable consumer and fixtures, include:
 
 - `from`: one exact source path or record selector;
 - `from_any`: ordered alternatives for source-format variants, recording which
@@ -394,11 +399,11 @@ Do not let SQLite column names become the mapping contract. Vendor adapters map
 to domain fields/entities; the SQLite writer maps the domain representation to
 physical storage.
 
-## 6. Conformance plan
+## 6. Conformance model
 
 ### Contract fixtures
 
-For every common entity or relationship, add:
+A conforming package represents every common entity or relationship with:
 
 - minimal valid instance;
 - maximal representative instance;
@@ -407,7 +412,7 @@ For every common entity or relationship, add:
 - ordering and lineage fixtures; and
 - old-format compatibility fixtures for every supported reader path.
 
-For every vendor/source family, add:
+A conforming vendor/source profile includes:
 
 - realistic golden source plus expected normalized output;
 - malformed and unsupported source records;
@@ -427,8 +432,7 @@ claimed invariant is not enforced by the test suite.
 
 ### Compatibility gate
 
-The small gate compares `contract.json` revisions. Initial classification
-coverage should include:
+The small gate compares `contract.json` revisions. Classification coverage includes:
 
 - entity/field/relation addition and removal;
 - nullability and type changes;
@@ -443,51 +447,36 @@ Do not attempt to parse every possible SQL expression initially. Compare a
 canonical machine-readable contract, validate the DDL behavior with fixtures,
 and fail closed when the gate lacks a rule.
 
-## 7. Effect on the seven key directions
+## 7. Package design implications
 
-1. **Durable store contract:** add the package manifest, immutable hashes,
-   machine-readable contract, evolution gate, and conformance fixtures.
-2. **CoSchema v2:** define strict common structures and explicit extension
-   points in the contract before DDL.
-3. **Vendor mappings:** make mappings executable specifications with named
-   transforms, traces, diagnostic levels, hazards, and loss reports.
-4. **Snapshots and raw capture:** use full immutable baselines; fixed-point
-   normalization and exact raw hashes replace migration chains and assumed
-   round trips.
-5. **Project catalog:** keep local/source identities stable; represent remote
-   and cross-vendor equivalence as dated evidence-bearing assertions.
-6. **Compatibility corpus:** organize minimal, maximal, edge, negative, hazard,
-   and golden fixtures around the small three-vendor corpus.
-7. **Mixed queries:** query common values while exposing source values, mapping
-   provenance, loss/diagnostics, and correlation confidence.
+- The durable store contract includes a manifest, immutable hashes,
+  machine-readable contract, evolution gate, and conformance fixtures.
+- Common structures and extension points are defined before physical DDL.
+- Vendor mappings are executable specifications with named transforms, traces,
+  diagnostic levels, hazards, and declared loss.
+- Immutable snapshots, fixed-point normalization, and exact raw hashes replace
+  migration chains and assumed round trips.
+- Project/source identities remain stable; remote and cross-vendor equivalence
+  is a dated evidence-bearing assertion.
+- Compatibility evidence uses minimal, maximal, edge, negative, hazard, and
+  golden fixtures around the bounded corpus.
+- Mixed queries expose common values together with source values, mapping
+  provenance, loss diagnostics, and correlation confidence.
 
-## 8. Implementation status and remaining plan
+## 8. Schema research direction
 
-Implemented: the v2 entity contract (`contract.json`), released manifest and
-hash checks, fixed application/user IDs, canonical DDL, common fixtures,
-mechanically checked Claude/Codex/Cursor profiles, fail-closed evolution gate,
-mapping traces/field diagnostics, strict store validation, raw capture, and
-immutable snapshot promotion. Per-project acceptance policies now automate
-package/store/raw checks, SQLite invariants, diagnostic limits, fixed-point
-semantic rebuilds, query smoke tests, and atomic approval after success.
+The schema programme treats compatibility as a versioned package of logical
+contract, physical layout, vendor mappings, fixtures, transform identities,
+and executable gates. Its long-term research direction is to improve:
 
-The first reviewed set, coverage matrix, Claude actor and Cursor envelope/copy
-hazard fixtures, cross-vendor artifact golden fixture, explicit external-file
-identity, CI-safe three-vendor policy, and historical reader boundary are now
-implemented. See `CompatibilityReview.md`.
+- semantic change classification beyond surface JSON or SQL diffs;
+- mutation evidence that every claimed invariant is enforced;
+- declared-loss and round-trip analysis for vendor translations;
+- vocabulary/alias reconciliation without weakening stable common structures;
+- fixed-point and cross-version comparison of immutable snapshots; and
+- content-addressed schema and mapping resolution across older readers.
 
-Next maintenance, in order:
-
-1. Maintain external-artifact/catalog assertions and stable workspace bindings.
-2. Keep Codex parentage unsupported until a direct identifier appears.
-3. Monitor the evidence-backed Cursor `toolFormerData` and
-   `modelInfo.modelName` mappings; empty `toolResults` remains non-evidentiary.
-4. Add effort/speed/service settings or lifecycle-abort evidence only when
-   current source records supply them; maintain shared-artifact evidence with
-   the structure-only inventory.
-5. Verify the frozen set after source refreshes and replace it atomically when
-   a newly sampled set is accepted.
-
-The evolution gate should follow the contract rather than lead it. Building a
-generic schema-diff framework before CoSchema v2 semantics are fixed would
-automate uncertainty rather than compatibility.
+The governing principle remains: the evolution gate follows a settled contract
+rather than automating uncertainty. These are offered research directions, not
+a work queue. Current work, known gaps, open decisions, event triggers, and
+postponed topics are registered only in **CoPlan.md §8**.

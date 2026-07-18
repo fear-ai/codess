@@ -1,5 +1,6 @@
 {
   "mapping_id": "codess.codex",
+  "direction": "source_to_common",
   "vendor": "openai",
   "product": "codex",
   "source_system_id": "openai.codex",
@@ -9,7 +10,10 @@
     {"id": "codex.tool-call", "source": "response_item.function_call|custom_tool_call|web_search_call", "target": "tool_invocations", "operation": "from_any", "retention": "specialized"},
     {"id": "codex.tool-result", "source": "response_item.function_call_output|custom_tool_call_output", "target": "tool_results", "operation": "from_any", "retention": "specialized"},
     {"id": "codex.abort", "source": "event_msg.turn_aborted", "target": "events.lifecycle.abort", "operation": "from", "retention": "core"},
-    {"id": "codex.session-meta", "source": "session_meta.payload", "target": "sessions", "operation": "from", "retention": "extension"}
+    {"id": "codex.session-meta", "source": "session_meta.payload", "target": "sessions", "operation": "from", "retention": "extension"},
+    {"id": "codex.configuration", "source": "turn_context.payload|event_msg.thread_settings_applied.payload.thread_settings", "target": "model_configurations+model_turns.model_config_id", "operation": "from_any", "retention": "specialized"},
+    {"id": "codex.turn-identity", "source": "turn_context.payload.turn_id", "target": "model_turns.source_turn_id", "operation": "from", "retention": "core"},
+    {"id": "codex.archive-location", "source": "session source root", "target": "sessions.archive_state+sessions.archive_source", "operation": "from", "retention": "extension"}
   ],
   "hazards": ["archived-directory-is-not-completion", "no-stable-parent-session-id", "call-status-is-vendor-status"]
 }

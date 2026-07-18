@@ -1,4 +1,7 @@
-# CoSchema v3 compatibility review
+# Historical CoSchema v3 compatibility review
+
+This records the retained format-3 baseline and is not the current format-4
+acceptance report. Format-4 rebuild and freeze is tracked as **CoPlan A12**.
 
 ## Decision
 
@@ -26,14 +29,14 @@ Package/store/raw hashes, SQLite integrity and foreign keys,
 manifest counts, event ordering, JSON fields, artifact identity, policy limits,
 and six query modes passed.
 
-## Semantic review findings
+## Semantic compatibility findings
 
 The review sampled normalized locators and mapping traces for prompts, model
 responses, tool calls/results, permission denials, failures, compaction,
 subagent linkage, slash commands, artifacts, and Cursor inferred turns. Prompt
 and response content was not copied into this report.
 
-Three defects were found and corrected before freezing. First, Claude error tool results
+The accepted mapping enforces three corrections established by review. Claude error tool results
 arrive in a vendor `user` envelope, but they are tool outcomes rather than human
 prompts. Denials and failures now map to `tool.result` / `tool` /
 `tool_result`, populate `tool_results`, and carry `denied` or `failed` status.
@@ -41,9 +44,9 @@ The rebuilt real baselines contain 33 such error results in spank-py and 9 in
 Zero400. A hazard fixture prevents regression while keeping failed Codex tool
 calls classified as model invocations.
 
-Second, 54,290 Cursor type-2 envelopes contained only whitespace message text
-and repeated harness/context fields. They are no longer called model responses;
-tool results would still be retained if present. Third, Cursor copied the same
+Cursor type-2 envelopes containing only whitespace message text and repeated
+harness/context fields are not called model responses; tool results are still
+retained when present. Cursor also copied the same
 logical message up to nine times under different local keys. Within a composer,
 records with the same `(type, serverBubbleId)` now retain only the earliest
 observed copy. There is no cross-composer or content-similarity deduplication.
@@ -52,7 +55,7 @@ rather than 60,368 mostly non-message events. Its average interaction fell from
 82.5 to 3.9 events and its maximum from 32,360 to 556. The packaged Cursor
 hazard fixture covers both rules.
 
-A subsequent structure-only audit found that current Cursor tool evidence lives
+Current structure-only evidence shows that Cursor tool evidence lives
 in populated `toolFormerData` objects, not the empty `toolResults` arrays. The
 mapping now emits source-call-id-linked invocations and outcomes, preserves
 `completed`/`error`/`loading`/`cancelled`, and retains `modelCallId` as evidence.
@@ -61,7 +64,7 @@ use vendor selection `composer-2.5` and five use `grok-4.5`. Large unmapped
 attachment/context fields are discarded after decoding but remain in captured
 raw evidence, reducing peak ingest memory from about 6 GB to about 0.6 GB.
 
-Artifact review also found that every spank-py artifact and eight Zero400
+Artifact evidence shows that every spank-py artifact and eight Zero400
 artifacts resolve outside the selected project root. These now use `file:` URIs
 and explicit `path_scope=external` metadata instead of misleading `../`
 project-relative identities. In-project artifacts retain normalized relative
@@ -81,7 +84,7 @@ Zero400 has 428 succeeded, 7 failed, and 2 denied. Failures are usually followed
 quickly by another call to the same tool: 20/25 Bash, 9/10 Edit, 2/5 Read, and
 2/2 WebFetch failures were retried within five normalized events.
 
-The searches found substantial concurrent Claude/Cursor work windows in
+The corpus contains substantial concurrent Claude/Cursor work windows in
 Zero400 (approximately 784 and 516 minutes for the two main Claude sessions)
 and shared normalized artifact paths across the two vendors. This supports
 cross-vendor work on the same files; it does not by itself prove shared
@@ -108,7 +111,7 @@ spank-py itself.
 | External versus project-scoped artifact identity | spank-py, Zero400 | store/query tests | Covered |
 | Same artifact across vendors | Claude/Cursor paths in Zero400 | `golden/cross-vendor-artifact.json` and evidence inventory | Covered |
 | Exact model selection | Cursor `modelInfo.modelName` | model-turn configuration tests | Covered |
-| Effort, speed, service settings | None | model-configuration storage tests | Source-data gap |
+| Effort, speed, service settings | Local audits now show Claude model/service tier and Codex model/effort/newer service tier; Cursor shows model only; no distinct speed tier | Adapter/provenance and model-configuration tests; real baseline rebuild pending | Uneven source availability and stale normalized baselines; **CoPlan A12/E-2** |
 | Exact raw recovery | SWEmore, spank-py, Zero400 | hash/decompression checks | Covered |
 | Reference-only raw behavior | Non-reviewed policies/fixtures | stability checks and explicit limitations | Covered |
 
@@ -119,13 +122,12 @@ case, and acceptance still requires the normalized, observation-independent
 digest to match. Each snapshot retains its exact captured revision. The frozen
 reviewed set now has no reference-only evidence.
 
-No additional real project is added now. The uncovered items are either already
-bounded by fixtures or require an upstream shape that the current candidates do
-not supply. Candidate expansion should be evidence-triggered, not exhaustive.
+Coverage states above are evidence facts. Corpus expansion and evidence-gap
+work are governed only by **CoPlan.md §8**, especially **T4–T5**.
 
 ## Retained snapshot access
 
-Querying a retained snapshot now requires `--snapshot-id`. The default package
+Querying a retained snapshot requires `--snapshot-id`. The default package
 policy is `exact`; it refuses a snapshot whose recorded CoSchema package digest
 differs. `--snapshot-package-policy read-compatible` is an explicit escape hatch
 for the same supported database format: it verifies snapshot, raw-manifest,
@@ -138,17 +140,9 @@ and exact mode read the new reviewed snapshot. Recovering old mapping semantics
 still requires the recorded matching software/package; format compatibility is
 not presented as semantic identity.
 
-## Remaining execution order
+## Maintenance ownership
 
-1. Maintain catalog-backed external-artifact assertions without changing
-   session ownership or claiming authorship.
-2. Keep Codex parentage unsupported until a direct referential field appears;
-   `catalog/codex-parent-audit.json` found none across 28 sessions/16 releases.
-3. Monitor the mapped Cursor `toolFormerData` and `modelInfo.modelName` shapes
-   with `catalog/cursor-feature-audit.json`; empty `toolResults` is not evidence.
-4. Maintain real Claude/Cursor shared-artifact evidence through the structural
-   inventory; keep the golden fixture as the stable query contract.
-5. Capture effort/speed/service only when the vendor source explicitly provides
-   them.
-6. Re-run the reviewed-baseline verifier after source refreshes and freeze a new
-   set only after semantic sampling.
+This review records evidence state, not a second work queue. **CoPlan.md** owns
+pending work and restart conditions. **Operations.md** owns baseline
+verification, evidence refresh, and freeze procedures. The machine-readable
+catalogs remain authoritative for membership and immutable snapshot identity.

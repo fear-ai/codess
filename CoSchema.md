@@ -1,4 +1,4 @@
-# CoSchema v3
+# CoSchema v4 candidate
 
 CoSchema is Codess's vendor-neutral logical record model and its current SQLite
 store format. Functional meaning is defined by
@@ -9,16 +9,37 @@ store format. Functional meaning is defined by
 
 ## Package and version identity
 
-The released package is `schema/coschema/` plus the three mapping profiles.
+The format-4 candidate package is `schema/coschema/` plus the three mapping profiles.
 `schema/coschema/manifest.json` names and hashes every package file. Runtime
 initialization refuses a package whose files do not match that manifest.
+Its manifest state remains `candidate`; **CoPlan R1 and R3a/R3b** are the bounded review
+checkpoint before release designation or real-baseline promotion. Formats 2/3
+remain the currently retained historical baselines during this review.
+
+### Format-3 to format-4 candidate delta
+
+Format 4 is primarily a contract and meaning correction over the existing
+physical design, not a wholesale replacement schema.
+
+| Impact | Change | Why it requires review |
+|---|---|---|
+| Critical | The logical contract now includes `model_configurations`, content links/derivations, event-artifact links, model-turn configuration, event causality/time basis, complete tool relations/status, diagnostic scope, and correlation evidence | Format 3 physically stored most of these but its claimed exhaustive contract omitted them; format 4 makes readers and validators acknowledge the real functional surface |
+| Critical | Contract JSON and JSON-extension fields have SQLite `json_valid()` constraints | Invalid Python representations or arbitrary text that previously entered structured columns now fail at write time; adapters must serialize or use a text field |
+| Critical | Source record type/subtype and mapping trace mean exact vendor evidence rather than normalized compatibility names | Existing format-3 rows cannot be reinterpreted as exact provenance; they remain historical and corrected rows require rebuilding from source |
+| Critical | Source revisions change from mtime/size identity to content-sensitive, non-authenticating update fingerprints, including SQLite WAL state | Session observation IDs and update detection can change even when normalized conversation content does not |
+| Significant | Model configuration identity adds family and null-safe uniqueness; occurrence provenance is separated conceptually from reusable configuration values | Duplicate configuration rows reduce, but the final provenance representation remains under **R3a/R3b** review |
+| Significant | Vendor mappings add Claude harness/configuration/fork fields, Codex turn/configuration/archive fields, and Cursor permission/subagent fields | Rebuilt counts, turns, archive state, relations, and model/configuration coverage may differ from format 3 |
+| Compatibility | Formats 2/3 remain readable; only candidate format 4 is writable by the current writer | Acceptance requires new stores and side-by-side comparison, never an in-place update of retained baselines |
+
+No accepted baseline or approved pointer is changed merely by defining this
+candidate.
 
 One monotonic integer versions the whole readable store contract:
 
 - format ID: `codess.coschema`
-- format version: `3`
+- format version: `4`
 - SQLite `application_id`: `0x434F4445` (`CODE`)
-- SQLite `user_version`: `3`
+- SQLite `user_version`: `4`
 - Codess software version: independent, currently recorded in `store_meta` and
   each snapshot manifest
 
@@ -27,11 +48,13 @@ mapping. A change advances the CoSchema format only when the stored contract or
 reader requirements change. Adapter corrections normally require a new software
 release and rebuilt snapshot, not a new database format.
 
-Released packages are immutable. Unknown package or database formats fail
+Once released, packages are immutable. Unknown package or database formats fail
 closed. Legacy unversioned stores may be read through the compatibility query
 surface but cannot be mutated; rebuild creates v2 stores beside retained
-baselines. Format-2 stores remain read-only compatibility inputs; all writes
-and rebuilds now produce format 3.
+baselines. Format-2 and format-3 stores remain read-only compatibility inputs;
+all writes and rebuilds now produce format 4. Format 4 makes the complete
+functional DDL surface and JSON obligations machine-verifiable in both
+directions; retained format-3 snapshots remain valid historical evidence.
 
 ## Core terms
 
@@ -59,7 +82,7 @@ and rebuilds now produce format 3.
 | `projects` | Stable logical project identity plus observed root/cwd, ownership, activity, and selection state |
 | `project_locations` / `workspace_bindings` | Machine-local locations and evidence-backed vendor workspace attribution |
 | `sources` | Immutable observed source revision; unique by source system, URI, and revision |
-| `model_configurations` | Provider/model family/exact name and independently settable effort, speed, service, and mode values |
+| `model_configurations` | Provider/model family/exact name and independently settable effort, speed, service, and mode values; `source_config` retains bounded vendor-field provenance |
 | `sessions` | Vendor/harness container; vendor session ID is scoped by source system and may be absent |
 | `interactions` | Initiating work unit, ordered within a session, with explicit boundary source/confidence |
 | `model_turns` | Model execution, ordered within a session and optionally linked to an interaction |
@@ -133,6 +156,16 @@ Vendor record type/subtype are retained in `source_record_type` and
 `source_record_subtype`. Broad common meaning is mapped into open
 `event_kind`, `actor_kind`, `content_role`, and `origin_kind` values. New vendor
 values therefore remain queryable even before the common vocabulary grows.
+Normalized names and formats are the stable mixed-vendor query surface, not a
+replacement for source designations. Each mapped event keeps scalar source
+type/subtype/locator fields and a named common mapping; `mapping_trace` records
+the structured source path and all applied rules. Adapter conformance checks
+require those rules to exist in the vendor mapping profile.
+Mapping profiles declare their direction. Current vendor profiles are
+`source_to_common`; future exports use separate `common_to_external` profiles
+and fixtures rather than reversing an ingest rule implicitly. Both directions
+use the same rule grammar and retain source/common values needed to explain the
+translation.
 
 Source tool names are free text because tool registries are vendor-, harness-,
 plugin-, and version-dependent. `canonical_tool_name` is an optional mapping,
@@ -153,21 +186,49 @@ become an unbounded raw-record dump. `mapping_rule` and `mapping_trace` identify
 the translation responsible for a normalized event. Structured mapping
 diagnostics record information that could not be mapped reliably.
 
+JSON is used only where the value is intrinsically compound: mapping traces,
+tool argument/result objects, configuration provenance, processing actions,
+correlation evidence, and sparse extension objects. Identifiers, field paths,
+record names, versions, statuses, normalized taxonomy values, paths, and the
+primary `mapping_rule` remain scalar text. SQLite format 4 enforces
+`json_valid()` for every contract field typed as `json` or `json_extension`;
+writers serialize structured values canonically instead of storing Python
+representations. Exact large or unbounded source objects remain in raw evidence.
+
 There is no `release_value`. Version strings remain exact source strings in the
 appropriate software/harness/model fields. There is no database `source_raw`
 column; raw evidence is handled by the sidecar store.
 
+Configuration values remain nullable and independent. A model name containing
+words such as `fast`, `high-thinking`, or `priority` does not populate speed,
+effort, or service tier. Per-event `configuration_provenance` records the source
+record type, locator, and exact field path for each normalized occurrence.
+The candidate currently writes `model_configurations.source_config` as a
+bounded representative JSON observation, not an exhaustive history; event
+provenance is authoritative. **CoPlan R3a** decides whether that representative
+is removed or narrowed, and **R3b** separately decides whether occurrence
+provenance also receives a materialized relational projection.
+Configuration identity includes provider, family, exact model, revision,
+effort, speed, service tier, and mode with null-safe database uniqueness.
+Absent, default, and unknown remain distinct.
+
 ## Raw evidence and immutable snapshots
 
 Raw retention uses `codess.raw/1`, a content-addressed store outside query
-databases. JSONL sources use a stable-file read; Cursor SQLite uses SQLite's
-backup API so WAL-visible committed data is captured consistently. Captured
-objects are zstd-compressed and named by the SHA-256 of uncompressed content.
+databases. JSONL sources use fixed-size stable-file reads; Cursor SQLite uses a
+paged SQLite backup into a temporary database so WAL-visible committed data is
+captured consistently. Source and stored hashes are computed in bounded passes,
+zstd output is staged, and only a verified content-addressed object is promoted.
+Capture and later raw verification both use fixed-size streaming reads, so
+memory does not scale with source size. The raw object and normalized SQLite
+store remain equally mutable local files. They expose different validation
+invariants but have the same local-writer trust boundary. The complete threat
+model and digest-role rationale are in **Designs.md §11**.
 
 `--raw-mode` controls retention:
 
 - `none`: record that the source was not retained
-- `reference`: record locator, size, and modification identity (default)
+- `reference`: record locator plus a bounded source fingerprint (default)
 - `capture`: store a content-addressed exact revision
 - `seal`: capture and hard-link/copy the objects into the snapshot
 
@@ -194,8 +255,8 @@ state without requiring a replacement and must not strand the last reproducible
 evidence. **Relocate** composes add, durable-pointer installation, read
 verification, and retirement. The current `retire_project.py` requires
 `--new-location`, so its behavior is relocation despite its historical name;
-keep it as a compatibility wrapper through the removal checkpoint. The catalog
-location operations in Designs.md §12 are implemented and tested.
+its compatibility-wrapper disposition is centralized in **CoPlan A11**. The
+catalog location operations define the current lifecycle surface.
 
 `tools/validate_snapshot.py` verifies the current package and immutable-file
 hashes, SQLite integrity and foreign keys, manifest counts, event ordering,
@@ -208,9 +269,23 @@ updating `catalog/approved-baselines.json`. Policies are versioned data under
 `catalog/policies/`; their contract is
 `schema/validation-policy-contract.json`.
 
-Immediate apply validation compares a reference-only locator's current size and
-mtime identity to the revision just ingested, preventing promotion after source
-drift. Frozen reviewed-baseline verification does not require a live mutable
+Sources at or below 64 MiB receive a full-file MD5 change fingerprint. Larger
+sources use an explicitly labeled eight-window MD5 sample plus size and mtime.
+MD5 is deliberately used here as a fast, non-authenticating change detector;
+neither form proves byte identity or protects against an adversary. Exact raw
+capture still hashes the complete stable file or transactional SQLite backup
+with SHA-256 because that digest is its content address and integrity identity.
+Incremental ingest
+state records the revision, method, size, mtime, and consistency, so same-size
+and same-mtime changes are detected for fully hashed sources. When a SQLite WAL
+exists, its revision is combined with the main-file revision so WAL-only Cursor
+updates are not skipped. Every Source and
+Session records observation/ingestion time, while immutable snapshot manifests
+provide the dated extraction boundary and retain prior versions.
+
+Immediate apply validation compares a reference-only locator's current revision
+to the revision just ingested, preventing promotion after source drift. Frozen
+reviewed-baseline verification does not require a live mutable
 locator to remain unchanged forever; it verifies retained snapshot/store/raw-
 manifest identities and reports reference reproducibility as a limitation.
 
@@ -245,6 +320,14 @@ compatible, breaking, or manual review. It checks entity/field removal,
 identity/order changes, type/nullability constraints, and vocabularies; unknown
 change shapes fail closed. Fixtures under `schema/coschema/fixtures/` cover
 minimal, maximal, edge, negative, and compatibility cases.
+
+Runtime `validate_database_contract()` checks both directions: every logical
+field must exist physically, and every physical table/column must be contracted
+or listed in `physical_contract` as an internal/compatibility detail. It also
+verifies SQLite JSON enforcement. `validate_mapped_event()` checks an adapter
+event's source identity, declared mapping rules, structured trace, and JSON tool
+input. These checks turn omissions into test failures instead of documentation
+drift.
 
 For a proposed store change:
 

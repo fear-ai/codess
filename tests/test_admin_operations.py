@@ -12,7 +12,8 @@ from codess.baseline_catalog import freeze_reviewed_catalogs, verify_reviewed_ca
 from codess.baseline_operations import reset_rebuildable_working_stores
 from codess.baseline_validation import validate_project
 from codess.candidate_review import (
-    discover_git_roots, recommend, record_decision, refresh_candidates, validate_policy,
+    discover_git_roots, observe_git, recommend, record_decision,
+    refresh_candidates, validate_policy,
 )
 from codess.catalog_operations import onboard_catalog, relocate_project
 from codess.fileio import hash_file, read_json, write_json_atomic
@@ -26,6 +27,7 @@ from codess.schema_evolution import compare, required
 from codess.snapshot import create_snapshot
 from codess.store import connect, init_db, replace_session_events, sync_project_catalog
 from codess.vendor_audits.claude_features import audit_claude_features
+from codess.vendor_audits.codex_features import audit_codex_features
 
 
 def _git_project(path: Path) -> None:
@@ -108,7 +110,32 @@ def test_candidate_refresh_uses_scan_and_preserves_review(tmp_path, monkeypatch)
     assert item["review"]["decision"] == "approved"
     assert item["recommendation"]["outcome"] == "consider"
     assert item["observations"]["git"]["is_repository"] is True
+    assert item["observations"]["git"]["worktree"]["is_linked"] is False
     assert item["observations"]["git"]["commits_since"] == 1
+
+
+def test_git_observation_identifies_linked_worktree_and_common_repository(tmp_path):
+    primary = tmp_path / "primary"
+    linked = tmp_path / "linked"
+    _git_project(primary)
+    subprocess.run(
+        ["git", "worktree", "add", "-qb", "performance", str(linked)],
+        cwd=primary,
+        check=True,
+    )
+    primary_observation = observe_git(primary)
+    linked_observation = observe_git(linked)
+    assert primary_observation["worktree"]["is_linked"] is False
+    assert linked_observation["worktree"]["is_linked"] is True
+    assert linked_observation["worktree"]["branch"] == "performance"
+    assert (
+        linked_observation["worktree"]["common_git_dir"]
+        == primary_observation["worktree"]["common_git_dir"]
+    )
+    assert (
+        linked_observation["worktree"]["git_dir"]
+        != primary_observation["worktree"]["git_dir"]
+    )
 
 
 def test_git_discovery_stops_at_first_repository_boundary(tmp_path):
@@ -245,6 +272,40 @@ def test_claude_feature_audit_is_structure_only(tmp_path):
     report = audit_claude_features(tmp_path)
     assert report["content_block_types"] == {"tool_use": 1}
     assert report["parent_links"] == 1
+    assert "secret body" not in json.dumps(report)
+
+
+def test_codex_feature_audit_is_bounded_and_tracks_setting_provenance(tmp_path):
+    root = tmp_path / "sessions"
+    root.mkdir()
+    source = root / "session.jsonl"
+    source.write_text("\n".join((
+        json.dumps({
+            "type": "turn_context",
+            "payload": {"model": "gpt-test", "effort": "high",
+                        "user_instructions": "secret body"},
+        }),
+        json.dumps({
+            "type": "event_msg",
+            "payload": {"type": "thread_settings_applied", "thread_settings": {
+                "model": "gpt-test", "reasoning_effort": "medium",
+                "service_tier": "priority",
+                "collaboration_mode": {"mode": "default"},
+            }},
+        }),
+        json.dumps({"type": "response_item", "payload": {
+            "type": "message", "content": "x" * 4096,
+        }}),
+    )) + "\n", encoding="utf-8")
+    report = audit_codex_features(
+        [("active", root)], max_record_bytes=1024
+    )
+    assert report["diagnostics"] == {"oversize": 1}
+    assert report["model_settings"]["service_tier"] == {"priority": 1}
+    assert report["model_settings"]["reasoning_effort"] == {
+        "high": 1, "medium": 1,
+    }
+    assert any("thread_settings_applied" in key for key in report["setting_provenance"])
     assert "secret body" not in json.dumps(report)
 
 

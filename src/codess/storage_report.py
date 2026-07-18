@@ -105,7 +105,7 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
                 }
             result["tokens"] = {
                 "availability": "not_normalized",
-                "reason": "CoSchema v3 does not yet persist vendor token observations",
+                "reason": "CoSchema v4 does not yet persist vendor token observations",
             }
         finally:
             conn.close()

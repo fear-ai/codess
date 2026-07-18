@@ -1,7 +1,7 @@
 # Codess design decisions
 
-This document records the design decisions behind the implemented CoSchema v3
-foundation and the remaining corpus/catalog/query work. `CoSchema.md`,
+This document records the functional design and research direction behind
+CoSchema v4 and cross-vendor investigation. `CoSchema.md`,
 `schema/coschema/contract.json`, and `schema/coschema/sqlite/schema.sql` are the
 authoritative logical description and executable layout.
 
@@ -13,7 +13,7 @@ queries.
 
 ## 1. Decisions and priorities
 
-### Implemented foundation
+### Current design foundation
 
 1. **Keep two public compatibility versions.** Version the Codess software and
    a durable CoSchema store-format package. Record implementation and upstream
@@ -340,7 +340,7 @@ Codess ingests it as evidence, and an Artifact if a session itself edited or
 discussed that file. A tool result body is event payload, not automatically an
 Artifact; it becomes one when it identifies or creates a durable referent.
 
-### Remaining concepts
+### Additional concepts
 
 - **Project**: a stable work identity, independent of its current local path.
 - **Project location**: a machine-local observed root, worktree, subdirectory,
@@ -462,6 +462,14 @@ Partition it into:
 Git remote identity, repository UUID, or content/commit evidence can help
 correlate moved checkouts, but none should automatically merge forks or
 uncommitted worktrees.
+
+Linked Git worktrees require both identities. Record the worktree Git directory,
+common Git directory, branch, HEAD, and remote observation. Two CodeSess
+Projects may remain separate analysis/curation units when their vendor
+workspaces and session purposes differ while still sharing one repository
+identity for repository-level correlation. A shared common Git directory is
+strong local evidence of that relationship, but does not by itself merge their
+Project IDs or session scopes.
 
 ### File meanings
 
@@ -700,6 +708,67 @@ capability is a child execution fact, not necessarily a second tool call.
 Avoid duplicating result content in both generic `content` and `tool_output`;
 define one canonical payload with typed projections for display and query.
 
+### Content processing contract
+
+Content processing is the configurable boundary between vendor evidence and
+normalized query content. Vendor record shapes remain in the vendor schema
+documents; persisted content and derivation entities remain in **CoSchema.md**.
+Implementation wiring is indexed from **CoPlan.md §5**.
+
+#### Policy entry points and order
+
+Ingest accepts `--content-policy JSON` and `--strict-mapping`.
+`--strict-mapping` fails a source on unsupported or lossy source mappings; it
+is independent of content transformation.
+
+A content policy may act during byte decoding, before normalization, and after
+normalization. Rules apply in this order:
+
+1. global policy;
+2. every matching scope in declaration order; and
+3. built-in adapter storage bounds.
+
+Scopes can match `vendor`, `record_type`, `event_kind`, `phase`,
+`project_path`, and `repo_path` by exact value or shell-style wildcard.
+The machine-readable example is
+`schema/content-policy.example.json`; it demonstrates syntax and is not a
+recommended privacy policy.
+
+#### Supported transformations
+
+A policy can declare:
+
+- character encoding, decode-error behavior, and Unicode normalization;
+- minimum and maximum character bounds;
+- suppression expressions for known hostile content;
+- privacy expressions with configurable replacement;
+- vocabulary blanking; and
+- topical include or exclude expressions.
+
+Every applied action contributes to a processing trace. The normalized store
+can identify policy and processor versions, input/output content identities,
+actions, rejection reasons, and derivation links without copying transformed
+bodies into general metadata.
+
+#### Evidence and safety contract
+
+Suppression, redaction, blanking, topical filtering, and truncation are lossy.
+Normalized content must therefore expose completeness and processing evidence;
+a query miss against a bounded projection does not prove absence from the
+source.
+
+Exact raw capture is governed separately and occurs before transformation.
+External content references are accepted only through vendor-specific validated
+locators. A retained hash, length, or `storage_class=not_retained` record is
+evidence about an input, not the input body itself.
+
+The common event vocabulary remains extensible, while `source_records`,
+`content_objects`, typed link tables, and `processing_runs` preserve durable
+identity and lineage. Structured artifact updates are source records with typed
+operation/target parameters and optional before, after, patch, or diagnostic
+content links. See **CoSchema.md** for their cardinality and persistence
+semantics.
+
 ## 11. Raw evidence and sidecars
 
 Do not put full `source_raw` blobs in the main query database. They enlarge
@@ -711,7 +780,7 @@ raw sidecar JSONL. Retain the hybrid architecture, but do not make converted
 JSONL the raw format: it cannot preserve a Cursor SQLite source byte-for-byte
 and may discard unknown fields, ordering, encoding, or database structure.
 
-### Proposed `codess.raw/1` format
+### `codess.raw/1` format
 
 Treat this as part of the CoSchema store package, not another regularly managed
 release train. `codess.raw/1` is a fixed format namespace; create `/2` only if a
@@ -806,6 +875,60 @@ permissions, encryption, retention, and deletion policy to raw objects
 separately. A redacted derivative is a different object/class and must never be
 labeled exact raw evidence.
 
+### Local evidence threat model
+
+The trust boundary is the local user account and its storage. A raw zstd object,
+its JSONL manifest, and a normalized SQLite store are all ordinary mutable local
+files. Corrupting a raw object is therefore not intrinsically harder than
+changing the SQLite database. Their different roles determine which invariants
+can be checked, but not their resistance to a local writer: raw verification
+checks exact stored and decompressed bytes, while SQLite verification adds
+structural, relational, package, and semantic invariants.
+
+The model covers accidental truncation/bit rot, interrupted writes, stale or
+mislinked revisions, importer defects, hostile source bytes, unauthorized local
+reading, and post-capture modification. It does not claim protection against a
+process with the same account authority that can rewrite an object, its
+manifest, the SQLite store, and every expected digest. A digest checked only
+against metadata stored beside the file detects inconsistency, not authorship.
+Authentication against that adversary would require a separately protected or
+signed manifest, and confidentiality requires permissions and/or encryption.
+
+| Risk | Current control | Remaining boundary |
+|---|---|---|
+| Accidental raw-object corruption | Complete stored SHA-256, complete uncompressed content SHA-256, sizes, zstd decoding, and bounded two-pass verification | These checks establish consistency with the adjacent manifest, not who wrote either file |
+| SQLite corruption or unintended mutation | Immutable snapshot hash, package/policy hashes, `quick_check`/integrity and foreign-key checks, semantic digest, and rebuild comparison | A same-authority writer can alter the DB and its adjacent manifest together |
+| Source changes during capture | Stable-stat JSONL read or transactional SQLite backup including committed WAL state | A reference-only source can later disappear; sampled routine fingerprints can miss adversarial changes |
+| Malicious collision input | SHA-256 content addressing for complete retained bytes | Hashing neither sanitizes hostile content nor authenticates its producer |
+| Unauthorized disclosure | Separate raw/query storage and configurable retention | Digests provide no secrecy; installations must restrict directory/file modes or encrypt at rest |
+| Unbounded allocation | Streaming capture and verification in fixed chunks; SQLite backup is paged | SQLite itself and temporary backup allocation still require disk-space monitoring |
+
+Recoverability, archival value, and whether another copy exists are retention
+and backup-policy questions, not differences in the local corruption threat.
+They must not be used to imply that one of these file types is tamper-resistant
+or to postpone removal of redundant current captures.
+
+Digest roles remain deliberately separate. MD5 is the approved fast,
+non-authenticating routine update fingerprint; it is not used for durable raw
+identity. `codess.raw/1`, snapshot manifests, and established global IDs use
+SHA-256. BLAKE3 would be a good high-throughput cryptographic content digest
+only through a maintained implementation such as the Rust-backed Python
+package—not a local reimplementation. It is not currently installed, and
+changing existing IDs or `objects/sha256/` paths would be a format/identity
+migration with little threat-model benefit. Evaluate it for `codess.raw/2` or a
+new measured digest role rather than silently applying it “across the board.”
+
+The default retention invariant is one retained revision of a shared logical
+source when an uncompressed revision is at least 1 GiB. Multiple such current
+revisions require the explicit `--keep-comparison-revisions` selection and are
+reported with their source locator, snapshots, sizes, and revision IDs.
+Content-addressing removes byte-identical copies but cannot deduplicate SQLite
+backups that genuinely differ. Because current snapshots are immutable, an
+existing conflict must be resolved by rebuilding the affected Projects against
+one deliberately captured source cohort and then applying validated pruning;
+deleting an object still named by a current manifest would falsify that
+snapshot.
+
 Routine storage accounting is a derived observation, not part of CoSchema.
 Each invocation records database allocation/utilization, entity counts,
 content/session skew, snapshot/raw allocation, thresholds, and a delta from the
@@ -855,20 +978,21 @@ Keep two distinct portability products:
   not byte-identical vendor evidence.
 
 Exact backup reuse is safe only when a revision guard covers the main database
-and WAL before and after backup and resolves to an already verified raw object.
-The main file's mtime/size is insufficient in WAL mode. Content addressing
-currently deduplicates stored bytes after backup; it does not avoid the backup
-or whole-buffer compression cost, which is why streaming remains pending.
-
-Large raw capture is the next resource-boundary change. The current capture
-implementation reads an ordinary source or completed Cursor SQLite backup into
-one byte string and produces another full compressed byte string. Replace that
-with a chunked pipeline: SQLite backup or stable source file → incremental
-content hash → streaming zstd writer → incremental stored hash → atomic
-content-addressed rename. The temporary output must live on the destination
-filesystem, be removed on every failure, and publish only after source-stability
-and stored-size/hash checks. Peak memory should be approximately the configured
-chunk/buffer sizes, not source size.
+and WAL and resolves to an already verified raw object. The marker is captured
+before backup and saved as the Project state guard: a change during or after
+capture therefore causes a later marker mismatch and conservative recapture,
+rather than allowing an older snapshot to appear current. The main file's
+mtime/size is insufficient in WAL mode. Content addressing deduplicates stored
+bytes after backup, while the metadata-only cohort cache avoids backup entirely
+when that marker is already represented. The bounded capture design is a chunked
+pipeline: SQLite backup or stable source file → incremental content hash →
+streaming zstd writer → incremental stored hash → atomic content-addressed
+rename. Temporary output lives on the destination filesystem, is removed on
+failure, and is published only after source-stability and size/hash checks.
+Peak memory is governed by configured buffers rather than source size. The
+fresh standalone SQLite backup is also the query input, avoiding an immediate
+decompression pass. The actionable implementation and acceptance evidence are
+**CoPlan A5**.
 
 ### Retiring or replacing a local directory
 
@@ -992,66 +1116,23 @@ WP projects are currently dormant/deferred, not permanently abandoned.
 `Code/jsonschema` is external/reference and should be considered only as a
 small compatibility/example case, not a priority corpus.
 
-### Review catalog seed
+### Review catalog authority
 
-Repository counts and commit-recency totals are deliberately not retained here;
-they age quickly and overrepresent reference collections. Repository discovery
-and vendor-session discovery remain separate observations. Use
-`~/Work/Code/SWEmore/active_work_projects_since_2026-05.csv` as the maintained
-active-work candidate input, not Git-repository recency or an old GitHub list.
-Its rows seed this review queue, which must be refreshed with current vendor
-observations before selection:
+Candidate membership, observations, and review dispositions are live data, not
+design prose. The maintained active-work CSV may seed
+`catalog/active-work-review.json`, but neither an old GitHub list nor this
+document is authoritative for current paths, remotes, session counts, or
+approval.
 
-| Local candidate | Evidence and current disposition |
-|---|---|
-| `ZK/Zero400` | Priority: active-work list plus meaningful Claude/Cursor evidence |
-| `ZK/zerowalletmac` | Imported compatibility candidate: one current Claude session plus two Cursor sessions linked explicitly from the former `zerowallet400` workspace; direct root/`src` Cursor traces still have no headers |
-| `Code/Misses` | Accepted Claude stress baseline: 18 main plus 105 subagent sessions, 26,658 events, 373 external artifacts, and 123 captured source revisions; root identity is the repository root |
-| `Code/CodeSess` | Priority: active implementation and `.codess`; locate/validate current sources from all three vendors |
-| `Spank/spank-py` | Priority: active-work list, harness markers, meaningful source evidence, and an old store that should be rebuilt |
-| `Spank/spank-rs` | Accepted Codex baseline: four sessions and 31,046 events; the nested `perf` Cursor workspace maps to the repository root but contains no attributable composer sessions |
-| `Claude/CContext` | Candidate/path-mapping case: active-work list, weak marker, and current zero-session trace |
-| `Claw/setpack` | Accepted large-single-session Codex baseline: 8,473 normalized events from one 18,223-record source despite no repository marker |
-| `Spank/HECpoc` | Candidate/path-mapping case: substantial local work but current zero-session trace and no marker |
-| `ZK/Zebro` | Local active candidate with no harness marker yet; current configured GitHub remote was unavailable, which does not invalidate the local repository |
-| `ZK/Requihash` | Local active candidate with no harness marker yet; current configured GitHub remote was unavailable, which does not invalidate the local repository |
-| `Codex` | Candidate: recent local work but no harness marker; verify relevant session evidence before inclusion |
-| `Github/Schema` | Needs explicit review: present in the CSV, but `Work/Github` is dormant by default and its current zero-session trace is not an ingestion success |
+The catalog keeps observed facts, policy recommendations, and human decisions
+separate. Remote state is a dated observation and missing remotes do not
+invalidate local owned work. Reference collections and dormant trees remain
+non-active by default unless a concrete compatibility or correlation need
+changes their classification.
 
-The CSV remains a list of **local active-work candidates**, not a promise that
-any recorded remote still exists. The generated catalog therefore marks every
-remote `unchecked`; remote availability is updated only by a new, dated
-observation and never inferred from an old list.
-
-Supplement the CSV with evidence-driven candidates it does not currently list:
-`Code/SWEmore` itself remains a priority baseline. `ZK/ZeroPerf` is now an
-accepted Claude baseline with eight sessions, 7,398 events, 71 artifacts, and
-nine raw revisions including one external tool-result file. Dormant `WP/wp`,
-`WP/wpages`, and `WP/harduw` are accepted compatibility baselines; their former
-working stores were preserved where present. `WP/multiwp` and `WP/must-py` were
-stale Claude-index observations and are not current candidates. `Code/jsonschema`
-is an external/reference fixture only.
-
-`Code/CodingTools`, including the upstream Codex checkout whose Rust workspace
-is `codex/codex-rs`, is third-party reference source. Git recency or local LLM
-sessions there may justify compatibility inspection, but do not make it owned
-work or authorize corpus onboarding.
-
-The remaining zero-session traces (`Github/skip` and any unresolved paths
-above) are discovery diagnostics or path-mapping work, not evidence of usable
-session ingestion.
-
-`ZK/ZKs/insight` was relocated to `ZK/insight`. Its Claude store deliberately
-retains the historical slug and is joined to the current checkout through an
-approved source link. The accepted baseline contains 14 sessions, 8,644 events,
-80 artifacts, four external tool-result sources, and 18 captured raw revisions.
-
-The old personal registry is not reused as catalog truth. The maintained CSV is
-now transformed into `catalog/active-work-review.json`, with observed CSV facts,
-local availability, remote status `unchecked`, path-derived conservative
-curation, and an empty human-review decision kept in separate objects. Refresh
-it with `tools/build_review_catalog.py`; then merge current vendor scan evidence
-and explicit review decisions without overwriting observations.
+Current candidate review and onboarding needs enter the central registry under
+**CoPlan T5**; broad discovery or corpus expansion remains governed by
+**CoPlan P4**. Machine catalogs and receipts retain the actual Project set.
 
 ### Candidate review, selection, and batch onboarding
 
@@ -1175,20 +1256,16 @@ Baseline freeze and verification follow this rule. Keep `baseline verify` as a
 read-only CI and diagnostic command. `baseline freeze --selection FILE`
 verifies proposed members and package/policy identities before writing,
 atomically replaces each catalog, rolls the pair back on a detected failure,
-then verifies the written set before success. `baseline apply` remains the expensive per-Project rebuild
-and fixed-point operation. A future `baseline refresh` may compose apply for
-each selected Project followed by freeze, but must expose every Project result.
+then verifies the written set before success. `baseline apply` remains the
+expensive per-Project rebuild and fixed-point operation. A composed refresh, if
+promoted under **CoPlan P8**, preserves every per-Project result.
 
 Evidence audits are capability-specific rather than symmetrical wrappers for
-their own sake. Cursor currently has a broad structural feature audit; Codex
-has a bounded parentage audit. A Claude wrapper is justified when it answers a
-maintained question such as raw role/source shapes, tool outcome and permission
-fields, compaction, sidechain parentage, model fields, or harness-version drift.
-Implement it as `evidence audit claude-features` over reusable
-`audit_claude_features()`, retaining counts and field population but no
-conversation bodies. `evidence gather` calls vendor audits once and may emit
-their full component reports plus the aggregate inventory; sequential wrapper
-runs are not the normal refresh procedure.
+their own sake. Cursor feature, Codex parentage, and Claude feature evidence use
+reusable audit operations that retain counts and field population but no
+conversation bodies. `evidence gather` calls them once and may emit detailed
+component reports plus the aggregate inventory; sequential wrapper runs are not
+the normal refresh procedure.
 
 Project-location lifecycle needs explicit complementary operations:
 
@@ -1200,11 +1277,10 @@ Project-location lifecycle needs explicit complementary operations:
 - `catalog relocate --project-id ID --from OLD --to NEW` composes add, pointer
   installation, retained-snapshot read verification, and retirement.
 
-Current ingest can ensure a binding for its path, while `retire_project.py`
-actually performs relocation because `--new-location` is required. Neither is
-a safe explicit “add this second location to the known Project” command. The
-public catalog operations now provide add, retire, and relocation; retain the
-old script as a compatibility wrapper through the removal checkpoint.
+Current ingest can ensure a binding for its path. The public catalog operations
+provide explicit add, retire, and relocation; `retire_project.py` is a legacy
+relocation wrapper because `--new-location` is required. Its disposition is
+centralized in **CoPlan A11**.
 
 ### Code partition for operations and wrappers
 
@@ -1215,8 +1291,8 @@ Partition by semantic ownership and reuse, not command count:
 - `src/cli/`: parsing, dispatch, rendering, exit-code mapping, and composition;
 - `tools/`: temporary developer entry points and compatibility wrappers only;
   no unique business rules or SQL;
-- `scripts/`: deprecated compatibility surface, removed only after replacement
-  commands pass tests and documented workflows are updated;
+- `scripts/`: no unique business rules; retired compatibility entry points do
+  not return here;
 - `catalog/`: versioned policy, selection, review, and accepted-baseline data;
   never Python policy hidden in a script; and
 - `schema/`: machine-readable contracts for those data formats.
@@ -1257,153 +1333,83 @@ matching prompt text. Uncommitted changes and concurrent sessions require
 explicit uncertainty; Codess should report correlation, not claim which model
 authored a line without evidence.
 
-## 13. Seven key directions and execution order
+## 13. Investigation and research direction
 
-The numbered directions below are also the intended execution order. Each step
-establishes the contract or evidence needed by the next; avoid broad historical
-ingestion until this path works on a small, representative corpus.
+Codess is useful only when normalized evidence supports actual investigation.
+The design therefore favors a typed, reproducible research path over a generic
+natural-language-to-SQL surface. Active implementation, gaps, decisions, and
+postponed work are registered only in **CoPlan.md §8**.
 
-### 1. Establish a durable store contract — implemented
+### Research questions the system is intended to support
 
-Package the logical schema, SQLite layout/DDL, constraints, required indexes,
-taxonomies, validation rules, and fixtures as `codess.coschema`. Define the
-manifest and `store_meta`, assign the SQLite application ID, encode the CoSchema
-format in `user_version`, declare reader compatibility, and reject unsupported
-formats. A detached database must be self-identifying and safely readable by a
-known Codess release.
+| Priority | Question | Desired research result |
+|----------|----------|-------------------------|
+| 1 | What changed since the preceding scan, ingest, snapshot, or usage observation? | Versioned new/changed/removed entities with input and observation identities |
+| 2 | Which Projects or sessions merit review? | A health/orientation summary with reasons and evidence IDs |
+| 3 | What is vendor usage, reset horizon, pace, and plausible monthly total or cost? | Confidence-labelled observations separated from quota, price, and billing claims |
+| 4 | What consumes storage and what is safely reclaimable? | Allocation/retention results tied to verified current manifests and dry-run selections |
+| 5 | Which sessions exist for a Project, vendor, model, or period, and how large or active are they? | Typed facets and timelines with explicit elapsed-versus-derived-active duration |
+| 6 | Where did a prompt, response, error, path, symbol, or topic occur? | Bounded search with content-completeness and source-availability evidence |
+| 7 | Which vendors touched the same Project or artifact? | Correlation rows with stable identities, locators, confidence, and no unsupported authorship claim |
+| 8 | What happened around a request, tool cycle, denial, compaction, or abort? | One canonical Interaction/Model Turn or sequence window |
+| 9 | Which outcomes failed, were orphaned, or lack mappings? | Composable source/tool/status/diagnostic evidence |
+| 10 | What intent, decisions, and unresolved work can be summarized? | A derived summary that cites the exact bounded evidence and processor identity |
 
-### 2. Finalize CoSchema v3 — implemented
-
-Define Source and Source Revision, Session, Interaction, Model Turn, Event,
-Actor, Tool Invocation/Result, Model Configuration, Artifact, and Artifact Link,
-including identities, relationships, ordering, time provenance, nullability,
-and lineage. Disposition every current field as keep, rename, partition,
-specialize, raw-only, or remove. `release_value` is removed and fabricated
-fallback values and overloaded fields before writing the new DDL.
-
-### 3. Produce explicit vendor mappings — implemented with evidence gaps
-
-Create field-by-field Claude, Codex, and Cursor mapping matrices. Preserve exact
-source types, roles, statuses, model settings, and tool names alongside common
-values. Document absent, unsupported, inferred, invalid, redacted, and discarded
-evidence. Cover parent/subagent relationships, archive semantics, commands,
-skills, tool call/results, context compaction, and memory. Every normalized fact
-must be traceable to source evidence and a tested mapping rule.
-
-### 4. Build immutable snapshots and raw capture — implemented
-
-Implement a writer that builds beside the current store, validates the result,
-and atomically promotes it without modifying the prior baseline. Implement
-`codess.raw/1` for exact JSONL capture and transactionally consistent Cursor
-backup, with `none`, `reference`, `capture`, and `seal` modes. Hash sources, raw
-objects, stores, and manifests; preserve the matching software identity. Rebuild
-derived data by default rather than migrating it in place.
-
-For a clean worktree, software revision is the Git commit. For a dirty
-worktree, snapshot identity also includes a SHA-256 over status, the binary Git
-diff, and every untracked file's path and bytes; `commit+dirty` alone is not a
-reproducible software identity.
-
-### 5. Repair project discovery and cataloging — catalog seed implemented
-
-Permanently isolate test registries and retire the polluted personal registry
-as evidence. Seed the clean review catalog from
-`active_work_projects_since_2026-05.csv`, then add vendor-session observations.
-Separate scan facts from human curation; record topic, ownership, activity,
-selection state, mapping quality, and dated remote observations. Treat reference
-collections and `Work/Github` as non-active by default, without allowing missing
-remotes to invalidate local work.
-
-### 6. Create a small compatibility corpus — implemented with known gaps
-
-The frozen SWEmore, spank-py, and Zero400 set covers Claude, Codex, Cursor, tool
-cycles for Claude/Codex, subagents, compaction, mixed-vendor project timing, and
-current mapping hazards. Golden fixtures cover same-artifact multi-vendor
-queries and shapes absent from the frozen corpus. Current real evidence contains
-Cursor `toolFormerData` call/result lineage, `modelInfo.modelName` selections,
-and Claude/Cursor references to the same normalized artifact paths in an
-approved workspace. This is evidence of shared files, not authorship.
-
-### 7. Deliver useful mixed queries — implemented
-
-Implement and test cross-vendor session/event queries, deterministic ordering,
-Interaction and evidenced Model Turn grouping, tool call/result correlation,
-source versus normalized status, model configuration, and artifact correlation.
-Queries may report that multiple coding systems touched the same project or
-artifact, with evidence and confidence, but must not assert unsupported
-authorship.
-
-### Common questions and a query workflow
-
-Prioritize questions that recur in corpus review and operations, plus the
-usage/reset/burn-rate views proven useful by
+Usage/reset/burn-rate views in
 [CodexBar](https://github.com/steipete/CodexBar) and
-[Claude Code Usage Monitor](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor).
-Do not build a generic natural-language-to-SQL surface first.
+[Claude Code Usage Monitor](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor)
+are useful precedents, but Codess keeps observed counters, derived estimates,
+external quota/price facts, and billed cost distinct.
 
-| Priority | Question | Current method | Missing method |
-|----------|----------|----------------|----------------|
-| 1 | What changed since the preceding scan, ingest, or usage observation? | Registry observations and storage-report deltas | Versioned entity-level new/changed/removed result |
-| 2 | Which Projects or sessions need review? | Preflight, diagnostics, audit, candidate review, resource/skew reports | One health summary with reasons and evidence IDs |
-| 3 | What is the current vendor usage, reset horizon, pace, and likely monthly total/cost? | Monthly Claude/Codex observations; Codex diagnostic | Verified quota/reset and price sources; confidence-aware forecast |
-| 4 | What consumes storage and what is safely reclaimable? | `storage report` and dry-run `storage prune` | Saved threshold comparison only when routine automation resumes |
-| 5 | Which recent sessions exist for a Project/vendor/model, and how large/long are they? | Sessions, stats, taxonomy, direct SQL | Typed filters and duration/content-size projections |
-| 6 | Where did a prompt, response, error, path, symbol, or topic occur? | Bounded session display and direct SQL | Scoped content search; optional rebuildable FTS index |
-| 7 | Which vendors touched the same Project or artifact, and what is the evidence? | Artifact and correlation reports | Typed correlation result with confidence and source locators |
-| 8 | What happened around a user request, tool call/result, denial, compaction, or abort? | Session, lineage, permissions, and audit reports | One ordered interaction/turn window |
-| 9 | Which tool/command outcomes failed, were orphaned, or lack mappings? | Lineage, audit, diagnostics | Composable status/tool/source filters |
-| 10 | What intent, decisions, and unresolved work can be summarized from selected evidence? | Manual bounded review | Optional derived summary that cites event/source IDs and records its processor |
+### Typed request and result vision
 
-Every formulated query should become a versioned request independent of the
-physical SQLite schema. A `codess.query-request/1` contains:
+A `codess.query-request/1` is independent of the physical SQLite schema and
+contains:
 
-- a stable `question_kind` and optional saved-query name;
-- scope by Project/location/workspace, vendor, session, and time interval;
+- a stable question kind and optional saved-query name;
+- scope by Project/location/workspace, vendor, session, snapshot, and time;
 - typed filters for text, event/record kind, actor/role, tool, status, model,
   artifact, and diagnostic reason;
 - projection, grouping, ordering, row/byte limits, and content policy; and
-- requested freshness: current retained snapshots by default, or an explicit
-  historical snapshot.
+- explicit freshness: current retained snapshots or named historical inputs.
 
-The planner resolves durable Project identities to current store paths, rejects
-ambiguous or stale scope, pushes indexed identity/time/tool/path predicates into
-each read-only SQLite store, streams bounded rows, merges deterministically, and
-only then aggregates or summarizes. Exact IDs, time, tool, status, and artifact
-queries use B-tree indexes. Text search must first be bounded by Project/time/
-record kind. Current `events.content`, `tool_input`, and `tool_output` have no FTS
-index, so ad hoc substring search is an explicit bounded scan. If repeated use
-justifies it, add a separately versioned, rebuildable FTS5 projection after
-content filtering; do not make FTS tables part of the durable CoSchema contract.
+The planner resolves stable Project identities, rejects ambiguous or stale
+scope, pushes indexed identity/time/tool/path predicates into each read-only
+store, streams bounded rows, merges deterministically, and only then aggregates
+or summarizes. Exact identity and bounded predicates use ordinary indexes.
+Text search is first bounded by Project, time, and record kind. Any FTS
+projection is a separately versioned, rebuildable derivative rather than part
+of durable CoSchema.
 
-A `codess.query-result/1` response contains the normalized request, observation
-and data-as-of times, selected store/snapshot identities, summary, typed rows and
-aggregates, evidence references, confidence, and explicit truncation or missing-
-data limitations. Stream large row sets as `codess.query-row/1` JSON Lines;
-write one JSON result for bounded aggregates; derive a table or Markdown view
-from the same typed result rather than scraping terminal output.
+A `codess.query-result/1` contains the normalized request, observation and
+data-as-of times, selected package/store/snapshot identities, summary, typed
+rows and aggregates, evidence references, confidence, and explicit truncation
+or missing-data limitations. Large row sets use `codess.query-row/1` JSON
+Lines; tables, CSV, and Markdown are renderings of typed results rather than
+inputs scraped back into the system.
 
-Saved queries should be declarative JSON/YAML definitions invoking one runner,
-not one wrapper script per question. Manual and post-ingest execution come
-first. A saved query can compare with its prior result, set threshold conditions,
-and return stable exit codes without sending notifications or mutating external
-systems. Periodic scheduling is postponed; when resumed, record the query
-definition hash, input snapshot IDs, result path, duration, rows/bytes examined,
-peak memory, and whether output was truncated. Any LLM-generated summary is a
-derived processing record and must cite the bounded rows it saw.
+Saved investigations are declarative JSON/YAML requests evaluated by one
+runner, not one wrapper script per question. Comparison with prior results,
+threshold conditions, and stable exit codes remain functions of the same typed
+request/result model. An LLM-produced summary is a derived processing record
+and cites the bounded rows it received.
 
-### Remaining maintenance sequence
+### Research venues
 
-1. Implement bounded streaming for exact raw capture without changing routine
-   selective Cursor access.
-2. Continue Codex counter-attribution experiments until the token result can be
-   accepted or permanently limited as non-billing evidence.
-3. Prototype the query request/result planner with the first five operational
-   questions before adding content FTS or natural-language formulation.
+- **Guided personal research:** branchable drill-downs, annotations, decisions,
+  and unresolved questions tied to immutable evidence.
+- **Comparative harness studies:** vendor/model/tool/permission/compaction
+  behavior over the same Project, artifact, or task period.
+- **Activity and cost modelling:** active-time estimators, token/cost
+  confidence, quota/reset observations, and per-Interaction resource profiles.
+- **Topic and phase discovery:** lexical facets, embeddings, clustering,
+  change-point detection, and LLM labelling as rebuildable derived processing
+  with method and confidence.
+- **Research workbenches:** read-only Datasette, Jupyter/pandas, sqlite-utils,
+  or DuckDB over exports and immutable snapshots.
+- **Cross-snapshot analysis:** semantic diffs of sessions/events, source
+  revisions, mapping changes, and investigation replay across package versions.
 
-Proactive baseline maintenance, periodic storage/query automation, and vendor-
-mapping audits are postponed. Existing gates still run when code changes.
-Restart the respective work only for a package/source-format change,
-unexplained growth, or observed unmapped vendor evidence. Codex parentage stays
-unsupported until a direct referential field appears. Broad historical
-discovery and additional vendors likewise require a concrete compatibility or
-correlation gap.
+These are research directions, not an implementation queue. Promotion to work,
+including its priority, decision dependencies, and restart conditions, occurs
+only in **CoPlan.md §8**.

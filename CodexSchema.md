@@ -56,7 +56,7 @@ the selected session rather than leaving events removed from the transcript.
 | `payload.id` | string | Session id fallback |
 | `payload.cwd` | string | Project directory; resolved and compared to scan path |
 | `payload.cli_version` | string | Stored as normalized session release and metadata |
-| `payload.model_provider`, `originator`, `source` | string | Retained as bounded session metadata |
+| `payload.model_provider`, `originator`, `source` | string | Retained as bounded session metadata; provider can seed a session-level configuration |
 | `timestamp` | number or string | Session time for `--days` filter |
 
 ---
@@ -73,10 +73,16 @@ Ingest adapter primarily uses:
 | `response_item.web_search_call` | `web_search` tool call with sanitized action metadata |
 | Matching call-output records | Tool results; call id restores the tool name |
 | `event_msg.turn_aborted` | Retained as a `turn_aborted` assistant audit event |
-| Other notifications, reasoning, token counts, snapshots, and turn context | Counted as ignored diagnostics, not duplicated as conversation events |
+| `turn_context` | Not emitted as conversation text. Exact `payload.model` and `payload.effort`/`reasoning_effort`, plus the specifically identified collaboration mode, are attached to subsequent normalized events with source-record/field provenance; observed `payload.turn_id` becomes vendor `model_turns.source_turn_id` |
+| `event_msg.thread_settings_applied` | Newer bounded settings envelope. Exact model, provider, reasoning effort, service tier, approval policy, and collaboration mode update subsequent event/model-turn configuration |
+| Other notifications, reasoning, token counts, and snapshots | Counted as ignored diagnostics, not duplicated as conversation events |
 
 Record timestamps accept Unix seconds, Unix milliseconds, and ISO 8601. Tool
 call/result lineage is stored in event metadata through `call_id`.
+Every emitted event also retains `response_item`/`event_msg`, the payload type,
+line locator, declared mapping rule, and structured trace. Configured active or
+archive roots supply explicit session archive state and provenance; an archive
+location is not interpreted as successful completion.
 
 ---
 
@@ -97,8 +103,10 @@ call/result lineage is stored in event metadata through `call_id`.
 - Timestamp formats mixed (Unix s, Unix ms, ISO); parser normalizes to ms where possible.
 - “Events” in scan ≠ only chat messages; includes structural lines.
 - History file `~/.codex/history.jsonl` (if present) is **not** the same as session store; CodexSchema applies to `sessions/`.
-- Reasoning bodies, token accounting, snapshots, and turn context are
-  deliberately not normalized until they have a concrete query/audit use case.
+- Reasoning bodies, token accounting, snapshots, and turn context are not a
+  first-class common runtime-context model. Selected scalar turn settings are
+  nevertheless normalized into `model_configurations`; see **CoPlan.md §8.3,
+  V-CTX1/E-2**.
 - Transcript compatibility must be maintained with fixtures because the
   [official hook guidance](https://developers.openai.com/codex/config-advanced#hooks)
   says the transcript format may change.
@@ -112,8 +120,20 @@ all 28 local active/archive transcripts spanning 16 CLI/Desktop releases. It
 found no parent-like field and no resolvable parent reference; message,
 reasoning, prompt, and tool bodies were not inspected. The evidence report is
 `catalog/codex-parent-audit.json`. Codess therefore does not infer parentage
-from timestamps, path proximity, archive location, or content. Reopen support
-only when a direct upstream identifier appears.
+from timestamps, path proximity, archive location, or content. The authoritative
+restart trigger is **CoPlan.md §8.5, T4**.
+
+### Configuration evidence
+
+`python -m main evidence audit codex-features` performs a bounded,
+structure-only audit. The July 2026 local audit reviewed all 28 active/archive
+transcripts (about 449 MiB) with a 64 KiB per-record ceiling. It found 8,107
+`turn_context` records and 143 newer `thread_settings_applied` records. Exact
+model and effort are widespread; the newer settings records contain an explicit
+`service_tier=default`. No distinct speed-tier field was observed. Other fields
+named `mode` mean sandbox policy or truncation units, so Codess maps only the
+identified `collaboration_mode.mode` and records its exact field provenance.
+Oversize bodies are counted, drained, and excluded from the structural audit.
 
 ---
 
@@ -124,4 +144,4 @@ only when a direct upstream identifier appears.
 | Unified DB columns | **CoSchema.md** |
 | Claude Code storage | **CCSchema.md** |
 | Cursor storage | **CursorSchema.md** |
-| Implementation plan | **CoPlan.md** |
+| Implementation, tests, and work queue | **CoPlan.md** |

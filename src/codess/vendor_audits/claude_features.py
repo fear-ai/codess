@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from codess.bounded_jsonl import DEFAULT_MAX_RECORD_BYTES, iter_bounded_jsonl
 
-def audit_claude_features(root: Path, *, max_files: int = 200) -> dict[str, Any]:
+
+def audit_claude_features(
+    root: Path,
+    *,
+    max_files: int = 200,
+    max_record_bytes: int = DEFAULT_MAX_RECORD_BYTES,
+) -> dict[str, Any]:
     if max_files < 1:
         raise ValueError("Claude audit max_files must be positive")
     files = sorted(root.expanduser().rglob("*.jsonl"))[:max_files]
@@ -21,23 +27,27 @@ def audit_claude_features(root: Path, *, max_files: int = 200) -> dict[str, Any]
     sidechains = 0
     malformed = 0
     records = 0
+    diagnostics: Counter[str] = Counter()
+    model_settings: dict[str, Counter[str]] = {
+        "model": Counter(), "service_tier": Counter(),
+    }
+    setting_provenance: Counter[str] = Counter()
     for path in files:
         try:
-            stream = path.open(encoding="utf-8")
+            iterator = iter_bounded_jsonl(
+                path, max_record_bytes=max_record_bytes
+            )
         except OSError:
-            malformed += 1
+            diagnostics["io_error"] += 1
             continue
-        with stream:
-            for line in stream:
-                if not line.strip():
+        try:
+            for _line, value, error in iterator:
+                if error:
+                    diagnostics[error] += 1
+                    if error == "malformed":
+                        malformed += 1
                     continue
-                try:
-                    value = json.loads(line)
-                except json.JSONDecodeError:
-                    malformed += 1
-                    continue
-                if not isinstance(value, dict):
-                    continue
+                assert value is not None
                 records += 1
                 kind = str(value.get("type") or "unknown")
                 record_types[kind] += 1
@@ -53,6 +63,16 @@ def audit_claude_features(root: Path, *, max_files: int = 200) -> dict[str, Any]
                     lifecycle[str(subtype)] += 1
                 message = value.get("message")
                 if isinstance(message, dict):
+                    model = message.get("model")
+                    if model:
+                        model_settings["model"][str(model)] += 1
+                        setting_provenance["assistant.message.model"] += 1
+                    usage = message.get("usage")
+                    if isinstance(usage, dict) and usage.get("service_tier"):
+                        model_settings["service_tier"][str(usage["service_tier"])] += 1
+                        setting_provenance[
+                            "assistant.message.usage.service_tier"
+                        ] += 1
                     if message.get("role"):
                         roles[str(message["role"])] += 1
                     content = message.get("content")
@@ -60,14 +80,18 @@ def audit_claude_features(root: Path, *, max_files: int = 200) -> dict[str, Any]
                         for block in content:
                             if isinstance(block, dict):
                                 content_block_types[str(block.get("type") or "unknown")] += 1
+        except OSError:
+            diagnostics["io_error"] += 1
     return {
         "audit_format": "codess.claude-feature-audit/1",
         "privacy_boundary": "structure and aggregate counts only; content bodies not retained",
         "root": str(root.expanduser().resolve()),
         "file_limit": max_files,
+        "max_record_bytes": max_record_bytes,
         "files_reviewed": len(files),
         "records_reviewed": records,
         "malformed_records": malformed,
+        "diagnostics": dict(diagnostics),
         "record_types": dict(record_types),
         "message_roles": dict(roles),
         "content_block_types": dict(content_block_types),
@@ -75,4 +99,8 @@ def audit_claude_features(root: Path, *, max_files: int = 200) -> dict[str, Any]
         "parent_links": parent_links,
         "sidechain_records": sidechains,
         "versions": dict(versions),
+        "model_settings": {
+            key: dict(value) for key, value in model_settings.items() if value
+        },
+        "setting_provenance": dict(setting_provenance),
     }

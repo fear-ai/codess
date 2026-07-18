@@ -1,36 +1,40 @@
 {
   "format_id": "codess.coschema",
-  "format_version": 3,
+  "format_version": 4,
   "application_id": 1129268293,
-  "state": "released",
+  "state": "candidate",
   "files": {
     "contract": {
       "path": "schema/coschema/contract.json",
-      "sha256": "20b31afea9bd5bd19a51639d38a8002f795bd25166bf8af690cec8fda74c9445"
+      "sha256": "50748406953e396e233f1ea1dd27de2066f40d4cc428b0c00a49670fc4b21406"
     },
     "mapping_contract": {
       "path": "schema/coschema/mapping-contract.json",
-      "sha256": "4b00255e0c2fb631919a1889733397d845543be0eb4d851efe20fbdc66caa302"
+      "sha256": "54b094e00e813b615f87334455a171b800451f9779879b19a8206f4fa802debb"
     },
     "sqlite_schema": {
       "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "cf136920e6591eb2d5ac26099c8cbe8b2c1d6b0927e856c3e7ae1ff75a62eeff"
+      "sha256": "2876c21ae5485130c39acdf0b818c4f0108790a9fcac657f6c59ce7c2cdc4823"
     },
     "mapping_claude": {
       "path": "schema/mappings/claude.json",
-      "sha256": "fccfd738b9cb1eca4c0a2eb91c8bdb4bb9aea38eb2e393465b144eac180f8152"
+      "sha256": "b103cded02f5a0ca0ac6da463a7f016f0582b7f55930e04895e3126ddd6cbcd7"
     },
     "mapping_codex": {
       "path": "schema/mappings/codex.json",
-      "sha256": "2da0c2e4d628c0a04a5a6dd8f84692b0c0f51d3a8c51d3ac9532a8f2cc12ff1b"
+      "sha256": "d8b5795b8b2ad6b3f99ee4f670d0a8676e98270dd4d2000338af58ecc1f747ca"
     },
     "mapping_cursor": {
       "path": "schema/mappings/cursor.json",
-      "sha256": "99ce3e8cb94f5831dc62d50b947599a35dd729c8dc841f82babef6509b450ec0"
+      "sha256": "297216436870bdf7f4df8fe60893d7f56d7ace284d6098b349bb8f4113230d1c"
     },
     "fixture_compatibility_store_meta_v2": {
       "path": "schema/coschema/fixtures/compatibility/store-meta-v2.json",
       "sha256": "35ee5178443f2abd1b1c1d5f1f220af8720ceede674822ed20ab9fbed58003f4"
+    },
+    "fixture_compatibility_store_meta_v3": {
+      "path": "schema/coschema/fixtures/compatibility/store-meta-v3.json",
+      "sha256": "37aedfccad754b88e887be9b66c1c813b25c68c84f6b9c0207a7f6acd4332717"
     },
     "fixture_edge_null_session_times": {
       "path": "schema/coschema/fixtures/edge/null-session-times.json",
@@ -66,8 +70,8 @@
     }
   },
   "reader_compatibility": {
-    "read": [2, 3],
-    "write": [3],
+    "read": [2, 3, 4],
+    "write": [4],
     "legacy_read": [1]
   }
 }

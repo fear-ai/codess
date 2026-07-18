@@ -8,7 +8,10 @@ from codess.fileio import hash_file
 from codess.retention import apply_retention_plan, build_retention_plan
 
 
-def _snapshot(registry, project="project", snapshot_id="current", raw_name="keep"):
+def _snapshot(
+    registry, project="project", snapshot_id="current", raw_name="keep",
+    *, source_locator=None, uncompressed_size=None,
+):
     root = registry / "projects" / project
     snapshot = root / "snapshots" / snapshot_id
     snapshot.mkdir(parents=True)
@@ -26,6 +29,14 @@ def _snapshot(registry, project="project", snapshot_id="current", raw_name="keep
         "object_relpath": str(raw.relative_to(raw_root)),
         "stored_size": raw.stat().st_size,
     }
+    if source_locator is not None:
+        record.update({
+            "availability": "captured",
+            "source_system_id": "cursor.composer",
+            "source_locator": source_locator,
+            "source_revision_id": f"sha256:{raw_name}",
+            "uncompressed_size": uncompressed_size,
+        })
     raw_manifest = snapshot / "raw-manifest.jsonl"
     raw_manifest.write_text(
         json.dumps({"record_type": "header"}) + "\n" + json.dumps(record) + "\n"
@@ -83,6 +94,7 @@ def test_apply_replans_deletes_and_records_receipt(tmp_path):
     assert not old.exists() and not old_raw.exists()
     assert receipt_path.exists()
     assert receipt["postcondition"]["remaining_candidates"] == 0
+    assert receipt["selection"]["keep_comparison_revisions"] is False
 
 
 def test_stale_selected_catalog_blocks_apply(tmp_path):
@@ -132,3 +144,28 @@ def test_working_archives_require_explicit_selection_and_current_project(tmp_pat
     )
     assert not (project / ".codess" / "working-archives").exists()
     assert len(receipt["deleted"]["working_archive_paths"]) == 1
+
+
+def test_multiple_huge_current_revisions_require_explicit_comparison(tmp_path):
+    registry = tmp_path / "registry"
+    locator = "/shared/Cursor/state.vscdb"
+    _snapshot(
+        registry, project="one", raw_name="first", source_locator=locator,
+        uncompressed_size=1024**3,
+    )
+    _snapshot(
+        registry, project="two", raw_name="second", source_locator=locator,
+        uncompressed_size=1024**3,
+    )
+
+    default = build_retention_plan(registry)
+    assert not default["safe_to_apply"]
+    conflicts = default["large_revision_retention"]["conflicts"]
+    assert conflicts[0]["revision_count"] == 2
+    assert not default["large_revision_retention"]["comparison_retention_explicit"]
+
+    comparison = build_retention_plan(
+        registry, allow_large_comparison_revisions=True
+    )
+    assert comparison["safe_to_apply"]
+    assert comparison["large_revision_retention"]["comparison_retention_explicit"]

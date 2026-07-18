@@ -17,6 +17,7 @@ from codess.resources import storage_usage
 
 PLAN_FORMAT = "codess.retention-plan/1"
 RECEIPT_FORMAT = "codess.retention-receipt/1"
+LARGE_RAW_REVISION_BYTES = 1024**3
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -40,7 +41,9 @@ def _raw_records(snapshot: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _validate_current(project_root: Path, pointer: dict[str, Any], raw_root: Path) -> tuple[Path, set[str]]:
+def _validate_current(
+    project_root: Path, pointer: dict[str, Any], raw_root: Path,
+) -> tuple[Path, set[str], list[dict[str, Any]]]:
     snapshot_id = pointer.get("snapshot_id")
     path_value = pointer.get("path")
     if not isinstance(snapshot_id, str) or not isinstance(path_value, str):
@@ -72,7 +75,8 @@ def _validate_current(project_root: Path, pointer: dict[str, Any], raw_root: Pat
         finally:
             conn.close()
     raw_references: set[str] = set()
-    for record in _raw_records(snapshot):
+    raw_records = _raw_records(snapshot)
+    for record in raw_records:
         relpath = record.get("object_relpath")
         if not isinstance(relpath, str):
             continue
@@ -83,7 +87,51 @@ def _validate_current(project_root: Path, pointer: dict[str, Any], raw_root: Pat
         if isinstance(expected_size, int) and obj.stat().st_size != expected_size:
             raise RuntimeError(f"current snapshot raw object size mismatch: {obj}")
         raw_references.add(relpath)
-    return snapshot.resolve(), raw_references
+    return snapshot.resolve(), raw_references, raw_records
+
+
+def _large_shared_revisions(
+    records: list[tuple[Path, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Find distinct huge revisions of one logical source kept as current."""
+    grouped: dict[tuple[str, str], dict[str, tuple[Path, dict[str, Any]]]] = {}
+    for snapshot, record in records:
+        if record.get("availability") != "captured":
+            continue
+        size = record.get("uncompressed_size")
+        relpath = record.get("object_relpath")
+        locator = record.get("source_locator")
+        system = record.get("source_system_id")
+        if (
+            not isinstance(size, int) or size < LARGE_RAW_REVISION_BYTES
+            or not all(isinstance(value, str) and value for value in (relpath, locator, system))
+        ):
+            continue
+        grouped.setdefault((system, locator), {})[relpath] = (snapshot, record)
+    conflicts: list[dict[str, Any]] = []
+    for (system, locator), revisions in sorted(grouped.items()):
+        if len(revisions) < 2:
+            continue
+        items = []
+        for relpath, (snapshot, record) in sorted(
+            revisions.items(), key=lambda item: str(item[1][1].get("observed_at") or "")
+        ):
+            items.append({
+                "snapshot_id": snapshot.name,
+                "observed_at": record.get("observed_at"),
+                "source_revision_id": record.get("source_revision_id"),
+                "object_relpath": relpath,
+                "uncompressed_size": record.get("uncompressed_size"),
+                "stored_size": record.get("stored_size"),
+            })
+        conflicts.append({
+            "source_system_id": system,
+            "source_locator": locator,
+            "revision_count": len(items),
+            "stored_bytes": sum(int(item.get("stored_size") or 0) for item in items),
+            "revisions": items,
+        })
+    return conflicts
 
 
 def _catalog_references(paths: list[Path], current_ids: set[str], delete_ids: set[str]) -> dict[str, Any]:
@@ -174,14 +222,16 @@ def _working_archives(
 def build_retention_plan(
     registry: Path, *, reference_catalogs: list[Path] | None = None,
     include_working_archives: bool = False,
+    allow_large_comparison_revisions: bool = False,
 ) -> dict[str, Any]:
-    """Plan keeping exactly each central current snapshot and its raw objects."""
+    """Plan current snapshots and enforce explicit retention of huge revisions."""
     registry = registry.expanduser().resolve()
     projects_root = registry / "projects"
     raw_root = registry / "raw" / "codess.raw-1"
     current: list[Path] = []
     current_by_project: dict[str, str] = {}
     raw_keep: set[str] = set()
+    current_raw_records: list[tuple[Path, dict[str, Any]]] = []
     errors: list[str] = []
     for project_root in sorted(path for path in projects_root.iterdir() if path.is_dir()) if projects_root.exists() else []:
         pointer_path = project_root / "current.json"
@@ -190,10 +240,13 @@ def build_retention_plan(
             continue
         try:
             pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-            snapshot, references = _validate_current(project_root, pointer, raw_root)
+            snapshot, references, records = _validate_current(
+                project_root, pointer, raw_root
+            )
             current.append(snapshot)
             current_by_project[project_root.name] = snapshot.name
             raw_keep.update(references)
+            current_raw_records.extend((snapshot, record) for record in records)
         except (OSError, ValueError, KeyError, json.JSONDecodeError, sqlite3.Error, RuntimeError) as exc:
             errors.append(str(exc))
     all_snapshots = sorted(
@@ -214,10 +267,17 @@ def build_retention_plan(
         registry, current_by_project, delete_ids
     )
     working_archives = _working_archives(registry, current_by_project)
+    large_shared_revisions = _large_shared_revisions(current_raw_records)
     if references["blocking"]:
         errors.append("a reference catalog selects a superseded snapshot; refreeze or drop that catalog entry before pruning")
     if references["local_pointers"]["blocking"]:
         errors.append("an active Project location points to a superseded snapshot; rebuild or synchronize that validated current pointer before pruning")
+    if large_shared_revisions and not allow_large_comparison_revisions:
+        errors.append(
+            "multiple current revisions of a >=1 GiB logical raw source are retained; "
+            "rebuild those Projects against one capture cohort, or explicitly select "
+            "--keep-comparison-revisions when the revisions are comparison evidence"
+        )
     identity = {
         "current": [str(path) for path in current],
         "delete_snapshots": [str(path) for path in delete_snapshots],
@@ -227,13 +287,15 @@ def build_retention_plan(
             [str(path) for path in working_archives]
             if include_working_archives else []
         ),
+        "large_shared_revisions": large_shared_revisions,
+        "allow_large_comparison_revisions": allow_large_comparison_revisions,
     }
     plan_sha256 = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return {
         "format": PLAN_FORMAT,
-        "policy": "latest-current-per-project",
+        "policy": "latest-current-per-project; one-large-revision-per-logical-source",
         "registry": str(registry),
         "safe_to_apply": not errors,
         "errors": errors,
@@ -267,6 +329,11 @@ def build_retention_plan(
             "usage": storage_usage(working_archives),
             "selected_for_delete": include_working_archives,
         },
+        "large_revision_retention": {
+            "threshold_bytes": LARGE_RAW_REVISION_BYTES,
+            "comparison_retention_explicit": allow_large_comparison_revisions,
+            "conflicts": large_shared_revisions,
+        },
         "references": references,
     }
 
@@ -274,11 +341,13 @@ def build_retention_plan(
 def apply_retention_plan(
     registry: Path, *, reference_catalogs: list[Path] | None = None,
     receipt_path: Path | None = None, include_working_archives: bool = False,
+    allow_large_comparison_revisions: bool = False,
 ) -> dict[str, Any]:
     """Re-plan immediately, then delete only the validated latest-only candidates."""
     plan = build_retention_plan(
         registry, reference_catalogs=reference_catalogs,
         include_working_archives=include_working_archives,
+        allow_large_comparison_revisions=allow_large_comparison_revisions,
     )
     if not plan["safe_to_apply"]:
         raise RuntimeError("retention plan rejected: " + "; ".join(plan["errors"]))
@@ -305,6 +374,7 @@ def apply_retention_plan(
     after = build_retention_plan(
         registry, reference_catalogs=reference_catalogs,
         include_working_archives=include_working_archives,
+        allow_large_comparison_revisions=allow_large_comparison_revisions,
     )
     if (
         after["delete"]["snapshots"]
@@ -319,6 +389,10 @@ def apply_retention_plan(
         "registry": plan["registry"],
         "policy": plan["policy"],
         "plan_sha256": plan["plan_sha256"],
+        "selection": {
+            "keep_comparison_revisions": allow_large_comparison_revisions,
+            "working_archives": include_working_archives,
+        },
         "deleted": {
             "snapshot_paths": deleted_snapshots,
             "raw_object_paths": deleted_objects,

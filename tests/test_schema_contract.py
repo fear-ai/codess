@@ -19,6 +19,7 @@ from codess.schema_contract import (
     load_mapping,
     require_store,
     validate_database_contract,
+    validate_mapped_event,
     validate_mapping,
     verify_package,
 )
@@ -70,8 +71,41 @@ def test_new_store_has_durable_identity_and_contract_tables(tmp_path):
             "mapping_diagnostics", "correlation_assertions",
         } <= tables
         assert require_store(conn, write=False) == FORMAT_VERSION
+        conn.execute("ALTER TABLE events ADD COLUMN undocumented_value TEXT")
+        assert "events: uncontracted column undocumented_value" in validate_database_contract(conn)
     finally:
         conn.close()
+
+
+def test_json_contract_is_enforced_by_sqlite(tmp_path):
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = connect(path)
+    replace_session_events(
+        conn, {"id": "s1", "source": "Cursor"}, [], session_id="s1"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO events(session_id,event_id,tool_input) VALUES ('s1','e1','not-json')"
+        )
+    conn.close()
+
+
+def test_mapping_event_verifier_checks_rules_provenance_and_json():
+    valid = {
+        "source_record_type": "response_item",
+        "source_record_subtype": "function_call",
+        "source_record_locator": "2",
+        "mapping_rule": "codex.tool-call",
+        "mapping_trace": json.dumps({"applied_rules": ["codex.tool-call"]}),
+        "tool_input": '{"command":"pwd"}',
+    }
+    assert validate_mapped_event("codex", valid) == []
+    invalid = {**valid, "mapping_rule": "codex.missing", "tool_input": "{'x': 1}"}
+    assert validate_mapped_event("codex", invalid) == [
+        "undeclared mapping rule codex.missing",
+        "tool_input is not valid JSON",
+    ]
 
 
 def test_writer_refuses_legacy_store_but_reader_can_identify_it(tmp_path):
@@ -160,6 +194,57 @@ def test_cursor_prompt_model_selection_configures_following_model_turn(tmp_path)
         },
     ], session_id="cursor-1")
     assert conn.execute("SELECT COUNT(*) FROM model_configurations").fetchone()[0] == 1
+    conn.close()
+
+
+def test_model_event_settings_override_session_or_prompt_defaults(tmp_path):
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = connect(path)
+    metadata = json.dumps({
+        "model": "gpt-test", "model_provider": "openai",
+        "reasoning_effort": "high", "service_tier": "priority",
+        "mode": "default", "configuration_provenance": {
+            "reasoning_effort": {
+                "source_record_type": "turn_context",
+                "source_record_locator": "2",
+                "source_field": "payload.effort",
+            },
+        },
+    })
+    replace_session_events(conn, {"id": "codex-1", "source": "Codex"}, [
+        {"session_id": "codex-1", "event_id": "prompt",
+         "event_type": "user_message", "subtype": "prompt", "role": "user",
+         "content": "hello"},
+        {"session_id": "codex-1", "event_id": "response",
+         "event_type": "assistant_message", "subtype": "response",
+         "role": "assistant", "content": "hi", "metadata": metadata},
+    ], session_id="codex-1")
+    row = conn.execute(
+        """
+        SELECT c.model_name_exact,c.provider,c.reasoning_effort,
+               c.service_tier,c.mode,c.source_config
+        FROM model_turns t JOIN model_configurations c ON c.id=t.model_config_id
+        """
+    ).fetchone()
+    assert tuple(row[:5]) == (
+        "gpt-test", "openai", "high", "priority", "default"
+    )
+    assert json.loads(row["source_config"])["configuration_provenance"]
+    conn.close()
+
+
+def test_model_configuration_null_safe_identity_is_enforced(tmp_path):
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = connect(path)
+    conn.execute(
+        "INSERT INTO model_configurations(model_name_exact) VALUES ('model-x')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO model_configurations(model_name_exact) VALUES ('model-x')"
+        )
     conn.close()
 
 
@@ -355,6 +440,45 @@ def test_cursor_turns_are_inferred_per_prompt_interaction(tmp_path):
     assert assignments["pre"] is None
     assert assignments["a1"] == assignments["a2"]
     assert assignments["a3"] != assignments["a2"]
+    conn.close()
+
+
+def test_codex_vendor_turn_id_groups_model_events(tmp_path):
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = connect(path)
+    metadata = json.dumps({"source_turn_id": "turn-42", "model": "gpt-test"})
+    events = [
+        {"session_id": "c1", "event_id": "1", "event_type": "user_message",
+         "subtype": "prompt", "role": "user", "content": "go"},
+        {"session_id": "c1", "event_id": "2", "event_type": "assistant_message",
+         "subtype": "response", "role": "assistant", "metadata": metadata},
+        {"session_id": "c1", "event_id": "3", "event_type": "assistant_message",
+         "subtype": "response", "role": "assistant", "metadata": metadata},
+    ]
+    replace_session_events(
+        conn, {"id": "c1", "source": "Codex"}, events, session_id="c1"
+    )
+    turns = conn.execute(
+        "SELECT source_turn_id,boundary_source FROM model_turns"
+    ).fetchall()
+    assert [tuple(row) for row in turns] == [("turn-42", "vendor")]
+    conn.close()
+
+
+def test_cursor_subagent_header_maps_to_common_relation(tmp_path):
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = connect(path)
+    replace_session_events(
+        conn,
+        {"id": "c1", "source": "Cursor", "metadata": '{"is_subagent":true}'},
+        [],
+        session_id="c1",
+    )
+    assert conn.execute(
+        "SELECT session_relation_kind FROM sessions WHERE id='c1'"
+    ).fetchone()[0] == "subagent"
     conn.close()
 
 

@@ -32,6 +32,46 @@ class SnapshotError(RuntimeError):
 _sha256 = hash_file
 
 
+def current_raw_records(project_root: Path) -> list[dict[str, Any]]:
+    """Read the verified raw-record set from the current project snapshot.
+
+    A partial-vendor ingest starts from this set and replaces observations for
+    sources it actually revisits.  That keeps the new snapshot complete when,
+    for example, Cursor alone is refreshed while Claude and Codex stores remain
+    unchanged.
+    """
+    pointer_path = project_root / ".codess" / "current.json"
+    if not pointer_path.exists():
+        return []
+    try:
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        snapshot_path = Path(pointer["path"])
+        if not snapshot_path.is_absolute():
+            snapshot_path = pointer_path.parent / snapshot_path
+        manifest_path = snapshot_path / "manifest.json"
+        if _sha256(manifest_path) != pointer["manifest_sha256"]:
+            raise SnapshotError("current snapshot manifest hash mismatch")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        raw_manifest = snapshot_path / "raw-manifest.jsonl"
+        if _sha256(raw_manifest) != manifest["raw_manifest_sha256"]:
+            raise SnapshotError("current snapshot raw manifest hash mismatch")
+        records: list[dict[str, Any]] = []
+        with raw_manifest.open(encoding="utf-8") as stream:
+            for number, line in enumerate(stream, 1):
+                value = json.loads(line)
+                if not isinstance(value, dict):
+                    raise SnapshotError(
+                        f"invalid raw manifest record at line {number}"
+                    )
+                if value.get("record_type") != "header":
+                    records.append(value)
+        return records
+    except SnapshotError:
+        raise
+    except (OSError, KeyError, json.JSONDecodeError) as exc:
+        raise SnapshotError(f"cannot read current raw records: {exc}") from exc
+
+
 def _software_revision() -> str | None:
     configured = os.environ.get("CODESS_BUILD_REVISION")
     if configured:
@@ -129,6 +169,33 @@ def _logical_counts(
         conn.close()
 
 
+def _store_package_identity(
+    store_paths: Iterable[Path],
+) -> tuple[int, str, list[Path]]:
+    """Return the common on-disk format/package without relabeling old stores."""
+    paths = [path for path in store_paths if path.exists()]
+    versions: set[int] = set()
+    package_digests: set[str] = set()
+    for path in paths:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            versions.add(require_store(conn, write=False))
+            meta = dict(conn.execute("SELECT key, value FROM store_meta"))
+            digest = meta.get("package_digest")
+            if not digest:
+                raise SnapshotError(f"store lacks package_digest: {path}")
+            package_digests.add(digest)
+        finally:
+            conn.close()
+    if not paths:
+        raise SnapshotError("cannot create a snapshot without a CoSchema store")
+    if len(versions) != 1 or len(package_digests) != 1:
+        raise SnapshotError(
+            "snapshot stores use mixed CoSchema formats or package digests"
+        )
+    return versions.pop(), package_digests.pop(), paths
+
+
 def create_snapshot(
     project_root: Path,
     store_paths: Iterable[Path],
@@ -149,7 +216,13 @@ def create_snapshot(
     )
     snapshots = base / "snapshots"
     snapshots.mkdir(parents=True, exist_ok=True)
-    package_digest = verify_package()
+    store_format_version, package_digest, source_stores = _store_package_identity(
+        store_paths
+    )
+    if store_format_version == FORMAT_VERSION and package_digest != verify_package():
+        raise SnapshotError(
+            "current-format store package differs from the current package"
+        )
     created_at = datetime.now(timezone.utc)
     created_at_text = created_at.isoformat()
     policy = build_policy or {"raw_mode": "seal" if seal else "unspecified"}
@@ -159,7 +232,10 @@ def create_snapshot(
     identity = hashlib.sha256(
         f"{project_root.resolve()}\0{created_at_text}\0{package_digest}\0{policy_digest}".encode("utf-8")
     ).hexdigest()[:12]
-    snapshot_id = f"{created_at.strftime('%Y%m%dT%H%M%S.%fZ')}-coschema{FORMAT_VERSION}-{identity}"
+    snapshot_id = (
+        f"{created_at.strftime('%Y%m%dT%H%M%S.%fZ')}-"
+        f"coschema{store_format_version}-{identity}"
+    )
     parent_snapshot_id = None
     pointer = local_base / "current.json"
     if pointer.exists():
@@ -180,9 +256,7 @@ def create_snapshot(
     with tempfile.TemporaryDirectory(prefix=".snapshot-", dir=snapshots) as tmp_name:
         tmp = Path(tmp_name)
         stores: dict[str, Any] = {}
-        for source_path in sorted(store_paths, key=lambda p: p.name):
-            if not source_path.exists():
-                continue
+        for source_path in sorted(source_stores, key=lambda p: p.name):
             target = tmp / source_path.name
             _backup_store(
                 source_path, target, snapshot_id=snapshot_id,
@@ -229,7 +303,7 @@ def create_snapshot(
             "build_policy": policy,
             "build_policy_sha256": policy_digest,
             "format_id": FORMAT_ID,
-            "format_version": FORMAT_VERSION,
+            "format_version": store_format_version,
             "package_digest": package_digest,
             "project_id": project_id,
             "raw_format": RAW_FORMAT,
@@ -248,7 +322,7 @@ def create_snapshot(
         "path": str(final if base != local_base else final.relative_to(local_base)),
         "project_id": project_id,
         "format_id": FORMAT_ID,
-        "format_version": FORMAT_VERSION,
+        "format_version": store_format_version,
         "manifest_sha256": _sha256(final / "manifest.json"),
     }
     local_base.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,100 @@
+{
+  "audit_format": "codess.claude-feature-audit/1",
+  "content_block_types": {
+    "document": 2,
+    "fallback": 2,
+    "image": 161,
+    "text": 13565,
+    "thinking": 2923,
+    "tool_result": 19456,
+    "tool_use": 19459
+  },
+  "diagnostics": {},
+  "file_limit": 200,
+  "files_reviewed": 200,
+  "lifecycle_subtypes": {
+    "api_error": 231,
+    "away_summary": 28,
+    "compact_boundary": 81,
+    "informational": 1,
+    "local_command": 35,
+    "model_refusal_fallback": 2,
+    "scheduled_task_fire": 7,
+    "stop_hook_summary": 1374,
+    "turn_duration": 579
+  },
+  "malformed_records": 0,
+  "max_record_bytes": 2097152,
+  "message_roles": {
+    "assistant": 35725,
+    "user": 22402
+  },
+  "model_settings": {
+    "model": {
+      "<synthetic>": 159,
+      "claude-fable-5": 8030,
+      "claude-haiku-4-5-20251001": 260,
+      "claude-opus-4-7": 3946,
+      "claude-opus-4-8": 15323,
+      "claude-sonnet-4-6": 815,
+      "claude-sonnet-5": 7192
+    },
+    "service_tier": {
+      "standard": 35566
+    }
+  },
+  "parent_links": 64701,
+  "privacy_boundary": "structure and aggregate counts only; content bodies not retained",
+  "record_types": {
+    "agent-name": 1,
+    "ai-title": 3340,
+    "assistant": 35725,
+    "attachment": 4516,
+    "custom-title": 2925,
+    "file-history-snapshot": 825,
+    "fork-context-ref": 3,
+    "last-prompt": 3867,
+    "mode": 2595,
+    "permission-mode": 818,
+    "queue-operation": 3170,
+    "system": 2338,
+    "user": 22402
+  },
+  "records_reviewed": 82525,
+  "root": "/Users/walter/.claude/projects",
+  "setting_provenance": {
+    "assistant.message.model": 35725,
+    "assistant.message.usage.service_tier": 35566
+  },
+  "sidechain_records": 2818,
+  "versions": {
+    "2.1.111": 4551,
+    "2.1.119": 557,
+    "2.1.121": 1114,
+    "2.1.128": 1047,
+    "2.1.138": 425,
+    "2.1.146": 459,
+    "2.1.148": 327,
+    "2.1.149": 3922,
+    "2.1.156": 3932,
+    "2.1.160": 97,
+    "2.1.161": 3003,
+    "2.1.165": 153,
+    "2.1.170": 3198,
+    "2.1.177": 2432,
+    "2.1.181": 1596,
+    "2.1.183": 1168,
+    "2.1.185": 2012,
+    "2.1.186": 1383,
+    "2.1.187": 3,
+    "2.1.191": 2146,
+    "2.1.193": 749,
+    "2.1.196": 31,
+    "2.1.197": 5149,
+    "2.1.198": 2325,
+    "2.1.202": 842,
+    "2.1.204": 839,
+    "2.1.205": 11207,
+    "2.1.209": 10314
+  }
+}
