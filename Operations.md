@@ -30,8 +30,22 @@ per session. Override with `--max-source-bytes`,
 `--max-events-per-source`, and `--max-events-per-session`, or deliberately use
 `--no-resource-limits`. Equivalent environment variables use `CODESS_` names.
 
-Routine ingest writes `.codess/last-ingest-report.json` with source bytes, event
-counts, largest buffered session, peak process RSS, limits, and diagnostics.
+Ingest emits `codess: progress` lines to stderr without waiting for Python
+DEBUG logging. Stdout remains the final human/structured result. Each line has
+a UTC timestamp, elapsed time, a stable phase name, and content-free fields such as
+Project/source/composer identity, counts, byte sizes, and phase duration. Cursor
+traces selection-marker computation, cohort restore or capture, periodic SQLite
+backup progress, compression/object verification, composer read-buffer
+heartbeats, composer writes, and unchanged skips. All vendors expose Project,
+vendor, snapshot, completion, and failure boundaries. A long operation should
+therefore show its current phase; `-v/--verbose` remains separate DEBUG logging.
+
+Routine ingest writes `.codess/last-ingest-report.json` with
+`progress_format: codess.progress/1`, the same bounded `progress_events`, source
+bytes, event counts, largest buffered session, peak process RSS, limits, and
+diagnostics. Preflight includes the trace in its JSON result. Progress records
+never contain prompt, response, tool, attachment, or raw-source bodies. The
+trace retains at most 5,000 events and explicitly reports any dropped count.
 Cursor runs add `cursor_cohort.status` (`unchanged`, `reused`, or `captured`),
 bounded-marker/capture elapsed time, source/materialized/stored byte counts when
 available, and the process RSS high-water mark.
@@ -131,9 +145,10 @@ current manifest still names it.
 
 For a multi-Project Cursor capture, a **cohort** is one transactionally
 consistent backup of the mutable global Cursor SQLite database, not a Project
-classification. Before any backup, ingest calculates one bounded main-file/WAL
-change marker and compares it with every selected Project's ingest state. If
-all markers are current, it neither backs up nor materializes the global DB and
+classification. Before any backup, ingest calculates a bounded marker for each
+Project's selected workspace headers and composer bubble-key ranges, then
+compares those markers with Project ingest state. If all markers are current,
+it neither backs up nor materializes the global DB and
 does not create no-op snapshots. Otherwise it captures once and applies indexed
 workspace/composer queries for every selected Project. A fresh capture is
 queried directly from its temporary standalone backup; it is not immediately
@@ -145,10 +160,10 @@ locator.
 does not contain a second database copy. When another Project needs the same
 unchanged cohort, ingest verifies and streams the retained raw object into one
 temporary query database. `--force` bypasses cache reuse. Cache deletion affects
-performance only. The pre-capture marker is deliberately retained as the state
-guard: if the live DB changes after the marker was read, the next invocation
-sees a different marker and revisits the source instead of treating the backup
-as current.
+performance only. The pre-capture selection marker is deliberately retained as
+the state guard: if selected header or bubble evidence changes after the marker
+was read, the next invocation revisits that Project instead of treating the
+backup as current.
 
 SQLite backups are normalized to `journal_mode=DELETE` before capture so the
 standalone object remains queryable through a strict read-only connection
@@ -200,13 +215,18 @@ all vendor history:
   ingest decodes only selected rows. A logical export of selected rows can be a
   useful derived artifact, but it is not an exact raw copy of the vendor store.
   Exact `capture`/`seal` still requires one SQLite backup when the bounded
-  marker changes or a selected Project lacks that marker, so WAL state is
-  included. Main-file size/mtime alone cannot safely cache that backup while a
-  WAL exists; routine change detection uses the fast non-authenticating MD5
-  fingerprint of the main file plus WAL. A retained/reused cohort remains a
+  selection marker changes or a selected Project lacks captured evidence, so
+  WAL state is included. Main-file size/mtime is both too coarse and incomplete
+  in WAL mode. Routine Cursor change detection reads one SQLite snapshot and
+  hashes exact selected header fields plus every selected bubble key/length and
+  the first/last 512 value bytes. This deliberately ignores unrelated Cursor
+  workbench/global state. A retained/reused cohort remains a
   fully SHA-256-addressed raw backup and cache restoration verifies both its
-  compressed and decompressed identities; MD5 is never an authenticity or
-  retained-object integrity claim.
+  compressed and decompressed identities; the selection MD5 is never an
+  authenticity or retained-object integrity claim. A same-length change wholly
+  inside a large bubble could evade the edge sample only if Cursor also failed
+  to update its selected composer header; use `--force` when investigating that
+  vendor-behavior boundary.
   Selected bubble rows are ordered by indexed key range, normalized one
   composer at a time, and written within one rollback-capable transaction. This
   bounds multi-composer accumulation, but the largest composer is still the

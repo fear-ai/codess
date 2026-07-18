@@ -769,6 +769,24 @@ operation/target parameters and optional before, after, patch, or diagnostic
 content links. See **CoSchema.md** for their cardinality and persistence
 semantics.
 
+### Operational progress contract
+
+Operational progress is distinct from content-processing lineage and Python
+DEBUG logging. Long-running ingest stages emit `codess.progress/1` events to
+stderr as they happen and retain the same bounded, content-free events in the
+runtime or preflight report. Events name start, periodic progress, completion,
+skip, and failure boundaries; fields are restricted to identifiers, phase
+durations, counts, sizes, status, and exception class. They must not carry
+transcript or raw-source content.
+
+Cursor needs finer boundaries because a selected composer is read, decoded,
+ordered, and deduplicated before its normalized events are written. The trace
+therefore distinguishes selection-marker work, raw SQLite backup/restore and
+compression, composer read-buffer heartbeats, composer writes, and snapshot
+promotion. This makes a slow but advancing run distinguishable from a stopped
+one without making DEBUG logging mandatory. The bounded event list is evidence
+for performance diagnosis, not authoritative source or normalization lineage.
+
 ## 11. Raw evidence and sidecars
 
 Do not put full `source_raw` blobs in the main query database. They enlarge
@@ -977,14 +995,18 @@ Keep two distinct portability products:
   rows. It is smaller and reparsable for that selection but is a derived export,
   not byte-identical vendor evidence.
 
-Exact backup reuse is safe only when a revision guard covers the main database
-and WAL and resolves to an already verified raw object. The marker is captured
-before backup and saved as the Project state guard: a change during or after
-capture therefore causes a later marker mismatch and conservative recapture,
-rather than allowing an older snapshot to appear current. The main file's
-mtime/size is insufficient in WAL mode. Content addressing deduplicates stored
-bytes after backup, while the metadata-only cohort cache avoids backup entirely
-when that marker is already represented. The bounded capture design is a chunked
+Exact backup reuse is safe only when a functional revision guard covers the
+workspace headers and composer bubble ranges actually consumed by ingestion
+and resolves to an already verified raw object. Each Project marker is read in
+one SQLite transaction, including committed WAL state, and hashes exact header
+fields, all selected keys and lengths, and bounded 512-byte value edges. The
+marker is captured before backup and saved as the Project state guard: a
+selected change during or after capture therefore causes a later mismatch and
+conservative recapture. Main-file mtime/size is both insufficient in WAL mode
+and too sensitive to unrelated Cursor state. Content addressing deduplicates
+stored bytes after backup, while the metadata-only cohort cache avoids backup
+entirely when the combined selected marker is already represented. The bounded
+capture design is a chunked
 pipeline: SQLite backup or stable source file → incremental content hash →
 streaming zstd writer → incremental stored hash → atomic content-addressed
 rename. Temporary output lives on the destination filesystem, is removed on

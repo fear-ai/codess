@@ -27,12 +27,12 @@
       "path": "/Users/walter/Work/ZK/Zero400",
       "policy": "catalog/policies/zero400.json",
       "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-      "semantic_digest": "cbca1ac48486007e507c4dd43e41404b504014f3c13c1a34f2becd71ad96c529",
-      "snapshot_id": "20260718T080434.659521Z-coschema4-06fbe686f744",
+      "semantic_digest": "cf44543a9679f1e5940107d8ca960f7a8c682f38b8eb22ff083e584b67521a5e",
+      "snapshot_id": "20260718T095547.634299Z-coschema4-69c5b45934d2",
       "validation_state": "accepted"
     }
   ],
   "registry": "/Users/walter/.codess",
   "review_state": "accepted_with_known_gaps",
-  "reviewed_at": "2026-07-18T08:05:53.546527+00:00"
+  "reviewed_at": "2026-07-18T10:10:26.519286+00:00"
 }

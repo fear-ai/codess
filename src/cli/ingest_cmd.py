@@ -2,6 +2,7 @@
 
 import json
 import logging
+import sqlite3
 import sys
 import gc
 import hashlib
@@ -24,10 +25,13 @@ from codess.adapters.cursor import process_db as process_cursor_db
 from codess.cursor_source import (
     get_composer_headers,
     get_global_db as get_cursor_global_db,
+    get_selection_marker as get_cursor_selection_marker,
+    has_bubble_rows as cursor_has_bubble_rows,
     get_workspace_dbs as get_cursor_workspace_dbs,
     get_workspace_ids as get_cursor_workspace_ids,
 )
 from codess.cursor_cohort import (
+    combine_selection_markers,
     cohort_needed,
     cohort_state_key,
     prepare_cursor_cohort,
@@ -60,8 +64,15 @@ from codess.store import record_processing_run, sync_project_catalog
 from codess.resources import ResourceLimitError, check_events, check_source, peak_rss_bytes
 from codess.evidence import summarize_store_evidence
 from codess.ingest_review import record_ingest_review
+from codess.progress import ProgressTrace
 
 log = logging.getLogger(__name__)
+
+
+def _progress(opts: dict, event: str, **fields) -> None:
+    callback = opts.get("progress")
+    if callback is not None:
+        callback(event, **fields)
 
 
 def _raw_record_key(record: dict) -> tuple:
@@ -107,6 +118,7 @@ def _record_raw(
         storage_format=profile["storage_format"],
         mode=opts.get("raw_mode", "reference"),
         source_locator=source_uri,
+        progress=opts.get("progress"),
     )
     if _merge_raw_record(records, record):
         opts["raw_records_changed"] = True
@@ -174,13 +186,30 @@ def _append_bounded_event(
     return source_total
 
 
-def _collect_bounded_events(opts: dict, events, session_id: str) -> list[dict]:
+def _collect_bounded_events(
+    opts: dict,
+    events,
+    session_id: str,
+    *,
+    project: str,
+    vendor: str,
+    source: str,
+) -> list[dict]:
     sessions_events: dict[str, list[dict]] = {}
     total = 0
+    started = last_progress = time.monotonic()
     for event in events:
         total = _append_bounded_event(
             opts, sessions_events, session_id, event, total
         )
+        now = time.monotonic()
+        if total % 1000 == 0 or now - last_progress >= 5.0:
+            _progress(
+                opts, "source.map.progress", project=project, vendor=vendor,
+                source=source, session_id=session_id, events=total,
+                phase_seconds=round(now - started, 3),
+            )
+            last_progress = now
     return sessions_events.get(session_id, [])
 
 
@@ -205,6 +234,7 @@ def _record_related_raw(
         mode=opts.get("raw_mode", "reference"),
         parent_source_locator=parent_source_locator,
         relation_kind=relation_kind,
+        progress=opts.get("progress"),
     )
     if _merge_raw_record(records, record):
         opts["raw_records_changed"] = True
@@ -255,6 +285,11 @@ def _ingest_cc(
             state_path, str(path.resolve()), mtime, force, path=path
         ):
             continue
+        source_started = time.monotonic()
+        _progress(
+            opts, "source.start", project=str(project_root.resolve()),
+            vendor="Claude", source=str(path.resolve()), source_bytes=st.st_size,
+        )
         rel = path.relative_to(cc_dir)
         session_id = path.stem
         direct_lineage = get_cc_session_lineage(path)
@@ -271,6 +306,8 @@ def _ingest_cc(
             }
             events_list = _collect_bounded_events(
                 opts, process_cc_file(path, session_id, source_opts), session_id,
+                project=str(project_root.resolve()), vendor="Claude",
+                source=str(path.resolve()),
             )
             _observe_resource(opts, path, {session_id: events_list})
             session = None
@@ -332,6 +369,11 @@ def _ingest_cc(
             total_events += len(events_list)
         except Exception as e:
             conn.rollback()
+            _progress(
+                opts, "source.failed", project=str(project_root.resolve()),
+                vendor="Claude", source=str(path.resolve()),
+                error_type=type(e).__name__,
+            )
             log.exception("Ingest failed for %s: %s", path, e)
             record_ingest_review(
                 opts, e, source=path, vendor="Claude", stage="record_mapping"
@@ -350,6 +392,12 @@ def _ingest_cc(
             kinds = opts.setdefault("claude_session_kinds", {"main": 0, "subagent": 0})
             kinds[kind] += 1
         ingested += int(bool(events_list))
+        _progress(
+            opts, "source.done", project=str(project_root.resolve()),
+            vendor="Claude", source=str(path.resolve()),
+            session_id=session_id, events=len(events_list),
+            phase_seconds=round(time.monotonic() - source_started, 3),
+        )
         del events_list
         gc.collect()
     return ingested, total_events, failures
@@ -390,6 +438,11 @@ def _ingest_codex(
             state_path, str(path.resolve()), mtime, force, path=path
         ):
             continue
+        source_started = time.monotonic()
+        _progress(
+            opts, "source.start", project=str(project_root.resolve()),
+            vendor="Codex", source=str(path.resolve()), source_bytes=st.st_size,
+        )
         session_id, proj_path = get_session_meta(path)
         session_metadata = get_session_metadata(path)
         archive_state, archive_source = get_codex_archive_evidence(path)
@@ -397,6 +450,8 @@ def _ingest_codex(
         try:
             events_list = _collect_bounded_events(
                 opts, process_codex_file(path, session_id, proj_path, opts), session_id,
+                project=str(project_root.resolve()), vendor="Codex",
+                source=str(path.resolve()),
             )
             _observe_resource(opts, path, {session_id: events_list})
             session = None
@@ -437,6 +492,11 @@ def _ingest_codex(
             total_events += len(events_list)
         except Exception as e:
             conn.rollback()
+            _progress(
+                opts, "source.failed", project=str(project_root.resolve()),
+                vendor="Codex", source=str(path.resolve()),
+                error_type=type(e).__name__,
+            )
             log.exception("Ingest failed for %s: %s", path, e)
             record_ingest_review(
                 opts, e, source=path, vendor="Codex", stage="record_mapping"
@@ -451,6 +511,12 @@ def _ingest_codex(
         state[str(path.resolve())] = ingest_state_marker(path)
         save_ingest_state(state_path, state)
         ingested += int(bool(events_list))
+        _progress(
+            opts, "source.done", project=str(project_root.resolve()),
+            vendor="Codex", source=str(path.resolve()),
+            session_id=session_id, events=len(events_list),
+            phase_seconds=round(time.monotonic() - source_started, 3),
+        )
         del events_list
         gc.collect()
     return ingested, total_events, failures
@@ -499,9 +565,16 @@ def _ingest_cursor(
         current_id: str | None = None
         current_events: list[dict] = []
         source_total = largest = 0
+        source_started = time.monotonic()
+        current_started: float | None = None
+        _progress(
+            opts, "cursor.source.start", project=proj_str,
+            source=source_file,
+            composer_total=(len(composer_ids) if composer_ids is not None else None),
+        )
 
         def flush() -> None:
-            nonlocal current_events, largest
+            nonlocal current_events, largest, current_started
             if current_id is None:
                 return
             timestamps = [
@@ -530,19 +603,39 @@ def _ingest_cursor(
             )
             seen.add(current_id)
             largest = max(largest, len(current_events))
+            _progress(
+                opts, "cursor.composer.write.done", project=proj_str,
+                composer_id=current_id, composer_index=len(seen),
+                composer_total=(len(composer_ids) if composer_ids is not None else None),
+                events=len(current_events),
+                phase_seconds=(
+                    round(time.monotonic() - current_started, 3)
+                    if current_started is not None else None
+                ),
+            )
             current_events = []
+            current_started = None
 
         for session_id, event in process_cursor_db(
             db_path, proj_str, opts, composer_ids=composer_ids,
             source_file=source_file,
         ):
-            if current_id is not None and session_id != current_id:
-                flush()
-                if session_id in seen:
-                    raise RuntimeError(
-                        f"Cursor session rows are not grouped: {session_id}"
-                    )
-            current_id = session_id
+            if session_id != current_id:
+                if current_id is not None:
+                    flush()
+                    if session_id in seen:
+                        raise RuntimeError(
+                            f"Cursor session rows are not grouped: {session_id}"
+                        )
+                current_id = session_id
+                current_started = time.monotonic()
+                _progress(
+                    opts, "cursor.composer.write.start", project=proj_str,
+                    composer_id=session_id, composer_index=len(seen) + 1,
+                    composer_total=(
+                        len(composer_ids) if composer_ids is not None else None
+                    ),
+                )
             source_total += 1
             source_max = opts.get("max_events_per_source")
             session_max = opts.get("max_events_per_session")
@@ -574,6 +667,12 @@ def _ingest_cursor(
             "events": source_total, "largest_session_events": largest,
             "peak_rss_bytes": peak_rss_bytes(),
         })
+        _progress(
+            opts, "cursor.source.done", project=proj_str, source=source_file,
+            sessions=len(seen), events=source_total,
+            largest_session_events=largest,
+            phase_seconds=round(time.monotonic() - source_started, 3),
+        )
         return len(seen), source_total
 
     dbs = get_cursor_workspace_dbs(project_root)
@@ -594,6 +693,31 @@ def _ingest_cursor(
         if not should_ingest(
             state_path, state_key, mtime, force, path=db_path
         ):
+            _progress(
+                opts, "cursor.workspace.skip", project=proj_str,
+                source=str(db_path.resolve()), reason="unchanged",
+            )
+            continue
+        try:
+            has_bubbles = cursor_has_bubble_rows(db_path)
+        except (OSError, sqlite3.Error) as e:
+            log.warning("Cursor workspace probe failed for %s: %s", db_path, e)
+            record_ingest_review(
+                opts, e, source=db_path, vendor="Cursor",
+                stage="workspace_selection",
+            )
+            failures += 1
+            if stop_on_error:
+                raise
+            continue
+        if not has_bubbles:
+            state = load_ingest_state(state_path)
+            state[state_key] = ingest_state_marker(db_path)
+            save_ingest_state(state_path, state)
+            _progress(
+                opts, "cursor.workspace.skip", project=proj_str,
+                source=str(db_path.resolve()), reason="no-bubble-rows",
+            )
             continue
         conn = connect(store_path)
         try:
@@ -603,6 +727,10 @@ def _ingest_cursor(
             total_events += db_events
         except Exception as e:
             conn.rollback()
+            _progress(
+                opts, "cursor.source.failed", project=proj_str,
+                source=str(db_path.resolve()), error_type=type(e).__name__,
+            )
             log.exception("Ingest failed for %s: %s", db_path, e)
             record_ingest_review(
                 opts, e, source=db_path, vendor="Cursor", stage="record_mapping"
@@ -627,7 +755,8 @@ def _ingest_cursor(
         cohort_record = opts.get("cursor_cohort_record")
         state_key = cohort_state_key(global_source)
         detection_marker = (
-            opts.get("cursor_cohort_marker")
+            opts.get("cursor_project_markers", {}).get(proj_str)
+            or opts.get("cursor_cohort_marker")
             or ingest_state_marker(global_source)
         )
         needs_captured_evidence = proj_str in opts.get(
@@ -638,6 +767,10 @@ def _ingest_cursor(
             and not needs_captured_evidence
             and load_ingest_state(state_path).get(state_key) == detection_marker
         ):
+            _progress(
+                opts, "cursor.project.unchanged", project=proj_str,
+                source=str(global_source.resolve()),
+            )
             return ingested, total_events, failures
         headers = get_composer_headers(global_db, workspace_ids)
         if not headers:
@@ -647,6 +780,10 @@ def _ingest_cursor(
                     project_root,
                     sorted(workspace_ids),
                 )
+            _progress(
+                opts, "cursor.project.no_composers", project=proj_str,
+                workspace_ids=len(workspace_ids),
+            )
             return ingested, total_events, failures
         try:
             marker_mtime = detection_marker.get("source_mtime")
@@ -687,6 +824,11 @@ def _ingest_cursor(
                     total_events += db_events
                 except Exception as e:
                     conn.rollback()
+                    _progress(
+                        opts, "cursor.source.failed", project=proj_str,
+                        source=str(global_source.resolve()),
+                        error_type=type(e).__name__,
+                    )
                     log.exception(
                         "Ingest failed for global %s: %s", global_db, e
                     )
@@ -706,6 +848,10 @@ def _ingest_cursor(
                 finally:
                     conn.close()
 
+    _progress(
+        opts, "cursor.project.done", project=proj_str,
+        sessions=ingested, events=total_events, failures=failures,
+    )
     return ingested, total_events, failures
 
 
@@ -812,6 +958,12 @@ def run(args) -> int:
         "content_failure_reviews": [],
         "claude_session_kinds": {"main": 0, "subagent": 0},
     }
+    progress_trace = ProgressTrace()
+    opts["progress"] = progress_trace
+    progress_trace(
+        "ingest.start", projects=len(roots), sources=",".join(sources),
+        validate_only=iopt.validate_only, raw_mode=iopt.raw_mode,
+    )
     if iopt.content_policy:
         policy_path = Path(iopt.content_policy).expanduser()
         try:
@@ -844,11 +996,18 @@ def run(args) -> int:
     if iopt.validate_only:
         opts["raw_mode"] = "none"
     if "codex" in sources:
+        index_started = time.monotonic()
+        progress_trace("codex.index.start")
         opts["codex_session_index"] = build_codex_session_index(
             cache_path=(
                 None if iopt.validate_only else
                 registry_root / "cache" / "codex-session-index-v1.json"
             )
+        )
+        progress_trace(
+            "codex.index.done",
+            sessions=len(opts["codex_session_index"]),
+            phase_seconds=round(time.monotonic() - index_started, 3),
         )
 
     cursor_cohort_temp = None
@@ -859,20 +1018,38 @@ def run(args) -> int:
             cursor_cohort_temp.cleanup()
             cursor_cohort_temp = None
 
-    cursor_roots = (
-        [root.resolve() for root in roots if get_cursor_workspace_ids(root)]
-        if "cursor" in sources else []
-    )
+    cursor_workspace_ids = {
+        root.resolve(): set(workspace_ids)
+        for root in roots
+        if "cursor" in sources
+        and (workspace_ids := get_cursor_workspace_ids(root))
+    }
+    cursor_roots = list(cursor_workspace_ids)
     if cursor_roots and not iopt.validate_only:
         live_global = get_cursor_global_db()
         if live_global is not None:
             try:
                 marker_started = time.monotonic()
-                marker = ingest_state_marker(live_global)
+                progress_trace(
+                    "cursor.marker.start", source=str(live_global.resolve()),
+                    projects=len(cursor_roots),
+                )
+                project_markers = {
+                    str(root): get_cursor_selection_marker(
+                        live_global, cursor_workspace_ids[root]
+                    )
+                    for root in cursor_roots
+                }
+                marker = combine_selection_markers(project_markers)
                 marker_elapsed = round(time.monotonic() - marker_started, 6)
+                progress_trace(
+                    "cursor.marker.done", source=str(live_global.resolve()),
+                    projects=len(cursor_roots), phase_seconds=round(marker_elapsed, 3),
+                )
                 opts.update({
                     "cursor_cohort_source": live_global,
                     "cursor_cohort_marker": marker,
+                    "cursor_project_markers": project_markers,
                 })
                 if (
                     iopt.raw_mode in {"capture", "seal"}
@@ -887,11 +1064,14 @@ def run(args) -> int:
                         "peak_rss_bytes": peak_rss_bytes(),
                     }
                     cohort_store = RawStore(registry_root / "raw")
-                    state_needs_cohort = cohort_needed(
-                        live_global,
-                        [get_state_path(root) for root in cursor_roots],
-                        marker,
-                        force=force,
+                    state_needs_cohort = force or any(
+                        cohort_needed(
+                            live_global,
+                            [get_state_path(root)],
+                            project_markers[str(root)],
+                            force=False,
+                        )
+                        for root in cursor_roots
                     )
                     evidence_projects = {
                         str(root)
@@ -915,6 +1095,12 @@ def run(args) -> int:
                     evidence_needs_cohort = False
                 if state_needs_cohort or evidence_needs_cohort:
                     cohort_started = time.monotonic()
+                    progress_trace(
+                        "cursor.cohort.prepare.start",
+                        source=str(live_global.resolve()),
+                        state_refresh=state_needs_cohort,
+                        evidence_refresh=evidence_needs_cohort,
+                    )
                     cursor_cohort_temp = tempfile.TemporaryDirectory(
                         prefix="codess-cursor-cohort-"
                     )
@@ -932,6 +1118,7 @@ def run(args) -> int:
                         storage_format=SOURCE_PROFILES["Cursor"]["storage_format"],
                         marker=marker,
                         force=force,
+                        progress=progress_trace,
                     )
                     opts.update({
                         "cursor_cohort_db": cohort_db,
@@ -958,7 +1145,22 @@ def run(args) -> int:
                             "peak_rss_bytes": peak_rss_bytes(),
                         },
                     })
+                    progress_trace(
+                        "cursor.cohort.prepare.done", status=status,
+                        object_id=cohort_record.get("object_id"),
+                        phase_seconds=round(time.monotonic() - cohort_started, 3),
+                    )
+                else:
+                    progress_trace(
+                        "cursor.cohort.unchanged",
+                        source=str(live_global.resolve()),
+                        projects=len(cursor_roots),
+                    )
             except Exception as exc:
+                progress_trace(
+                    "cursor.cohort.failed", source=str(live_global.resolve()),
+                    error_type=type(exc).__name__,
+                )
                 cleanup_cursor_cohort()
                 print(f"codess: Cursor cohort capture failed: {exc}", file=sys.stderr)
                 return 1
@@ -968,6 +1170,11 @@ def run(args) -> int:
             resource_start = len(opts["resource_observations"])
             review_start = len(opts["content_failure_reviews"])
             project_root = project_root.resolve()
+            project_started = time.monotonic()
+            progress_trace(
+                "project.start", project=str(project_root),
+                project_index=project_index + 1, project_total=len(roots),
+            )
             if iopt.validate_only:
                 digest = hashlib.sha256(str(project_root).encode()).hexdigest()[:24]
                 binding = {"project_id": f"codess:preflight-project:{digest}", "location_id": f"preflight:{digest}"}
@@ -1001,6 +1208,10 @@ def run(args) -> int:
             )
 
             if "cc" in sources:
+                vendor_started = time.monotonic()
+                progress_trace(
+                    "vendor.start", project=str(project_root), vendor="Claude",
+                )
                 store_path = _store_path(project_root, "cc")
                 init_db(store_path)
                 conn = connect(store_path)
@@ -1046,8 +1257,18 @@ def run(args) -> int:
                         }
                     finally:
                         conn.close()
+                progress_trace(
+                    "vendor.done", project=str(project_root), vendor="Claude",
+                    sessions=proj_stats.get("Claude", {}).get("sessions", 0),
+                    events=proj_stats.get("Claude", {}).get("events", 0),
+                    phase_seconds=round(time.monotonic() - vendor_started, 3),
+                )
 
             if "codex" in sources:
+                vendor_started = time.monotonic()
+                progress_trace(
+                    "vendor.start", project=str(project_root), vendor="Codex",
+                )
                 store_path = _store_path(project_root, "codex")
                 init_db(store_path)
                 conn = connect(store_path)
@@ -1085,8 +1306,18 @@ def run(args) -> int:
                         }
                     finally:
                         conn.close()
+                progress_trace(
+                    "vendor.done", project=str(project_root), vendor="Codex",
+                    sessions=proj_stats.get("Codex", {}).get("sessions", 0),
+                    events=proj_stats.get("Codex", {}).get("events", 0),
+                    phase_seconds=round(time.monotonic() - vendor_started, 3),
+                )
 
             if "cursor" in sources:
+                vendor_started = time.monotonic()
+                progress_trace(
+                    "vendor.start", project=str(project_root), vendor="Cursor",
+                )
                 store_path = _store_path(project_root, "cursor")
                 init_db(store_path)
                 conn = connect(store_path)
@@ -1123,6 +1354,12 @@ def run(args) -> int:
                         }
                     finally:
                         conn.close()
+                progress_trace(
+                    "vendor.done", project=str(project_root), vendor="Cursor",
+                    sessions=proj_stats.get("Cursor", {}).get("sessions", 0),
+                    events=proj_stats.get("Cursor", {}).get("events", 0),
+                    phase_seconds=round(time.monotonic() - vendor_started, 3),
+                )
 
             if proj_stats:
                 catalog = load_catalog(registry_root)
@@ -1176,7 +1413,14 @@ def run(args) -> int:
                         get_store_path(project_root, vendor)
                         for vendor in ("Claude", "Codex", "Cursor")
                     ]
-                    create_snapshot(
+                    snapshot_started = time.monotonic()
+                    progress_trace(
+                        "snapshot.start", project=str(project_root),
+                        stores=len([path for path in working_stores if path.exists()]),
+                        raw_records=len(project_raw_records),
+                        sealed=iopt.raw_mode == "seal",
+                    )
+                    snapshot_path = create_snapshot(
                         project_root,
                         [path for path in working_stores if path.exists()],
                         project_raw_records,
@@ -1191,16 +1435,36 @@ def run(args) -> int:
                         registry_root=registry_root,
                         project_id=binding["project_id"],
                     )
+                    progress_trace(
+                        "snapshot.done", project=str(project_root),
+                        snapshot_id=snapshot_path.name,
+                        phase_seconds=round(time.monotonic() - snapshot_started, 3),
+                    )
+                elif project_raw_records and not iopt.validate_only:
+                    progress_trace(
+                        "snapshot.skip", project=str(project_root),
+                        reason="unchanged",
+                    )
+                progress_trace(
+                    "project.done", project=str(project_root),
+                    sessions=sum(value["sessions"] for value in proj_stats.values()),
+                    events=sum(value["events"] for value in proj_stats.values()),
+                    phase_seconds=round(time.monotonic() - project_started, 3),
+                )
                 if not iopt.validate_only:
                     _save_stats(project_root, registry_root, proj_stats)
                     evidence_paths = [_store_path(project_root, key) for key in ("cc", "codex", "cursor")]
                     _write_runtime_report(project_root, {
                         "report_format": "codess.ingest-runtime/1",
+                        "progress_format": "codess.progress/1",
                         "project": str(project_root), "sources": proj_stats,
                         "diagnostics": diagnostics,
                         "content_failure_reviews": opts["content_failure_reviews"][review_start:],
                         "resource_observations": opts["resource_observations"][resource_start:],
                         "cursor_cohort": opts.get("cursor_cohort"),
+                        "progress_events": progress_trace.records_for(
+                            str(project_root)
+                        ),
                         "evidence_summary": _evidence_summary(evidence_paths),
                         "limits": {
                             "max_source_bytes": iopt.max_source_bytes,
@@ -1214,6 +1478,10 @@ def run(args) -> int:
                     source_stats[k]["sessions"] += v["sessions"]
                     source_stats[k]["events"] += v["events"]
         except Exception:
+            progress_trace(
+                "project.failed", project=str(project_root),
+                error_type=sys.exc_info()[0].__name__ if sys.exc_info()[0] else None,
+            )
             log.exception("Ingest failed for project root %s", project_root)
             had_error = True
             if iopt.stop_on_error:
@@ -1237,8 +1505,13 @@ def run(args) -> int:
                 })
             finally:
                 conn.close()
+        progress_trace(
+            "ingest.done", sessions=total_ingested, events=total_events,
+            status="failed" if had_error else "accepted",
+        )
         report = {
             "report_format": "codess.ingest-preflight/1",
+            "progress_format": "codess.progress/1",
             "status": "rejected" if had_error else "accepted",
             "projects": [str(root.resolve()) for root in roots],
             "sources": source_stats,
@@ -1247,6 +1520,7 @@ def run(args) -> int:
             "diagnostics": diagnostics,
             "content_failure_reviews": opts["content_failure_reviews"],
             "resource_observations": opts["resource_observations"],
+            "progress_events": progress_trace.records_for(),
             "session_kinds": {"Claude": opts["claude_session_kinds"]},
             "store_checks": store_checks,
             "evidence_summary": _evidence_summary(sorted(staging_root.rglob("*.db"))),
@@ -1262,6 +1536,10 @@ def run(args) -> int:
             temporary.cleanup()
         return 1 if had_error else 0
     cleanup_cursor_cohort()
+    progress_trace(
+        "ingest.done", sessions=total_ingested, events=total_events,
+        status="failed" if had_error else "accepted",
+    )
     if opts.get("cursor_cohort"):
         cohort = opts["cursor_cohort"]
         elapsed = cohort.get("cohort_seconds", cohort.get("marker_seconds", 0))

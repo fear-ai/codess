@@ -7,18 +7,29 @@ paths, table names, or key-range details.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 from codess.config import CURSOR_DATA
 from codess.helpers import local_path_from_uri
 
 log = logging.getLogger(__name__)
+
+CURSOR_SELECTION_EDGE_BYTES = 512
+
+
+def _fingerprint_digest():
+    """Return a fast non-authenticating digest for change detection."""
+    try:
+        return hashlib.md5(usedforsecurity=False)
+    except TypeError:  # pragma: no cover - older Python/OpenSSL combinations
+        return hashlib.md5()
 
 
 def connect_readonly(db_path: Path) -> sqlite3.Connection:
@@ -27,7 +38,24 @@ def connect_readonly(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(uri, uri=True, timeout=5)
     conn.execute("PRAGMA query_only = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
-    return conn
+    try:
+        conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+        return conn
+    except sqlite3.OperationalError:
+        conn.close()
+        # Some Cursor workspace DBs are standalone, contain no Composer rows,
+        # and cannot be opened in ordinary read-only mode despite having no WAL
+        # sidecars. Immutable mode is safe only for that sidecar-free shape.
+        if Path(str(db_path) + "-wal").exists() or Path(str(db_path) + "-shm").exists():
+            raise
+        immutable = sqlite3.connect(
+            db_path.resolve().as_uri() + "?mode=ro&immutable=1",
+            uri=True,
+            timeout=5,
+        )
+        immutable.execute("PRAGMA query_only = ON")
+        immutable.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+        return immutable
 
 
 def table_columns(conn: sqlite3.Connection, table: str) -> dict[str, str]:
@@ -137,6 +165,51 @@ def get_workspace_dbs(
     ]
 
 
+def _composer_headers(
+    conn: sqlite3.Connection, workspace_ids: set[str] | None,
+) -> dict[str, dict]:
+    """Read selected headers through an existing SQLite snapshot."""
+    if workspace_ids == set():
+        return {}
+    columns = table_columns(conn, "composerHeaders")
+    composer_col = quoted_column(columns, "composerId")
+    workspace_col = quoted_column(columns, "workspaceId")
+    if composer_col is None or workspace_col is None:
+        raise sqlite3.OperationalError(
+            "composerHeaders lacks composerId or workspaceId"
+        )
+
+    def optional(name: str) -> str:
+        column = quoted_column(columns, name)
+        return f"{column} AS {name}" if column else f"NULL AS {name}"
+
+    sql = (
+        f"SELECT {composer_col} AS composerId, "
+        f"{workspace_col} AS workspaceId, "
+        f"{optional('createdAt')}, {optional('lastUpdatedAt')}, "
+        f"{optional('isArchived')}, {optional('isSubagent')} "
+        "FROM composerHeaders"
+    )
+    params: tuple[str, ...] = ()
+    if workspace_ids is not None:
+        ordered = tuple(sorted(workspace_ids))
+        placeholders = ",".join("?" for _ in ordered)
+        sql += f" WHERE {workspace_col} IN ({placeholders})"
+        params = ordered
+    return {
+        str(composer_id): {
+            "workspace_id": workspace_id,
+            "created_at": created_at,
+            "last_updated_at": last_updated_at,
+            "is_archived": bool(is_archived),
+            "is_subagent": bool(is_subagent),
+        }
+        for composer_id, workspace_id, created_at, last_updated_at,
+            is_archived, is_subagent in conn.execute(sql, params)
+        if composer_id
+    }
+
+
 def get_composer_headers(
     db_path: Path, workspace_ids: set[str] | None = None,
 ) -> dict[str, dict]:
@@ -145,46 +218,103 @@ def get_composer_headers(
         return {}
     try:
         with closing(connect_readonly(db_path)) as conn:
-            columns = table_columns(conn, "composerHeaders")
-            composer_col = quoted_column(columns, "composerId")
-            workspace_col = quoted_column(columns, "workspaceId")
-            if composer_col is None or workspace_col is None:
-                raise sqlite3.OperationalError(
-                    "composerHeaders lacks composerId or workspaceId"
-                )
-
-            def optional(name: str) -> str:
-                column = quoted_column(columns, name)
-                return f"{column} AS {name}" if column else f"NULL AS {name}"
-
-            sql = (
-                f"SELECT {composer_col} AS composerId, "
-                f"{workspace_col} AS workspaceId, "
-                f"{optional('createdAt')}, {optional('lastUpdatedAt')}, "
-                f"{optional('isArchived')}, {optional('isSubagent')} "
-                "FROM composerHeaders"
-            )
-            params: tuple[str, ...] = ()
-            if workspace_ids is not None:
-                ordered = tuple(sorted(workspace_ids))
-                placeholders = ",".join("?" for _ in ordered)
-                sql += f" WHERE {workspace_col} IN ({placeholders})"
-                params = ordered
-            return {
-                str(composer_id): {
-                    "workspace_id": workspace_id,
-                    "created_at": created_at,
-                    "last_updated_at": last_updated_at,
-                    "is_archived": bool(is_archived),
-                    "is_subagent": bool(is_subagent),
-                }
-                for composer_id, workspace_id, created_at, last_updated_at,
-                    is_archived, is_subagent in conn.execute(sql, params)
-                if composer_id
-            }
+            return _composer_headers(conn, workspace_ids)
     except Exception as exc:
         log.warning("Cannot read Cursor composer headers from %s: %s", db_path, exc)
         return {}
+
+
+def _fingerprint_value(digest, value: Any) -> None:
+    """Add one typed, length-delimited SQLite value to a digest."""
+    if value is None:
+        kind, encoded = b"null", b""
+    elif isinstance(value, bytes):
+        kind, encoded = b"bytes", value
+    elif isinstance(value, str):
+        kind = b"text"
+        encoded = value.encode("utf-8", errors="surrogatepass")
+    else:
+        kind = type(value).__name__.encode("ascii", errors="replace")
+        encoded = str(value).encode("utf-8")
+    digest.update(kind + b":" + str(len(encoded)).encode("ascii") + b":")
+    digest.update(encoded)
+    digest.update(b"\0")
+
+
+def get_selection_marker(
+    db_path: Path, workspace_ids: set[str],
+) -> dict[str, Any]:
+    """Fingerprint only Cursor rows consumed by one Project ingest.
+
+    Header fields are hashed exactly. Every selected bubble contributes its
+    key, byte length, and bounded leading/trailing value bytes. This is a fast
+    non-authenticating invalidation guard, not raw-object integrity evidence.
+    All fields come from one SQLite read transaction, including live WAL state.
+    """
+    digest = _fingerprint_digest()
+    selected_bytes = bubble_count = 0
+    latest_timestamp: float | None = None
+    with closing(connect_readonly(db_path)) as conn:
+        conn.execute("BEGIN")
+        headers = _composer_headers(conn, workspace_ids)
+        for workspace_id in sorted(workspace_ids):
+            _fingerprint_value(digest, "workspace")
+            _fingerprint_value(digest, workspace_id)
+        for composer_id in sorted(headers):
+            header = headers[composer_id]
+            _fingerprint_value(digest, "header")
+            _fingerprint_value(digest, composer_id)
+            for name in (
+                "workspace_id", "created_at", "last_updated_at",
+                "is_archived", "is_subagent",
+            ):
+                _fingerprint_value(digest, name)
+                _fingerprint_value(digest, header.get(name))
+            for candidate in (
+                parse_timestamp(header.get("created_at")),
+                parse_timestamp(header.get("last_updated_at")),
+            ):
+                if candidate is not None:
+                    latest_timestamp = (
+                        candidate if latest_timestamp is None
+                        else max(latest_timestamp, candidate)
+                    )
+            lower = f"bubbleId:{composer_id}:"
+            upper = f"bubbleId:{composer_id}:\U0010ffff"
+            rows = conn.execute(
+                "SELECT key, length(value), "
+                "CAST(substr(value, 1, ?) AS BLOB), "
+                "CAST(substr(value, -?) AS BLOB) "
+                "FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key",
+                (
+                    CURSOR_SELECTION_EDGE_BYTES, CURSOR_SELECTION_EDGE_BYTES,
+                    lower, upper,
+                ),
+            )
+            for key, value_size, leading, trailing in rows:
+                bubble_count += 1
+                selected_bytes += int(value_size or 0)
+                _fingerprint_value(digest, "bubble")
+                _fingerprint_value(digest, key)
+                _fingerprint_value(digest, value_size)
+                _fingerprint_value(digest, leading)
+                _fingerprint_value(digest, trailing)
+        conn.rollback()
+    return {
+        "source_revision": (
+            f"cursor-selection-md5-fingerprint:{digest.hexdigest()}"
+        ),
+        "source_mtime": latest_timestamp,
+        "source_size": selected_bytes,
+        "fingerprint_method": (
+            "cursor-workspace-header-key-length-edge-md5-fingerprint"
+        ),
+        "consistency": "sqlite-read-transaction",
+        "workspace_count": len(workspace_ids),
+        "composer_count": len(headers),
+        "bubble_count": bubble_count,
+        "edge_bytes": CURSOR_SELECTION_EDGE_BYTES,
+    }
 
 
 def iter_bubble_rows(
@@ -224,6 +354,15 @@ def iter_bubble_size_rows(
             "SELECT key, length(value) FROM cursorDiskKV WHERE key >= ? AND key < ?",
             (f"bubbleId:{composer_id}:", f"bubbleId:{composer_id}:\U0010ffff"),
         )
+
+
+def has_bubble_rows(db_path: Path) -> bool:
+    """Return whether a workspace DB has any Composer bubble record."""
+    with closing(connect_readonly(db_path)) as conn:
+        return conn.execute(
+            "SELECT 1 FROM cursorDiskKV "
+            "WHERE key >= 'bubbleId:' AND key < 'bubbleId;' LIMIT 1"
+        ).fetchone() is not None
 
 
 def get_db_metrics(db_path: Path, composer_ids: set[str] | None = None) -> dict:

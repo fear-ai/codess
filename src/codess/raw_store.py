@@ -6,9 +6,10 @@ import hashlib
 import os
 import sqlite3
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from codess.fileio import hash_file, source_fingerprint
 
@@ -122,13 +123,32 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _sqlite_backup(path: Path, backup_path: Path) -> os.stat_result:
+def _sqlite_backup(
+    path: Path,
+    backup_path: Path,
+    progress: Callable[..., Any] | None = None,
+) -> os.stat_result:
     """Write one transactionally consistent backup without materializing it."""
     source = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
     target = sqlite3.connect(backup_path)
+    backup_started = last_progress = time.monotonic()
+
+    def backup_progress(_status: int, remaining: int, total: int) -> None:
+        nonlocal last_progress
+        now = time.monotonic()
+        if progress is not None and now - last_progress >= 5.0:
+            progress(
+                "raw.sqlite_backup.progress", source=str(path.resolve()),
+                pages_completed=total - remaining, pages_total=total,
+                phase_seconds=round(now - backup_started, 3),
+            )
+            last_progress = now
+
     try:
         source.execute("PRAGMA query_only = ON")
-        source.backup(target, pages=256, sleep=0.01)
+        source.backup(
+            target, pages=256, sleep=0.01, progress=backup_progress,
+        )
         target.commit()
         # A backup of a WAL-mode source may retain WAL-mode header bytes even
         # though no WAL sidecar belongs to the standalone backup.  Normalize
@@ -214,6 +234,7 @@ class RawStore:
         mode: str,
         source_locator: str | None = None,
         materialized_target: Path | None = None,
+        progress: Callable[..., Any] | None = None,
     ) -> dict[str, Any]:
         if mode not in RAW_MODES:
             raise RawCaptureError(f"invalid raw mode: {mode}")
@@ -261,7 +282,20 @@ class RawStore:
                     prefix="codess-raw-sqlite-"
                 )
                 capture_path = Path(backup_directory.name) / "source.sqlite"
-                stat = _sqlite_backup(path, capture_path)
+                phase_started = time.monotonic()
+                if progress is not None:
+                    progress(
+                        "raw.sqlite_backup.start",
+                        source=str(path.resolve()), source_bytes=stat.st_size,
+                    )
+                stat = _sqlite_backup(path, capture_path, progress=progress)
+                if progress is not None:
+                    progress(
+                        "raw.sqlite_backup.done",
+                        source=str(path.resolve()),
+                        backup_bytes=capture_path.stat().st_size,
+                        phase_seconds=round(time.monotonic() - phase_started, 3),
+                    )
                 capture_method = "sqlite-backup"
                 consistency = "transactional-snapshot"
                 require_stable_stat = False
@@ -270,6 +304,12 @@ class RawStore:
                 capture_method = "stable-file-read"
                 consistency = "stable-stat"
                 require_stable_stat = True
+            phase_started = time.monotonic()
+            if progress is not None:
+                progress(
+                    "raw.compress.start", source=str(path.resolve()),
+                    input_bytes=capture_path.stat().st_size,
+                )
             (
                 content_hash,
                 stored_hash,
@@ -281,6 +321,12 @@ class RawStore:
                 staged_path,
                 require_stable_stat=require_stable_stat,
             )
+            if progress is not None:
+                progress(
+                    "raw.compress.done", source=str(path.resolve()),
+                    input_bytes=uncompressed_size, stored_bytes=stored_size,
+                    phase_seconds=round(time.monotonic() - phase_started, 3),
+                )
             if storage_format != "cursor-sqlite":
                 source_stat = captured_stat
             object_path = (
@@ -289,6 +335,12 @@ class RawStore:
             )
             object_path.parent.mkdir(parents=True, exist_ok=True)
             if object_path.exists():
+                phase_started = time.monotonic()
+                if progress is not None:
+                    progress(
+                        "raw.object_verify.start", object_id=f"sha256:{content_hash}",
+                        stored_bytes=object_path.stat().st_size,
+                    )
                 try:
                     existing = verify_captured_object(
                         object_path, {"compression": "zstd"}
@@ -307,8 +359,19 @@ class RawStore:
                 stored_hash = existing["stored_sha256"]
                 stored_size = existing["stored_size"]
                 uncompressed_size = existing["uncompressed_size"]
+                if progress is not None:
+                    progress(
+                        "raw.object_verify.done", object_id=f"sha256:{content_hash}",
+                        stored_bytes=stored_size,
+                        phase_seconds=round(time.monotonic() - phase_started, 3),
+                    )
             else:
                 os.replace(staged_path, object_path)
+                if progress is not None:
+                    progress(
+                        "raw.object_promoted", object_id=f"sha256:{content_hash}",
+                        stored_bytes=stored_size,
+                    )
             if materialized_target is not None:
                 if storage_format != "cursor-sqlite":
                     raise RawCaptureError(
@@ -316,6 +379,11 @@ class RawStore:
                     )
                 materialized_target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(capture_path, materialized_target)
+                if progress is not None:
+                    progress(
+                        "raw.materialized.done", target=str(materialized_target),
+                        materialized_bytes=materialized_target.stat().st_size,
+                    )
         finally:
             staged_path.unlink(missing_ok=True)
             if backup_directory is not None:
@@ -347,6 +415,7 @@ class RawStore:
         mode: str,
         parent_source_locator: str,
         relation_kind: str,
+        progress: Callable[..., Any] | None = None,
     ) -> dict[str, Any]:
         """Observe external content as a linked raw revision.
 
@@ -359,6 +428,7 @@ class RawStore:
             source_system_id=source_system_id,
             storage_format=storage_format,
             mode=mode,
+            progress=progress,
         )
         identity = "\0".join((
             parent_source_locator,

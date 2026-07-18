@@ -1,5 +1,6 @@
 """Tests for Cursor adapter."""
 
+from contextlib import closing
 import json
 import sqlite3
 from pathlib import Path
@@ -14,7 +15,13 @@ from codess.adapters.cursor import (
     get_composer_data,
     process_db,
 )
-from codess.cursor_source import get_composer_headers, get_db_metrics
+from codess.cursor_source import (
+    connect_readonly,
+    get_composer_headers,
+    get_db_metrics,
+    get_selection_marker,
+    has_bubble_rows,
+)
 from codess.schema_contract import validate_mapped_event
 
 
@@ -150,6 +157,80 @@ class TestGetComposerHeaders:
                 "is_subagent": False,
             }
         }
+
+
+class TestSelectionMarker:
+    def test_ignores_unselected_state_and_detects_selected_changes(self, tmp_path):
+        db = tmp_path / "state.vscdb"
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "CREATE TABLE composerHeaders ("
+                "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+                "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+            )
+            conn.execute(
+                "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
+            )
+            conn.executemany(
+                "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    ("selected", "ws1", 1700000000000, 1700000001000, 0, 0),
+                    ("other", "ws2", 1700000000000, 1700000001000, 0, 0),
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO cursorDiskKV VALUES (?, ?)",
+                [
+                    ("bubbleId:selected:one", "selected payload"),
+                    ("bubbleId:other:one", "other payload"),
+                ],
+            )
+        first = get_selection_marker(db, {"ws1"})
+        assert first["workspace_count"] == 1
+        assert first["composer_count"] == 1
+        assert first["bubble_count"] == 1
+
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE cursorDiskKV SET value='other changed' "
+                "WHERE key='bubbleId:other:one'"
+            )
+            conn.execute("CREATE TABLE unrelated(value TEXT)")
+            conn.execute("INSERT INTO unrelated VALUES ('changed')")
+        assert get_selection_marker(db, {"ws1"}) == first
+
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE cursorDiskKV SET value='selected changed' "
+                "WHERE key='bubbleId:selected:one'"
+            )
+            conn.execute(
+                "UPDATE composerHeaders SET lastUpdatedAt=1700000002000 "
+                "WHERE composerId='selected'"
+            )
+        changed = get_selection_marker(db, {"ws1"})
+        assert changed["source_revision"] != first["source_revision"]
+        assert changed["source_mtime"] == 1700000002000
+
+    def test_sidecar_free_wal_workspace_uses_immutable_fallback(self, tmp_path):
+        db = tmp_path / "state.vscdb"
+        with sqlite3.connect(db) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
+            )
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        Path(str(db) + "-wal").unlink(missing_ok=True)
+        Path(str(db) + "-shm").unlink(missing_ok=True)
+
+        with pytest.raises(sqlite3.OperationalError):
+            with sqlite3.connect(
+                db.resolve().as_uri() + "?mode=ro", uri=True
+            ) as conn:
+                conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+        with closing(connect_readonly(db)) as conn:
+            assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert not has_bubble_rows(db)
 
 
 class TestGetDbMetrics:
@@ -492,6 +573,30 @@ class TestProcessDb:
         sids = [o[0] for o in out]
         assert sids.count("c1") == 2
         assert sids.count("c2") == 1
+
+    def test_process_db_traces_composer_read_buffer(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("codess.adapters.cursor._PROGRESS_ROWS", 2)
+        db = _make_cursor_db(tmp_path, [
+            ("c1", "b1", {"type": 1, "text": "one"}),
+            ("c1", "b2", {"type": 2, "text": "two"}),
+            ("c2", "b1", {"type": 1, "text": "three"}),
+        ])
+        progress = []
+
+        list(process_db(
+            db, "/proj",
+            {"progress": lambda event, **fields: progress.append((event, fields))},
+        ))
+
+        assert [event for event, _fields in progress] == [
+            "cursor.composer.read.start",
+            "cursor.composer.read.progress",
+            "cursor.composer.read.done",
+            "cursor.composer.read.start",
+            "cursor.composer.read.done",
+        ]
+        assert progress[1][1]["bubbles"] == 2
+        assert {fields["composer_id"] for _event, fields in progress} == {"c1", "c2"}
 
     def test_representative_fixture_contract(self, tmp_path):
         db = _make_cursor_db(tmp_path, _cursor_fixture())

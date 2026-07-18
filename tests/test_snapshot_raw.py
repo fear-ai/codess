@@ -217,17 +217,27 @@ def test_cursor_capture_uses_consistent_sqlite_backup(tmp_path):
     observed_source_stat = source.stat()
     raw = RawStore(tmp_path / "raw")
     materialized = tmp_path / "cohort.db"
+    progress_events = []
     record = raw.observe(
         source,
         source_system_id="cursor.composer",
         storage_format="cursor-sqlite",
         mode="capture",
         materialized_target=materialized,
+        progress=lambda event, **fields: progress_events.append((event, fields)),
     )
     writer.close()
     assert record["capture_method"] == "sqlite-backup"
     assert record["source_mtime_ns"] == observed_source_stat.st_mtime_ns
     assert record["source_size"] == observed_source_stat.st_size
+    assert [event for event, _fields in progress_events] == [
+        "raw.sqlite_backup.start",
+        "raw.sqlite_backup.done",
+        "raw.compress.start",
+        "raw.compress.done",
+        "raw.object_promoted",
+        "raw.materialized.done",
+    ]
     with sqlite3.connect(
         materialized.resolve().as_uri() + "?mode=ro", uri=True
     ) as conn:

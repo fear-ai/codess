@@ -279,7 +279,7 @@ Defaults in the table are when the variable is **unset**.
 
 **Boolean and pseudo-boolean flags — by command**
 
-- **Top-level `-v` / `--verbose`:** true when **`args.verbose or VERBOSE`** from **`CODESS_VERBOSE`**; **`parse_and_run`** sets **`logging.basicConfig(DEBUG)`**. Not the same as **`CODESS_DEBUG`** (vendor/session trace).
+- **Top-level `-v` / `--verbose`:** true when **`args.verbose or VERBOSE`** from **`CODESS_VERBOSE`**; **`parse_and_run`** sets **`logging.basicConfig(DEBUG)`**. Not the same as **`CODESS_DEBUG`** (vendor/session diagnostics) or the always-on, content-free ingest progress stream documented in **Operations.md**.
 - **Scan `--debug`:** **`args.debug or DEBUG`**. **`--subagent`:** **`args.subagent or SUBAGENT`**.
 - **Ingest `--debug` / `--force` / `--redact`:** each **`args.* or`** matching **`CODESS_*`**; **`--force`** argparse default stays **`False`** so omission does not imply force.
 - **Query:** mode flags only; **no** **`CODESS_*`** booleans for **`--stats`**, **`--tool`**, etc.
@@ -553,53 +553,24 @@ link here instead of maintaining another queue.
 - Rebuild derived stores and replace accepted baselines rather than mutating
   them in place.
 
-#### 8.1.1 Current review checkpoint
+#### 8.1.1 Current decisions
 
-The implementation is deliberately stopped before real-store rollout. The
-existing format-3 snapshots and approved-baseline pointers have not been
-replaced. The format-4 package is a **candidate**, not an accepted release,
-until R1 and the two parts of R3 are confirmed. R2 is decided.
+- **R1:** CoSchema format 4 is accepted and current. Formats 2 and 3 remain
+  read-only compatibility inputs; derived stores are rebuilt, not migrated.
+- **R2:** routine fingerprints are fast, labeled, and non-authenticating.
+  Ordinary files use full MD5 through 64 MiB and bounded sampling above it.
+  Cursor uses transactionally read selected headers plus bubble
+  key/length/512-byte edges. Exact retained objects use complete SHA-256.
+- **R3a:** authoritative occurrence provenance remains per-event JSON with the
+  source record/locator/field and exact designation. Normalized configuration
+  columns are not occurrence history.
+- **R3b:** a materialized configuration-observation table is postponed until a
+  demonstrated query requires it. A rebuildable projection is preferred over
+  prematurely expanding the central format.
 
-Directions already established and not reopened by this checkpoint:
-
-- preserve useful vendor- and release-specific evidence even before it has a
-  common field;
-- expose normalized common names for mixed-vendor queries while retaining exact
-  source names, values, locators, and mapping evidence;
-- support documented and automated source-to-common and common-to-external
-  mappings as separate directions; and
-- retain dated, versioned snapshots and detect changed sources rather than
-  migrating accepted derived stores in place.
-
-| Review ID | Small decision still required | Current recommendation | Work held until decision |
-|---|---|---|---|
-| **R1** | Accept CoSchema format 4 now, or defer the complete contract/JSON correction | Accept format 4: it makes already-used functional tables/fields and JSON obligations truthful and machine-verifiable; keep formats 2/3 read-only | Release designation, real-store rebuild, baseline replacement |
-| **R2 — decided** | Routine source-update fingerprint | Use fast, non-authenticating MD5: full-file through 64 MiB and labeled bounded sampling above it, including SQLite WAL state. This is only a change detector. Captured raw objects retain complete SHA-256 because it is their content address and integrity check, not the routine fingerprint. | Measure scale/detection behavior; no further policy approval required |
-| **R3a** | Authoritative occurrence provenance | Recommend per-event JSON provenance containing source record/locator/field path and exact source value or designation. Keep reusable model-configuration columns limited to normalized configuration values. Do not rely on one representative `source_config` as occurrence history. | Decide whether `source_config` is removed, retained only as a non-authoritative example, or narrowed to configuration-level notes |
-| **R3b** | Materialized model-configuration observation table | Recommend postponing it. Add one only when direct queries need every configuration-field occurrence without JSON extraction. If approved now, it adds a row per observed field/occurrence plus event/source links and becomes part of the format-4 contract. | Final format-4 table set and query design |
-
-R3a and R3b solve different problems. Provenance answers “which exact source
-field justified this value on this event?” and is required even without a new
-table. An observation table answers “show and aggregate every occurrence of a
-configuration field efficiently.” The alternatives are:
-
-- **Per-event JSON only (recommended now):** exact and naturally attached to
-  the event; no additional joins or row multiplication. Queries use
-  `json_extract` and repeated provenance is less compact.
-- **Observation table now:** strongest relational querying and indexing, with
-  explicit event/source/configuration foreign keys. It materially increases
-  row counts, schema surface, ingestion work, and rules for deduplication and
-  partial observations.
-- **Representative `source_config` only:** compact but ambiguous when the same
-  normalized configuration came from several releases or field paths. This is
-  not sufficient as authoritative provenance and is not recommended.
-- **Hybrid later:** keep authoritative event JSON now, then build a rebuildable
-  observation projection if real queries justify it. This preserves evidence
-  without committing the central schema prematurely.
-
-Until R1 and R3a/R3b are resolved, changes may receive tests and documentation fixes but
-must not promote a format-4 baseline, alter approved pointers, or claim a new
-Codess release.
+Preserve useful vendor/release evidence, normalized common mappings, exact
+source designations, and dated immutable snapshots. `--force` remains the
+escape hatch for suspected fingerprint sampling or vendor-timestamp gaps.
 
 The format-4 package and reviewed corpus are current. SWEmore, spank-py, and
 Zero400 passed policy, query-smoke, integrity, foreign-key, and repeat-ingest
@@ -609,6 +580,18 @@ zerowalletmac, and Spank/Logs. Superseded format-3/intermediate snapshots,
 obsolete Cursor captures, and temporary working archives were pruned through a
 validated retention receipt. Future schema changes return to the same
 compare/rebuild/freeze sequence rather than mutating these stores.
+
+The current shared Cursor object is `sha256:ae3c2380…`. Two successive exact
+global revisions differed while all three Project selection markers and
+normalization digests matched. Per-Project workspace/header/bubble-edge markers
+therefore replace whole-DB invalidation. A post-instrumentation unchanged run
+over all three Projects completed in 1.97 seconds (0.685 seconds for marker
+selection), ingested 0 records, retained the same three snapshot IDs, and
+recorded 11–14 progress events per Project. A changed full run remains dominated
+by Zero400 composer normalization at about 7.5 minutes and 559 MB peak RSS;
+composer read buffers and writes now have separate live and retained progress
+events for the next profile. Retention has a zero-candidate postcondition after
+removing the superseded revisions and snapshots.
 
 ZeroPerf is the `perf-401` linked Git worktree of Zero400's repository, whose
 current primary worktree is on `testfix-401`; it is not an unrelated repository.
@@ -624,11 +607,11 @@ queries and future correlation can group them explicitly.
 | 2 | **A2** | Orientation and utilization overview: sessions, Interactions, turns, events, content volume, tools, artifacts, models, elapsed span, active days/time estimate, and time buckets | Golden reports cover empty, tiny, multi-vendor, long-idle, many-small-session, and one-huge-session stores |
 | 3 | **A3** | Event and Interaction drill-down: typed event rows, stable event lookup, complete Interaction/Model Turn, sequence windows, source locators, and completeness | Known Claude, Codex, and Cursor exchanges reconstruct in canonical order |
 | 4 | **A4** | Bounded search by Project/vendor/time/type with completeness warnings and product-state facets; benchmark a rebuildable FTS5 derivative only afterward | Known hits, truncated false-negative warnings, repeated-state noise tests, and bounded resource evidence |
-| 5 | **A5** | Complete failure/resource validation for exact raw capture and bounded fingerprints. Transactional standalone SQLite backup, metadata-only cohort cache, all-Project marker preflight, direct fresh-backup queries, staged level-3 zstd, content-addressed reuse across valid encodings, bounded restore/verification, no-op snapshot suppression, atomic promotion, and retention apply are implemented | Add measured fresh-capture peak RSS, injected partial-failure/no-promotion cases, and documented large-source sampling false-negative bounds; measure cache restoration for a newly selected Project |
+| 5 | **A5** | Complete failure/resource validation for exact raw capture and bounded fingerprints. Transactional standalone SQLite backup, per-Project selected Cursor markers, metadata-only cohort cache, direct fresh-backup queries, staged level-3 zstd, content-addressed reuse across valid encodings, bounded restore/verification, no-op snapshot suppression, atomic promotion, and retention apply are implemented | Add injected partial-failure/no-promotion cases and measure cache restoration for a newly selected Project; retain the documented 512-byte edge/header false-negative boundary |
 | 6 | **A6** | Exact evidence resolver from event to source record to verified live, captured, or sealed evidence | The same record resolves from live and captured evidence; changed or unavailable sources are explicit |
 | 7 | **A7** | Reusable results and automation: `codess.query-result/1`, saved selections, result-set input, hashes, prior-result comparison, stable exit codes, and derivation records | A multi-step investigation replays against the same snapshots and cites every evidence row |
 | 8 | **A8** | Guided investigation and optional question-to-typed-request formulation | Project → overview → search → Interaction → exact evidence → cited summary works without handwritten SQL |
-| 9 | **A9** | Performance and ecosystem: predicate/limit pushdown, heap merge, profiling, justified read-only views, and Datasette/notebook/DuckDB recipes | Scale fixtures bound rows, bytes, and RSS; external recipes remain read-only |
+| 9 | **A9** | Performance and ecosystem: predicate/limit pushdown, heap merge, allocation profiling, justified read-only views, and Datasette/notebook/DuckDB recipes. Live/persisted `codess.progress/1` phase tracing and Cursor buffer/backup heartbeats are implemented | Use traces plus allocation profiles to bound rows, bytes, phase time, and RSS in scale fixtures; external recipes remain read-only |
 | parallel | **A10** | Resolve Codex token counter reset/model/fork/interleave attribution, or formally limit it to non-billing evidence | The diagnostic either proves a stable attribution rule or records a permanent confidence boundary |
 | maintenance | **A11** | Consolidate duplicated Claude/Codex ingest control flow and review remaining compatibility aliases/wrappers, including `retire_project.py` | Shared control flow has one tested owner; retained wrappers are thin, documented, and have an explicit keep/remove decision |
 
@@ -656,8 +639,8 @@ its active item or trigger.
 | **L-P2** | Repeated Cursor title/mode/permission/reminder state can dominate naïve text search | **A4** facets and defaults |
 | **L-E1** | Cross-store reports materialize and sort selected sessions in Python | **A9** |
 | **L-E2** | Repeated substring search has no rebuildable policy-aware index | Benchmark after **A4**; decide under **D4** |
-| **L-E3** | Cursor selection and SQLite writes are composer-streamed, but ordering/deduplication and Interaction construction still buffer one complete composer; a real 19,661-event composer reached about 531 MiB RSS | **A9**: profile allocation owners, then make event grouping/stateful writes incremental without weakening rollback or canonical ordering |
-| **L-E4** | First capture of a changed 4.78 GB Cursor DB still requires one transactional backup and streaming compression; a newly selected Project may require one verified streaming restore of an unchanged cached cohort | **A5/A9**: measure fresh-capture and cache-restore I/O/RSS; keep the unchanged all-Project path at bounded marker cost only |
+| **L-E3** | Cursor selection and SQLite writes are composer-streamed, but ordering/deduplication and Interaction construction still buffer one complete composer; a real 19,661-event composer reached about 531 MiB RSS. Phase tracing now identifies read-buffer progress separately from writes | **A9**: use retained phase evidence and allocation profiles, then make event grouping/stateful writes incremental without weakening rollback or canonical ordering |
+| **L-E4** | First capture of changed selected Cursor evidence still requires one transactional backup and streaming compression; a newly selected Project may require one verified streaming restore of an unchanged cached cohort. Real exact revisions `368bb3…` and `ae3c23…` differed while all three selected markers and normalization digests matched, proving whole-DB invalidation was too coarse | **A5/A9**: selected markers are implemented; measure cache-restore I/O/RSS and keep `--force` for suspected vendor timestamp/edge-sampling gaps |
 | **V-CC1** | Claude slug decoding is lossy when the index lacks an explicit Project path | Prefer indexed paths; reopen mapping only with new evidence |
 | **V-CC2** | Claude model/service settings, custom/AI titles, agent names, direct fork references, and bounded product state are mapped; richer runtime-context snapshots remain only partially specialized | Validate under **A12**; other context remains evidence-triggered |
 | **V-CTX1** | Runtime context such as memory, skills/tool schemas, reasoning/turn context, and detailed token snapshots is not represented as a first-class common model | Evidence- and use-case-triggered; define semantics before adding entities |

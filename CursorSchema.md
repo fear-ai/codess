@@ -168,6 +168,21 @@ Re-ingesting a Cursor database replaces events whose `source_file` is that
 database. Sessions removed from the database are deleted only when no events
 from another Cursor source remain.
 
+Incremental global ingestion does not use the whole `state.vscdb` mtime as its
+functional revision. Cursor frequently changes unrelated global/workbench
+state. Codess instead reads each Project's selected `composerHeaders` and
+`bubbleId:<composerId>:` ranges in one SQLite transaction and calculates a
+non-authenticating change marker from exact header fields, every key and value
+length, and the first/last 512 bytes of each value. A changed selected marker
+triggers one exact transactional backup for the cohort; unrelated table changes
+do not. Exact captured evidence remains fully SHA-256 addressed and verified.
+
+Some sidecar-free workspace databases cannot be opened with ordinary SQLite
+`mode=ro` even though they are valid standalone files. Codess retries those
+only with `immutable=1` after confirming that neither `-wal` nor `-shm` exists.
+An indexed prefix existence probe then advances ingest state without parsing or
+retaining workspace databases that contain no `bubbleId:*` records.
+
 ## 6. Read-only access
 
 Use SQLite read-only mode:

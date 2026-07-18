@@ -266,9 +266,6 @@ def test_malformed_json_skipped():
 
 def test_codex_ingest_and_query():
     """Codex ingest → query cycle with temp Codex dir."""
-    import json
-    import sqlite3
-
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         proj = tmp / "myproj"
@@ -611,6 +608,16 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(tmp_path):
         (workspace / "workspace.json").write_text(
             json.dumps({"folder": project.resolve().as_uri()}), encoding="utf-8"
         )
+        if index == 1:
+            workspace_db = workspace / "state.vscdb"
+            with sqlite3.connect(workspace_db) as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute(
+                    "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
+                )
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            Path(str(workspace_db) + "-wal").unlink(missing_ok=True)
+            Path(str(workspace_db) + "-shm").unlink(missing_ok=True)
     global_dir = cursor_base / "globalStorage"
     global_dir.mkdir(parents=True)
     global_db = global_dir / "state.vscdb"
@@ -652,6 +659,11 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(tmp_path):
         text=True,
     )
     assert result.returncode == 0, result.stderr
+    assert "cursor.marker.start" in result.stderr
+    assert "raw.sqlite_backup.start" in result.stderr
+    assert "cursor.composer.read.done" in result.stderr
+    assert "cursor.composer.write.done" in result.stderr
+    assert "snapshot.done" in result.stderr
 
     records = []
     source_rows = []
@@ -687,6 +699,11 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(tmp_path):
         (project / ".codess" / "current.json").read_bytes()
         for project in projects
     ]
+    # Cursor routinely mutates unrelated global/workbench state. Such a change
+    # must not invalidate selected workspace/composer ingestion.
+    with sqlite3.connect(global_db) as conn:
+        conn.execute("CREATE TABLE unrelatedCursorState(value TEXT)")
+        conn.execute("INSERT INTO unrelatedCursorState VALUES ('changed')")
     unchanged = subprocess.run(
         command,
         cwd=str(Path(__file__).parent.parent),
@@ -700,6 +717,8 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(tmp_path):
     )
     assert unchanged.returncode == 0, unchanged.stderr
     assert "Cursor cohort: unchanged" in unchanged.stdout
+    assert "cursor.cohort.unchanged" in unchanged.stderr
+    assert "cursor.project.unchanged" in unchanged.stderr
     assert [
         (project / ".codess" / "current.json").read_bytes()
         for project in projects
@@ -803,8 +822,7 @@ def test_incremental_skip_unchanged():
             capture_output=True,
             text=True,
         )
-        count1 = len(r2.stdout.strip().split("\n"))
-
+        assert r2.returncode == 0
         # Second ingest (unchanged)
         r3 = subprocess.run(
             [sys.executable, "-m", "main", "ingest", "--dir", str(project_root), "--min-size", "0"],

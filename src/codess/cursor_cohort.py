@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from codess.fileio import write_json_atomic
 from codess.raw_store import RawCaptureError, RawStore, materialize_captured_object
@@ -12,6 +14,35 @@ from codess.store import load_ingest_state
 
 
 CACHE_FORMAT = "codess.cursor-cohort-cache/1"
+
+
+def combine_selection_markers(
+    markers: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Return one cache key for a set of per-Project Cursor selections."""
+    canonical = json.dumps(
+        [[project, markers[project]] for project in sorted(markers)],
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    try:
+        digest = hashlib.md5(canonical, usedforsecurity=False).hexdigest()
+    except TypeError:  # pragma: no cover - older Python/OpenSSL combinations
+        digest = hashlib.md5(canonical).hexdigest()
+    mtimes = [
+        marker.get("source_mtime") for marker in markers.values()
+        if isinstance(marker.get("source_mtime"), (int, float))
+    ]
+    return {
+        "source_revision": f"cursor-cohort-selection-md5-fingerprint:{digest}",
+        "source_mtime": max(mtimes) if mtimes else None,
+        "source_size": sum(
+            int(marker.get("source_size") or 0) for marker in markers.values()
+        ),
+        "fingerprint_method": "cursor-combined-project-selection-md5-fingerprint",
+        "consistency": "composed-sqlite-read-transactions",
+        "project_count": len(markers),
+    }
 
 
 def cohort_state_key(source: Path) -> str:
@@ -71,6 +102,7 @@ def prepare_cursor_cohort(
     storage_format: str,
     marker: dict[str, Any],
     force: bool,
+    progress: Callable[..., Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     """Materialize a reusable cohort, capturing only after a cache miss.
 
@@ -83,7 +115,21 @@ def prepare_cursor_cohort(
         if cached is not None:
             object_path = raw_store.resolve(cached)
             try:
+                phase_started = time.monotonic()
+                if progress is not None:
+                    progress(
+                        "cursor.cohort.restore.start",
+                        object_id=cached.get("object_id"),
+                        stored_bytes=cached.get("stored_size"),
+                    )
                 materialize_captured_object(object_path, materialized_path, cached)
+                if progress is not None:
+                    progress(
+                        "cursor.cohort.restore.done",
+                        object_id=cached.get("object_id"),
+                        materialized_bytes=cached.get("uncompressed_size"),
+                        phase_seconds=round(time.monotonic() - phase_started, 3),
+                    )
                 return cached, marker, "reused"
             except RawCaptureError:
                 # Fall through to a fresh transactional backup.  If the
@@ -97,6 +143,7 @@ def prepare_cursor_cohort(
         storage_format=storage_format,
         mode="capture",
         materialized_target=materialized_path,
+        progress=progress,
     )
     record["change_detection"] = {
         "source_revision": marker.get("source_revision"),

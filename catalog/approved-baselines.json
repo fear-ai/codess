@@ -19,7 +19,7 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-18T08:05:47.287231+00:00"
+        "validated_at": "2026-07-18T10:10:20.503249+00:00"
       },
       "mapping_diagnostics": {
         "missing_tool_call_id": 19
@@ -57,7 +57,7 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-18T08:05:47.333685+00:00"
+        "validated_at": "2026-07-18T10:10:20.552112+00:00"
       },
       "mapping_diagnostics": {},
       "parent_snapshot_id": "20260718T074634.298457Z-coschema4-69cd18da6c59",
@@ -80,8 +80,11 @@
     {
       "last_automated_validation": {
         "fixed_point": {
+          "first_snapshot_id": "20260718T094630.846830Z-coschema4-4f72da502224",
+          "method": "successive-shared-cohort-ingests",
           "normalization_digest_match": true,
           "passed": true,
+          "repeat_snapshot_id": "20260718T095547.634299Z-coschema4-69c5b45934d2",
           "semantic_digest_match": false,
           "source_revisions_match": false
         },
@@ -93,17 +96,17 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-18T08:05:47.621235+00:00"
+        "validated_at": "2026-07-18T10:10:20.832461+00:00"
       },
       "mapping_diagnostics": {},
-      "parent_snapshot_id": "20260718T075337.516480Z-coschema4-4e7869dffdbf",
+      "parent_snapshot_id": "20260718T094630.846830Z-coschema4-4f72da502224",
       "path": "/Users/walter/Work/ZK/Zero400",
       "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
       "raw_mode": "capture",
       "raw_records": 6,
       "selection_state": "approved",
-      "semantic_digest": "cbca1ac48486007e507c4dd43e41404b504014f3c13c1a34f2becd71ad96c529",
-      "snapshot_id": "20260718T080434.659521Z-coschema4-06fbe686f744",
+      "semantic_digest": "cf44543a9679f1e5940107d8ca960f7a8c682f38b8eb22ff083e584b67521a5e",
+      "snapshot_id": "20260718T095547.634299Z-coschema4-69c5b45934d2",
       "sources": {
         "Claude": {
           "events": 1932,

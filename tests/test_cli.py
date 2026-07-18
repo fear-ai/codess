@@ -850,6 +850,11 @@ def test_ingest_validate_uses_real_adapter_without_mutation():
         assert result.returncode == 0, result.stderr
         report = json.loads(result.stdout.strip())
         assert report["report_format"] == "codess.ingest-preflight/1"
+        assert report["progress_format"] == "codess.progress/1"
+        assert "project.done" in {
+            event["event"] for event in report["progress_events"]
+        }
+        assert report["progress_events"][-1]["event"] == "ingest.done"
         assert report["events"] > 0
         assert report["session_kinds"] == {
             "Claude": {"main": 1, "subagent": 0}
@@ -970,10 +975,17 @@ def test_routine_ingest_writes_resource_and_evidence_report():
             (project / ".codess/last-ingest-report.json").read_text(encoding="utf-8")
         )
         assert report["report_format"] == "codess.ingest-runtime/1"
+        assert report["progress_format"] == "codess.progress/1"
         assert report["resource_observations"][0]["source_bytes"] == source.stat().st_size
         assert report["resource_observations"][0]["events"] > 0
         assert report["evidence_summary"]["tool_invocations"] >= 0
         assert report["limits"]["max_source_bytes"] > 0
+        assert "codess: progress " in result.stderr
+        assert [event["event"] for event in report["progress_events"]] == [
+            "ingest.start", "project.start", "vendor.start", "source.start",
+            "source.done", "vendor.done", "snapshot.start", "snapshot.done",
+            "project.done",
+        ]
 
 
 def test_query_jsonl_sessions_and_stats_are_typed():

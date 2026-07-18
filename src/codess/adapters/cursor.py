@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -20,6 +21,8 @@ _MAPPED_BUBBLE_FIELDS = frozenset({
     "type", "text", "createdAt", "timingInfo", "serverBubbleId",
     "toolFormerData", "toolResults", "modelInfo",
 })
+_PROGRESS_ROWS = 1000
+_PROGRESS_SECONDS = 5.0
 
 
 def _bubble_timestamp(data: dict) -> float | None:
@@ -148,25 +151,61 @@ def process_db(
 ) -> Iterator[tuple[str, dict]]:
     """Stream (session_id, event) from Cursor state.vscdb. Groups by composerId."""
     source_file = source_file or str(db_path.resolve())
-    redact_enabled = opts.get("redact", False)
     diagnostics = opts.get("diagnostics")
     stats: dict[str, int] = {}
+    progress = opts.get("progress")
 
     current_composer: str | None = None
     bubbles: list[tuple[str, dict]] = []
+    composer_started: float | None = None
+    last_progress: float | None = None
+
+    def emit(event: str, **fields) -> None:
+        if progress is not None:
+            progress(
+                event, project=project_path, source=source_file,
+                composer_id=current_composer, **fields,
+            )
+
+    def finish_read() -> None:
+        if current_composer is None:
+            return
+        emit(
+            "cursor.composer.read.done", bubbles=len(bubbles),
+            phase_seconds=(
+                round(time.monotonic() - composer_started, 3)
+                if composer_started is not None else None
+            ),
+        )
+
     for composer_id, bubble_id, data in _iter_bubbles(
         db_path,
         stats,
         composer_ids,
     ):
         if current_composer is not None and composer_id != current_composer:
+            finish_read()
             yield from _process_composer(
                 current_composer, bubbles, source_file, opts, diagnostics
             )
             bubbles.clear()
-        current_composer = composer_id
+        if composer_id != current_composer:
+            current_composer = composer_id
+            composer_started = last_progress = time.monotonic()
+            emit("cursor.composer.read.start")
         bubbles.append((bubble_id, data))
+        now = time.monotonic()
+        if len(bubbles) % _PROGRESS_ROWS == 0 or (
+            last_progress is not None
+            and now - last_progress >= _PROGRESS_SECONDS
+        ):
+            emit(
+                "cursor.composer.read.progress", bubbles=len(bubbles),
+                phase_seconds=round(now - composer_started, 3),
+            )
+            last_progress = now
     if current_composer is not None:
+        finish_read()
         yield from _process_composer(
             current_composer, bubbles, source_file, opts, diagnostics
         )
