@@ -11,6 +11,7 @@ from codess.cursor_source import (
     get_composer_headers,
     get_db_metrics,
     get_global_db as get_cursor_global_db,
+    get_project_composer_headers,
     get_workspace_dbs as get_cursor_workspace_dbs,
     get_workspace_ids as get_cursor_workspace_ids,
 )
@@ -215,7 +216,7 @@ def _session_metrics_cursor(p: Path) -> dict:
     workspace_ids = set(get_cursor_workspace_ids(p))
     global_db = get_cursor_global_db()
     if workspace_ids and global_db:
-        composer_ids = set(get_composer_headers(global_db, workspace_ids))
+        composer_ids = set(get_project_composer_headers(global_db, p))
         if composer_ids:
             m = get_db_metrics(global_db, composer_ids)
             count += m["count"]

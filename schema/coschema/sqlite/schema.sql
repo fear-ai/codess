@@ -365,19 +365,30 @@ CREATE INDEX idx_events_timestamp ON events(timestamp) WHERE timestamp IS NOT NU
 CREATE INDEX idx_events_tool_name ON events(tool_name) WHERE tool_name IS NOT NULL;
 CREATE INDEX idx_events_source_record ON events(source_id, source_record_locator);
 CREATE INDEX idx_events_interaction ON events(interaction_id, sequence_no);
+CREATE INDEX idx_events_source ON events(source_id);
 CREATE INDEX idx_sources_uri_revision ON sources(source_uri, source_revision);
 CREATE INDEX idx_sessions_project ON sessions(project_id);
 CREATE INDEX idx_sessions_project_path ON sessions(project_path);
 CREATE INDEX idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX idx_sessions_global ON sessions(global_id);
 CREATE INDEX idx_sessions_observation ON sessions(observation_id);
+CREATE INDEX idx_sessions_source ON sessions(source_id);
+CREATE INDEX idx_sessions_default_model_config ON sessions(default_model_config_id)
+  WHERE default_model_config_id IS NOT NULL;
 CREATE INDEX idx_events_global ON events(global_id);
+CREATE INDEX idx_model_turns_model_config ON model_turns(model_config_id)
+  WHERE model_config_id IS NOT NULL;
 CREATE INDEX idx_project_locations_project ON project_locations(project_id);
 CREATE INDEX idx_workspace_bindings_project ON workspace_bindings(project_id);
 CREATE INDEX idx_source_records_source ON source_records(source_id, source_sequence);
 CREATE INDEX idx_content_sha256 ON content_objects(content_sha256);
+CREATE INDEX idx_event_content_content ON event_content(content_id);
+CREATE INDEX idx_source_record_content_content ON source_record_content(content_id);
+CREATE INDEX idx_tool_result_content_content ON tool_result_content(content_id);
+CREATE INDEX idx_artifact_content_content ON artifact_content(content_id);
 CREATE INDEX idx_tools_name ON tool_invocations(canonical_tool_name);
 CREATE INDEX idx_artifacts_project_path ON artifacts(project_id, relative_path);
+CREATE INDEX idx_event_artifacts_artifact ON event_artifacts(artifact_id);
 CREATE UNIQUE INDEX idx_model_configurations_identity
   ON model_configurations(
     coalesce(provider,''), coalesce(model_family,''),

@@ -19,9 +19,11 @@ from codess.cursor_source import (
     connect_readonly,
     get_composer_headers,
     get_db_metrics,
+    get_project_composer_headers,
     get_selection_marker,
     get_selection_markers,
     get_sqlite_container_marker,
+    get_workspace_composer_headers,
     has_bubble_rows,
 )
 from codess.schema_contract import validate_mapped_event
@@ -43,6 +45,84 @@ def _make_cursor_db(tmp_path: Path, bubbles: list[tuple[str, str, dict]]) -> Pat
     conn.commit()
     conn.close()
     return db
+
+
+def test_workspace_composer_index_recovers_missing_global_headers(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    cursor_data = tmp_path / "Cursor" / "User"
+    workspace = cursor_data / "workspaceStorage" / "workspace-one"
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"folder": project.resolve().as_uri()})
+    )
+    with sqlite3.connect(workspace / "state.vscdb") as conn:
+        conn.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "INSERT INTO ItemTable VALUES (?, ?)",
+            (
+                "composer.composerData",
+                json.dumps({
+                    "allComposers": [
+                        {
+                            "composerId": "legacy",
+                            "createdAt": 1700000000000,
+                            "lastUpdatedAt": 1700000001000,
+                            "isArchived": True,
+                        },
+                        {
+                            "composerId": "current",
+                            "createdAt": 1,
+                            "lastUpdatedAt": 2,
+                        },
+                    ]
+                }),
+            ),
+        )
+    global_dir = cursor_data / "globalStorage"
+    global_dir.mkdir()
+    global_db = global_dir / "state.vscdb"
+    with sqlite3.connect(global_db) as conn:
+        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        conn.executemany(
+            "INSERT INTO cursorDiskKV VALUES (?, ?)",
+            [
+                ("bubbleId:legacy:one", json.dumps({"type": 1, "text": "old"})),
+                ("bubbleId:current:one", json.dumps({"type": 1, "text": "new"})),
+            ],
+        )
+        conn.execute(
+            "CREATE TABLE composerHeaders ("
+            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+        )
+        conn.execute(
+            "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+            ("current", "workspace-one", 1700000002000, 1700000003000, 0, 0),
+        )
+
+    fallback = get_workspace_composer_headers(project, cursor_data)
+    assert fallback["legacy"] == {
+        "workspace_id": "workspace-one",
+        "created_at": 1700000000000,
+        "last_updated_at": 1700000001000,
+        "is_archived": True,
+        "is_subagent": False,
+        "selection_source": "workspace.composerData",
+    }
+    combined = get_project_composer_headers(global_db, project, cursor_data)
+    assert set(combined) == {"legacy", "current"}
+    assert combined["current"]["created_at"] == 1700000002000
+    assert "selection_source" not in combined["current"]
+
+    markers = get_selection_markers(
+        global_db,
+        {"project": {"workspace-one"}},
+        supplemental_headers={"project": combined},
+    )
+    assert markers["project"]["composer_count"] == 2
+    assert markers["project"]["bubble_count"] == 2
+    assert markers["project"]["source_mtime"] == 1700000003000
 
 
 def _cursor_fixture() -> list[tuple[str, str, dict]]:

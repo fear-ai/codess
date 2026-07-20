@@ -11,7 +11,7 @@ import zstandard
 
 from cli.ingest_cmd import _record_raw
 from codess.raw_store import (
-    RawStore,
+    RawCaptureError, RawStore,
     materialize_captured_object,
     verify_captured_object,
 )
@@ -103,6 +103,24 @@ def test_raw_capture_streams_without_path_read_bytes(tmp_path, monkeypatch):
         zstandard.ZstdDecompressor().copy_stream(compressed, output)
     assert restored.stat().st_size == source.stat().st_size
     assert restored.open("rb").read(len(unit)) == unit
+
+
+def test_raw_capture_failure_never_promotes_partial_object(tmp_path, monkeypatch):
+    source = tmp_path / "source.jsonl"
+    source.write_bytes(b'{"payload":"failure injection"}\n')
+    raw = RawStore(tmp_path / "raw")
+
+    def fail_compression(*_args, **_kwargs):
+        raise RawCaptureError("injected compression failure")
+
+    monkeypatch.setattr("codess.raw_store._compress_file", fail_compression)
+    with pytest.raises(RawCaptureError, match="injected"):
+        raw.observe(
+            source, source_system_id="openai.codex",
+            storage_format="codex-jsonl", mode="capture",
+        )
+    assert not list((raw.root / ".staging").glob("*"))
+    assert not list((raw.root / "objects").rglob("*.zst"))
 
 
 def test_raw_verification_streams_without_path_read_bytes(tmp_path, monkeypatch):
@@ -350,6 +368,26 @@ def test_snapshot_preserves_older_store_format_identity(tmp_path):
     assert "coschema3" in snapshot.name
     assert manifest["format_version"] == 3
     assert manifest["package_digest"] == "legacy-package"
+
+
+def test_snapshot_build_failure_does_not_replace_current_pointer(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    store = project / ".codess" / "sessions_codex.db"
+    init_db(store)
+    raw = RawStore(tmp_path / "raw")
+    first = create_snapshot(project, [store], [], raw_store=raw)
+    pointer = project / ".codess" / "current.json"
+    before = pointer.read_bytes()
+    snapshots_before = {path.name for path in first.parent.iterdir()}
+
+    def fail_backup(*_args, **_kwargs):
+        raise RuntimeError("injected backup failure")
+
+    monkeypatch.setattr("codess.snapshot._backup_store", fail_backup)
+    with pytest.raises(RuntimeError, match="injected"):
+        create_snapshot(project, [store], [], raw_store=raw)
+    assert pointer.read_bytes() == before
+    assert {path.name for path in first.parent.iterdir()} == snapshots_before
 
 
 def test_snapshot_rejects_raw_manifest_tamper(tmp_path):

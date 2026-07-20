@@ -134,3 +134,5 @@ def test_codex_validation_flags_resets_models_and_shared_points(tmp_path):
     assert report["totals"]["files_with_model_changes"] == 1
     assert report["totals"]["shared_counter_points"] == 1
     assert not report["billing_ready"]
+    assert report["utilization_ready"]
+    assert report["files"][0]["attribution_state"] == "ambiguous_reset_or_interleave"

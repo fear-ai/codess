@@ -1401,38 +1401,130 @@ Usage/reset/burn-rate views in
 are useful precedents, but Codess keeps observed counters, derived estimates,
 external quota/price facts, and billed cost distinct.
 
-### Typed request and result vision
+### Typed request and result contract
 
-A `codess.query-request/1` is independent of the physical SQLite schema and
-contains:
+A first vertical `codess.query-request/1` / `codess.query-result/1` path is
+implemented for sessions, overview, event rows, and bounded search. It is
+independent of the physical SQLite schema. The implemented request contains:
 
-- a stable question kind and optional saved-query name;
-- scope by Project/location/workspace, vendor, session, snapshot, and time;
-- typed filters for text, event/record kind, actor/role, tool, status, model,
-  artifact, and diagnostic reason;
-- projection, grouping, ordering, row/byte limits, and content policy; and
-- explicit freshness: current retained snapshots or named historical inputs.
+- a stable action;
+- CLI-resolved Project scope plus vendor, session, snapshot, and time scope;
+- typed filters for text, event kind/ID, Interaction, Model Turn, status, exact
+  model, and artifact path;
+- action-appropriate row and byte limits; and
+- explicit current or named-snapshot freshness.
 
-The planner resolves stable Project identities, rejects ambiguous or stale
-scope, pushes indexed identity/time/tool/path predicates into each read-only
-store, streams bounded rows, merges deterministically, and only then aggregates
-or summarizes. Exact identity and bounded predicates use ordinary indexes.
+Catalog/location/workspace selectors, actor/role/tool predicates, projection,
+grouping, caller-selected ordering, saved-query names, and content-policy
+selection are planned extensions, not silently accepted fields.
+
+The target planner resolves stable Project identities, rejects ambiguous or
+stale scope, pushes indexed identity/time/tool/path predicates into each
+read-only store, streams bounded rows, merges deterministically, and only then
+aggregates or summarizes. The prototype rejects unsupported fields and pushes
+its implemented predicates into each store, but cross-store heap merge and
+complete limit pushdown remain A9 work. Exact identity and bounded predicates use ordinary indexes.
 Text search is first bounded by Project, time, and record kind. Any FTS
 projection is a separately versioned, rebuildable derivative rather than part
 of durable CoSchema.
 
 A `codess.query-result/1` contains the normalized request, observation and
-data-as-of times, selected package/store/snapshot identities, summary, typed
-rows and aggregates, evidence references, confidence, and explicit truncation
-or missing-data limitations. Large row sets use `codess.query-row/1` JSON
-Lines; tables, CSV, and Markdown are renderings of typed results rather than
-inputs scraped back into the system.
+data-as-of times, selected package/store/snapshot/policy identities, bounds,
+summary, typed rows with stable evidence IDs, and explicit truncation or
+missing-data limitations. The existing `codess.query-row/1` JSON Lines contract
+remains the legacy sessions/stats streaming form; a typed streaming projection
+is added only when scale evidence defines its contract. Tables, CSV, and
+Markdown are renderings rather than inputs scraped back into the system.
 
-Saved investigations are declarative JSON/YAML requests evaluated by one
-runner, not one wrapper script per question. Comparison with prior results,
-threshold conditions, and stable exit codes remain functions of the same typed
-request/result model. An LLM-produced summary is a derived processing record
-and cites the bounded rows it received.
+Saved investigations are declarative JSON requests evaluated by one runner,
+not one wrapper script per question. Stable-ID result chaining, prior-membership
+comparison, and stable success/change codes are implemented. Threshold
+conditions and persisted derivation records remain A7 work. An LLM-produced
+summary must become a derived processing record and cite the bounded rows it
+received.
+
+### Guided investigation behavior
+
+Guidance is an orchestration of inspectable typed operations, not a second
+query engine. Its expected sequence is:
+
+1. resolve an explicit Project/vendor/current-or-named-snapshot scope;
+2. orient with volume, time, vendor, model, tool, artifact, and completeness
+   evidence before reading large bodies;
+3. formulate and display a typed request, rejecting unknown or ignored
+   predicates before any scan;
+4. run a bounded search or facet query with predicate/limit pushdown;
+5. branch by saving stable result IDs and feeding them into a narrower request;
+6. reconstruct the complete Interaction or Model Turn, or a declared sequence
+   window, in canonical order;
+7. resolve material claims to an exact matching sealed, captured, or live
+   source revision;
+8. produce a cited summary whose processor, inputs, limitations, and evidence
+   IDs are recorded; and
+9. replay against the same snapshots, or explicitly compare a later result.
+
+At every stage “no hit” is qualified by source availability, normalized-content
+completeness, policy, and truncation. A changed live source is shown as a
+mismatch, not silently substituted. Row and byte limits stop the operation
+with a visible truncation reason. Optional natural-language formulation may
+propose a request only after this deterministic path is stable; it must show the
+request for validation and cannot bypass scope or evidence rules.
+
+The present implementation owns steps 1–5 for the first four actions and step
+7 for event evidence. Interaction windows, derivation records, and a guided UI
+remain incremental work under A3/A7/A8.
+
+### SQLite authority and optional analytical consumers
+
+Adding DuckDB does **not** justify restructuring durable storage. Per-Project
+CoSchema SQLite snapshots remain authoritative because they are embedded,
+transactional, easily shipped, directly integrity-checked, and already encode
+the accepted store contract. Typed application queries are the compatibility
+boundary above those files.
+
+DuckDB is useful as an optional read-only analytical consumer when an
+investigation needs columnar aggregation across exported result documents,
+Parquet, or several immutable SQLite snapshots. It must not write accepted
+snapshots, become required for ingest, or introduce a second authoritative
+catalog. Compared with alternatives:
+
+- SQLite views are best for stable single-store joins, but do not remove the
+  attachment limit or provide a cross-project analytical workspace;
+- Python iterators and heap merge remain the portable application path for
+  bounded interactive results;
+- pandas is convenient for modest in-memory results but has a less explicit
+  memory boundary;
+- Datasette and sqlite-utils provide inspection and presentation over SQLite,
+  not a replacement execution/store model; and
+- DuckDB earns a recipe when columnar scans, Parquet interchange, or broad
+  aggregates materially outperform typed pushdown plus streaming merge.
+
+Therefore A9 is primarily a query-execution refactor—push predicates/limits to
+each SQLite store, stream and heap-merge ordered rows, and profile allocations.
+External recipes consume immutable inputs or typed exports. A vendor-neutral
+SQL view is promoted only after two independent consumers repeat the same row
+contract; DuckDB remains optional and testable at the boundary.
+
+### Broad historical semantics
+
+Historical scope is explicit and has five distinct operations:
+
+1. **current** resolves each selected Project's verified current pointer;
+2. **snapshot** reads one named immutable Project snapshot and records package
+   compatibility policy;
+3. **diff** compares exactly two named observations by stable entity identity,
+   source revision, content/semantic hash, and mapping/package identity;
+4. **union** reads an explicitly enumerated snapshot set, retains observation
+   identity on every row, and reports duplicate/revision conflicts; and
+5. **discovery** lists snapshot metadata and coverage without treating every
+   old filesystem object as approved query scope.
+
+There is no implicit “latest per row” merge and no default union of every
+historical snapshot. Broad discovery should first query the maintained Project
+registry and verified manifests, metadata-only, then allow an operator to save
+an explicit set. Current and named-snapshot reads exist; diff, union, and broad
+registry discovery remain postponed until reusable results and comparison
+semantics are mature enough to preserve observation identity.
 
 ### Research venues
 

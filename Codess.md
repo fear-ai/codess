@@ -35,14 +35,16 @@ task-oriented use is documented in **README.md**.
 |------------|----------|
 | Find projects with session data (scan) | P0 |
 | Ingest CC, Codex, Cursor | P0 |
-| Query sessions, tool counts, content | P0 |
+| Query sessions, orientation, events, and bounded normalized content | P0 |
+| Save/replay typed requests, chain stable result IDs, and verify exact evidence | P1 |
 | Batch / multi-root (`--dirs`, `--dir`) | P0 |
 | Review candidates using session, local Git, activity, ownership, and topic evidence | P1 |
 | Execute an explicit reviewed selection without a hidden “worthy” heuristic | P1 |
 | Per-source filters (`--source`) | P1 |
 | Redaction | P1 |
 
-**Out of scope:** full-text (FTS5) search and Markdown export. Their current
+**Out of scope:** an FTS5 derivative and Markdown export. Bounded normalized
+substring search is implemented. The remaining
 dispositions are centralized in **CoPlan §8**.
 
 ### 2.3 People and scenarios
@@ -69,6 +71,7 @@ dispositions are centralized in **CoPlan §8**.
 | Curated batch ingest | Consume an explicit reviewed selection; preserve stage visibility and receipts | **Designs.md** §12; **Operations.md** |
 | Baseline/evidence administration | Keep read-only stages callable while safe orchestrators compose them | **Designs.md** §§2, 12; **Operations.md** |
 | CLI & configuration | Flags, ENV, defaults, and root resolution | **CoPlan.md** §§3–4; **README.md** |
+| Typed investigation | Stable Project-bound request/result contracts, bounded output, chaining, and exact evidence | **README.md**; **Designs.md** §13; `schema/query-*-v1.json` |
 
 ---
 

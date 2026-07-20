@@ -18,6 +18,14 @@ from codess.sanitize import (
 from codess.schema_contract import SchemaContractError
 from codess.snapshot import SnapshotError, snapshot_store_paths
 from codess.store import connect as connect_store
+from codess.configuration_audit import audit as audit_configurations
+from codess.evidence_resolver import resolve_event
+from codess.query_api import (
+    REQUEST_FORMAT, RESULT_FORMAT, QueryContractError,
+    compare_results, execute as execute_typed_query, load_document,
+    make_request, merge_selection, save_document, selection_from_result,
+    selected_project_ids, validate_request,
+)
 log = logging.getLogger(__name__)
 
 # Standard (built-in) tools for grouping; others are "loaded"
@@ -250,6 +258,14 @@ def run(args) -> int:
         bool(getattr(args, "stats", False)),
         bool(getattr(args, "taxonomy", False)),
     ]
+    if getattr(args, "query_action", None):
+        # A stable session ID is a typed predicate.  Other legacy report modes
+        # would make the requested result contract ambiguous.
+        legacy_without_session_filter = primary_modes[:2] + primary_modes[3:]
+        if any(legacy_without_session_filter) or getattr(args, "sess", None) is not None:
+            print("codess: typed query actions cannot be combined with legacy report modes", file=sys.stderr)
+            return 1
+        primary_modes = [True]
     if sum(primary_modes) > 1:
         print("codess: select exactly one query report mode", file=sys.stderr)
         return 1
@@ -299,6 +315,8 @@ def run(args) -> int:
         )
 
     try:
+        if getattr(args, "query_action", None):
+            return _typed_output(scope, args, snapshot_id=snapshot_id)
         if getattr(args, "output_format", "table") == "jsonl":
             return _jsonl_output(
                 scope, args, resolved_roots, limit,
@@ -349,6 +367,141 @@ def run(args) -> int:
         return 1
     finally:
         scope.close()
+
+
+def _typed_filters(args, source_tokens: set[str] | None) -> dict:
+    filters = {}
+    values = {
+        "event_ids": getattr(args, "event_ids", None),
+        "interaction_ids": getattr(args, "interaction_ids", None),
+        "model_turn_ids": getattr(args, "model_turn_ids", None),
+        "event_kinds": getattr(args, "event_kinds", None),
+        "statuses": getattr(args, "query_statuses", None),
+        "models": getattr(args, "query_models", None),
+        "artifact": getattr(args, "query_artifact", None),
+        "text": getattr(args, "query_text", None),
+        "since": getattr(args, "since", None),
+        "until": getattr(args, "until", None),
+    }
+    for key, value in values.items():
+        if value is not None:
+            filters[key] = value
+    if getattr(args, "session_identifier", None):
+        filters["session_ids"] = [args.session_identifier]
+    if source_tokens:
+        filters["source_system_ids"] = [QUERY_SOURCE_FILTERS[token][0] for token in sorted(source_tokens)]
+    return filters
+
+
+def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
+    """Execute the typed interface and retain exact replay/provenance contracts."""
+    action = args.query_action
+    if action == "evidence":
+        event_ids = getattr(args, "event_ids", None) or []
+        if len(event_ids) != 1:
+            print("codess: query evidence requires exactly one --event-id", file=sys.stderr)
+            return 1
+        matches = []
+        for store in scope.stores:
+            try:
+                matches.append(resolve_event(store, event_ids[0]))
+            except LookupError as exc:
+                if "ambiguous" in str(exc):
+                    print(f"codess: {exc}", file=sys.stderr)
+                    return 1
+        if len(matches) != 1:
+            print(f"codess: event {event_ids[0]!r} resolved in {len(matches)} stores; use a globally unique ID", file=sys.stderr)
+            return 1
+        allowed = (
+            {QUERY_SOURCE_FILTERS[token][0] for token in scope.source_tokens}
+            if scope.source_tokens else None
+        )
+        if allowed and matches[0]["source"]["source_system_id"] not in allowed:
+            print("codess: event is outside the selected vendor scope", file=sys.stderr)
+            return 1
+        print(json.dumps(matches[0], indent=2, sort_keys=True))
+        return 0 if matches[0]["selected"] else 2
+    if action == "configurations":
+        allowed = (
+            {QUERY_SOURCE_FILTERS[token][0] for token in scope.source_tokens}
+            if scope.source_tokens else None
+        )
+        print(json.dumps(audit_configurations(
+            scope.stores, source_system_ids=allowed,
+        ), indent=2, sort_keys=True))
+        return 0
+    source_tokens, error = _parse_source_tokens(getattr(args, "source", None))
+    if error:
+        print(error, file=sys.stderr)
+        return 1
+    try:
+        if getattr(args, "query_request", None):
+            request = load_document(Path(args.query_request), REQUEST_FORMAT)
+            validate_request(request)
+            if request["action"] != action:
+                raise QueryContractError(
+                    f"request action {request['action']!r} does not match query action {action!r}"
+                )
+            cli_filters = _typed_filters(args, source_tokens)
+            if (
+                cli_filters or getattr(args, "limit", None) is not None
+                or getattr(args, "byte_limit", None) is not None
+                or getattr(args, "active_gap_caps", None)
+            ):
+                raise QueryContractError(
+                    "a saved request cannot be combined with CLI predicates or limits"
+                )
+            if request.get("snapshot_id") != snapshot_id:
+                raise QueryContractError(
+                    "saved request snapshot_id must match the explicit --snapshot-id scope"
+                )
+            if request.get("project_ids") != selected_project_ids(scope.stores):
+                raise QueryContractError(
+                    "saved request project_ids do not match the selected Project scope"
+                )
+        else:
+            if action == "overview" and (
+                getattr(args, "limit", None) is not None
+                or getattr(args, "byte_limit", None) is not None
+            ):
+                raise QueryContractError("overview does not accept --limit or --byte-limit")
+            request = make_request(
+                action,
+                project_ids=selected_project_ids(scope.stores),
+                filters=_typed_filters(args, source_tokens),
+                limit=getattr(args, "limit", None),
+                byte_limit=(
+                    (getattr(args, "byte_limit", None) if getattr(args, "byte_limit", None) is not None else 16 * 1024 * 1024)
+                    if action in {"events", "search"} else None
+                ),
+                snapshot_id=snapshot_id,
+                active_gap_caps_minutes=getattr(args, "active_gap_caps", None) or (5, 30, 120),
+            )
+        if getattr(args, "result_input", None):
+            prior_selection = load_document(Path(args.result_input), RESULT_FORMAT)
+            request = merge_selection(request, selection_from_result(prior_selection))
+        if getattr(args, "save_request", None):
+            save_document(Path(args.save_request), request)
+        result = execute_typed_query(scope.stores, request)
+        changed = False
+        if getattr(args, "compare_result", None):
+            prior = load_document(Path(args.compare_result), RESULT_FORMAT)
+            result["comparison"] = compare_results(prior, result)
+            changed = bool(result["comparison"]["added_ids"] or result["comparison"]["removed_ids"])
+        if getattr(args, "save_result", None):
+            save_document(Path(args.save_result), result)
+    except (QueryContractError, OSError) as exc:
+        print(f"codess: typed query rejected: {exc}", file=sys.stderr)
+        return 1
+    output_format = getattr(args, "output_format", "table")
+    if output_format == "csv":
+        print("codess: typed results are JSON documents; use jq/sqlite/notebooks for tabular projection", file=sys.stderr)
+        return 1
+    if output_format == "jsonl":
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return 3 if changed else 0
 
 
 def _emit_jsonl(report: str, data: dict, *, project_path: str | None = None, row_number: int | None = None) -> None:

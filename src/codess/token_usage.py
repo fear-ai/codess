@@ -246,6 +246,12 @@ def validate_codex_token_usage(paths: Iterable[Path]) -> dict[str, Any]:
             "model_changes": model_changes,
             "malformed_lines": parsed["malformed"],
             "oversized_lines": parsed["oversized"],
+            "attribution_state": (
+                "ambiguous_reset_or_interleave" if resets else
+                "ambiguous_model_transition" if model_changes else
+                "timestamp_regression" if timestamp_regressions else
+                "monotonic_single_file_sequence"
+            ),
         })
     shared = [
         {"counter_point": dict(zip(keys, point)), "files": sorted(paths)}
@@ -267,6 +273,9 @@ def validate_codex_token_usage(paths: Iterable[Path]) -> dict[str, Any]:
         limitations.append("shared cumulative points may represent forks/shared prefixes and double counting")
     if totals["files_with_model_changes"]:
         limitations.append("model changes complicate attribution within a cumulative sequence")
+    limitations.append(
+        "cumulative local counters are utilization evidence, not provider billing records"
+    )
     return {
         "format": TOKEN_VALIDATION_FORMAT,
         "confidence": "diagnostic_prototype",
@@ -274,7 +283,8 @@ def validate_codex_token_usage(paths: Iterable[Path]) -> dict[str, Any]:
         "files": files,
         "shared_counter_points": shared[:100],
         "limitations": limitations,
-        "billing_ready": not limitations and bool(totals["observations"]),
+        "utilization_ready": bool(totals["observations"]),
+        "billing_ready": False,
     }
 
 

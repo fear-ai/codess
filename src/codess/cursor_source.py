@@ -224,6 +224,86 @@ def get_composer_headers(
         return {}
 
 
+def get_workspace_composer_headers(
+    project_root: Path, cursor_data: Path | None = None,
+) -> dict[str, dict]:
+    """Recover workspace-bound composers absent from global composerHeaders.
+
+    Older Cursor state can retain ``composer.composerData`` in the workspace
+    database after removing the corresponding global header.  This is vendor
+    workspace evidence, not a path/content inference.  Current global headers
+    remain authoritative when the two indexes overlap.
+    """
+    data_root = cursor_data or CURSOR_DATA
+    workspace_root = data_root / "workspaceStorage"
+    recovered: dict[str, dict] = {}
+    for workspace_id in get_workspace_ids(project_root, data_root):
+        db_path = workspace_root / workspace_id / "state.vscdb"
+        if not db_path.exists():
+            continue
+        try:
+            with closing(connect_readonly(db_path)) as conn:
+                columns = table_columns(conn, "ItemTable")
+                key_column = quoted_column(columns, "key")
+                value_column = quoted_column(columns, "value")
+                if key_column is None or value_column is None:
+                    continue
+                row = conn.execute(
+                    f"SELECT {value_column} FROM ItemTable "
+                    f"WHERE {key_column}='composer.composerData' LIMIT 1"
+                ).fetchone()
+                if row is None or row[0] is None:
+                    continue
+                value = json.loads(row[0])
+                composers = value.get("allComposers", []) if isinstance(value, dict) else []
+                if not isinstance(composers, list):
+                    continue
+                for item in composers:
+                    if not isinstance(item, dict) or not item.get("composerId"):
+                        continue
+                    composer_id = str(item["composerId"])
+                    header = {
+                        "workspace_id": workspace_id,
+                        "created_at": item.get("createdAt"),
+                        "last_updated_at": item.get("lastUpdatedAt"),
+                        "is_archived": bool(item.get("isArchived")),
+                        "is_subagent": bool(item.get("isSubagent")),
+                        "selection_source": "workspace.composerData",
+                    }
+                    previous = recovered.get(composer_id)
+                    if previous is not None and previous["workspace_id"] != workspace_id:
+                        log.warning(
+                            "Cursor composer %s occurs in multiple selected workspace indexes; "
+                            "excluding ambiguous fallback mapping",
+                            composer_id,
+                        )
+                        recovered[composer_id] = {"ambiguous": True}
+                    elif previous is None:
+                        recovered[composer_id] = header
+        except (OSError, sqlite3.Error, json.JSONDecodeError, TypeError) as exc:
+            log.warning(
+                "Cannot read Cursor workspace composer index from %s: %s",
+                db_path,
+                exc,
+            )
+    return {
+        composer_id: header
+        for composer_id, header in recovered.items()
+        if not header.get("ambiguous")
+    }
+
+
+def get_project_composer_headers(
+    global_db: Path, project_root: Path, cursor_data: Path | None = None,
+) -> dict[str, dict]:
+    """Combine current global headers with workspace-index fallbacks."""
+    workspace_ids = set(get_workspace_ids(project_root, cursor_data))
+    fallback = get_workspace_composer_headers(project_root, cursor_data)
+    current = get_composer_headers(global_db, workspace_ids)
+    fallback.update(current)
+    return fallback
+
+
 def _fingerprint_value(digest, value: Any) -> None:
     """Add one typed, length-delimited SQLite value to a digest."""
     if value is None:
@@ -268,10 +348,13 @@ def _selection_marker(
     workspace_ids: set[str],
     *,
     all_headers: dict[str, dict] | None = None,
+    selected_headers: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
     """Fingerprint one Project selection inside an existing transaction."""
     headers = (
-        _composer_headers(conn, workspace_ids)
+        selected_headers
+        if selected_headers is not None
+        else _composer_headers(conn, workspace_ids)
         if all_headers is None
         else {
             composer_id: header
@@ -292,7 +375,7 @@ def _selection_marker(
         _fingerprint_value(digest, composer_id)
         for name in (
             "workspace_id", "created_at", "last_updated_at",
-            "is_archived", "is_subagent",
+            "is_archived", "is_subagent", "selection_source",
         ):
             _fingerprint_value(digest, name)
             _fingerprint_value(digest, header.get(name))
@@ -345,6 +428,8 @@ def _selection_marker(
 def get_selection_markers(
     db_path: Path,
     selections: dict[str, set[str]],
+    *,
+    supplemental_headers: dict[str, dict[str, dict]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Fingerprint several Project selections in one SQLite read snapshot."""
     if not selections:
@@ -357,7 +442,17 @@ def get_selection_markers(
         try:
             return {
                 project: _selection_marker(
-                    conn, workspace_ids, all_headers=all_headers,
+                    conn,
+                    workspace_ids,
+                    all_headers=all_headers,
+                    selected_headers={
+                        **(supplemental_headers or {}).get(project, {}),
+                        **{
+                            composer_id: header
+                            for composer_id, header in all_headers.items()
+                            if header.get("workspace_id") in workspace_ids
+                        },
+                    },
                 )
                 for project, workspace_ids in selections.items()
             }

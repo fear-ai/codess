@@ -25,6 +25,7 @@ from codess.adapters.cursor import process_db as process_cursor_db
 from codess.cursor_source import (
     get_composer_headers,
     get_global_db as get_cursor_global_db,
+    get_project_composer_headers as get_cursor_project_composer_headers,
     get_selection_markers as get_cursor_selection_markers,
     get_sqlite_container_marker as get_cursor_container_marker,
     has_bubble_rows as cursor_has_bubble_rows,
@@ -55,6 +56,7 @@ from codess.store import (
     ingest_state_marker,
     load_ingest_state,
     replace_session_events,
+    prune_unreferenced_records,
     save_ingest_state,
     should_ingest,
 )
@@ -68,6 +70,7 @@ from codess.resources import ResourceLimitError, check_events, check_source, pea
 from codess.evidence import summarize_store_evidence
 from codess.ingest_review import record_ingest_review
 from codess.progress import ProgressTrace
+from codess.ingest_pipeline import inspect_sources, mark_source_complete
 
 log = logging.getLogger(__name__)
 
@@ -268,26 +271,28 @@ def _ingest_cc(
     if cc_dir is None:
         return 0, 0, 0, False
     ingested, total_events, failures, changed = 0, 0, 0, False
-    for path, parent_session_id in _cc_session_files(cc_dir):
-        try:
-            st = path.stat()
-            mtime = st.st_mtime
-            if st.st_size < min_size:
-                continue
-            check_source(path, opts.get("max_source_bytes"))
-        except (OSError, ResourceLimitError) as e:
+    files = _cc_session_files(cc_dir)
+    parent_by_path = {path: parent for path, parent in files}
+    for admission in inspect_sources(
+        files, state_path=state_path, force=force, min_size=min_size,
+        max_source_bytes=opts.get("max_source_bytes"),
+    ):
+        path = admission.path
+        parent_session_id = parent_by_path[path]
+        if admission.error is not None:
+            e = admission.error
             log.warning("Source validation failed for %s: %s", path, e)
             record_ingest_review(
                 opts, e, source=path, vendor="Claude", stage="source_validation"
             )
             failures += 1
             if stop_on_error:
-                raise
+                raise e
             continue
-        if not should_ingest(
-            state_path, str(path.resolve()), mtime, force, path=path
-        ):
+        if admission.skip_reason:
             continue
+        st = admission.stat
+        mtime = st.st_mtime
         source_started = time.monotonic()
         _progress(
             opts, "source.start", project=str(project_root.resolve()),
@@ -388,9 +393,7 @@ def _ingest_cc(
             continue
         finally:
             conn.close()
-        state = load_ingest_state(state_path)
-        state[str(path.resolve())] = ingest_state_marker(path)
-        save_ingest_state(state_path, state)
+        mark_source_complete(state_path, path)
         if events_list:
             kind = "subagent" if parent_session_id else "main"
             kinds = opts.setdefault("claude_session_kinds", {"main": 0, "subagent": 0})
@@ -422,26 +425,25 @@ def _ingest_codex(
         project_root, index=opts.get("codex_session_index")
     )
     ingested, total_events, failures, changed = 0, 0, 0, False
-    for path in files:
-        try:
-            st = path.stat()
-            mtime = st.st_mtime
-            if st.st_size < min_size:
-                continue
-            check_source(path, opts.get("max_source_bytes"))
-        except (OSError, ResourceLimitError) as e:
+    for admission in inspect_sources(
+        files, state_path=state_path, force=force, min_size=min_size,
+        max_source_bytes=opts.get("max_source_bytes"),
+    ):
+        path = admission.path
+        if admission.error is not None:
+            e = admission.error
             log.warning("Source validation failed for %s: %s", path, e)
             record_ingest_review(
                 opts, e, source=path, vendor="Codex", stage="source_validation"
             )
             failures += 1
             if stop_on_error:
-                raise
+                raise e
             continue
-        if not should_ingest(
-            state_path, str(path.resolve()), mtime, force, path=path
-        ):
+        if admission.skip_reason:
             continue
+        st = admission.stat
+        mtime = st.st_mtime
         source_started = time.monotonic()
         _progress(
             opts, "source.start", project=str(project_root.resolve()),
@@ -512,9 +514,7 @@ def _ingest_codex(
             continue
         finally:
             conn.close()
-        state = load_ingest_state(state_path)
-        state[str(path.resolve())] = ingest_state_marker(path)
-        save_ingest_state(state_path, state)
+        mark_source_complete(state_path, path)
         ingested += int(bool(events_list))
         _progress(
             opts, "source.done", project=str(project_root.resolve()),
@@ -604,7 +604,8 @@ def _ingest_cursor(
                 "source_observation": source_observation,
             }
             replace_session_events(
-                conn, session, current_events, session_id=current_id
+                conn, session, current_events, session_id=current_id,
+                prune=False,
             )
             seen.add(current_id)
             largest = max(largest, len(current_events))
@@ -667,6 +668,7 @@ def _ingest_cursor(
                 "SELECT 1 FROM events WHERE session_id=? LIMIT 1", (session_id,)
             ).fetchone() is None:
                 conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        prune_unreferenced_records(conn)
         opts["resource_observations"].append({
             "source": source_file, "source_bytes": db_path.stat().st_size,
             "events": source_total, "largest_session_events": largest,
@@ -778,7 +780,10 @@ def _ingest_cursor(
                 source=str(global_source.resolve()),
             )
             return ingested, total_events, failures, changed
-        headers = get_composer_headers(global_db, workspace_ids)
+        headers = (
+            opts.get("cursor_project_headers", {}).get(proj_str)
+            or get_composer_headers(global_db, workspace_ids)
+        )
         if not headers:
             if opts.get("debug"):
                 log.debug(
@@ -1062,8 +1067,15 @@ def run(args) -> int:
         and (workspace_ids := get_cursor_workspace_ids(root))
     }
     cursor_roots = list(cursor_workspace_ids)
+    live_cursor_global = get_cursor_global_db() if cursor_roots else None
+    cursor_project_headers = {
+        str(root): get_cursor_project_composer_headers(live_cursor_global, root)
+        for root in cursor_roots
+        if live_cursor_global is not None
+    }
+    opts["cursor_project_headers"] = cursor_project_headers
     if cursor_roots and not iopt.validate_only:
-        live_global = get_cursor_global_db()
+        live_global = live_cursor_global
         if live_global is not None:
             try:
                 marker_started = time.monotonic()
@@ -1078,7 +1090,14 @@ def run(args) -> int:
                 selection_cache_path = (
                     registry_root / "cache" / "cursor-selection-v1.json"
                 )
-                container_marker = get_cursor_container_marker(live_global)
+                container_marker = {
+                    "global": get_cursor_container_marker(live_global),
+                    "workspace_indexes": {
+                        str(path.resolve()): get_cursor_container_marker(path)
+                        for root in cursor_roots
+                        for path in get_cursor_workspace_dbs(root)
+                    },
+                }
                 project_markers = None
                 marker_status = "scanned"
                 if not force:
@@ -1090,19 +1109,41 @@ def run(args) -> int:
                     )
                     if (
                         project_markers is not None
-                        and get_cursor_container_marker(live_global)
-                        != container_marker
+                        and {
+                            "global": get_cursor_container_marker(live_global),
+                            "workspace_indexes": {
+                                str(path.resolve()): get_cursor_container_marker(path)
+                                for root in cursor_roots
+                                for path in get_cursor_workspace_dbs(root)
+                            },
+                        } != container_marker
                     ):
                         project_markers = None
                     elif project_markers is not None:
                         marker_status = "reused"
                 if project_markers is None:
                     for _attempt in range(2):
-                        container_before = get_cursor_container_marker(live_global)
+                        container_before = {
+                            "global": get_cursor_container_marker(live_global),
+                            "workspace_indexes": {
+                                str(path.resolve()): get_cursor_container_marker(path)
+                                for root in cursor_roots
+                                for path in get_cursor_workspace_dbs(root)
+                            },
+                        }
                         project_markers = get_cursor_selection_markers(
-                            live_global, selections
+                            live_global,
+                            selections,
+                            supplemental_headers=cursor_project_headers,
                         )
-                        container_after = get_cursor_container_marker(live_global)
+                        container_after = {
+                            "global": get_cursor_container_marker(live_global),
+                            "workspace_indexes": {
+                                str(path.resolve()): get_cursor_container_marker(path)
+                                for root in cursor_roots
+                                for path in get_cursor_workspace_dbs(root)
+                            },
+                        }
                         if container_before == container_after:
                             save_selection_marker_cache(
                                 selection_cache_path,

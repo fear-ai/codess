@@ -1203,28 +1203,17 @@ def replace_session_events(
     events: list[dict[str, Any]],
     *,
     session_id: str,
+    prune: bool = True,
 ) -> None:
     """Replace one transcript-backed session inside the caller's transaction."""
     conn.execute("DELETE FROM events WHERE session_id=?", (session_id,))
-    conn.execute(
-        "DELETE FROM artifacts WHERE NOT EXISTS "
-        "(SELECT 1 FROM event_artifacts WHERE event_artifacts.artifact_id=artifacts.id)"
-    )
     conn.execute("DELETE FROM tool_invocations WHERE session_id=?", (session_id,))
     conn.execute("DELETE FROM model_turns WHERE session_id=?", (session_id,))
-    conn.execute(
-        """
-        DELETE FROM model_configurations
-        WHERE NOT EXISTS (
-          SELECT 1 FROM model_turns WHERE model_turns.model_config_id=model_configurations.id
-        ) AND NOT EXISTS (
-          SELECT 1 FROM sessions WHERE sessions.default_model_config_id=model_configurations.id
-        )
-        """
-    )
     conn.execute("DELETE FROM interactions WHERE session_id=?", (session_id,))
     if session is None:
         conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        if prune:
+            prune_unreferenced_records(conn)
         return
     source_file = next((e.get("source_file") for e in events if e.get("source_file")), None)
     source_id = ensure_source(
@@ -1250,6 +1239,31 @@ def replace_session_events(
         _record_tool(conn, event, row_id)
         _record_artifact(conn, event, row_id)
         _link_specialized_content(conn, row_id)
+    if prune:
+        prune_unreferenced_records(conn)
+
+
+def prune_unreferenced_records(conn: sqlite3.Connection) -> None:
+    """Prune store-wide orphans once after a replacement batch.
+
+    These statements intentionally cover the whole normalized store. Running
+    them after every composer makes a multi-session Cursor replacement roughly
+    quadratic in store size, so batch callers defer them until their last row.
+    """
+    conn.execute(
+        "DELETE FROM artifacts WHERE NOT EXISTS "
+        "(SELECT 1 FROM event_artifacts WHERE event_artifacts.artifact_id=artifacts.id)"
+    )
+    conn.execute(
+        """
+        DELETE FROM model_configurations
+        WHERE NOT EXISTS (
+          SELECT 1 FROM model_turns WHERE model_turns.model_config_id=model_configurations.id
+        ) AND NOT EXISTS (
+          SELECT 1 FROM sessions WHERE sessions.default_model_config_id=model_configurations.id
+        )
+        """
+    )
     prune_unreferenced_source_revisions(conn)
 
 
@@ -1271,7 +1285,8 @@ def replace_source_sessions(
         grouped.setdefault(str(event["session_id"]), []).append(event)
     for session_id, session in sessions.items():
         replace_session_events(
-            conn, session, grouped.get(session_id, []), session_id=session_id
+            conn, session, grouped.get(session_id, []), session_id=session_id,
+            prune=False,
         )
     for session_id in old_session_ids - set(sessions):
         conn.execute("DELETE FROM events WHERE session_id=? AND source_file=?", (session_id, source_file))
@@ -1280,6 +1295,7 @@ def replace_source_sessions(
         ).fetchone()
         if remaining is None:
             conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+    prune_unreferenced_records(conn)
 
 
 def load_ingest_state(state_path: Path) -> dict[str, Any]:

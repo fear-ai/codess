@@ -59,14 +59,21 @@ Session-level index:
 | `isArchived`, `isSubagent` | Session classification flags |
 | `recency`, `checkpointAt`, `value` | Cursor state not currently used by Codess |
 
-Codess reads this table when ingesting the global DB. Only composers whose
-workspace id maps to the selected project are imported. `composerId` and
-`workspaceId` are required for that mapping. Missing timestamp or
+Codess uses this as the primary global-session index. Composers whose
+`workspaceId` maps to the selected Project are imported. Missing timestamp or
 classification columns default to null/false; additional columns are ignored.
+The table is not a complete historical catalog: Cursor can retain full
+`composerData:*` and `bubbleId:*` rows after removing a composer header.
 
 ### `ItemTable`
 
-Editor/workbench state. Codess does not use it for session discovery or ingest.
+Most rows are editor/workbench state and are ignored. One workspace-local row,
+`composer.composerData`, is a secondary session index. Its `allComposers`
+entries preserve composer identity, timestamps, archive/subagent flags, and
+other header-like metadata for some sessions missing from the live global
+`composerHeaders` table. Codess uses this row only for workspaces already
+matched to the Project (including approved source links). A composer occurring
+in more than one selected workspace fallback is ambiguous and excluded.
 
 ## 3. Bubble JSON
 
@@ -127,15 +134,16 @@ themselves authorize mapping a remote or renamed workspace to a local project.
 Codess requires an approved project-local `.codess/source-links.json` entry for
 that case.
 
-Reliable content normalization currently comes from `bubbleId:*`; session and
-workspace metadata should come from `composerHeaders` when that table is
-available.
+Reliable content normalization currently comes from `bubbleId:*`. Session and
+workspace metadata come first from `composerHeaders`; workspace
+`composer.composerData` supplies a provenance-labeled fallback when the primary
+header is absent. A current header wins when both exist.
 
 ## 5. Codess mapping
 
 | Codess concept | Workspace DB | Global DB |
 |---|---|---|
-| Project | `workspace.json` folder | `composerHeaders.workspaceId` joined to a matching `workspace.json`, plus explicitly approved source links for renamed/remote identities; observed local workspace bindings are persisted in the Project catalog |
+| Project | `workspace.json` folder plus workspace `composer.composerData` fallback index | `composerHeaders.workspaceId` joined to a matching `workspace.json`, plus explicitly approved source links for renamed/remote identities; observed local workspace bindings are persisted in the Project catalog |
 | Session | Distinct composer id with bubble rows | Same |
 | Event | Supported message evidence plus derived tool invocation/result events from each decodable `bubbleId:*` row | Same |
 | Event timestamp | Parsed bubble `createdAt`, with epoch-only legacy fallback | Same |
@@ -152,8 +160,9 @@ Scan metrics:
 | Header coverage | Matched composer headers and headers with at least one usable timestamp; shown by debug scan output |
 
 The global scan row is `(global)` and is not filtered by the requested project
-root. Project-level ingest filters global bubbles to composer headers mapped to
-the selected project's workspace ids. Archived and subagent flags are preserved
+root. Project-level ingest filters global bubbles to the union of current
+headers and fallback composer entries mapped to the selected Project's
+workspace ids. Archived and subagent flags are preserved
 in session metadata and normalized respectively to `archive_state` and
 `session_relation_kind=subagent`; unmapped composers are excluded.
 
@@ -170,8 +179,9 @@ from another Cursor source remain.
 
 Incremental global ingestion does not use the whole `state.vscdb` mtime as its
 functional revision. Cursor frequently changes unrelated global/workbench
-state. Codess instead reads each Project's selected `composerHeaders` and
-`bubbleId:<composerId>:` ranges in one SQLite transaction and calculates a
+state. Codess instead reads each Project's selected `composerHeaders`, the
+selected workspace fallback indexes, and `bubbleId:<composerId>:` ranges in
+SQLite read transactions and calculates a
 non-authenticating change marker from exact header fields, every key and value
 length, and the first/last 512 bytes of each value. A changed selected marker
 triggers one exact transactional backup for the cohort; unrelated table changes
@@ -223,12 +233,12 @@ normalizes events.
 
 ## 7. Current limitations
 
-- Global composers without a usable header/workspace mapping are excluded from
-  project ingest.
-- Direct workspace traces can exist without composer headers, and newer
-  composer headers can exist without a surviving workspaceStorage mapping.
-  Candidate review should use structured composer identity; ambiguous paths
-  remain unattributed.
+- Global composers without a usable current-header or workspace-fallback
+  mapping are excluded from Project ingest.
+- Direct workspace traces can exist without either index, and newer composer
+  headers can exist without a surviving workspaceStorage mapping. Candidate
+  review should use structured composer identity; ambiguous workspace identity
+  remains unattributed.
 - Scan time ranges remain incomplete when matching headers omit usable
   timestamps. Codess reports header/timestamp coverage in debug output and does
   not decode every bubble merely to improve scan dates.

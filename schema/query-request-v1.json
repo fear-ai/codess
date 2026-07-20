@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codess.local/schema/query-request-v1.json",
+  "title": "Codess typed query request v1",
+  "type": "object",
+  "required": ["format", "action", "project_ids", "filters", "limit", "byte_limit", "snapshot_id", "active_gap_caps_minutes"],
+  "properties": {
+    "format": {"const": "codess.query-request/1"},
+    "action": {"enum": ["sessions", "overview", "events", "search"]},
+    "project_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "filters": {
+      "type": "object",
+      "properties": {
+        "session_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "event_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "interaction_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "model_turn_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "source_system_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "event_kinds": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "statuses": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "models": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "artifact": {"type": "string"},
+        "text": {"type": "string", "minLength": 1},
+        "since": {"type": "number"},
+        "until": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "limit": {"type": ["integer", "null"], "minimum": 0},
+    "byte_limit": {"type": ["integer", "null"], "minimum": 0},
+    "snapshot_id": {"type": ["string", "null"]},
+    "active_gap_caps_minutes": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"action": {"const": "search"}}},
+      "then": {"properties": {"filters": {"required": ["text"]}}}
+    }
+  ],
+  "additionalProperties": false
+}

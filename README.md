@@ -45,7 +45,8 @@ pyenv exec python -m main scan --dir /path/to/work --out -
 pyenv exec python -m main ingest --dir /path/to/project
 
 # Orient, list sessions, and open one by stable ID.
-pyenv exec python -m main query --dir /path/to/project --stats
+pyenv exec python -m main query overview --dir /path/to/project
+pyenv exec python -m main query sessions --dir /path/to/project --limit 50
 pyenv exec python -m main query --dir /path/to/project --sessions --id
 pyenv exec python -m main query --dir /path/to/project \
   --session-id 'codess:session:sha256:…' --show pr tool
@@ -117,16 +118,16 @@ active-work registers in **CoPlan.md §§8.2–8.3**.
 
 | Use case | Current support | Commands and export | Limits |
 |----------|-----------------|---------------------|--------|
-| **UC1 — list sessions for one or more Projects** | Direct for current ingested snapshots; one explicit historical snapshot is also supported | `query --dir P --sessions --id`; repeat `--dir` or use `--dirs FILE`; table, JSONL, or CSV | **L-S1**, **L-S3** |
-| **UC2 — select sessions by vendor** | Direct; comma-separated union | Add `--source cc`, `codex`, `cursor`, `cc,cursor`, or `all` to sessions, stats, content, tool, lineage, audit, diagnostic, permission, and artifact reports | No model/date filter yet: **L-S2** |
-| **UC3 — orient by size, activity, and time** | Basic session/event totals, session bounds, tool histogram, artifact and storage/skew reports | `--stats`; `--tool N`; `--artifacts`; `storage report`; sessions CSV/JSONL for external aggregation | Totals are minimal and elapsed span is not active time: **L-M1–L-M3** |
+| **UC1 — list sessions for one or more Projects** | Direct typed result for current stores; one explicit historical snapshot is also supported | `query sessions --dir P`; repeat `--dir` or use `--dirs FILE`; legacy `--sessions --id` remains | Catalog-wide selection and historical union/diff remain: **L-S1**, **L-S3** |
+| **UC2 — select sessions by vendor** | Direct; comma-separated union; typed events add time/model/kind/status/artifact filters | Add `--source`, `--since`, `--until`, `--model`, `--event-kind`, or `--status` to typed actions | Tool-name predicate and catalog selection remain: **L-S1–L-S2** |
+| **UC3 — orient by size, activity, and time** | Typed overview reports sessions, Interactions, turns, events, text/tool/artifact/model volume, elapsed span, event days, and 5/30/120-minute active-time sensitivity | `query overview --dir P`; legacy `--stats`, `--tool`, `--artifacts`; `storage report` | Time buckets, gap histogram, token/cost confidence, and scale goldens remain: **L-M1–L-M3** |
 | **UC4 — open a known session** | Direct by list ordinal, stable global ID, or an unambiguous vendor ID | `-sess N` or `--session-id ID`; `--show prompt pr agent tool perm` | Whole-session display only; terminal excerpts: **L-S2**, **L-O1**, **L-C2** |
-| **UC5 — find an exchange, Interaction, or event group** | Data exists; direct SQLite is currently required | Read-only SQL by `global_id`, `session_id`, `interaction_id`, `model_turn_id`, `sequence_no`, time, tool, status, or artifact | No first-class event/window command: **L-S2**, **L-O2** |
-| **UC6 — find text, a path, error, symbol, or topic** | Bounded SQL substring search over normalized fields; artifacts have a report | SQLite `LIKE` over `content`, `tool_input`, `tool_output`, or artifact locators; `--artifacts` | No FTS/topic index; text may be excerpted: **L-C1–L-C3**, **L-E2** |
+| **UC5 — find an exchange, Interaction, or event group** | Typed event rows select stable event/session/Interaction/Model-Turn IDs in canonical order | `query events --event-id ID`; `--interaction-id`, `--model-turn-id`, time/kind/status/model/artifact filters | Sequence-window convenience and richer projections remain: **L-S2**, **L-O2** |
+| **UC6 — find text, a path, error, symbol, or topic** | First-class bounded substring search over normalized content, tool input/output, and artifact paths | `query search --text TEXT --limit N --byte-limit N`; scope with Project/vendor/session/time/type | No ranking/topic/FTS; a miss cannot prove raw absence: **L-C1–L-C2**, **L-E2** |
 | **UC7 — investigate tools, failures, denials, or compaction** | Direct fixed reports | `--lineage`, `--audit`, `--permissions`, `--task-review`, `--tool N`; vendor scope applies | Most reports are table-only and cannot feed a next selection: **L-O1–L-O3** |
 | **UC8 — correlate work across vendors/artifacts** | Direct aggregate plus read-only SQL drill-down | `--artifacts --source ...`; SQL through `event_artifacts` to sessions/events | Aggregate output omits constituent event IDs: **L-O2**, **L-P1** |
-| **UC9 — export and compose** | Sessions/stats support table, versioned JSONL, and spreadsheet-safe CSV | `--output-format jsonl`; `--output-format csv > result.csv`; external `jq`, SQLite, or Python | Only sessions/stats have structured formats; no saved selection input: **L-O1–L-O3** |
-| **UC10 — verify exact source evidence** | Raw/live source identities and locators exist; manual resolver needed | Inspect `sources`, `source_records`, raw manifest, then the local or captured source | No record resolver; captured containers may require streaming decode: **L-C2–L-C3** |
+| **UC9 — export and compose** | Typed actions return `codess.query-result/1`; requests/results save atomically, prior result IDs can restrict the next request, and comparisons use exit 3 for changed row identities | `--save-request`, `--save-result`, `--result-input`, `--compare-result`; legacy sessions/stats JSONL/CSV remain | Derivation records and historical union/diff remain: **L-O1–L-O3** |
+| **UC10 — verify exact source evidence** | Exact event resolver follows event → source record → verified sealed/central-captured/live candidates without copying the object and reports changed/unavailable revisions | `query evidence --event-id GLOBAL_ID` | Three-vendor representative evidence smoke remains: **L-C2–L-C3** |
 
 Operationally, UC1–UC10 may be run interactively with live progress or under
 automation with `--no-progress`; both modes retain the same per-Project trace
@@ -164,29 +165,55 @@ and do not overwrite that all-source registry summary.
 
 ### Workflow B — orientation, narrowing, and phases
 
-1. Run scoped `--stats` and `--sessions` to establish corpus size and bounds.
+1. Run scoped `query overview` and `query sessions` to establish corpus size,
+   bounds, vendor/model composition, and active-time sensitivity.
 2. Use `--tool N`, `--artifacts`, `--audit`, and `--lineage` to identify skew,
    repeated activity, failures, or cross-vendor evidence.
-3. Export sessions and bucket their millisecond timestamps externally when a
-   date range is enough.
-4. For an activity period or task phase, query `events` by session plus
-   `sequence_no`, `event_at`, `interaction_id`, or `model_turn_id`.
+3. Save the request/result when the selection will feed another step.
+4. For an activity period or task phase, run `query events` by session,
+   event, Interaction, Model Turn, timestamp, kind, status, model, or artifact.
 5. Treat `ended_at-started_at` as elapsed span. Active duration requires a
    declared inactivity-gap rule and remains a derived measure.
 
 ### Workflow C — locate and reconstruct an exchange
 
 1. Bound the search by Project, vendor, and preferably session/time.
-2. Search prompt/response/tool fields or artifact locators read-only.
+2. Run `query search --text ...` with a row and byte limit; preserve its result.
 3. Record the stable event global ID, source locator, session, Interaction,
    sequence, event kind, and content-completeness evidence.
-4. Fetch the entire Interaction or a sequence window around the hit.
-5. Resolve the original source record when the normalized value is excerpted or
+4. Feed the result into `query events --result-input ...`, or select its
+   Interaction/Model Turn directly. Use read-only SQL for a surrounding
+   sequence window until that convenience is first-class.
+5. Run `query evidence --event-id ...` when the normalized value is excerpted or
    when an exhaustive search must distinguish “absent” from “not retained.”
 6. Preserve the SQL/request, snapshot identity, and evidence IDs with any
    external or LLM-produced summary.
 
+```sh
+python -m main query overview --dir "$PROJECT" --source codex,cursor \
+  --save-result overview.json
+python -m main query search --dir "$PROJECT" --source codex,cursor \
+  --text 'counter reset' --limit 100 --byte-limit 4194304 \
+  --save-request search-request.json --save-result hits.json
+python -m main query events --dir "$PROJECT" --result-input hits.json \
+  --save-result selected-events.json
+python -m main query evidence --dir "$PROJECT" --event-id 'codess:event:sha256:…'
+```
+
+Typed actions reject unknown predicates and incompatible saved-request/action
+combinations. Their JSON result always names the canonical request and hash,
+store/package/snapshot/policy identities, source-availability counts, limits,
+limitations, and a result hash. `--compare-result PRIOR.json` returns 0 when
+stable row membership is unchanged and 3 when IDs were added or removed.
+
 ### Structured JSONL and CSV
+
+The typed `sessions`, `overview`, `events`, and `search` actions emit one
+`codess.query-result/1` JSON document (compact with `--output-format jsonl`,
+indented otherwise). Contracts live in `schema/query-request-v1.json` and
+`schema/query-result-v1.json`. CSV is intentionally not synthesized from these
+partly nested results; use `jq`, Python/pandas, or DuckDB for an explicit
+projection.
 
 `query --output-format jsonl` is a versioned interface for `--sessions` and
 `--stats`. Stats stream one record per Project followed by one total. Each line
@@ -206,8 +233,8 @@ must be documented; consumers requiring a strict contract should prefer JSONL.
 
 ## Direct read-only SQLite investigation
 
-Direct SQL is the present event-level escape hatch and a design laboratory for
-future first-class reports. Prefer retained snapshot databases: they are
+Direct SQL remains the escape hatch for projections, windows, and joins not yet
+expressed by typed actions. Prefer retained snapshot databases: they are
 immutable, versioned, hash-checked inputs. Do not edit, vacuum, reindex, attach
 with write intent, or create FTS tables inside an accepted snapshot.
 

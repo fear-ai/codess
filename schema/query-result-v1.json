@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codess.local/schema/query-result-v1.json",
+  "title": "Codess reusable query result v1",
+  "type": "object",
+  "required": ["format", "processor", "created_at", "data_as_of", "request", "request_hash", "provenance", "bounds", "summary", "rows", "limitations", "result_hash"],
+  "properties": {
+    "format": {"const": "codess.query-result/1"},
+    "processor": {"type": "string"},
+    "created_at": {"type": "string"},
+    "data_as_of": {"type": "array", "items": {"type": "string"}},
+    "request": {"type": "object"},
+    "request_hash": {"type": "string"},
+    "provenance": {"type": "array", "items": {"type": "object"}},
+    "bounds": {"type": "object"},
+    "summary": {"type": "object"},
+    "rows": {"type": "array", "items": {"type": "object"}},
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "result_hash": {"type": "string"},
+    "comparison": {"type": "object"}
+  },
+  "additionalProperties": false
+}

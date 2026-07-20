@@ -14,7 +14,7 @@
     },
     "sqlite_schema": {
       "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "2876c21ae5485130c39acdf0b818c4f0108790a9fcac657f6c59ce7c2cdc4823"
+      "sha256": "76b66cfc9cf31c71f1a22ae8c762d33db9b188967fdbed2751f20f959ace0bd9"
     },
     "mapping_claude": {
       "path": "schema/mappings/claude.json",

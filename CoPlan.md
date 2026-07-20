@@ -342,6 +342,13 @@ command exits 1 before doing work.
 | `--limit N` | — | unlimited | Globally limit rows after deterministic cross-project/vendor ordering for `--sessions`, `--permissions`, `--lineage`, and `--audit`. `0` emits no rows; negative values fail before stores are opened. |
 | `--session-id ID` | — | — | Show a session by stable global ID or an unambiguous vendor session ID; preferable to recency ordinal in composed workflows. |
 | `--output-format table\|jsonl\|csv` | — | table | Sessions/stats have versioned JSONL and spreadsheet-safe CSV; redirect CSV stdout to a file. Other reports currently require table output. |
+| `query sessions\|overview\|events\|search` | — | — | Typed actions producing `codess.query-result/1`; the legacy flag modes below remain compatibility paths. |
+| `--event-id`, `--interaction-id`, `--model-turn-id` | — | — | Repeatable stable drill-down predicates for typed event/search actions. |
+| `--event-kind`, `--status`, `--model`, `--artifact`, `--text`, `--since`, `--until` | — | — | Typed normalized predicates; unknown request fields are rejected rather than ignored. Timestamps are Unix milliseconds. |
+| `--byte-limit N` | — | 16 MiB | Maximum returned inline content bytes for typed event/search results. |
+| `--save-request`, `--save-result`, `--result-input`, `--compare-result` | — | — | Atomic request/result persistence, stable-ID chaining, and prior-membership comparison. Comparison exits 3 when membership changed. |
+| `query evidence --event-id ID` | — | — | Resolve a normalized event to source-record and verified sealed/captured/live evidence. Exit 2 means no exact candidate is available. |
+| `query configurations` | — | — | Audit normalized model/settings coverage and exact `source_config` provenance without inferring missing settings. |
 
 **Modes:** **`--stats`**, **`--sessions`**, **`--tool`**, **`-sess`**,
 **`--session-id`**,
@@ -464,6 +471,13 @@ names.
 | **UC8** | `query_cmd._artifacts`, `artifact_correlation`, `correlation_assertions`, `event_artifacts` |
 | **UC9** | `query_cmd._jsonl_output`, `_csv_output`, `schema/query-row-v1.json`, `sanitize.protect_csv_row` |
 | **UC10** | `raw_store`, snapshot raw manifests, `sources`, and `source_records` |
+
+The typed vertical path is owned by `codess.query_api`, with JSON contracts in
+`schema/query-request-v1.json` and `schema/query-result-v1.json`.
+`codess.evidence_resolver` owns exact event evidence precedence, and
+`codess.configuration_audit` owns nullable model-setting/provenance coverage.
+Legacy table/row renderers remain in `cli.query_cmd`; they do not define the
+new request semantics.
 
 ### Content processing implementation
 
@@ -609,17 +623,16 @@ queries and future correlation can group them explicitly.
 
 | Order | ID | Work item | Completion evidence |
 |------:|----|-----------|---------------------|
-| 1 | **A1** | Typed selection kernel and `codess.query-request/1`: Project/catalog/vendor/session/time/event/tool/status/model/artifact scope; current and explicit historical snapshot resolution; reject ignored predicates | Cross-store tests prove identical scope across renderers and no out-of-scope rows |
-| 2 | **A2** | Orientation and utilization overview: sessions, Interactions, turns, events, content volume, tools, artifacts, models, elapsed span, active days/time estimate, and time buckets | Golden reports cover empty, tiny, multi-vendor, long-idle, many-small-session, and one-huge-session stores |
-| 3 | **A3** | Event and Interaction drill-down: typed event rows, stable event lookup, complete Interaction/Model Turn, sequence windows, source locators, and completeness | Known Claude, Codex, and Cursor exchanges reconstruct in canonical order |
-| 4 | **A4** | Bounded search by Project/vendor/time/type with completeness warnings and product-state facets; benchmark a rebuildable FTS5 derivative only afterward | Known hits, truncated false-negative warnings, repeated-state noise tests, and bounded resource evidence |
-| 5 | **A5** | Complete failure/resource validation for exact raw capture and bounded fingerprints. Transactional standalone SQLite backup, per-Project selected Cursor markers, metadata-only container/selection prefilter and cohort cache, direct fresh-backup queries, staged level-3 zstd, content-addressed reuse across valid encodings, bounded restore/verification, no-op snapshot suppression, atomic promotion, and retention apply are implemented | Add injected partial-failure/no-promotion cases and measure cache restoration for a newly selected Project; retain the documented stat-prefilter and 512-byte edge/header false-negative boundaries |
-| 6 | **A6** | Exact evidence resolver from event to source record to verified live, captured, or sealed evidence | The same record resolves from live and captured evidence; changed or unavailable sources are explicit |
-| 7 | **A7** | Reusable results and automation: `codess.query-result/1`, saved selections, result-set input, hashes, prior-result comparison, stable exit codes, and derivation records | A multi-step investigation replays against the same snapshots and cites every evidence row |
-| 8 | **A8** | Guided investigation and optional question-to-typed-request formulation | Project → overview → search → Interaction → exact evidence → cited summary works without handwritten SQL |
+| 1 | **A1** | **Vertical prototype implemented:** `codess.query-request/1`, typed `sessions\|overview\|events\|search`, vendor/session/time/event/Interaction/turn/kind/status/model/artifact/text scope, named snapshot input, and rejection of unknown predicates. Remaining: catalog/Project-ID selector, tool predicate, projections/order/grouping, multi-store pushdown parity tests | Cross-store tests prove identical scope across renderers and no out-of-scope rows |
+| 2 | **A2** | **Prototype implemented:** overview counts sessions, Interactions, turns, events, content characters, tools, artifacts, model configurations, vendor/kind/model distributions, elapsed span, event days, and 5/30/120-minute active-time sensitivity. Remaining: time buckets/gap histogram and scale goldens | Golden reports cover empty, tiny, multi-vendor, long-idle, many-small-session, and one-huge-session stores |
+| 3 | **A3** | **Prototype implemented:** typed stable event rows, event/Interaction/Model-Turn filters, canonical order, source locators, and completeness. Remaining: explicit complete-Interaction/turn expansion, sequence windows, and three-vendor semantic fixtures | Known Claude, Codex, and Cursor exchanges reconstruct in canonical order |
+| 4 | **A4** | **Prototype implemented:** bounded normalized substring search with Project/vendor/session/time/type/model/status/artifact prefilters, row/byte limits, and completeness/missing-source warning. Remaining: repeated-state facets, benchmarks, ranking evaluation; FTS5 stays conditional | Known hits, truncated false-negative warnings, repeated-state noise tests, and bounded resource evidence |
+| 5 | **A5** | Streaming raw capture/restore, transactional SQLite backup, selected Cursor markers/cache, staged zstd, content-addressed reuse, no-op suppression, atomic snapshot promotion, and retention apply are implemented. Injected compression and snapshot-backup failures now prove no partial promotion; cache restore emits bytes/duration and is fixture-validated | Measure restore I/O/RSS on the next newly selected real Project; retain documented stat-prefilter and 512-byte edge/header false-negative boundaries |
+| 7 | **A7** | **Vertical prototype implemented:** `codess.query-result/1`, atomic saved requests/results, stable-ID result input, request/result hashes, prior-membership comparison, and stable success/change codes. Remaining: derivation records, richer predicate replay, historical diff/union | A multi-step investigation replays against the same snapshots and cites every evidence row |
+| 8 | **A8** | Expected behavior and layering are specified in **Designs.md §13**. Implement deterministic Project → overview → bounded search → result selection → Interaction/window → exact evidence → cited summary; optional question formulation remains externally orchestrated until evaluated | The complete path works without handwritten SQL and exposes every request, bound, limitation, and citation |
 | 9 | **A9** | Performance and ecosystem: predicate/limit pushdown, heap merge, allocation profiling, justified read-only views, and Datasette/notebook/DuckDB recipes. Live/persisted rolling `codess.progress/1` tracing, Cursor buffer/backup heartbeats, no-op derived-correlation suppression, null-safe catalog synchronization, and snapshot-bound evidence-summary reuse are implemented | Use traces plus allocation profiles to bound rows, bytes, phase time, and RSS in scale fixtures; external recipes remain read-only |
-| parallel | **A10** | Resolve Codex token counter reset/model/fork/interleave attribution, or formally limit it to non-billing evidence | The diagnostic either proves a stable attribution rule or records a permanent confidence boundary |
-| maintenance | **A11** | Consolidate duplicated Claude/Codex ingest control flow and review remaining compatibility aliases/wrappers, including `retire_project.py` | Shared control flow has one tested owner; retained wrappers are thin, documented, and have an explicit keep/remove decision |
+| maintenance | **A11** | **First consolidation implemented:** `codess.ingest_pipeline` owns Claude/Codex source validation, incremental admission, and post-commit state advancement. Remaining: shared normalized transaction shell and explicit keep/remove decision for compatibility wrappers including `retire_project.py` | Shared control flow has one tested owner; retained wrappers are thin, documented, and have an explicit keep/remove decision |
+| parallel | **A12** | **Audit prototype implemented:** `query configurations` reports per-vendor Model Turn linkage, nullable provider/family/exact/revision/effort/speed/service/mode values, exact `source_config`, and provenance limitations. Continue vendor/release fixture review and event-occurrence provenance validation | Claude, Codex, and Cursor fixtures prove exact available settings, preserve absent values as NULL, and never infer one setting from another |
 
 ### 8.3 Known gaps
 
@@ -630,28 +643,27 @@ its active item or trigger.
 | ID | Known gap | Disposition |
 |----|-----------|-------------|
 | **L-S1** | No catalog-wide current selector by Project ID, topic, ownership, or curation state | **A1** |
-| **L-S2** | No common CLI selection by date/model/event/Interaction/turn/status/artifact or stable event ID | **A1–A3** |
-| **L-S3** | No historical union or semantic snapshot-diff operation | Decide under **D9**, then **A1/A7** |
-| **L-O1** | Structured JSONL/CSV covers sessions and stats only | **A2–A4**, then **A7** |
+| **L-S2** | Typed selection now covers date/model/event/Interaction/turn/status/artifact and stable event ID; tool/actor/role predicates, projections/order/grouping, sequence windows, and full legacy parity remain | **A1–A3** |
+| **L-S3** | No historical union or semantic snapshot-diff operation | Implement the adopted **D9** semantics under **A1/A7** |
+| **L-O1** | Typed actions emit one structured reusable JSON result; nested-result CSV projection and streaming row envelopes remain external/legacy-only | **A7/A9**; add only with a demonstrated consumer |
 | **L-O2** | Aggregate reports often omit constituent stable session/event identities | **A2–A3** |
-| **L-O3** | Results cannot be consumed directly as a saved or chained selection | **A7** |
-| **L-M1** | Orientation is limited to shallow session/event totals | **A2** |
-| **L-M2** | Elapsed span exists, but active-time semantics and gap sensitivity are unsettled | Decide under **D3**, implement in **A2** |
-| **L-M3** | Utilization differs by vendor: Codex attribution is provisional, Cursor lacks verified local tokens, and quota/price facts are dated external evidence | **A10**; do not infer tokens from text |
-| **L-C1** | No first-class bounded search, ranking, topic classification, or saved search | **A4**, **A7** |
+| **L-O3** | Stable result IDs can feed the next typed request, but derivation records, named investigation graphs, and historical replay/diff remain | **A7–A8** |
+| **L-M1** | Typed orientation is implemented; time buckets, gap histogram, distribution limits, and scale/skew goldens remain | **A2/A9** |
+| **L-M2** | D3 active-time sensitivity is implemented for 5/30/120-minute caps; the gap histogram and event-bearing interval presentation remain | **A2** |
+| **L-M3** | Utilization differs by vendor: Codex cumulative attribution is permanently non-billing evidence, Cursor lacks verified local tokens, and quota/price facts are dated external evidence | Preserve the A10 boundary; reopen only under **T4**; never infer tokens from text |
+| **L-C1** | First-class bounded substring search and saved results exist; ranking, topic classification, repeated-state facets, and a named saved-search catalog do not | **A4**, **A7–A8** |
 | **L-C2** | Normalized content may be sanitized, filtered, redacted, or truncated; a miss does not prove raw absence | Preserve completeness in **A3–A6** |
-| **L-C3** | No command resolves one normalized event to its exact available source record | **A5–A6** |
 | **L-P1** | Interaction, Model Turn, phase, and cross-vendor correlation confidence varies; shared evidence is not authorship | Preserve method/confidence in **A2–A8** |
 | **L-P2** | Repeated Cursor title/mode/permission/reminder state can dominate naïve text search | **A4** facets and defaults |
 | **L-E1** | Cross-store reports materialize and sort selected sessions in Python | **A9** |
 | **L-E2** | Repeated substring search has no rebuildable policy-aware index | Benchmark after **A4**; decide under **D4** |
-| **L-E3** | Cursor selection and SQLite writes are composer-streamed, but ordering/deduplication and Interaction construction still buffer one complete composer; a real 19,661-event composer reached about 531 MiB RSS. Phase tracing now identifies read-buffer progress separately from writes | **A9**: use retained phase evidence and allocation profiles, then make event grouping/stateful writes incremental without weakening rollback or canonical ordering |
+| **L-E3** | Cursor selection and SQLite writes are composer-streamed, but ordering/deduplication and Interaction construction still buffer one complete composer; a real 19,661-event composer reached about 531 MiB RSS. Store-wide orphan pruning is now deferred to once per source transaction instead of once per composer, eliminating a repeated full-store scan; phase tracing separates read-buffer and write work | **A9**: measure the batch-pruning improvement and use allocation profiles to make per-composer grouping/stateful writes incremental without weakening rollback or canonical ordering |
 | **L-E4** | First capture of changed selected Cursor evidence still requires one transactional backup and streaming compression; a newly selected Project may require one verified streaming restore of an unchanged cached cohort. Real exact revisions `368bb3…` and `ae3c23…` differed while all three selected markers and normalization digests matched, proving whole-DB invalidation was too coarse | **A5/A9**: selected markers are implemented; measure cache-restore I/O/RSS and keep `--force` for suspected vendor timestamp/edge-sampling gaps |
 | **V-CC1** | Claude slug decoding is lossy when the index lacks an explicit Project path | Prefer indexed paths; reopen mapping only with new evidence |
 | **V-CC2** | Claude model/service settings, custom/AI titles, agent names, direct fork references, and bounded product state are mapped; richer runtime-context snapshots remain only partially specialized | Validate under **A12**; other context remains evidence-triggered |
 | **V-CTX1** | Runtime context such as memory, skills/tool schemas, reasoning/turn context, and detailed token snapshots is not represented as a first-class common model | Evidence- and use-case-triggered; define semantics before adding entities |
 | **V-CX1** | Codex supplies no direct referential parent-session identifier | Unsupported until **T4** |
-| **V-CU1** | Cursor composers without usable workspace/header mapping remain unattributed | Evidence-triggered mapping maintenance under **T1** |
+| **V-CU1** | Cursor's current header list is incomplete for historical sessions. Workspace `composer.composerData` fallback recovery is implemented and current headers take precedence; composers absent from both indexes or ambiguously bound remain unattributed | Validate fallback provenance across releases; evidence-triggered mapping maintenance under **T1** |
 | **V-CU2** | Cursor scan time range is incomplete when headers lack usable timestamps | Preserve coverage diagnostics; do not decode all bubbles merely for dates |
 | **V-CU3** | Cursor exposes exact `modelInfo.modelName` and accepted/rejected `toolFormerData.userDecision`, but no separate observed effort, speed, or service-tier fields | Validate model/permission provenance under **A12**; retain absent settings as NULL |
 | **E-1** | Lifecycle abort is fixture-only in the reviewed corpus | Add a real shape only under **T4** |
@@ -662,25 +674,25 @@ its active item or trigger.
 Resolve a decision immediately before its first consuming work item; do not
 block unrelated work.
 
-**State:** D4 and D10 are adopted directions; D11's normalized identity is
-adopted while occurrence representation remains at R3a/R3b. D7 has an approved iterative
-shape but each method still needs evaluation; D1, D2, D3, D5, D6, and D9 are
-expanded recommendations awaiting acceptance; D8 remains the only unframed
-open choice.
+**State:** **D1–D11 are resolved.** Decisions are adopted at the narrowest
+reversible boundary needed by current work. D4 resolves to postponement; D7's
+composition is adopted but each optional method still requires evaluation;
+D11 adopts normalized identity while occurrence representation remains at
+R3a/R3b. Reopen a decision only with contrary implementation or vendor evidence.
 
-| ID | Decision | Needed by | Recommended direction |
+| ID | Decision | Needed by | Resolution and justification |
 |----|----------|-----------|-----------------------|
-| **D1** | Query interface shape | **A1–A4** | **Recommend subcommands.** Use `query sessions|overview|events|search|show` because they have different result contracts and required arguments; keep Project/vendor/session/time and output flags shared. One typed request remains the implementation kernel. Existing flat report flags become documented compatibility aliases, then deprecate only after command parity. This reduces invalid flag combinations and makes help/completion usable without fragmenting query semantics. |
-| **D2** | Inline and saved selection representation | **A1**, **A7** | **Recommend both over one schema.** Inline requests are the inspectable/default form. A saved selection stores the canonical request, snapshot IDs, policy/package hash, and optionally materialized stable IDs; its content hash names it. Predicates support refresh, explicit IDs support exact replay, and a saved result must state which form it contains. |
-| **D3** | Derived active-time sensitivity | **A2** | **Recommend a sensitivity report, not one duration.** Always report observed elapsed span and event-bearing intervals; estimate active time with declared default gap caps of 5, 30, and 120 minutes plus configurable caps. Include the gap histogram and never call an estimate observed, billable, or charged time. |
-| **D4** | Full-source search derivative | postponed | Normalized, bounded search remains **A4**. Any full-source index remains postponed indefinitely until an explicit privacy, encryption, retention, deletion, and access design is approved; raw capture alone does not authorize indexing. |
-| **D5** | Exact evidence resolution precedence | **A6** | **Recommend evidence equality before location preference.** Resolve a hash-matching sealed/captured object first; accept live evidence only after its revision/hash matches; allow an explicitly selected immutable snapshot next. Report changed live files as mismatching candidates and unavailable sources as unavailable—never silently fall through to a different revision. |
-| **D6** | Stable SQL views and query package boundary | **A9** | **Recommend typed application queries as owner.** Add a vendor-neutral read-only SQL view only after two independent consumers repeat the same stable row contract and compatibility tests cover it. Keep exploratory SQL in documented recipes. A standalone versioned `queries.sql` package remains **P7**, not a prerequisite for ordinary reports. |
-| **D7** | Topic/phase derivation methods and composition | **A8** | **Use multiple, composed methods iteratively:** (1) deterministic lexical rules and explicit vendor events; (2) phase heuristics over ordered windows; (3) optional versioned embeddings for recall; (4) optional LLM labels only on bounded candidates; (5) an ensemble assertion that cites its inputs. Preserve every method/version/evidence/confidence separately rather than overwriting one label. Promote each stage only after a labelled evaluation set shows added value. |
-| **D8** | What result provenance is mandatory? | **A1**, **A7** | Require package/query hashes, snapshot IDs, policy, source availability, truncation, and processor identity |
-| **D9** | Historical snapshot semantics | **A1**, **A7** | **Recommend one immutable snapshot by default.** Historical reads require an explicit snapshot selector. Diff compares stable entity IDs, source revisions, and content/semantic hashes; union is a separate explicit operation retaining observation identity and duplicate diagnostics. Never combine “latest” rows from different snapshots implicitly. |
-| **D10** | Saved-result validity across Project moves | **A7** | Treat relocation separately from extraction correctness. Bind result identity and comparison to stable Project/session/event IDs plus snapshot/query hashes; retain the observed filesystem path as time-specific provenance. A move updates location bindings, not prior evidence, and must not excuse inaccurate or inconsistent extraction. |
-| **D11** | Model-configuration identity and provenance | **A2–A3**, **A12**, **R3a/R3b** | Keep provider, family, exact name, revision, effort, speed, service tier, and mode nullable and independently queryable. Use their normalized tuple as null-safe configuration identity; do not infer one setting from another. Preserve exact source values and field paths per event. R3a/R3b decide whether `source_config` remains and whether occurrences receive a relational projection. |
+| **D1** | Query interface shape | **A1–A4** | **Adopted: action subcommands over one typed kernel.** `query sessions|overview|events|search|evidence|configurations` have distinct result/argument requirements while sharing Project/vendor/session/time flags. Existing flat reports remain compatibility aliases until parity and usage justify deprecation. This prevents invalid flag combinations without fragmenting semantics. |
+| **D2** | Inline and saved selection representation | **A1**, **A7** | **Adopted: retain both predicates and materialized stable IDs in one result contract.** Predicates support deliberate refresh; IDs support exact replay. Saved requests/results record canonical scope, snapshot/package/policy evidence and their content identities. |
+| **D3** | Derived active-time sensitivity | **A2** | **Adopted: sensitivity, not one duration.** Report observed elapsed span separately and estimate active time with declared 5, 30, and 120-minute gap caps plus configurable values. Never label the estimate observed, billable, or charged; add the gap histogram next. |
+| **D4** | Full-source search derivative | postponed | **Adopted: postpone.** Normalized, bounded search remains **A4**. Any full-source index waits for an explicit privacy, encryption, retention, deletion, and access design; raw capture alone does not authorize indexing. |
+| **D5** | Exact evidence resolution precedence | **A6** | **Adopted: equality before location.** Resolve a verified exact sealed/captured object first and exact live evidence next. Report changed live files as mismatches and unavailable sources as unavailable—never silently substitute a different revision. |
+| **D6** | Stable SQL views and query package boundary | **A9** | **Adopted: typed application queries own product behavior.** Add a vendor-neutral read-only SQL view only after two independent consumers repeat a stable row contract with compatibility tests. Exploratory SQL remains documented recipes; `queries.sql` remains **P7**. |
+| **D7** | Topic/phase derivation methods and composition | **A8** | **Adopted: multiple composed methods, iteratively:** (1) deterministic lexical rules and explicit vendor events; (2) phase heuristics over ordered windows; (3) optional versioned embeddings for recall; (4) optional LLM labels only on bounded candidates; (5) an ensemble assertion that cites its inputs. Preserve every method/version/evidence/confidence separately and promote a stage only after a labelled evaluation set shows added value. |
+| **D8** | What result provenance is mandatory? | **A1**, **A7** | **Adopted:** canonical request and hash, result identity, processor identity, Project/store/snapshot/package identities, processing-policy hashes, source-availability summary, row/byte limits and truncation reasons, limitations, and constituent stable IDs. Observation time may vary and is excluded from semantic result identity. This is sufficient to replay or explain a result without copying huge evidence bodies. |
+| **D9** | Historical snapshot semantics | **A1**, **A7** | **Adopted:** one verified current or explicitly named immutable snapshot by default. Diff compares two named observations by stable IDs, source revisions, semantic/content and package hashes. Union is separately explicit and retains observation identity plus duplicate diagnostics. Discovery is metadata-first from the maintained registry/manifests. Never combine per-row “latest” observations implicitly; see **Designs.md §13**. |
+| **D10** | Saved-result validity across Project moves | **A7** | **Adopted:** treat relocation separately from extraction correctness. Bind result identity/comparison to stable entity IDs and snapshot/query hashes; retain filesystem paths only as time-specific provenance. A move updates location bindings, not prior evidence. |
+| **D11** | Model-configuration identity and provenance | **A2–A3**, **A12**, **R3a/R3b** | **Adopted:** keep provider, family, exact name, revision, effort, speed, service tier, and mode nullable and independently queryable. Use the normalized tuple as null-safe identity; never infer one setting from another. Preserve exact source values/field paths. R3a/R3b retain occurrence JSON now and postpone a relational projection until demonstrated. |
 
 ### 8.5 Event-triggered maintenance
 
@@ -689,7 +701,7 @@ open choice.
 | **T1** | Vendor storage or source-format change, or observed unmapped evidence | Update the vendor fact document and smallest representative fixture; run the bounded vendor audit and compatibility gate |
 | **T2** | Package/schema/mapping change or accepted source refresh | Run preflight, fixed-point rebuild, semantic sampling, query smoke tests, and atomic baseline replacement |
 | **T3** | Material ingest/rebuild or unexplained storage growth | Run storage observation and dry-run prune; apply only a reviewed selection with a receipt |
-| **T4** | Direct Codex parent ID, distinct speed tier, a new lifecycle shape, or another recorded evidence gap appears | Add the minimal source shape, mapping, fixture, and compatibility assertion; update the gap disposition |
+| **T4** | Direct Codex parent ID, distinct speed tier, direct usage/billing attribution evidence, a new lifecycle shape, or another recorded evidence gap appears | Add the minimal source shape, mapping, fixture, and compatibility assertion; update the gap disposition |
 | **T5** | Project move, replacement checkout, or demonstrated cross-vendor correlation need | Update stable location/source bindings; add a corpus member only when the existing corpus cannot answer the compatibility question |
 | **T6** | Every implementation change | Keep the full suite and representative candidate, onboarding, evidence, baseline, relocation, and real-store smoke workflows green |
 
@@ -716,8 +728,9 @@ or atomic failure semantics become product requirements.
 
 | ID | Topic | Restart condition |
 |----|-------|-------------------|
-| **P4** | Broad historical discovery or additional vendors | A concrete compatibility, correlation, or active-work requirement appears; filesystem/Git discovery can propose candidates but cannot approve catalog membership. |
+| **P4** | Broad historical discovery implementation or additional vendors | Current/named/diff/union/discovery semantics are specified in **Designs.md §13**. Implement registry/manifest discovery, diff, or union only after A7 preserves observation identity end to end, or when a concrete compatibility/correlation requirement appears. Filesystem/Git discovery may propose but cannot approve scope. |
 | **P5** | FTS5 normalized-search derivative | **A4** bounded search is measured and repeated scans justify an index. This does not authorize the full-source derivative postponed by **D4**. |
+| **P10** | Misses/Falla assessment-store integration | Keep Misses inputs as a companion consumer of saved Codess selections/results. Reopen merged or aligned assessment storage only after A3/A6/A7 contracts stabilize and a concrete assessment workflow proves which extra entities must persist. |
 
 ### 8.7 Completed foundation retained for follow-up
 
@@ -734,7 +747,13 @@ Only completed capabilities that constrain current work are retained here:
   audit/diagnostic/artifact reports, sessions/stats JSONL and protected CSV,
   single-report validation, and pipeline-safe shutdown.
 - Resource limits/telemetry, storage observations, latest-only pruning, and
-  provisional derived token observations.
+  derived token observations with a permanent non-billing confidence boundary.
+- **A6 exact evidence resolution:** event/source-record lineage, streamed exact
+  verification, sealed/central-captured/live precedence, and real Claude,
+  Codex, and Cursor checks including a changed live Cursor database.
+- **A10 token-attribution feasibility:** per-file reset/interleave/model/time
+  classification and explicit `utilization_ready` versus always-false
+  `billing_ready`; new direct vendor evidence reopens it under T4.
 
 ## 9. Change routing
 

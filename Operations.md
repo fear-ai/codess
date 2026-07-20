@@ -81,10 +81,12 @@ mistaken for text, and an unmapped vendor variant before classifying the source
 as malformed or overriding a limit. These records retain no content excerpts.
 An override is an explicit operational decision, not automatic recovery.
 
-One selected multi-session Cursor source is still the transaction buffer. If
-real evidence approaches the event maximum, use a staging table and
-composer-at-a-time writes in one transaction rather than silently raising the
-defaults.
+A selected multi-session Cursor source remains one rollback-capable SQLite
+transaction, but only one composer's normalized events are retained in memory.
+Store-wide artifact/model/source orphan pruning runs once after that batch;
+running it after every composer caused repeated full-store scans. If one real
+composer approaches the event maximum, use a staging table and incremental
+group construction rather than silently raising the defaults.
 
 ## Storage observations and retention
 
@@ -114,8 +116,11 @@ observations, not billed cost, and are never inferred from text length.
 `python -m main storage token-validate` is the Codex validation prototype. It
 selects only Codex source files referenced by current stores and reports
 cumulative counter drops, repeated points, timestamp regressions, model changes,
-and counter points shared across files. `billing_ready` remains false whenever
-those observations make attribution ambiguous. The report contains counters and
+and counter points shared across files. Each file is classified as a monotonic
+single-file sequence or as reset/interleave, model-transition, or timestamp
+ambiguity. `utilization_ready` means usable as a local activity observation;
+`billing_ready` is always false because cumulative local counters are not
+provider billing records. The report contains counters and
 source paths, not conversation text; `--output` saves an explicit copy.
 
 Storage locations and cleanup boundaries are:
@@ -230,12 +235,15 @@ updates both central and local pointers.
 Routine work should begin from selected Projects and current pointers, not from
 all vendor history:
 
-- Cursor ingestion resolves workspace IDs to composer headers, then uses
-  indexed key ranges for only those composers. Even an explicit all-composer
+- Cursor ingestion resolves workspace IDs to current composer headers and the
+  workspace-local `composer.composerData` fallback index, then uses indexed key
+  ranges for only those composers. Even an explicit all-composer
   audit uses a bounded prefix range rather than `LIKE`. A full transactional
   Cursor backup occurs only for raw capture, not querying.
-- Cursor's live `composerHeaders` indexes select a workspace's composers, and
-  `cursorDiskKV`'s unique key index selects `bubbleId:<composer-id>:` ranges.
+- Cursor's live `composerHeaders` is the primary selector; workspace
+  `composer.composerData` recovers older composers that still have global
+  content rows but no current header. `cursorDiskKV`'s unique key index selects
+  `bubbleId:<composer-id>:` ranges.
   Counts and byte totals use `COUNT(*)` and `length(value)` without JSON decode;
   ingest decodes only selected rows. A logical export of selected rows can be a
   useful derived artifact, but it is not an exact raw copy of the vendor store.
@@ -243,7 +251,8 @@ all vendor history:
   selection marker changes or a selected Project lacks captured evidence, so
   WAL state is included. Main-file size/mtime is both too coarse and incomplete
   in WAL mode. Routine Cursor change detection reads one SQLite snapshot and
-  hashes exact selected header fields plus every selected bubble key/length and
+  hashes exact selected primary/fallback header fields plus every selected
+  bubble key/length and
   the first/last 512 value bytes. This deliberately ignores unrelated Cursor
   workbench/global state. A retained/reused cohort remains a
   fully SHA-256-addressed raw backup and cache restoration verifies both its

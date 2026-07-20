@@ -314,6 +314,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("scan", "ingest", "query"),
         help="scan: discover projects; ingest: load into .codess/; query: read store",
     )
+    p.add_argument(
+        "query_action",
+        nargs="?",
+        choices=("sessions", "overview", "events", "search", "evidence", "configurations"),
+        help="query action (typed interface); legacy query report flags remain compatible",
+    )
 
     p.add_argument(
         "--dirs",
@@ -521,6 +527,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-format", choices=("table", "jsonl", "csv"), default="table",
         help="query: human table, versioned JSON Lines, or CSV rows",
     )
+    p.add_argument("--event-id", action="append", dest="event_ids", help="query: stable/global event ID (repeatable)")
+    p.add_argument("--interaction-id", action="append", dest="interaction_ids", help="query: Interaction ID (repeatable)")
+    p.add_argument("--model-turn-id", action="append", dest="model_turn_ids", help="query: Model Turn ID (repeatable)")
+    p.add_argument("--event-kind", action="append", dest="event_kinds", help="query: normalized event kind (repeatable)")
+    p.add_argument("--status", action="append", dest="query_statuses", help="query: normalized/source status (repeatable)")
+    p.add_argument("--model", action="append", dest="query_models", help="query: exact model name (repeatable)")
+    p.add_argument("--artifact", dest="query_artifact", help="query: artifact-path substring")
+    p.add_argument("--text", dest="query_text", help="query search: normalized content/tool/artifact substring")
+    p.add_argument("--since", type=float, help="query: inclusive Unix timestamp in milliseconds")
+    p.add_argument("--until", type=float, help="query: inclusive Unix timestamp in milliseconds")
+    p.add_argument("--byte-limit", type=int, default=None, help="typed query: maximum returned inline content bytes (default 16 MiB)")
+    p.add_argument("--active-gap-cap", type=int, action="append", dest="active_gap_caps", help="overview: active-time gap cap in minutes (repeatable; default 5,30,120)")
+    p.add_argument("--request", dest="query_request", help="typed query: load codess.query-request/1 JSON")
+    p.add_argument("--save-request", help="typed query: atomically save canonical request JSON")
+    p.add_argument("--save-result", help="typed query: atomically save codess.query-result/1 JSON")
+    p.add_argument("--result-input", help="typed query: restrict by stable IDs from a prior result")
+    p.add_argument("--compare-result", help="typed query: compare stable row identities with a prior result; exit 3 when changed")
     return p
 
 

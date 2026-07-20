@@ -77,6 +77,7 @@ def test_cursor_cohort_cache_restores_without_recapturing(tmp_path, monkeypatch)
 
     monkeypatch.setattr(raw_store, "observe", reject_recapture)
     second_target = tmp_path / "second.db"
+    progress = []
     second, second_marker, status = prepare_cursor_cohort(
         source,
         raw_store=raw_store,
@@ -86,10 +87,16 @@ def test_cursor_cohort_cache_restores_without_recapturing(tmp_path, monkeypatch)
         storage_format="cursor-sqlite",
         marker=marker,
         force=False,
+        progress=lambda event, **fields: progress.append((event, fields)),
     )
     assert status == "reused"
     assert second_marker == marker
     assert second["object_id"] == first["object_id"]
+    assert [event for event, _fields in progress] == [
+        "cursor.cohort.restore.start", "cursor.cohort.restore.done",
+    ]
+    assert progress[-1][1]["materialized_bytes"] == second["uncompressed_size"]
+    assert progress[-1][1]["phase_seconds"] >= 0
     with sqlite3.connect(second_target.resolve().as_uri() + "?mode=ro", uri=True) as conn:
         assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
 
