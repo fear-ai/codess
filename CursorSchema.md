@@ -96,8 +96,15 @@ failed, running, and cancelled. Cursor therefore contributes evidence-backed
 tool-failure audit rows. The audited store also contains 2,936 accepted and 17
 rejected `userDecision` values. Rejection maps to normalized `denied`
 independently of the status value; acceptance does not erase an observed error.
-Cursor still supplies no verified turn-abort or context-compaction shape;
-error-looking prose is not evidence.
+
+**Compaction.** Cursor auto-summarizes older messages when the context window is
+exceeded and resets context within the same chat at ~100%, plus a manual
+`/compress` command (`Findings.md §2/§7`). Whether a summarization event leaves a
+durable `bubbleId`/`composerData` marker is **unconfirmed**; the next step is to
+run `get_composer_data()` against a known-summarized session. Until a stored
+marker is confirmed, Cursor compaction stays `indeterminate` under decision
+**D15**, and error-looking prose is not evidence. Cursor supplies no verified
+turn-abort shape.
 
 The audited `modelInfo` objects contain only `modelName`; Codess therefore does
 not infer effort, speed, or service tier from names such as `*-fast` or

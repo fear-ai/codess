@@ -13,6 +13,70 @@ round-trip tests, and transform-language experiment. These are local source
 artifacts. Their repository URLs or continued publication must not be assumed
 from an old list.
 
+## 0. Re-review update (2026-07-20)
+
+A second pass over `~/Work/Github/Schema` found the project materially advanced
+past the original review. Sections 1–8 below remain the governing application to
+Codess; this section records what is now *confirmed by running evidence* in the
+source project and what that changes for our deferred decisions. The source
+project has its own decision records (`docs/decisions/00N-*.md`); its **decision
+003** is person-identity linking, **004** is transform language — do not confuse
+these with Codess `CoPlan` D-numbers.
+
+**New/advanced in the source project [observed]:**
+- **Five real ingest mappings** (Salesforce, HubSpot, Shopify, Microsoft Graph,
+  Stripe) now exist, plus a **publish spec** (`common_to_external`) with
+  **round-trip fixed-point tests**: ingest → publish → ingest converges exactly,
+  with `Website` hostname the one declared-lossy field. Fan-out (`from_each`)
+  maps all Shopify locations.
+- **Conformance is green and load-bearing:** mutation harness (104 mutants, zero
+  survivors), cross-validator parity fuzzing (~1,100-doc corpus, Python
+  jsonschema vs Node Ajv), evolution gate (12 classification tests). The parity
+  fuzzer found a **real upstream `jsonschema` crash** (`hostname` checker
+  registered without `raises=ValueError`) — concrete proof the "same fixtures
+  through both layers, disagreement is a defect" discipline pays off.
+- **Transform-language shootout ran (source decision 004):** JMESPath eliminated
+  (silent nulls); jq and JSONata tie and both fail loudly; no language removes the
+  host-function need. Codess's own postponed evaluation of this question, and the
+  borrowed methodology, are recorded in `experiments/JsonDSL.md`.
+- **Reconciliation three-level design** (field aliases / controlled vocabularies
+  / entity registries) is now partly implemented: a generic `vocab(name)`
+  transform + first vocabulary, and a **GLEIF connector behind a W3C
+  Reconciliation-shaped interface** with evidence-graded assertions
+  (registry-grade → written, review-grade → queued, conflicts never overwrite).
+  New sharpening rules: normalize headers before alias lookup; never fuzzy-match;
+  SKOS `exactMatch` vs `closeMatch` distinction recorded per row.
+- **Entity-resolution testbed ran** (99-record seeded corpus with planted
+  name-twin and household traps). Failure-mode taxonomy: **contact-point equality
+  is not identity evidence** (name-derived corporate emails false-merge name
+  twins); **postal address outranks employer domain** as the independent
+  corroborator (domain correlates with the name); **phone confirms but cannot
+  find** (recall ~0.65). No production linking built.
+
+**What this changes for Codess (detail in `Findings.md §9`):**
+1. Our defer-the-DSL decision is now *externally validated with data*, not just
+   asserted. If we ever revisit, JSONata — not jq/JMESPath — is the candidate,
+   and it still would not remove our named Python transforms.
+2. The source project has now *implemented the publish/round-trip direction we
+   deferred*. It confirms `common_to_external` is a separable, testable profile
+   with declared loss — the exact shape our `direction` grammar reserves — so if
+   a Codess export requirement ever appears, the pattern is proven upstream.
+3. The entity-resolution failure taxonomy directly informs
+   `correlation_assertions`: for cross-vendor/session/artifact links, treat
+   shared file path like "address" (independent corroborator) and shared model or
+   tool name like "domain" (correlated, weak); never merge on a single
+   contact-point-equivalent. This tightens D14/D15 without new schema.
+4. The green mutation+parity+gate triad is the evidence that our adopted
+   conformance discipline (`Schemas.md §2.2`, §6) is not aspirational upstream —
+   it caught a real bug. Reinforces prioritizing our own mutation coverage.
+
+Nothing here reverses an adopt/adapt/defer/reject decision in §3; it upgrades
+several from "borrowed principle" to "borrowed principle with upstream running
+evidence," and it changes one designated tool (JSONata over unspecified) and one
+corroboration ranking (address/path > domain/model). Suggested changes to the
+*source* project, if any, are recorded only in `Findings.md §9` and never applied
+here.
+
 ## 1. Conclusions
 
 The most useful lesson is not “use JSON Schema.” It is to make a canonical

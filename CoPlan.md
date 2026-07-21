@@ -185,7 +185,7 @@ Verification baseline is the full **`pytest tests/`** suite. **Validated** here 
 cross-store query aggregation, lineage, audit normalization/reporting, and
 bounded row reports are covered. Preflight and versioned session/stat output
 are implemented. All incomplete coverage and deferred scope is classified in
-§§8.3 and 8.6.
+§8 (known gaps and postponed topics).
 
 ### 2.6 Verified wiring
 
@@ -559,6 +559,27 @@ link here instead of maintaining another queue.
 
 ### 8.1 Execution rules
 
+#### 8.1.0 Designator scheme
+
+To keep planning IDs legible, this registry uses a small fixed set. Do not mint
+new prefix families; add to an existing register.
+
+- **A** — work items (§8.2). The single register for actionable work. An item's
+  lifecycle state (postponed/active/triggered/done) is a property of the item,
+  not a separate ID space; `P` (§8.4 postponed) and the completed set (§8.6) are
+  presentation groupings of the same work, and `T` (§8.4.3) triggers are
+  conditions that *promote* work into A, not a parallel queue.
+- **D** — decisions (§8.3). A resolved choice that constrains work; not itself a task.
+- **Gaps** (§8.5) — known limitations. The prefixes `L-*`, `V-*`, `E-*` are
+  **category facets** of one gaps register (scope/measurement/output/content/
+  evidence, and vendor `CC/CU/CX/CTX`), not separate registers.
+- **UC** — user-facing use cases (README capability matrix).
+- **R** — settled review checkpoints (§8.1.1).
+
+There is no durable "PR-n" designator. A proposed change is tracked as an **A**
+item; `Findings.md` may sequence A items into a delivery order but does not
+create a separate ID family.
+
 - Work active items in dependency order unless a production defect or source
   format change takes priority.
 - Land each feature vertically: request/contract, data operation, renderer or
@@ -633,8 +654,84 @@ queries and future correlation can group them explicitly.
 | 9 | **A9** | Performance and ecosystem: predicate/limit pushdown, heap merge, allocation profiling, justified read-only views, and Datasette/notebook/DuckDB recipes. Live/persisted rolling `codess.progress/1` tracing, Cursor buffer/backup heartbeats, no-op derived-correlation suppression, null-safe catalog synchronization, and snapshot-bound evidence-summary reuse are implemented | Use traces plus allocation profiles to bound rows, bytes, phase time, and RSS in scale fixtures; external recipes remain read-only |
 | maintenance | **A11** | **First consolidation implemented:** `codess.ingest_pipeline` owns Claude/Codex source validation, incremental admission, and post-commit state advancement. Remaining: shared normalized transaction shell and explicit keep/remove decision for compatibility wrappers including `retire_project.py` | Shared control flow has one tested owner; retained wrappers are thin, documented, and have an explicit keep/remove decision |
 | parallel | **A12** | **Audit prototype implemented:** `query configurations` reports per-vendor Model Turn linkage, nullable provider/family/exact/revision/effort/speed/service/mode values, exact `source_config`, and provenance limitations. Continue vendor/release fixture review and event-occurrence provenance validation | Claude, Codex, and Cursor fixtures prove exact available settings, preserve absent values as NULL, and never infer one setting from another |
+| 11 | **A14** | **Pending (D17):** two-value acceptance gate reporting `match`/`mismatch`/`vacant` via `field_state.compare` (with `vacant`-over-`mismatch` precedence), sharing the `vacant` token and the `fatal`/`advisory` criteria scale with the field-state taxonomy (`field_state.py`, D18). Only a `fatal` outcome (`mismatch` or `vacant` on an identity/order/lineage field) fails; structural contract gate unchanged | Fixtures prove a `vacant` (absent/uninterpreted/source-advanced) field is `advisory` (non-fatal), a `mismatch` requires both sides present, and an identity/order/lineage `mismatch` is `fatal`; the gate imports `field_state.compare`/`criticality`; v4 promotion unblocked |
+| 13 | **A16** | **Prototyped (D18):** `src/codess/field_state.py` classifies any value into present/absent/empty/null/sentinel/malformed with a `vacant` umbrella, `info`/`warn` levels, and a never-raising `diagnose()`; `tests/test_field_state.py` proves the states, the umbrella, the levels, and never-crash on hostile inputs. **Remaining:** thread `field_state` through the three adapters at their real field reads (timestamps, model config, tool input, prompt origin), materialize field-level `mapping_diagnostics` rows in the store, and add a hostile-input fixture per vendor (truncated JSONL line, empty bubble, malformed timestamp, sentinel strings, absent required key). | Every adapter processes a corpus of malformed/absent/empty/sentinel inputs without aborting; each bad field yields the correct diagnostic level and the surrounding record still normalizes |
 
-### 8.3 Known gaps
+### 8.3 Decision register
+
+Resolve a decision immediately before its first consuming work item; do not
+block unrelated work.
+
+**State:** **D1–D18 are resolved.** D4 postpones; D7's composition is adopted but
+each method still requires evaluation; D11 adopts normalized identity while
+occurrence representation stays at R3a/R3b. Reopen a decision only with contrary
+implementation or vendor evidence.
+
+| ID | Decision | Needed by | Resolution and justification |
+|----|----------|-----------|-----------------------|
+| **D1** | Query interface shape | **A1–A4** | **Adopted: action subcommands over one typed kernel.** `query sessions|overview|events|search|evidence|configurations` have distinct result/argument requirements while sharing Project/vendor/session/time flags. Existing flat reports remain compatibility aliases until parity and usage justify deprecation. This prevents invalid flag combinations without fragmenting semantics. |
+| **D2** | Inline and saved selection representation | **A1**, **A7** | **Adopted: retain both predicates and materialized stable IDs in one result contract.** Predicates support deliberate refresh; IDs support exact replay. Saved requests/results record canonical scope, snapshot/package/policy evidence and their content identities. |
+| **D3** | Derived active-time sensitivity | **A2** | **Adopted: sensitivity, not one duration.** Report observed elapsed span separately and estimate active time with declared 5, 30, and 120-minute gap caps plus configurable values. Never label the estimate observed, billable, or charged; add the gap histogram next. |
+| **D4** | Full-source search derivative | postponed | **Adopted: postpone.** Normalized, bounded search remains **A4**. Any full-source index waits for an explicit privacy, encryption, retention, deletion, and access design; raw capture alone does not authorize indexing. |
+| **D5** | Exact evidence resolution precedence | **A6** | **Adopted: equality before location.** Resolve a verified exact sealed/captured object first and exact live evidence next. Report changed live files as mismatches and unavailable sources as unavailable—never silently substitute a different revision. |
+| **D6** | Stable SQL views and query package boundary | **A9** | **Adopted: typed application queries own product behavior.** Add a vendor-neutral read-only SQL view only after two independent consumers repeat a stable row contract with compatibility tests. Exploratory SQL remains documented recipes; `queries.sql` remains **P7**. |
+| **D7** | Topic/phase derivation methods and composition | **A8** | **Adopted: multiple composed methods, iteratively:** (1) deterministic lexical rules and explicit vendor events; (2) phase heuristics over ordered windows; (3) optional versioned embeddings for recall; (4) optional LLM labels only on bounded candidates; (5) an ensemble assertion that cites its inputs. Preserve every method/version/evidence/confidence separately and promote a stage only after a labelled evaluation set shows added value. |
+| **D8** | What result provenance is mandatory? | **A1**, **A7** | **Adopted:** canonical request and hash, result identity, processor identity, Project/store/snapshot/package identities, processing-policy hashes, source-availability summary, row/byte limits and truncation reasons, limitations, and constituent stable IDs. Observation time may vary and is excluded from semantic result identity. This is sufficient to replay or explain a result without copying huge evidence bodies. |
+| **D9** | Historical snapshot semantics | **A1**, **A7** | **Adopted:** one verified current or explicitly named immutable snapshot by default. Diff compares two named observations by stable IDs, source revisions, semantic/content and package hashes. Union is separately explicit and retains observation identity plus duplicate diagnostics. Discovery is metadata-first from the maintained registry/manifests. Never combine per-row “latest” observations implicitly; see **Designs.md §13**. |
+| **D10** | Saved-result validity across Project moves | **A7** | **Adopted:** treat relocation separately from extraction correctness. Bind result identity/comparison to stable entity IDs and snapshot/query hashes; retain filesystem paths only as time-specific provenance. A move updates location bindings, not prior evidence. |
+| **D11** | Model-configuration identity and provenance | **A2–A3**, **A12**, **R3a/R3b** | **Adopted:** keep provider, family, exact name, revision, effort, speed, service tier, and mode nullable and independently queryable. Use the normalized tuple as null-safe identity; never infer one setting from another. Preserve exact source values/field paths. R3a/R3b retain occurrence JSON now and postpone a relational projection until demonstrated. |
+| **D12** | Supported provenance window | **A12**, D13 | **Adopted:** model change, harness change, or any other readable/deducible parameter can define the minimum acceptable level for a given Codess release. The cutoff is rooted in major breaking format incompatibilities, never model capability. Below the window → source-quarantine diagnostic, not silent best-effort. Model choice stays evidence (`model_configurations`), never a support gate. |
+| **D13** | Vendor vs session behavior | D12, D17 | **Adopted:** behavior seen across *all* sessions at a given model/harness provenance is vendor-specific; only behaviors explicitly declared `unsupported` (→ diagnostic), `ignored` (→ `retention: discard`), or `adjusted/mapped` (→ named rule + `mapping_trace`) are exceptions. One-session variance never drives a mapping rule. |
+| **D14** | Cross-vendor renditions are separate artifacts | **T5**, `correlation_assertions` | **Adopted:** resolve each vendor → common (N mappings). Do **not** require every vendor combination → each other (N² resolution is an explicit non-goal). Cross-vendor linkage is an optional additive search/process step via `correlation_assertions` + shared `relative_path`; it never rewrites identities. Intra-session model attribution beyond `model_turn_id` coverage is a separate confidence-graded inference, not a normalization requirement. |
+| **D15** | Compaction is evidence-graded | **T4**, `Findings.md §2` | **Adopted:** map a direct vendor record → `event_kind=context.compact` with no inference (Codex `type=compaction`, Claude `compact_boundary`); otherwise emit a `confidence`-scored assertion or `indeterminate`, never a binary claim. Detail and signal list: `Findings.md §2`. |
+| **D16** | Capture consistency and optional quiesce | **A6**, `Findings.md §3` | **Adopted:** rely on the SQLite online-backup-over-live-WAL primitive plus a capture-verify-recapture stability loop that records `consistency=source_advanced` when a write lands mid-capture. Orderly harness shutdown is an **opt-in hint only** (detect running harness, suggest closing, prefer idle windows); never a forced kill. |
+| **D17** | Acceptance-gate outcomes (with D18) | **A12**, D13, D16, D18 | **Adopted:** the value-level gate compares rebuilt vs. prior store per field/row and reports `match` / `mismatch` / `vacant` (`field_state.compare`), where `vacant` (a non-present side) takes precedence over `mismatch` (both present, differing). A `mismatch` or `vacant` on an identity/order/lineage field is `fatal`; else `advisory`. The structural contract gate (`validate_database_contract`) is unaffected. Prerequisite for v4 promotion. |
+| **D18** | Field-state resilience | **A16**, D13, D17 | **Adopted:** every adapter field is classified `present`/`absent`/`empty`/`null`/`sentinel`/`malformed` (umbrella `vacant` = absent-family, excludes `malformed`). Non-present states emit `info` (or `warn` for `malformed`) diagnostics; **no input ever crashes the program** — a bad field is dropped with a diagnostic and the record still lands; only an unreadable source quarantines. Shares the `vacant` token and `fatal`/`advisory` scale with D17. Impl: `field_state.py`. |
+
+### 8.4 Postponed topics
+
+Intentionally outside the active sequence. The externally orchestratable table
+can be composed today from Codess commands and system tooling; native
+implementation is justified only when orchestration, portability, provenance,
+or atomic failure semantics become product requirements. Event triggers
+(§8.4.3) name the conditions that promote a postponed or gap item into Active.
+
+#### 8.4.1 Externally orchestratable
+
+| ID | Topic | Restart condition |
+|----|-------|-------------------|
+| **P1** | Enterprise PII/secret scanning beyond configured regex policy | External scanners can gate source/raw promotion now. Add native policy integration only when a deployment threat model requires uniform findings, suppression, and provenance. |
+| **P2** | Periodic storage/query scheduling and notifications | Use `launchd` on macOS, systemd timers on Linux, or cron/CI to invoke stable commands and retain outputs. Add an internal scheduler only when cross-platform lifecycle and notification state are product requirements. |
+| **P3** | Proactive baseline refreshes and vendor audits | An external scheduler may run dry-run/audit commands; promotion remains reviewed. Reopen native automation under **T1/T2** only if safe apply policy is defined. |
+| **P6** | Natural-language query execution | An external LLM can formulate a proposed typed request after **A1–A7**; Codess must validate and display it before execution. Native formulation waits for evaluation and trust requirements. |
+| **P7** | Standalone `queries.sql` package | SQLite CLI, Datasette, sqlite-utils, and notebooks can consume documented read-only recipes. Package only when **D6** has repeated external consumers and a versioned contract. |
+| **P8** | Multi-Project `baseline refresh` orchestration | Shell/Make/CI can compose preflight → apply → validate → freeze per Project now. Native orchestration waits for demonstrated cross-Project rollback and partial-failure semantics. |
+| **P9** | First-class Markdown report export | `jq`, templates, notebooks, or report tools can render typed JSONL/CSV. Add a native format only when a stable customer-facing Markdown contract is required. |
+
+#### 8.4.2 Product functionality still postponed
+
+| ID | Topic | Restart condition |
+|----|-------|-------------------|
+| **P4** | Broad historical discovery implementation or additional vendors | Current/named/diff/union/discovery semantics are specified in **Designs.md §13**. Implement registry/manifest discovery, diff, or union only after A7 preserves observation identity end to end, or when a concrete compatibility/correlation requirement appears. Filesystem/Git discovery may propose but cannot approve scope. |
+| **P5** | FTS5 normalized-search derivative | **A4** bounded search is measured and repeated scans justify an index. This does not authorize the full-source derivative postponed by **D4**. |
+| **P10** | Misses/Falla assessment-store integration | Keep Misses inputs as a companion consumer of saved Codess selections/results. Reopen merged or aligned assessment storage only after A3/A6/A7 contracts stabilize and a concrete assessment workflow proves which extra entities must persist. |
+| **P11** | Full planning-designator reconciliation | **Problem:** `A`/`P`/`T`/done are lifecycle stages of one work register but use separate ID spaces, and `L-*`/`V-*`/`E-*` are three prefixes over one gaps register. **Resolution:** keep IDs as strings; treat `A`/`P`/`triggered`/`done` as a `state` on one register (Postponed and Completed become filtered views of Active), and `L-*`/`V-*`/`E-*` as facets of one gaps register; keep `D` and `UC` distinct. **Restart:** when a planning-doc reorganization is already underway. |
+
+#### 8.4.3 Event-triggered maintenance
+
+Conditions that promote a postponed or gap item into Active work.
+
+| ID | Trigger | Required response |
+|----|---------|-------------------|
+| **T1** | Vendor storage or source-format change, or observed unmapped evidence | Update the vendor fact document and smallest representative fixture; run the bounded vendor audit and compatibility gate |
+| **T2** | Package/schema/mapping change or accepted source refresh | Run preflight, fixed-point rebuild, semantic sampling, query smoke tests, and atomic baseline replacement |
+| **T3** | Material ingest/rebuild or unexplained storage growth | Run storage observation and dry-run prune; apply only a reviewed selection with a receipt |
+| **T4** | Direct Codex parent ID, distinct speed tier, direct usage/billing attribution evidence, a new lifecycle shape, or another recorded evidence gap appears | Add the minimal source shape, mapping, fixture, and compatibility assertion; update the gap disposition |
+| **T5** | Project move, replacement checkout, or demonstrated cross-vendor correlation need | Update stable location/source bindings; add a corpus member only when the existing corpus cannot answer the compatibility question |
+| **T6** | Every implementation change | Keep the full suite and representative candidate, onboarding, evidence, baseline, relocation, and real-store smoke workflows green |
+| **T7** | Rule authors who cannot ship Python become a bottleneck for a vendor mapping | Reopen the transform-DSL question per `experiments/JsonDSL.md`; JSONata is the designated candidate |
+
+### 8.5 Known gaps
 
 The IDs below are stable references for README use cases, vendor evidence, and
 tests. A gap is not automatically active work; the **Disposition** column names
@@ -669,70 +766,7 @@ its active item or trigger.
 | **E-1** | Lifecycle abort is fixture-only in the reviewed corpus | Add a real shape only under **T4** |
 | **E-2** | Settings are uneven: Codex records model/effort and newer service tier; Claude records model/service tier; Cursor records model only; no distinct speed-tier evidence was observed | **A12**; preserve exact values and field provenance, never derive speed from a model label |
 
-### 8.4 Decision register
-
-Resolve a decision immediately before its first consuming work item; do not
-block unrelated work.
-
-**State:** **D1–D11 are resolved.** Decisions are adopted at the narrowest
-reversible boundary needed by current work. D4 resolves to postponement; D7's
-composition is adopted but each optional method still requires evaluation;
-D11 adopts normalized identity while occurrence representation remains at
-R3a/R3b. Reopen a decision only with contrary implementation or vendor evidence.
-
-| ID | Decision | Needed by | Resolution and justification |
-|----|----------|-----------|-----------------------|
-| **D1** | Query interface shape | **A1–A4** | **Adopted: action subcommands over one typed kernel.** `query sessions|overview|events|search|evidence|configurations` have distinct result/argument requirements while sharing Project/vendor/session/time flags. Existing flat reports remain compatibility aliases until parity and usage justify deprecation. This prevents invalid flag combinations without fragmenting semantics. |
-| **D2** | Inline and saved selection representation | **A1**, **A7** | **Adopted: retain both predicates and materialized stable IDs in one result contract.** Predicates support deliberate refresh; IDs support exact replay. Saved requests/results record canonical scope, snapshot/package/policy evidence and their content identities. |
-| **D3** | Derived active-time sensitivity | **A2** | **Adopted: sensitivity, not one duration.** Report observed elapsed span separately and estimate active time with declared 5, 30, and 120-minute gap caps plus configurable values. Never label the estimate observed, billable, or charged; add the gap histogram next. |
-| **D4** | Full-source search derivative | postponed | **Adopted: postpone.** Normalized, bounded search remains **A4**. Any full-source index waits for an explicit privacy, encryption, retention, deletion, and access design; raw capture alone does not authorize indexing. |
-| **D5** | Exact evidence resolution precedence | **A6** | **Adopted: equality before location.** Resolve a verified exact sealed/captured object first and exact live evidence next. Report changed live files as mismatches and unavailable sources as unavailable—never silently substitute a different revision. |
-| **D6** | Stable SQL views and query package boundary | **A9** | **Adopted: typed application queries own product behavior.** Add a vendor-neutral read-only SQL view only after two independent consumers repeat a stable row contract with compatibility tests. Exploratory SQL remains documented recipes; `queries.sql` remains **P7**. |
-| **D7** | Topic/phase derivation methods and composition | **A8** | **Adopted: multiple composed methods, iteratively:** (1) deterministic lexical rules and explicit vendor events; (2) phase heuristics over ordered windows; (3) optional versioned embeddings for recall; (4) optional LLM labels only on bounded candidates; (5) an ensemble assertion that cites its inputs. Preserve every method/version/evidence/confidence separately and promote a stage only after a labelled evaluation set shows added value. |
-| **D8** | What result provenance is mandatory? | **A1**, **A7** | **Adopted:** canonical request and hash, result identity, processor identity, Project/store/snapshot/package identities, processing-policy hashes, source-availability summary, row/byte limits and truncation reasons, limitations, and constituent stable IDs. Observation time may vary and is excluded from semantic result identity. This is sufficient to replay or explain a result without copying huge evidence bodies. |
-| **D9** | Historical snapshot semantics | **A1**, **A7** | **Adopted:** one verified current or explicitly named immutable snapshot by default. Diff compares two named observations by stable IDs, source revisions, semantic/content and package hashes. Union is separately explicit and retains observation identity plus duplicate diagnostics. Discovery is metadata-first from the maintained registry/manifests. Never combine per-row “latest” observations implicitly; see **Designs.md §13**. |
-| **D10** | Saved-result validity across Project moves | **A7** | **Adopted:** treat relocation separately from extraction correctness. Bind result identity/comparison to stable entity IDs and snapshot/query hashes; retain filesystem paths only as time-specific provenance. A move updates location bindings, not prior evidence. |
-| **D11** | Model-configuration identity and provenance | **A2–A3**, **A12**, **R3a/R3b** | **Adopted:** keep provider, family, exact name, revision, effort, speed, service tier, and mode nullable and independently queryable. Use the normalized tuple as null-safe identity; never infer one setting from another. Preserve exact source values/field paths. R3a/R3b retain occurrence JSON now and postpone a relational projection until demonstrated. |
-
-### 8.5 Event-triggered maintenance
-
-| ID | Trigger | Required response |
-|----|---------|-------------------|
-| **T1** | Vendor storage or source-format change, or observed unmapped evidence | Update the vendor fact document and smallest representative fixture; run the bounded vendor audit and compatibility gate |
-| **T2** | Package/schema/mapping change or accepted source refresh | Run preflight, fixed-point rebuild, semantic sampling, query smoke tests, and atomic baseline replacement |
-| **T3** | Material ingest/rebuild or unexplained storage growth | Run storage observation and dry-run prune; apply only a reviewed selection with a receipt |
-| **T4** | Direct Codex parent ID, distinct speed tier, direct usage/billing attribution evidence, a new lifecycle shape, or another recorded evidence gap appears | Add the minimal source shape, mapping, fixture, and compatibility assertion; update the gap disposition |
-| **T5** | Project move, replacement checkout, or demonstrated cross-vendor correlation need | Update stable location/source bindings; add a corpus member only when the existing corpus cannot answer the compatibility question |
-| **T6** | Every implementation change | Keep the full suite and representative candidate, onboarding, evidence, baseline, relocation, and real-store smoke workflows green |
-
-### 8.6 Postponed topics
-
-These are intentionally outside the active product sequence. The first table
-can be composed today from Codess commands and external/system tooling; native
-implementation is justified only when orchestration, portability, provenance,
-or atomic failure semantics become product requirements.
-
-#### 8.6.1 Externally orchestratable
-
-| ID | Topic | Restart condition |
-|----|-------|-------------------|
-| **P1** | Enterprise PII/secret scanning beyond configured regex policy | External scanners can gate source/raw promotion now. Add native policy integration only when a deployment threat model requires uniform findings, suppression, and provenance. |
-| **P2** | Periodic storage/query scheduling and notifications | Use `launchd` on macOS, systemd timers on Linux, or cron/CI to invoke stable commands and retain outputs. Add an internal scheduler only when cross-platform lifecycle and notification state are product requirements. |
-| **P3** | Proactive baseline refreshes and vendor audits | An external scheduler may run dry-run/audit commands; promotion remains reviewed. Reopen native automation under **T1/T2** only if safe apply policy is defined. |
-| **P6** | Natural-language query execution | An external LLM can formulate a proposed typed request after **A1–A7**; Codess must validate and display it before execution. Native formulation waits for evaluation and trust requirements. |
-| **P7** | Standalone `queries.sql` package | SQLite CLI, Datasette, sqlite-utils, and notebooks can consume documented read-only recipes. Package only when **D6** has repeated external consumers and a versioned contract. |
-| **P8** | Multi-Project `baseline refresh` orchestration | Shell/Make/CI can compose preflight → apply → validate → freeze per Project now. Native orchestration waits for demonstrated cross-Project rollback and partial-failure semantics. |
-| **P9** | First-class Markdown report export | `jq`, templates, notebooks, or report tools can render typed JSONL/CSV. Add a native format only when a stable customer-facing Markdown contract is required. |
-
-#### 8.6.2 Product functionality still postponed
-
-| ID | Topic | Restart condition |
-|----|-------|-------------------|
-| **P4** | Broad historical discovery implementation or additional vendors | Current/named/diff/union/discovery semantics are specified in **Designs.md §13**. Implement registry/manifest discovery, diff, or union only after A7 preserves observation identity end to end, or when a concrete compatibility/correlation requirement appears. Filesystem/Git discovery may propose but cannot approve scope. |
-| **P5** | FTS5 normalized-search derivative | **A4** bounded search is measured and repeated scans justify an index. This does not authorize the full-source derivative postponed by **D4**. |
-| **P10** | Misses/Falla assessment-store integration | Keep Misses inputs as a companion consumer of saved Codess selections/results. Reopen merged or aligned assessment storage only after A3/A6/A7 contracts stabilize and a concrete assessment workflow proves which extra entities must persist. |
-
-### 8.7 Completed foundation retained for follow-up
+### 8.6 Completed foundation retained for follow-up
 
 Only completed capabilities that constrain current work are retained here:
 
@@ -748,6 +782,13 @@ Only completed capabilities that constrain current work are retained here:
   single-report validation, and pipeline-safe shutdown.
 - Resource limits/telemetry, storage observations, latest-only pruning, and
   derived token observations with a permanent non-billing confidence boundary.
+- **A13 doc truth-sync:** `CoSchema.md` states v4 is written and in use with an
+  honest promotion gate; `CompatibilityReview.md` is scoped to the historical v3
+  baseline; vendor docs state the Codex/Cursor compaction shapes.
+- **A15 capture stability loop:** `cursor_cohort.prepare_cursor_cohort` stamps
+  `change_detection.capture_stability` (`stable_during_capture` / `source_advanced`
+  + `post_capture_revision`) and emits `cursor.cohort.source_advanced` on drift,
+  without failing the capture; two fixtures cover both cases.
 - **A6 exact evidence resolution:** event/source-record lineage, streamed exact
   verification, sealed/central-captured/live precedence, and real Claude,
   Codex, and Cursor checks including a changed live Cursor database.

@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from codess.fileio import write_json_atomic
 from codess.raw_store import RawCaptureError, RawStore, materialize_captured_object
-from codess.store import load_ingest_state
+from codess.store import ingest_state_marker, load_ingest_state
 
 
 CACHE_FORMAT = "codess.cursor-cohort-cache/1"
@@ -199,10 +199,26 @@ def prepare_cursor_cohort(
         materialized_target=materialized_path,
         progress=progress,
     )
+    # Re-read the source revision after the backup: if it moved during the
+    # capture window, annotate the record rather than assume a quiescent source.
+    post_marker = ingest_state_marker(source)
+    source_advanced = (
+        post_marker.get("source_revision") != marker.get("source_revision")
+    )
+    stability = "source_advanced" if source_advanced else "stable_during_capture"
+    if source_advanced and progress is not None:
+        progress(
+            "cursor.cohort.source_advanced",
+            source=str(source.resolve()),
+            pre_revision=marker.get("source_revision"),
+            post_revision=post_marker.get("source_revision"),
+        )
     record["change_detection"] = {
         "source_revision": marker.get("source_revision"),
         "fingerprint_method": marker.get("fingerprint_method"),
         "consistency": marker.get("consistency"),
+        "capture_stability": stability,
+        "post_capture_revision": post_marker.get("source_revision"),
     }
     write_json_atomic(cache_path, {
         "cache_format": CACHE_FORMAT,

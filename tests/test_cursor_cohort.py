@@ -148,3 +148,61 @@ def test_cursor_cohort_source_change_creates_a_new_cached_revision(tmp_path):
     )
     assert status == "captured"
     assert second["object_id"] != first["object_id"]
+
+
+def test_capture_records_stable_when_source_quiescent(tmp_path):
+    """A15/D16: a capture over an unchanging source is marked stable."""
+    source = tmp_path / "state.vscdb"
+    _cursor_db(source)
+    raw_store = RawStore(tmp_path / "raw")
+    marker = ingest_state_marker(source)
+    record, _, status = prepare_cursor_cohort(
+        source,
+        raw_store=raw_store,
+        cache_path=tmp_path / "cache.json",
+        materialized_path=tmp_path / "cap.db",
+        source_system_id="cursor.composer",
+        storage_format="cursor-sqlite",
+        marker=marker,
+        force=False,
+    )
+    assert status == "captured"
+    assert record["change_detection"]["capture_stability"] == "stable_during_capture"
+    assert (
+        record["change_detection"]["post_capture_revision"]
+        == marker["source_revision"]
+    )
+
+
+def test_capture_records_source_advanced_when_revision_moves(tmp_path):
+    """A15/D16: if the source revision moves across the backup window, the
+    capture is annotated `source_advanced` instead of being treated as if the
+    source were quiescent. We simulate the window by advancing the source after
+    computing the pre-capture marker but before the capture reads it."""
+    source = tmp_path / "state.vscdb"
+    _cursor_db(source)
+    raw_store = RawStore(tmp_path / "raw")
+
+    stale_marker = ingest_state_marker(source)
+    # The source changes between marker read and capture — the exact hazard the
+    # stability loop exists to detect.
+    with sqlite3.connect(source) as conn:
+        conn.execute("INSERT INTO values_for_test VALUES ('mid-capture write')")
+
+    progress_events = []
+    record, _, status = prepare_cursor_cohort(
+        source,
+        raw_store=raw_store,
+        cache_path=tmp_path / "cache.json",
+        materialized_path=tmp_path / "cap.db",
+        source_system_id="cursor.composer",
+        storage_format="cursor-sqlite",
+        marker=stale_marker,
+        force=False,
+        progress=lambda event, **fields: progress_events.append((event, fields)),
+    )
+    assert status == "captured"
+    cd = record["change_detection"]
+    assert cd["capture_stability"] == "source_advanced"
+    assert cd["post_capture_revision"] != stale_marker["source_revision"]
+    assert any(e == "cursor.cohort.source_advanced" for e, _ in progress_events)

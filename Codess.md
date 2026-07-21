@@ -117,6 +117,7 @@ dispositions are centralized in **CoPlan §8**.
 | **CoPlan.md** | Repository/code boundaries, runtime and CLI contract, configuration, tests, delivery order, actionable work, and decisions | Product requirements; operating procedures |
 | **Operations.md** | Maintainer procedures, safety gates, evidence, storage, retained baselines, and Claude process recovery | End-user research tutorial; design rationale |
 | **CompatibilityReview.md** | Evidence-backed coverage of the bounded reviewed corpus | General backlog; chronology |
+| **Findings.md** | Cross-cutting evidence-graded findings and decisions D12–D17: contract authority, compaction detection, capture consistency, three-outcome acceptance, v4 status, and external references | Per-vendor storage truth; the authoritative work queue (CoPlan §8) |
 | **schema/** | Executable and machine-readable contracts | Narrative requirements and rationale |
 
 ### 4.3 Maintenance rules

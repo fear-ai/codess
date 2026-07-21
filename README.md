@@ -112,7 +112,7 @@ Investigation is the primary reason to retain and normalize sessions. Use the
 CLI first for stable Project/vendor/session scope and repeatable reports; use
 read-only SQLite for event-level questions that the current report surface does
 not yet express. The use-case IDs below cross-reference the known-gap and
-active-work registers in **CoPlan.md §§8.2–8.3**.
+active-work and known-gap registers in **CoPlan.md §8**.
 
 ### Capability matrix
 

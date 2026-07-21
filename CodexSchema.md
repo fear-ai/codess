@@ -105,8 +105,16 @@ location is not interpreted as successful completion.
 - History file `~/.codex/history.jsonl` (if present) is **not** the same as session store; CodexSchema applies to `sessions/`.
 - Reasoning bodies, token accounting, snapshots, and turn context are not a
   first-class common runtime-context model. Selected scalar turn settings are
-  nevertheless normalized into `model_configurations`; see **CoPlan.md §8.3,
-  V-CTX1/E-2**.
+  nevertheless normalized into `model_configurations`; see CoPlan rows
+  **V-CTX1/E-2**.
+- **Compaction.** Codex auto-compacts at a token threshold
+  (`model_auto_compact_token_limit`) and writes a `type=compaction` item
+  carrying an opaque `encrypted_content` blob into the rollout JSONL; a
+  "Session Memory Compact" tier often avoids an LLM call (`Findings.md §2/§7`).
+  The adapter does **not** yet parse this record — a Tier-1 parser mapping it
+  to `event_kind=context.compact` is decision **D15**, promoted by **CoPlan T4**.
+  Auto-compaction is user-independent, so it appears even in sessions where the
+  operator never ran `/compact`.
 - Transcript compatibility must be maintained with fixtures because the
   [official hook guidance](https://developers.openai.com/codex/config-advanced#hooks)
   says the transcript format may change.
@@ -121,7 +129,7 @@ found no parent-like field and no resolvable parent reference; message,
 reasoning, prompt, and tool bodies were not inspected. The evidence report is
 `catalog/codex-parent-audit.json`. Codess therefore does not infer parentage
 from timestamps, path proximity, archive location, or content. The authoritative
-restart trigger is **CoPlan.md §8.5, T4**.
+restart trigger is **CoPlan T4**.
 
 ### Configuration evidence
 

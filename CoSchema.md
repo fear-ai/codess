@@ -9,12 +9,18 @@ store format. Functional meaning is defined by
 
 ## Package and version identity
 
-The format-4 candidate package is `schema/coschema/` plus the three mapping profiles.
+The format-4 package is `schema/coschema/` plus the three mapping profiles.
 `schema/coschema/manifest.json` names and hashes every package file. Runtime
 initialization refuses a package whose files do not match that manifest.
-Its manifest state remains `candidate`; **CoPlan R1 and R3a/R3b** are the bounded review
-checkpoint before release designation or real-baseline promotion. Formats 2/3
-remain the currently retained historical baselines during this review.
+
+**Current state (A13 truth-sync).** Format 4 is the format the current writer
+produces, and real format-4 snapshots exist on disk (for example Zero400's
+current pointer names a `coschema4` snapshot). The package `manifest.json` still
+records `state: candidate`, and formal *promotion* to released remains gated on
+the value-level acceptance gate (**A14/D17**) and the configuration-provenance
+decisions (**R3a/R3b**). So the honest status is: v4 is written and in use, not
+yet promoted-released. Formats 2/3 remain readable historical baselines
+(`reader_compatibility.read = [2,3,4]`); only format 4 is written.
 
 ### Format-3 to format-4 candidate delta
 

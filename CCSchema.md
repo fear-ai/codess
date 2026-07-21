@@ -162,8 +162,8 @@ available for release-specific investigation.
 Richer product state remains raw or metadata. Memory, skills, tool schemas,
 instructions, compaction summaries, and token usage are not represented as one
 generic audit event because they have different runtime semantics. The
-authoritative gap classifications and dispositions are **CoPlan.md §8.3**,
-rows **V-CC2**, **V-CTX1**, and **E-2**.
+authoritative gap classifications and dispositions are CoPlan rows **V-CC2**,
+**V-CTX1**, and **E-2**.
 
 ---
 
