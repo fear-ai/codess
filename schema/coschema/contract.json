@@ -129,6 +129,7 @@
         "session_id": {"type": "reference", "nullable": false, "target": "sessions"},
         "sequence_no": {"type": "integer", "nullable": false, "minimum": 1},
         "initiating_event_id": {"type": "text", "nullable": true},
+        "initiation_kind": {"type": "taxonomy", "nullable": false, "vocabulary": "initiation_kind"},
         "boundary_source": {"type": "taxonomy", "nullable": false, "vocabulary": "boundary_source"},
         "confidence": {"type": "number", "nullable": true, "minimum": 0, "maximum": 1}
       }
@@ -378,6 +379,7 @@
     "session_relation_kind": ["subagent", "fork", "resume", "continuation", "unknown"],
     "archive_state": ["active", "archived", "unknown"],
     "boundary_source": ["vendor", "mapping", "inferred", "manual"],
+    "initiation_kind": ["human", "autonomous", "unknown"],
     "turn_boundary_source": ["vendor", "mapping", "inferred"],
     "normalized_status": ["pending", "running", "succeeded", "failed", "denied", "cancelled", "incomplete", "unknown"],
     "diagnostic_level": ["source", "record", "field"]

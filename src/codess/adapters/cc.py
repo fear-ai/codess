@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from codess import field_state
+
 from codess.config import (
     TRUNCATE_DIALOG,
     TRUNCATE_GREP_PATTERN,
@@ -301,10 +303,22 @@ def _parse_timestamp(ts) -> float | None:
     return None
 
 
-def _get_timestamp(record: dict) -> float | None:
-    """Extract timestamp from record or message. Returns Unix ms."""
+def _get_timestamp(record: dict, opts: dict | None = None) -> float | None:
+    """Extract timestamp from record or message. Returns Unix ms.
+
+    A present-but-unparseable timestamp is reported as ``malformed`` (warn) when
+    ``opts`` is given; absent/empty values stay silent. Never raises.
+    """
     ts = record.get("timestamp") or record.get("message", {}).get("timestamp")
-    return _parse_timestamp(ts)
+    parsed = _parse_timestamp(ts)
+    if opts is not None and parsed is None:
+        state = field_state.classify(ts if ts is not None else field_state._MISSING)
+        if state == field_state.PRESENT:
+            state = field_state.MALFORMED  # present but did not parse
+        field_state.diagnose(
+            opts, field="event_at", state=state, source_field="timestamp", value=ts
+        )
+    return parsed
 
 
 def _block_event_id(line_num: int, emitted_index: int) -> str:

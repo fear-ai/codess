@@ -382,7 +382,11 @@ def test_claude_source_role_hazard_keeps_denial_as_tool_outcome(tmp_path):
         "SELECT is_error, normalized_status FROM tool_results"
     ).fetchone()
     assert tuple(result) == (expected["is_error"], expected["normalized_status"])
-    assert conn.execute("SELECT COUNT(*) FROM interactions").fetchone()[0] == 0
+    # The error tool-result in a user envelope is not a human prompt, so it opens
+    # no human interaction (any interaction present is autonomous model activity).
+    assert conn.execute(
+        "SELECT COUNT(*) FROM interactions WHERE initiation_kind='human'"
+    ).fetchone()[0] == 0
     conn.close()
 
 
@@ -430,14 +434,23 @@ def test_cursor_turns_are_inferred_per_prompt_interaction(tmp_path):
     turns = conn.execute(
         "SELECT interaction_id, source_turn_id, boundary_source FROM model_turns ORDER BY sequence_no"
     ).fetchall()
+    # `pre` precedes the first prompt: it opens an autonomous interaction rather
+    # than being dropped, then p1/p2 open human interactions.
     assert [tuple(row) for row in turns] == [
         ("c1:interaction:1", None, "inferred"),
         ("c1:interaction:2", None, "inferred"),
+        ("c1:interaction:3", None, "inferred"),
     ]
+    kinds = dict(
+        conn.execute("SELECT id, initiation_kind FROM interactions")
+    )
+    assert kinds["c1:interaction:1"] == "autonomous"
+    assert kinds["c1:interaction:2"] == "human"
+    assert kinds["c1:interaction:3"] == "human"
     assignments = dict(
         conn.execute("SELECT event_id, model_turn_id FROM events")
     )
-    assert assignments["pre"] is None
+    assert assignments["pre"] is not None  # no longer orphaned
     assert assignments["a1"] == assignments["a2"]
     assert assignments["a3"] != assignments["a2"]
     conn.close()

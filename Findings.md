@@ -72,23 +72,27 @@ denormalized without a contract entry, is caught by the structural gate.
 ## 2. Compaction detection — evidence-first
 
 Prior docs stated Cursor and Codex have no compaction shape and that only
-Claude's `compact_boundary` is real. **[web]** research shows this is wrong:
+Claude's `compact_boundary` is real. Only Claude has a verified local record:
 
-- **Codex** writes a `type=compaction` item with an `encrypted_content` field
-  into the local `~/.codex/sessions/…rollout*.jsonl` transcript, triggered by a
-  token threshold (`model_auto_compact_token_limit`, ~180k–244k by model). A
-  first "Session Memory Compact" tier often avoids an LLM call; overflow calls
-  a server-side compact endpoint. The record is on disk and parseable.
-- **Cursor** auto-summarizes at ~100% context and offers a `/compress` command.
-  Whether a stored bubble/composer marker survives is **unconfirmed** and must be
-  established by running `get_composer_data()` against a summarized session.
-- **Claude** remains Tier-1 via `system.compact_boundary` (`cc.py:830`), already
-  parsed.
+- **Codex — no local compaction record [measured].** A structure-only scan of
+  all 26 local transcripts found **no `compaction` record type** (`response_item`
+  payloads seen: reasoning, function_call(_output), message,
+  custom_tool_call(_output), ghost_snapshot, web_search_call, tool_search). The
+  `encrypted_content` field that a **[web]** summary tied to compaction is
+  actually the Fernet-encrypted `reasoning` trace (19,353 items), unrelated.
+  Codex compaction is therefore server-side or absent in these releases; Codess
+  emits nothing until a real record is observed (**T4**).
+- **Cursor** auto-summarizes at ~100% context and offers a `/compress` command
+  **[web]**. Whether a stored bubble/composer marker survives is **unconfirmed**;
+  establish by running `get_composer_data()` against a summarized session.
+- **Claude** is Tier-1 via `system.compact_boundary` (`cc.py:830`), already
+  parsed. **[code]**
 
 ### Detection tiers (goal is precision/accuracy however reached)
 
-- **Tier 1 — direct vendor record (highest precision).** Codex `type=compaction`;
-  Claude `compact_boundary`. Map to `event_kind=context.compact`, no inference.
+- **Tier 1 — direct vendor record (highest precision).** Claude `compact_boundary`
+  only, today. Map to `event_kind=context.compact`, no inference. (Codex would
+  join if a real record appears.)
 - **Tier 2 — corroborating signals**, always confidence-graded, never a hard
   claim:
   - long engagement gap — **[measured]** Zero400 has real inter-event gaps of
@@ -105,8 +109,8 @@ Claude's `compact_boundary` is real. **[web]** research shows this is wrong:
 The corpus owner rarely tracks context visually and almost never manually
 compacts; `/compact` was used mostly on Claude, hardly on Codex. Consequences:
 - Claude compactions are user-initiated `compact_boundary` — **Tier-1, solved.**
-- Codex compactions are almost all **automatic** (threshold-driven regardless of
-  the user) → carry `type=compaction` → **Tier-1, parse the record.**
+- Codex compactions leave **no observed local record** (scan above); they cannot
+  be detected from the transcript in these releases. Reopen only under **T4**.
 - Cursor compactions are rare (never user-triggered); the prompt-signature
   heuristic is weak because the user does not inject. Run the probe first; build
   Cursor inference only if a stored marker exists.

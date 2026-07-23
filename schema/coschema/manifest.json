@@ -6,7 +6,7 @@
   "files": {
     "contract": {
       "path": "schema/coschema/contract.json",
-      "sha256": "50748406953e396e233f1ea1dd27de2066f40d4cc428b0c00a49670fc4b21406"
+      "sha256": "17c3ea00416b00b2b8855fc80f5ee2d02875eea115c4d059492f39e9488584af"
     },
     "mapping_contract": {
       "path": "schema/coschema/mapping-contract.json",
@@ -14,7 +14,7 @@
     },
     "sqlite_schema": {
       "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "76b66cfc9cf31c71f1a22ae8c762d33db9b188967fdbed2751f20f959ace0bd9"
+      "sha256": "866abb391ae81061763e33c6f15cd04f52333735c91f5e9b0a334b004f54c140"
     },
     "mapping_claude": {
       "path": "schema/mappings/claude.json",
@@ -70,8 +70,16 @@
     }
   },
   "reader_compatibility": {
-    "read": [2, 3, 4],
-    "write": [4],
-    "legacy_read": [1]
+    "read": [
+      2,
+      3,
+      4
+    ],
+    "write": [
+      4
+    ],
+    "legacy_read": [
+      1
+    ]
   }
 }

@@ -552,3 +552,18 @@ class TestProcessFile:
                 transcript, "session-id",
                 {"redact": False, "strict_mapping": True},
             ))
+
+
+def test_get_timestamp_reports_field_state():
+    """A16: malformed timestamp -> warn diagnostic; absent -> info; never raises."""
+    from codess.adapters.cc import _get_timestamp
+
+    opts = {"diagnostics": {}, "field_diagnostics": []}
+    assert _get_timestamp({"timestamp": "not-a-date"}, opts) is None
+    assert _get_timestamp({}, opts) is None
+    assert _get_timestamp({"timestamp": 1700000000000.0}, opts) == 1700000000000.0
+
+    assert opts["diagnostics"] == {"field_malformed": 1, "field_absent": 1}
+    levels = [(r["level"], r["reason_code"]) for r in opts["field_diagnostics"]]
+    assert ("warn", "field_malformed") in levels
+    assert ("info", "field_absent") in levels

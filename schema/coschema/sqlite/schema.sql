@@ -125,6 +125,7 @@ CREATE TABLE interactions (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   sequence_no INTEGER NOT NULL CHECK (sequence_no > 0),
   initiating_event_id TEXT,
+  initiation_kind TEXT NOT NULL DEFAULT 'human' CHECK (initiation_kind IN ('human','autonomous','unknown')),
   boundary_source TEXT NOT NULL CHECK (boundary_source IN ('vendor','mapping','inferred','manual')),
   confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
   UNIQUE(session_id, sequence_no)

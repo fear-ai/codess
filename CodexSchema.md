@@ -107,14 +107,17 @@ location is not interpreted as successful completion.
   first-class common runtime-context model. Selected scalar turn settings are
   nevertheless normalized into `model_configurations`; see CoPlan rows
   **V-CTX1/E-2**.
-- **Compaction.** Codex auto-compacts at a token threshold
-  (`model_auto_compact_token_limit`) and writes a `type=compaction` item
-  carrying an opaque `encrypted_content` blob into the rollout JSONL; a
-  "Session Memory Compact" tier often avoids an LLM call (`Findings.md §2/§7`).
-  The adapter does **not** yet parse this record — a Tier-1 parser mapping it
-  to `event_kind=context.compact` is decision **D15**, promoted by **CoPlan T4**.
-  Auto-compaction is user-independent, so it appears even in sessions where the
-  operator never ran `/compact`.
+- **Compaction — no local record observed.** A structure-only scan of all 26
+  local active/archive transcripts found **no `compaction` record** of any kind
+  (`response_item` payload types present: reasoning, function_call,
+  function_call_output, message, custom_tool_call(_output), ghost_snapshot,
+  web_search_call, tool_search_call/output). Codex compaction is therefore either
+  server-side only or uses a shape these releases do not emit. Codess emits no
+  `context.compact` for Codex until a real record is observed (**T4**).
+- **`encrypted_content` is not compaction.** It is the Fernet-encrypted
+  (`gAAAAAB…`) reasoning trace carried on `payload.type=reasoning` items (19,353
+  in the local corpus) so a reasoning model can restore its chain-of-thought
+  across turns. It is routine per-turn state, retained only as raw evidence.
 - Transcript compatibility must be maintained with fixtures because the
   [official hook guidance](https://developers.openai.com/codex/config-advanced#hooks)
   says the transcript format may change.

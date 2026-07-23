@@ -1142,25 +1142,37 @@ def _prepare_event_groups(
                 """
                 INSERT INTO interactions(
                   id, session_id, sequence_no, initiating_event_id,
-                  boundary_source, confidence)
-                VALUES (?, ?, ?, ?, 'mapping', 0.8)
+                  initiation_kind, boundary_source, confidence)
+                VALUES (?, ?, ?, ?, 'human', 'mapping', 0.8)
                 """,
                 (current_interaction, session_id, interaction_counter, event.get("event_id")),
             )
             current_model_config_id = _ensure_model_configuration(
                 conn, _json_dict(event.get("metadata"))
             )
-        event["interaction_id"] = current_interaction
         if semantics["actor_kind"] == "model":
             observed_model_config_id = _ensure_model_configuration(
                 conn, _json_dict(event.get("metadata"))
             )
             if observed_model_config_id is not None:
                 current_model_config_id = observed_model_config_id
+            if current_interaction is None:
+                # Model activity with no preceding human prompt (e.g. /loop or a
+                # scheduled/timer fire). Open an inferred autonomous interaction so
+                # the turn is attributed rather than orphaned.
+                interaction_counter += 1
+                current_interaction = f"{session_id}:interaction:{interaction_counter}"
+                conn.execute(
+                    """
+                    INSERT INTO interactions(
+                      id, session_id, sequence_no, initiating_event_id,
+                      initiation_kind, boundary_source, confidence)
+                    VALUES (?, ?, ?, ?, 'autonomous', 'inferred', 0.5)
+                    """,
+                    (current_interaction, session_id, interaction_counter,
+                     event.get("event_id")),
+                )
             if session_source == "Cursor":
-                if current_interaction is None:
-                    prepared.append(event)
-                    continue
                 record_key = current_interaction
                 boundary_source = "inferred"
             else:
@@ -1193,6 +1205,7 @@ def _prepare_event_groups(
                     ),
                 )
             event["model_turn_id"] = turn_id
+        event["interaction_id"] = current_interaction
         prepared.append(event)
     return prepared
 
