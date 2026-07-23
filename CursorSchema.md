@@ -99,7 +99,7 @@ independently of the status value; acceptance does not erase an observed error.
 
 **Compaction.** Cursor auto-summarizes older messages when the context window is
 exceeded and resets context within the same chat at ~100%, plus a manual
-`/compress` command (`Findings.md §2/§7`). Whether a summarization event leaves a
+`/compress` command. Whether a summarization event leaves a
 durable `bubbleId`/`composerData` marker is **unconfirmed**; the next step is to
 run `get_composer_data()` against a known-summarized session. Until a stored
 marker is confirmed, Cursor compaction stays `indeterminate` under decision

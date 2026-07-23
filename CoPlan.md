@@ -577,8 +577,7 @@ new prefix families; add to an existing register.
 - **R** — settled review checkpoints (§8.1.1).
 
 There is no durable "PR-n" designator. A proposed change is tracked as an **A**
-item; `Findings.md` may sequence A items into a delivery order but does not
-create a separate ID family.
+item.
 
 - Work active items in dependency order unless a production defect or source
   format change takes priority.
@@ -685,8 +684,8 @@ implementation or vendor evidence.
 | **D12** | Supported provenance window | **A12**, D13 | **Adopted:** model change, harness change, or any other readable/deducible parameter can define the minimum acceptable level for a given Codess release. The cutoff is rooted in major breaking format incompatibilities, never model capability. Below the window → source-quarantine diagnostic, not silent best-effort. Model choice stays evidence (`model_configurations`), never a support gate. |
 | **D13** | Vendor vs session behavior | D12, D17 | **Adopted:** behavior seen across *all* sessions at a given model/harness provenance is vendor-specific; only behaviors explicitly declared `unsupported` (→ diagnostic), `ignored` (→ `retention: discard`), or `adjusted/mapped` (→ named rule + `mapping_trace`) are exceptions. One-session variance never drives a mapping rule. |
 | **D14** | Cross-vendor renditions are separate artifacts | **T5**, `correlation_assertions` | **Adopted:** resolve each vendor → common (N mappings). Do **not** require every vendor combination → each other (N² resolution is an explicit non-goal). Cross-vendor linkage is an optional additive search/process step via `correlation_assertions` + shared `relative_path`; it never rewrites identities. Intra-session model attribution beyond `model_turn_id` coverage is a separate confidence-graded inference, not a normalization requirement. |
-| **D15** | Compaction is evidence-graded | **T4**, `Findings.md §2` | **Adopted:** map a direct vendor record → `event_kind=context.compact` with no inference. Only **Claude `compact_boundary`** is a verified local record; Codex has **no observed compaction record** (26-transcript scan) and Cursor's stored form is unconfirmed. Absent a record, emit a `confidence`-scored assertion or `indeterminate`, never a binary claim. Detail: `Findings.md §2`. |
-| **D16** | Capture consistency and optional quiesce | **A6**, `Findings.md §3` | **Adopted:** rely on the SQLite online-backup-over-live-WAL primitive plus a capture-verify-recapture stability loop that records `consistency=source_advanced` when a write lands mid-capture. Orderly harness shutdown is an **opt-in hint only** (detect running harness, suggest closing, prefer idle windows); never a forced kill. |
+| **D15** | Compaction is evidence-graded | **T4** | **Adopted:** map a direct vendor record → `event_kind=context.compact` with no inference. Only **Claude `compact_boundary`** is a verified local record; Codex has **no observed compaction record** (26-transcript scan) and Cursor's stored form is unconfirmed. Absent a record, emit a `confidence`-scored assertion or `indeterminate`, never a binary claim. |
+| **D16** | Capture consistency and optional quiesce | **A6** | **Adopted:** rely on the SQLite online-backup-over-live-WAL primitive plus a capture-verify-recapture stability loop that records `consistency=source_advanced` when a write lands mid-capture. Orderly harness shutdown is an **opt-in hint only** (detect running harness, suggest closing, prefer idle windows); never a forced kill. |
 | **D17** | Acceptance-gate outcomes (with D18) | **A12**, D13, D16, D18 | **Adopted:** the value-level gate compares rebuilt vs. prior store per field/row and reports `match` / `mismatch` / `vacant` (`field_state.compare`), where `vacant` (a non-present side) takes precedence over `mismatch` (both present, differing). A `mismatch` or `vacant` on an identity/order/lineage field is `fatal`; else `advisory`. The structural contract gate (`validate_database_contract`) is unaffected. Prerequisite for v4 promotion. |
 | **D18** | Field-state resilience | **A16**, D13, D17 | **Adopted:** every adapter field is classified `present`/`absent`/`empty`/`null`/`sentinel`/`malformed` (umbrella `vacant` = absent-family, excludes `malformed`). Non-present states emit `info` (or `warn` for `malformed`) diagnostics; **no input ever crashes the program** — a bad field is dropped with a diagnostic and the record still lands; only an unreadable source quarantines. Shares the `vacant` token and `fatal`/`advisory` scale with D17. Impl: `field_state.py`. |
 
@@ -798,9 +797,31 @@ Only completed capabilities that constrain current work are retained here:
   classification and explicit `utilization_ready` versus always-false
   `billing_ready`; new direct vendor evidence reopens it under T4.
 
+### 8.7 Elicitation checklist
+
+Behaviors to confirm against real records. The operator supplies (or notes) the
+interaction just prior; Codess checks the corresponding session/event/tool rows.
+Answers feed **T1** and the postponed compaction/attribution work.
+
+- **Codex:** `/archive` then `codex resume --last` (archive state, resume
+  lineage); `codex fork` (fork lineage); mid-session model/effort/service change
+  via `thread_settings_applied` (does it update `model_configurations`);
+  whether any local compaction record exists (none observed to date).
+- **Claude:** `/compact` (`compact_boundary` retained, summary discarded);
+  slash command vs task-notification vs typed prompt (the four-way
+  `direct_user_input`/`harness_injected`/`task_notification`/`slash_command`
+  split); subagent or `--fork` (`parent_session_id`, `session_relation_kind`).
+- **Cursor:** auto-summarization or `/compress` (does a `composerData`/bubble
+  marker survive in `state.vscdb` — probe with `get_composer_data`); mid-session
+  model switch (per-turn `modelInfo.modelName`, surrounding-event attribution);
+  accept/reject a tool permission (`toolFormerData.userDecision` →
+  `normalized_status`).
+- **Cross-vendor:** same file in two vendors (shared `relative_path` +
+  `correlation_assertions`, not a normalization requirement).
+
 ## 9. Change routing
 
-Use **Codess.md §4.3** for documentation ownership:
+Documentation ownership is in **Codess.md §4**:
 
 - User-visible investigation behavior → **README.md** and the relevant **A/L/D**
   registry rows.

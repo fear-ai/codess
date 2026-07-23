@@ -148,9 +148,9 @@ duration, scheduled-task, and direct `fork-context-ref` facts have bounded
 common events. A direct `parentSessionId` overrides directory-inferred
 parentage and records its source field. Assistant `message.model` and
 `message.usage.service_tier` configure model turns with exact field
-provenance. The bounded July 2026 audit found model values on 35,724 reviewed
-assistant records and `service_tier=standard` on 35,565; no Claude effort or
-speed tier was inferred.
+provenance. A bounded audit found model values on 35,724 reviewed assistant
+records and `service_tier=standard` on 35,565; no Claude effort or speed tier
+was inferred.
 
 Every emitted event retains its exact Claude record type/subtype and line
 locator. The scalar `mapping_rule` names the primary rule in

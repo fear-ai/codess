@@ -137,7 +137,7 @@ restart trigger is **CoPlan T4**.
 ### Configuration evidence
 
 `python -m main evidence audit codex-features` performs a bounded,
-structure-only audit. The July 2026 local audit reviewed all 28 active/archive
+structure-only audit. A local audit reviewed all 28 active/archive
 transcripts (about 449 MiB) with a 64 KiB per-record ceiling. It found 8,107
 `turn_context` records and 143 newer `thread_settings_applied` records. Exact
 model and effort are widespread; the newer settings records contain an explicit

@@ -806,10 +806,10 @@ Do not put full `source_raw` blobs in the main query database. They enlarge
 backups, mix sensitive evidence with normalized search data, and make retention
 and redaction all-or-nothing. Raw capture should be explicit and policy-driven.
 
-The older local `SessionRec.md` proposed a useful hybrid—normalized SQLite plus
-raw sidecar JSONL. Retain the hybrid architecture, but do not make converted
-JSONL the raw format: it cannot preserve a Cursor SQLite source byte-for-byte
-and may discard unknown fields, ordering, encoding, or database structure.
+The architecture is a hybrid: normalized SQLite plus a raw sidecar. Converted
+JSONL is not the raw format — it cannot preserve a Cursor SQLite source
+byte-for-byte and may discard unknown fields, ordering, encoding, or database
+structure.
 
 ### `codess.raw/1` format
 

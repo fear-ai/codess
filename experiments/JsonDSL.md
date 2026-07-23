@@ -89,7 +89,7 @@ stage to the same harness; measure the axis that actually decides.
 
 ## 6. Evaluating results and crafting the recommendation
 
-The reference run of this method (Schema project, 2026-07-06, on an equivalent
+The reference run of this method (Schema project, on an equivalent
 Salesforce mapping) produced: JMESPath eliminated (silent nulls, no
 split/regex/lookup); jq and JSONata tied at full expressiveness and both fail
 loudly; no language removed the host-function need. Codess has **not** re-run the

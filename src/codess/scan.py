@@ -6,9 +6,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from codess.config import AGGREGATORS, CC_PROJECTS, CODESS_DAYS, CURSOR_WS
+from codess.config import AGGREGATORS, CC_PROJECTS, CURSOR_WS
 from codess.cursor_source import (
-    get_composer_headers,
     get_db_metrics,
     get_global_db as get_cursor_global_db,
     get_project_composer_headers,
@@ -536,6 +535,6 @@ def run_scan(
                 "span_weeks": m_global["span_weeks"],
             })
             if debug:
-                print(f"[scan] project (global) path=(global)", file=sys.stderr)
+                print("[scan] project (global) path=(global)", file=sys.stderr)
                 print(f"  Cursor central: sess={m_global.get('count')} events={m_global.get('events', 0)} mb={m_global.get('size_mb')} span_weeks={m_global.get('span_weeks')} days_ago={m_global.get('days_ago')} headers={m_global.get('header_count', 0)} timed_headers={m_global.get('timed_header_count', 0)}", file=sys.stderr)
     return rows

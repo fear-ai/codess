@@ -14,8 +14,6 @@
 
 ## 2. Product framing (strategy → requirements)
 
-Material is ordered **outcomes → capabilities → audiences → traceable requirements** so each layer adds detail without repeating the prior one. Criteria and filters appear under **2.1**; the feature table states what ships; the remaining sections link needs to vendor schemas and **CoSchema** instead of copying file layouts.
-
 ### 2.1 Outcomes and constraints
 
 - **Inclusion:** Path exists; session data present or explicit curator interest;
@@ -25,9 +23,6 @@ Material is ordered **outcomes → capabilities → audiences → traceable requ
 - **Filters:** Scan supports source and recency filters. Ingest supports source
   selection and a run-wide minimum source-file size; it does not define
   vendor-specific event-count or duration thresholds.
-
-Command behavior and configuration are documented in **CoPlan.md** §§3–4;
-task-oriented use is documented in **README.md**.
 
 ### 2.2 Capabilities and priorities
 
@@ -60,19 +55,6 @@ dispositions are centralized in **CoPlan §8**.
 | Auditor | Permissions, evidence coverage, and reproducibility review |
 | Automation / CI | Run noninteractive preflight and verification with versioned reports |
 
-### 2.4 Requirements summary (traceability)
-
-| Need | Detail | Where specified |
-|------|--------|-----------------|
-| Multi-vendor inputs | CC projects dir, Codex `sessions`, Cursor `state.vscdb` | **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md** |
-| Normalized store | SQLite under `<project>/.codess/` | **CoSchema.md**, `schema/coschema/sqlite/schema.sql` |
-| Incremental ingest | mtime state plus transactional source replacement | **CoPlan.md** §§2.4, 4.2; **store** / adapters |
-| Candidate selection | Separate observations, recommendations, and explicit decisions; local Git review is complementary evidence | **Designs.md** §12; **Operations.md** |
-| Curated batch ingest | Consume an explicit reviewed selection; preserve stage visibility and receipts | **Designs.md** §12; **Operations.md** |
-| Baseline/evidence administration | Keep read-only stages callable while safe orchestrators compose them | **Designs.md** §§2, 12; **Operations.md** |
-| CLI & configuration | Flags, ENV, defaults, and root resolution | **CoPlan.md** §§3–4; **README.md** |
-| Typed investigation | Stable Project-bound request/result contracts, bounded output, chaining, and exact evidence | **README.md**; **Designs.md** §13; `schema/query-*-v1.json` |
-
 ---
 
 ## 3. Architecture
@@ -86,54 +68,39 @@ dispositions are centralized in **CoPlan §8**.
 ```
 
 - **Project discovery** is index-led and separate from event normalization in vendor adapters.
-- **Vendors:** CC, Codex, Cursor — filter with `--source`; scan, ingest, and
-  query semantics are documented in **CoPlan.md** §4.
-- **Layers, pipelines, and index-led discovery:** **CoPlan.md** §2.
+- **Vendors:** CC, Codex, Cursor — filter with `--source`.
 
 ---
 
 ## 4. Documentation map
 
-### 4.1 Audience paths
+### 4.1 Documents and authority
 
-- **Users and customers:** use **README.md** for installation, investigation
-  workflows, exports, and direct read-only access.
-- **Product and schema reviewers:** use this specification, **CoSchema.md**, the
-  three vendor schema documents, **Designs.md**, and **Schemas.md**.
-- **Contributors:** use **CoPlan.md** for implementation, tests, priorities, and
-  open decisions.
-- **Maintainers:** use **Operations.md** for preflight, baseline publication,
-  evidence refresh, relocation, storage, and retention.
+Each document is the single authority for its subject; others link to it rather
+than restating it.
 
-### 4.2 Document authority
+| Document | Authoritative for |
+|----------|-------------------|
+| **README.md** | Installation, Project/vendor selection, investigation workflows, query composition, exports, read-only SQL |
+| **Codess.md** | Product goals, requirements, high-level architecture, glossary, and this map |
+| **Designs.md** | Functional design rationale, content-processing policy, and alternatives |
+| **Schemas.md** | Schema compatibility, evolution, and vendor-translation policy |
+| **CoSchema.md** | Logical normalized data, store semantics, and the format contract |
+| **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md** | Vendor-owned storage, observed fields, mapping evidence, and access |
+| **CoPlan.md** | Code boundaries, runtime/CLI contract, configuration, tests, active work, decisions, and gaps |
+| **Operations.md** | Maintainer procedures, safety gates, evidence, storage, retained baselines |
+| **CompatibilityReview.md** | Evidence of the reviewed compatibility corpus |
+| **experiments/** | Self-contained evaluations that graduate into decisions |
+| **schema/** | Executable and machine-readable contracts |
 
-| Document | Authoritative for | Excludes |
-|----------|-------------------|----------|
-| **README.md** | Installation, Project/vendor selection, investigation use cases, query composition, exports, safe read-only SQL, and audience routing | Baseline publication; code architecture; backlog |
-| **Codess.md** | Product goals, requirements, high-level architecture, glossary, and this map | Detailed CLI flags; implementation tasks |
-| **Designs.md** / **Schemas.md** | Functional design rationale, content-processing policy, alternatives, compatibility, evolution, and translation policy | Daily commands; work status |
-| **CoSchema.md** | Logical normalized data and store semantics | Vendor storage truth; SQLite tuning detail |
-| **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md** | Vendor-owned storage, observed fields, mapping evidence, and limitations | Universal product semantics |
-| **CoPlan.md** | Repository/code boundaries, runtime and CLI contract, configuration, tests, delivery order, actionable work, and decisions | Product requirements; operating procedures |
-| **Operations.md** | Maintainer procedures, safety gates, evidence, storage, retained baselines, and Claude process recovery | End-user research tutorial; design rationale |
-| **CompatibilityReview.md** | Evidence-backed coverage of the bounded reviewed corpus | General backlog; chronology |
-| **Findings.md** | Cross-cutting evidence-graded findings and decisions D12–D17: contract authority, compaction detection, capture consistency, three-outcome acceptance, v4 status, and external references | Per-vendor storage truth; the authoritative work queue (CoPlan §8) |
-| **schema/** | Executable and machine-readable contracts | Narrative requirements and rationale |
+### 4.2 Maintenance rules
 
-### 4.3 Maintenance rules
-
-Keep one authority for each fact. Requirements change here; functional or
-schema rationale changes in **Designs.md** or **Schemas.md**; implementation,
-tests, and actionable work change in **CoPlan.md**;
-procedures change in **Operations.md**. Vendor facts belong only in the
-matching vendor schema, and executable DDL belongs in
-`schema/coschema/sqlite/schema.sql`.
-
-When behavior and prose diverge, update the owning document in the same change.
-Do not put dated chronology, copied command catalogs, transient scratch notes,
-or duplicate backlogs into the durable documentation set. Project-local
-manifests, receipts, and validation reports are operational records rather than
-customer documentation.
+Keep one authority for each fact; update the owning document when behavior
+diverges from prose. Vendor facts belong only in the matching vendor schema;
+executable DDL belongs in `schema/coschema/sqlite/schema.sql`. Do not add dated
+chronology, copied command catalogs, or duplicate backlogs to the durable set.
+Project-local manifests, receipts, and validation reports are operational
+records, not documentation.
 
 ## 5. Glossary
 

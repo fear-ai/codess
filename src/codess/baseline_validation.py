@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from codess.raw_store import RawCaptureError, RawStore, verify_captured_object
-from codess.fileio import hash_file, source_fingerprint, write_json_atomic
+from codess.fileio import hash_file, source_fingerprint
 from codess.schema_contract import FORMAT_VERSION, require_store, verify_package
 from codess.snapshot import SnapshotError, current_store_paths
 
