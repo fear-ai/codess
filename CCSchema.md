@@ -80,8 +80,13 @@ varies by record type.
 The current adapter emits conversation events from `user` and `assistant`
 records, distinguishes typed human prompts from harness/system inputs carried
 in user envelopes, and emits bounded product-state and lifecycle events. It
-retains the compaction trigger but not compacted summary
-or token-accounting bodies. Error tool results are split into explicit
+maps a `system` `compact_boundary` to `context.compact` and preserves its
+trigger, pre/post token counts, duration, preserved-segment/message counts, and
+other observed compact metadata. The paired `user` record marked
+`isCompactSummary` becomes a distinct `context.inject` event whose summary body
+is retained subject to the context-content limit. The boundary UUID and the
+summary's `parentUuid` preserve their direct relationship. Error tool
+results are split into explicit
 `permission_denied` evidence and other `tool_failure` results. Each emitted
 content block has a distinct stable event id. Event metadata retains `uuid` /
 `parentUuid`; tool calls and their results also retain the shared tool-use id,
@@ -89,6 +94,13 @@ making record and call/result lineage queryable without copying the full
 envelope. Task-list metadata under
 `~/.claude/tasks/` is separate from transcript JSONL and from live background
 processes.
+
+Decoder 0.2 distinguishes unsupported content from non-semantic state:
+signature-only `thinking` blocks with empty plaintext and model-fallback
+markers are known retained-raw state, not missing conversation text.
+Image-only user records are reported as `attachment_only_records` and
+`unsupported_records`; their bytes remain in source evidence until the
+attachment/content-link mapper is implemented.
 
 Large tool results may be externalized below
 `<sessionId>/tool-results/` and referenced by
@@ -116,6 +128,12 @@ supported events, Codess removes the prior normalized session and reports an
 | **Ingest** | Top-level `*.jsonl` | Ingested from `{parent}/subagents/**/*.jsonl` |
 | **Stored linkage** | No extra session metadata | `is_sidechain`, `parent_session_id`, and `source_relpath` in session metadata |
 | **Size fallback** | `fullPath` or `{sessionId}/**/*.jsonl` | Fallback rglob may include subagent bytes if main path missing |
+
+Consequently, default scan counts and stored Session-entity counts are not
+directly comparable: scan excludes subagents unless requested, while ingest
+preserves them for lineage. User-facing orientation must partition top-level
+and related Sessions instead of presenting the flattened total as independent
+work Sessions.
 
 ---
 
@@ -152,6 +170,10 @@ provenance. A bounded audit found model values on 35,724 reviewed assistant
 records and `service_tier=standard` on 35,565; no Claude effort or speed tier
 was inferred.
 
+Timestamp, model, service-tier, prompt-origin, and tool-input reads use the
+common field-state decoder. Malformed optional fields produce field-scoped
+diagnostics and are omitted without rejecting an otherwise usable record.
+
 Every emitted event retains its exact Claude record type/subtype and line
 locator. The scalar `mapping_rule` names the primary rule in
 `schema/mappings/claude.json`; JSON `mapping_trace` records the source path and
@@ -159,11 +181,12 @@ additional lineage/configuration rules. Common event/configuration names are
 the cross-vendor query surface, while original Claude names and values remain
 available for release-specific investigation.
 
-Richer product state remains raw or metadata. Memory, skills, tool schemas,
-instructions, compaction summaries, and token usage are not represented as one
-generic audit event because they have different runtime semantics. The
-authoritative gap classifications and dispositions are CoPlan rows **V-CC2**,
-**V-CTX1**, and **E-2**.
+Richer product state remains raw or metadata. Compaction boundaries and
+summaries are specialized context-operation events, not a generic memory
+event. Memory, skills, tool schemas, arbitrary instructions, and detailed
+token snapshots are still not represented as one generic audit event because
+they have different runtime semantics. The authoritative gap classifications
+and dispositions are CoPlan rows **V-CC2**, **V-CTX1**, and **E-2**.
 
 ---
 

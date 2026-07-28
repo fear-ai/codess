@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from codess.fileio import hash_file
+from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 
 
 
@@ -50,6 +51,10 @@ def load_manifest() -> dict[str, Any]:
         raise SchemaContractError("CoSchema manifest format_version mismatch")
     if manifest.get("application_id") != APPLICATION_ID:
         raise SchemaContractError("CoSchema manifest application_id mismatch")
+    if manifest.get("decoder_version") != DECODER_VERSION:
+        raise SchemaContractError("CoSchema manifest decoder_version mismatch")
+    if manifest.get("validator_version") != VALIDATOR_VERSION:
+        raise SchemaContractError("CoSchema manifest validator_version mismatch")
     return manifest
 
 
@@ -94,7 +99,14 @@ def load_mapping(name: str) -> dict[str, Any]:
     verify_package()
     if name not in {"claude", "codex", "cursor"}:
         raise SchemaContractError(f"unknown mapping profile: {name}")
-    return json.loads((MAPPINGS_ROOT / f"{name}.json").read_text(encoding="utf-8"))
+    mapping = json.loads(
+        (MAPPINGS_ROOT / f"{name}.json").read_text(encoding="utf-8")
+    )
+    if mapping.get("decoder_version") != DECODER_VERSION:
+        raise SchemaContractError(
+            f"{name} mapping decoder_version differs from {DECODER_VERSION}"
+        )
+    return mapping
 
 
 def validate_mapping(mapping: dict[str, Any]) -> list[str]:
@@ -262,6 +274,14 @@ def require_store(
         raise UnsupportedStoreError(
             "store package differs from the current released package; rebuild "
             "the derived working store from source"
+        )
+    if write and meta.get("decoder_version") != DECODER_VERSION:
+        raise UnsupportedStoreError(
+            "store decoder version differs from the current decoder; rebuild"
+        )
+    if write and meta.get("validator_version") != VALIDATOR_VERSION:
+        raise UnsupportedStoreError(
+            "store validator version differs from the current validator; rebuild"
         )
     layout_errors = validate_database_contract(conn) if version == FORMAT_VERSION else []
     if layout_errors:

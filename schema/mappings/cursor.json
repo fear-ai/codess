@@ -1,5 +1,6 @@
 {
   "mapping_id": "codess.cursor-composer",
+  "decoder_version": "0.2",
   "direction": "source_to_common",
   "vendor": "cursor",
   "product": "cursor-composer",
@@ -12,6 +13,9 @@
     {"id": "cursor.permission-decision", "source": "bubble.toolFormerData.userDecision", "target": "tool_invocations.source_status+tool_invocations.normalized_status", "operation": "from", "retention": "specialized"},
     {"id": "cursor.tool-result-legacy", "source": "bubble.toolResults[]", "target": "tool_results", "operation": "from_each", "retention": "specialized"},
     {"id": "cursor.model-selection", "source": "bubble.modelInfo.modelName", "target": "model_turns.model_config_id", "operation": "from", "retention": "specialized"},
+    {"id": "cursor.context-window-observation", "source": "bubble.contextWindowStatusAtCreation", "target": "events.metadata", "operation": "from", "retention": "extension"},
+    {"id": "cursor.compaction-summary", "source": "bubble.conversationSummary", "target": "events.context.compact", "operation": "from", "retention": "core"},
+    {"id": "cursor.request-context", "source": "cursorDiskKV.messageRequestContext:*", "target": "events.context.inject", "operation": "from_each", "retention": "core"},
     {"id": "cursor.header", "source": "composerHeaders", "target": "sessions", "operation": "from", "retention": "extension"},
     {"id": "cursor.archive", "source": "composerHeaders.isArchived", "target": "sessions.archive_state", "operation": "from", "retention": "core"},
     {"id": "cursor.subagent", "source": "composerHeaders.isSubagent", "target": "sessions.session_relation_kind", "operation": "from", "retention": "core"}

@@ -1,5 +1,6 @@
 {
   "mapping_id": "codess.claude-code",
+  "decoder_version": "0.2",
   "direction": "source_to_common",
   "vendor": "anthropic",
   "product": "claude-code",
@@ -12,6 +13,7 @@
     {"id": "claude.tool-result", "source": "message.content[type=tool_result]", "target": "tool_results", "operation": "from_each", "retention": "specialized"},
     {"id": "claude.persisted-tool-result", "source": "toolUseResult.persistedOutputPath", "target": "events.content.external+raw.related_content_revision", "operation": "from", "retention": "specialized"},
     {"id": "claude.compaction", "source": "system.compact_boundary", "target": "events.context.compact", "operation": "from", "retention": "core"},
+    {"id": "claude.compaction-summary", "source": "user.isCompactSummary.message.content", "target": "events.context.inject", "operation": "from", "retention": "core"},
     {"id": "claude.product-state", "source": "mode|permission-mode|ai-title|custom-title|agent-name|attachment|file-history-snapshot|last-prompt", "target": "events.state.product", "operation": "from_any", "retention": "core"},
     {"id": "claude.lifecycle", "source": "queue-operation|system.turn_duration|system.scheduled_task_fire", "target": "events.lifecycle.vendor", "operation": "from_any", "retention": "core"},
     {"id": "claude.fork-context", "source": "fork-context-ref", "target": "events.lifecycle.vendor+sessions.parent_session_id", "operation": "from", "retention": "core"},

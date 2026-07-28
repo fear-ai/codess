@@ -1,4 +1,4 @@
-# CoSchema v4 candidate
+# CoSchema v4
 
 CoSchema is Codess's vendor-neutral logical record model and its current SQLite
 store format. Functional meaning is defined by
@@ -12,15 +12,17 @@ store format. Functional meaning is defined by
 The format-4 package is `schema/coschema/` plus the three mapping profiles.
 `schema/coschema/manifest.json` names and hashes every package file. Runtime
 initialization refuses a package whose files do not match that manifest.
+Format 4 is currently interpreted by decoder `0.2` and validator `0.2`.
+These behavior profiles are recorded independently because corrected
+selection/mapping or acceptance logic can change normalized results without
+making the format-4 row contract unreadable.
 
-**Current state (A13 truth-sync).** Format 4 is the format the current writer
-produces, and real format-4 snapshots exist on disk (for example Zero400's
-current pointer names a `coschema4` snapshot). The package `manifest.json` still
-records `state: candidate`, and formal *promotion* to released remains gated on
-the value-level acceptance gate (**A14/D17**) and the configuration-provenance
-decisions (**R3a/R3b**). So the honest status is: v4 is written and in use, not
-yet promoted-released. Formats 2/3 remain readable historical baselines
-(`reader_compatibility.read = [2,3,4]`); only format 4 is written.
+**Current state.** Format 4 is released and is the only format the current
+writer produces. The released package digest is
+`4be177965524dbfe2d5d0f9577b71aecc2901deec0627d8d9e64851f47707bad`;
+the approved and reviewed catalogs bind six decoder/validator-0.2 baselines to
+that package. Formats 2/3 remain readable historical inputs
+(`reader_compatibility.read = [2,3,4]`) but are never mutated.
 
 ### Format-3 to format-4 candidate delta
 
@@ -35,7 +37,7 @@ physical design, not a wholesale replacement schema.
 | Critical | Source revisions change from mtime/size identity to content-sensitive, non-authenticating update fingerprints, including SQLite WAL state | Session observation IDs and update detection can change even when normalized conversation content does not |
 | Significant | Model configuration identity adds family and null-safe uniqueness; occurrence provenance is separated conceptually from reusable configuration values | Duplicate configuration rows reduce, but the final provenance representation remains under **R3a/R3b** review |
 | Significant | Vendor mappings add Claude harness/configuration/fork fields, Codex turn/configuration/archive fields, and Cursor permission/subagent fields | Rebuilt counts, turns, archive state, relations, and model/configuration coverage may differ from format 3 |
-| Compatibility | Formats 2/3 remain readable; only candidate format 4 is writable by the current writer | Acceptance requires new stores and side-by-side comparison, never an in-place update of retained baselines |
+| Compatibility | Formats 2/3 remain readable; only released format 4 is writable by the current writer | Acceptance requires new stores and side-by-side comparison, never an in-place update of retained baselines |
 
 No accepted baseline or approved pointer is changed merely by defining this
 candidate.
@@ -80,16 +82,21 @@ directions; retained format-3 snapshots remain valid historical evidence.
 - **Artifact** — a file, URI, repository object, or other durable object an event
   reads, creates, modifies, deletes, executes, or mentions. Observed absolute
   paths are evidence; project-relative paths are the preferred portable key.
+- **Project snapshot** — one immutable dated normalized observation of one
+  Project, bound to exact source revisions and processing/package identities.
+- **Assembly** — a reproducible selection over one or more Project snapshots,
+  with optional SQLite, JSONL, Parquet, or DuckDB materializations. Assemblies
+  are derived query/export products, not additional CoSchema source entities.
 
 ## Functional entities
 
 | Entity | Purpose and identity |
 |---|---|
 | `projects` | Stable logical project identity plus observed root/cwd, ownership, activity, and selection state |
-| `project_locations` / `workspace_bindings` | Machine-local locations and evidence-backed vendor workspace attribution |
+| `project_locations` / `workspace_bindings` | Machine-local locations and evidence-backed vendor workspace attribution; `path_obsolete` distinguishes historical vendor placement from a current working root |
 | `sources` | Immutable observed source revision; unique by source system, URI, and revision |
 | `model_configurations` | Provider/model family/exact name and independently settable effort, speed, service, and mode values; `source_config` retains bounded vendor-field provenance |
-| `sessions` | Vendor/harness container; vendor session ID is scoped by source system and may be absent |
+| `sessions` | Vendor/harness container; vendor session ID is scoped by source system and may be absent. Vendor `source_cwd` carries `path_obsolete` when it lies outside the active Project root |
 | `interactions` | Initiating work unit, ordered within a session, with explicit boundary source/confidence |
 | `model_turns` | Model execution, ordered within a session and optionally linked to an interaction |
 | `events` | Ordered normalized observation with preserved vendor type/subtype and mapping trace |
@@ -102,10 +109,38 @@ directions; retained format-3 snapshots remain valid historical evidence.
 | `mapping_diagnostics` | Source-, record-, or field-level loss, rejection, or ambiguity |
 | `correlation_assertions` | Reviewable cross-session/project/vendor claims with method, evidence, and confidence |
 
+### Interaction-preservation rule
+
+Agent, subagent, harness, tool, MCP, skill/plugin, process, and model
+interactions are source evidence whenever a vendor exposes them. Ingest must
+preserve, subject only to the documented bounded-content policy:
+
+- the exact vendor record type/subtype, identifiers, names, status, and payload
+  representation;
+- participant and component identity when supplied, including server/provider
+  namespace and model or agent configuration;
+- parent, caller/callee, request/result, and caused-by relationships, without
+  requiring every vendor to express the same graph;
+- vendor ordering and timestamps, including result-fragment order; and
+- records that have no natural common-taxonomy equivalent.
+
+Common Actors, Sessions, Events, Tool Invocations, Tool Results, Artifacts, and
+relations are additive normalized projections. They must not replace or flatten
+the vendor evidence. An unavailable relationship remains NULL with a
+diagnostic; it must not be invented. A vendor-only interaction remains
+queryable through its preserved source classification and mapping trace rather
+than being discarded because another vendor lacks an equivalent.
+
 The exhaustive field, nullability, reference, ordering, range, and vocabulary
 definitions are machine-readable in `contract.json`; this document does not
 duplicate that list. SQLite compatibility projection columns in `sessions` and
 `events` preserve the existing query surface but are not the global identity model.
+
+CoSchema governs each authoritative Project snapshot. A cross-Project Assembly
+uses a separate read/export contract above CoSchema and must retain
+`project_id`, `snapshot_id`, stable entity/observation IDs, and source lineage.
+Creating an Assembly or a new materialization format does not advance the
+CoSchema format unless the authoritative per-Project stored meaning changes.
 
 ## Important field decisions
 
@@ -126,7 +161,9 @@ path hash or inode is not a Project identity: paths identify locations and
 inodes do not survive copying or cloning.
 
 `root_path` is the normalized project anchor. `source_cwd` is what the source
-actually reported. `relative_path` is preferred for artifact correlation;
+actually reported. An obsolete source or workspace path remains vendor-layout
+provenance and is explicitly marked by `path_obsolete`; it never replaces the
+active root. `relative_path` is preferred for artifact correlation;
 `observed_absolute_path` preserves local evidence. Source locators are URIs or
 absolute observed paths and are never treated as portable project identity.
 An artifact resolving outside `root_path` is not assigned a misleading `../`
@@ -191,6 +228,10 @@ field. It must not duplicate canonical fields, conceal required identity, or
 become an unbounded raw-record dump. `mapping_rule` and `mapping_trace` identify
 the translation responsible for a normalized event. Structured mapping
 diagnostics record information that could not be mapped reliably.
+Their `diagnostic_level` is structural scope (`source`, `record`, or `field`),
+while `severity` is operational significance (`info`, `warn`, or `error`);
+these are independent dimensions. Field diagnostics retain the exact field
+path and classified state without rejecting the rest of a usable record.
 
 JSON is used only where the value is intrinsically compound: mapping traces,
 tool argument/result objects, configuration provenance, processing actions,
@@ -209,7 +250,7 @@ Configuration values remain nullable and independent. A model name containing
 words such as `fast`, `high-thinking`, or `priority` does not populate speed,
 effort, or service tier. Per-event `configuration_provenance` records the source
 record type, locator, and exact field path for each normalized occurrence.
-The candidate currently writes `model_configurations.source_config` as a
+The current writer stores `model_configurations.source_config` as a
 bounded representative JSON observation, not an exhaustive history; event
 provenance is authoritative. **CoPlan R3a** decides whether that representative
 is removed or narrowed, and **R3b** separately decides whether occurrence
@@ -273,7 +314,11 @@ a time and can require two rebuilds with unchanged source revisions and equal
 canonical logical digests. It runs read-only query smoke tests before atomically
 updating `catalog/approved-baselines.json`. Policies are versioned data under
 `catalog/policies/`; their contract is
-`schema/validation-policy-contract.json`.
+`schema/validation-policy-contract.json`. The repeated-build path additionally
+streams canonical rows from both immutable stores through the D17 value gate.
+Identity, ordering, and lineage differences are fatal; other value differences
+are advisory and remain visible in the acceptance report. This comparison does
+not materialize either database in memory.
 
 Sources at or below 64 MiB receive a full-file MD5 change fingerprint. Larger
 sources use an explicitly labeled eight-window MD5 sample plus size and mtime.

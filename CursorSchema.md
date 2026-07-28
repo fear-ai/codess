@@ -40,6 +40,7 @@ Key/value table with unique text keys and text, blob, or null values.
 | Key pattern | Content |
 |---|---|
 | `bubbleId:<composerId>:<bubbleId>` | One conversation bubble |
+| `messageRequestContext:<composerId>:<bubbleId>` | Harness context assembled for one message request |
 | `composerData:<composerId>` | Session UI/state object; shape varies |
 | `composer.content.<hash>` | Content blob referenced indirectly |
 | `agentKv:<...>` | Agent state not used by Codess |
@@ -88,23 +89,44 @@ Fields relevant to normalization:
 | `toolFormerData` | One tool name/call id/model-call id, arguments, result, status, and optional `userDecision` | Emitted as a linked invocation and, for final states or a result body, a result/failure event; exact accepted/rejected permission evidence is retained |
 | `toolResults` | Legacy/possible tool-result array | Nonempty arrays are mapped for compatibility; the audited local store contains only empty arrays |
 | `modelInfo.modelName` | Model selection attached to a user request | Non-`default` values configure the following inferred model turn with exact source-field provenance; `default` remains source metadata |
-| `codeBlocks`, `fileActions`, context fields | Product state and supporting content | Not normalized |
+| `conversationSummary` | JSON string with summary body and truncation boundary IDs | Bounded `context.compact` event |
+| `contextWindowStatusAtCreation` | Context usage observation (`tokensUsed`, `tokenLimit`, percentages) | Preserved as source metadata on the bubble's emitted events |
+| `codeBlocks`, `fileActions`, other context fields | Product state and supporting content | Not normalized unless explicitly mapped below |
 
 Current `toolFormerData.status` values include `completed`, `error`, `loading`,
 and `cancelled`. Codess preserves the source value and maps those to succeeded,
 failed, running, and cancelled. Cursor therefore contributes evidence-backed
-tool-failure audit rows. The audited store also contains 2,936 accepted and 17
+tool-failure audit rows. The current dated audit contains 2,973 accepted and 20
 rejected `userDecision` values. Rejection maps to normalized `denied`
 independently of the status value; acceptance does not erase an observed error.
 
-**Compaction.** Cursor auto-summarizes older messages when the context window is
-exceeded and resets context within the same chat at ~100%, plus a manual
-`/compress` command. Whether a summarization event leaves a
-durable `bubbleId`/`composerData` marker is **unconfirmed**; the next step is to
-run `get_composer_data()` against a known-summarized session. Until a stored
-marker is confirmed, Cursor compaction stays `indeterminate` under decision
-**D15**, and error-looking prose is not evidence. Cursor supplies no verified
-turn-abort shape.
+**Compaction and request context.** A durable assistant bubble
+`conversationSummary` is verified in the local store. It is a JSON string with
+the summary plus `truncationLastBubbleIdInclusive` and
+`clientShouldStartSendingFromInclusiveBubbleId`; Codess emits one bounded
+`context.compact` event and preserves both boundary IDs. Top-level
+`messageRequestContext:<composerId>:<bubbleId>` values are separate harness
+request-context objects; selected values become bounded `context.inject`
+events linked to the composer and bubble. They are included in the selection
+marker, so context-only updates invalidate an otherwise unchanged cohort.
+Workspace `composerData` summary fields are retained as audit evidence but do
+not create a duplicate event when empty or when a bubble supplies the actual
+summary. Cursor still supplies no verified turn-abort shape.
+
+Cursor's public product description matches these local observations but is
+not the storage contract. The
+[summarization guide](https://docs.cursor.com/en/agent/chat/summarization)
+says older messages are summarized automatically as a conversation reaches the
+model context limit; current surfaces also document manual `/summarize` or
+CLI `/compress`. Cursor's
+[dynamic-context description](https://cursor.com/blog/dynamic-context-discovery)
+describes writing long tool/MCP outputs to files and giving summarization
+access to history files.
+Codess therefore treats file references found in future verified records as
+candidate external content, not as proof that a guessed filesystem path is
+part of this SQLite release. The current mapped subset remains the three
+verified shapes above; file-backed Cursor context is an evidence-triggered
+extension.
 
 The audited `modelInfo` objects contain only `modelName`; Codess therefore does
 not infer effort, speed, or service tier from names such as `*-fast` or
@@ -118,11 +140,14 @@ The global database may repeat the same logical bubble under several local
 `bubbleId` keys. When `serverBubbleId` is present, Codess treats `(type,
 serverBubbleId)` as the stable identity within one composer and keeps the
 earliest observed copy. It does not deduplicate across composers or by content.
-Type-2 envelopes whose `text` is empty or whitespace-only are product/context
-state, not model messages; they emit no response event, although tool evidence
-is still normalized. Before ordering and deduplication, the reader projects each
-decoded bubble to mapped fields; large context/attachment envelopes remain in
-captured raw evidence instead of normalized metadata or retained memory.
+Type-2 envelopes whose `text` is empty or whitespace-only are known
+product/context state, not model messages; they emit no response event or
+unknown-loss diagnostic, although tool, compaction, or context evidence is
+still normalized. Before ordering and
+deduplication, the reader projects each decoded bubble to mapped fields. The
+explicitly supported context subset is `conversationSummary`,
+`contextWindowStatusAtCreation`, and top-level `messageRequestContext`; other
+large attachment/context-selection envelopes remain in captured raw evidence.
 
 ## 4. Composer data
 
@@ -179,6 +204,10 @@ bubble type, exact key locator, declared mapping rule, and structured trace.
 serialized, already encoded JSON is retained, and plain strings become JSON
 strings. `userDecision=rejected` remains exact metadata and maps to common
 `normalized_status=denied` without replacing the source designation.
+
+Malformed timestamps, model values, prompt origins, and tool-input containers
+are diagnosed at field scope and omitted independently; other usable content in
+the bubble continues through normalization.
 
 Re-ingesting a Cursor database replaces events whose `source_file` is that
 database. Sessions removed from the database are deleted only when no events

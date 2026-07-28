@@ -18,17 +18,30 @@ Project catalog, registry statistics, raw store, snapshots, or ingest state.
 The `codess.ingest-preflight/1` JSON result contains source/session/event counts,
 diagnostics, resource observations, limits, content-failure review records, and
 temporary-store checks. This proves current records can normalize under the
-current package. It does not
+current package and records the independent `decoder_version` and
+`validator_version`. A policy may require exact processing-profile versions;
+an older snapshot is never silently validated under newer interpretation. It does not
 prove raw durability, snapshot promotion, or a two-run fixed point;
 `python -m main baseline apply` is the acceptance gate for those properties;
 `tools/apply_and_verify.py` is its compatibility wrapper.
 
+With `--repeat`, baseline apply resolves both immutable rebuilt stores and
+streams their canonical rows through the value gate. Identity, sequence, and
+lineage vacancies or mismatches are fatal; non-critical differences are
+advisory and reported. The comparison is row-streamed and bounds examples, so
+its memory use does not scale with database size.
+
 ## Resource bounds and processing
 
-Defaults are 8 GiB per source, 500,000 normalized events per source, and 250,000
-per session. Override with `--max-source-bytes`,
-`--max-events-per-source`, and `--max-events-per-session`, or deliberately use
-`--no-resource-limits`. Equivalent environment variables use `CODESS_` names.
+Defaults are 8 GiB per source, 500,000 normalized events per source, 250,000
+per session, and 128 Ki characters for each normalized context or compaction
+body. Override with `--max-source-bytes`, `--max-events-per-source`,
+`--max-events-per-session`, and `--max-context-content-chars`, or deliberately
+use `--no-resource-limits`. Equivalent environment variables use `CODESS_`
+names, including `CODESS_MAX_CONTEXT_CONTENT_CHARS`. The event records retain
+the full source character count and an explicit truncation flag. Exact
+over-limit content remains resolvable from captured, sealed, or referenced raw
+evidence; Codess does not create a second unbounded normalized copy.
 
 Ingest emits `codess: progress` lines to stderr without waiting for Python
 DEBUG logging. Stdout remains the final human/structured result. Each line has
@@ -47,6 +60,9 @@ Routine ingest writes `.codess/last-ingest-report.json` with
 bytes, event counts, largest buffered session, peak process RSS, limits, and
 diagnostics. Preflight includes the trace in its JSON result. Progress records
 never contain prompt, response, tool, attachment, or raw-source bodies. The
+report also records decoder and validator versions. `status: accepted` here
+means the ingest transaction completed and the snapshot was promoted to
+current; it is not reviewed-baseline approval. The
 trace retains the most recent 5,000 events and explicitly reports the number of
 older events dropped. This rolling window preserves the point of failure in a
 large batch; earlier completed Projects already have their own reports.
@@ -80,6 +96,11 @@ Review wrong source scope, wrong session boundary, container/binary content
 mistaken for text, and an unmapped vendor variant before classifying the source
 as malformed or overriding a limit. These records retain no content excerpts.
 An override is an explicit operational decision, not automatic recovery.
+
+Mapping diagnostics keep scope and severity separate. `diagnostic_level`
+identifies `source`, `record`, or `field`; `severity` is `info`, `warn`, or
+`error`. Informational field-state observations remain queryable but do not
+consume policy warning/error allowances.
 
 A selected multi-session Cursor source remains one rollback-capable SQLite
 transaction, but only one composer's normalized events are retained in memory.
@@ -229,6 +250,16 @@ old `parent_snapshot_id` is reported but does not pin storage. Active
 Project-local `.codess/current.json` pointers are also checked; a stale one
 blocks apply and should be repaired by a validated rebuild/relocation that
 updates both central and local pointers.
+
+`baseline freeze` publishes one package-coherent reviewed set: every selected
+Project must have a current fixed-point report produced by the same CoSchema
+package. Rebuild all selected members after a package change; do not freeze a
+single new member beside stale package evidence. `accepted_with_limitations` is
+a valid, preserved review state when policy intentionally permits a
+reference-only source. It is never rewritten as `accepted`; subsequent
+`baseline verify` must reproduce the same qualified state with
+`verify_reference_current=False`, because the recorded revision—not the
+mutable live locator—is the reviewed cohort.
 
 ### Full-scan boundaries
 

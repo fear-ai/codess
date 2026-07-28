@@ -71,6 +71,7 @@ from codess.evidence import summarize_store_evidence
 from codess.ingest_review import record_ingest_review
 from codess.progress import ProgressTrace
 from codess.ingest_pipeline import inspect_sources, mark_source_complete
+from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 
 log = logging.getLogger(__name__)
 
@@ -350,6 +351,7 @@ def _ingest_cc(
                     "time_basis": "event" if timestamps else "unknown",
                     "project_path": str(project_root),
                     "project_id": opts.get("project_id"),
+                    "source_cwd": session_facts.get("source_cwd"),
                     "parent_session_id": parent_session_id,
                     "session_relation_kind": (
                         direct_lineage.get("session_relation_kind")
@@ -364,7 +366,7 @@ def _ingest_cc(
                         diagnostics.get("empty_sources", 0) + 1
                     )
             replace_session_events(
-                conn, session, events_list, session_id=session_id
+                conn, session, events_list, session_id=session_id, prune=False
             )
             _record_raw(opts, path, "Claude", conn)
             for external in external_sources[external_start:]:
@@ -407,6 +409,13 @@ def _ingest_cc(
         )
         del events_list
         gc.collect()
+    if changed:
+        conn = connect(store_path)
+        try:
+            prune_unreferenced_records(conn)
+            conn.commit()
+        finally:
+            conn.close()
     return ingested, total_events, failures, changed
 
 
@@ -476,6 +485,7 @@ def _ingest_codex(
                     "time_basis": "event" if timestamps else "unknown",
                     "project_path": proj_path if proj_path != "." else str(project_root),
                     "project_id": opts.get("project_id"),
+                    "source_cwd": proj_path if proj_path != "." else str(project_root),
                     "archive_state": archive_state,
                     "archive_source": archive_source,
                     "metadata": (
@@ -491,7 +501,7 @@ def _ingest_codex(
                         diagnostics.get("empty_sources", 0) + 1
                     )
             replace_session_events(
-                conn, session, events_list, session_id=session_id
+                conn, session, events_list, session_id=session_id, prune=False
             )
             _record_raw(opts, path, "Codex", conn)
             conn.commit()
@@ -524,6 +534,13 @@ def _ingest_codex(
         )
         del events_list
         gc.collect()
+    if changed:
+        conn = connect(store_path)
+        try:
+            prune_unreferenced_records(conn)
+            conn.commit()
+        finally:
+            conn.close()
     return ingested, total_events, failures, changed
 
 
@@ -600,6 +617,7 @@ def _ingest_cursor(
                 "time_basis": "event" if timestamps else "unknown",
                 "project_path": proj_str,
                 "project_id": opts.get("project_id"),
+                "source_cwd": proj_str,
                 "metadata": metadata,
                 "source_observation": source_observation,
             }
@@ -974,6 +992,7 @@ def run(args) -> int:
         ("--max-source-bytes", iopt.max_source_bytes),
         ("--max-events-per-source", iopt.max_events_per_source),
         ("--max-events-per-session", iopt.max_events_per_session),
+        ("--max-context-content-chars", iopt.max_context_content_chars),
     ):
         if value is not None and value <= 0:
             print(f"codess: {name} must be > 0", file=sys.stderr)
@@ -989,6 +1008,7 @@ def run(args) -> int:
         "max_source_bytes": iopt.max_source_bytes,
         "max_events_per_source": iopt.max_events_per_source,
         "max_events_per_session": iopt.max_events_per_session,
+        "max_context_content_chars": iopt.max_context_content_chars,
         "resource_observations": [],
         "content_failure_reviews": [],
         "claude_session_kinds": {"main": 0, "subagent": 0},
@@ -1696,6 +1716,8 @@ def run(args) -> int:
                         ),
                         "project": str(project_root), "sources": proj_stats,
                         "snapshot_id": snapshot_id,
+                        "decoder_version": DECODER_VERSION,
+                        "validator_version": VALIDATOR_VERSION,
                         "evidence_summary_reused": evidence_summary_reused,
                         "diagnostics": {
                             key: value - diagnostic_start.get(key, 0)
@@ -1713,6 +1735,7 @@ def run(args) -> int:
                             "max_source_bytes": iopt.max_source_bytes,
                             "max_events_per_source": iopt.max_events_per_source,
                             "max_events_per_session": iopt.max_events_per_session,
+                            "max_context_content_chars": iopt.max_context_content_chars,
                         },
                     })
                 for k, v in proj_stats.items():
@@ -1764,6 +1787,8 @@ def run(args) -> int:
             "progress_format": "codess.progress/1",
             "progress_live": iopt.live_progress,
             "status": "rejected" if had_error else "accepted",
+            "decoder_version": DECODER_VERSION,
+            "validator_version": VALIDATOR_VERSION,
             "projects": [str(root.resolve()) for root in roots],
             "sources": source_stats,
             "sessions": total_ingested,
@@ -1779,6 +1804,7 @@ def run(args) -> int:
                 "max_source_bytes": iopt.max_source_bytes,
                 "max_events_per_source": iopt.max_events_per_source,
                 "max_events_per_session": iopt.max_events_per_session,
+                "max_context_content_chars": iopt.max_context_content_chars,
             },
             "mutation_boundary": "temporary stores only; project, registry, raw store, snapshots, and ingest state unchanged",
         }

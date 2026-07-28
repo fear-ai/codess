@@ -124,6 +124,20 @@ class TestCliOptionsEnvMerge:
         )
         assert build_ingest_run_options(args).redact is True
 
+    def test_ingest_context_limit_cli_override(self):
+        args = SimpleNamespace(
+            stop=False, force=False, min_size=100, debug=False, redact=False,
+            max_context_content_chars=4096,
+        )
+        assert build_ingest_run_options(args).max_context_content_chars == 4096
+
+    def test_ingest_no_resource_limits_disables_context_limit(self):
+        args = SimpleNamespace(
+            stop=False, force=False, min_size=100, debug=False, redact=False,
+            no_resource_limits=True, max_context_content_chars=4096,
+        )
+        assert build_ingest_run_options(args).max_context_content_chars is None
+
 class TestValidateScanSource:
     """Scan --source is validated globally before run (see scan_cmd)."""
 

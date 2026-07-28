@@ -1,21 +1,113 @@
 {
   "audit_format": "codess.cursor-feature-audit/1",
-  "bubble_records": 155446,
+  "bubble_records": 166994,
+  "context_window_ranges": {
+    "maximum_token_limit": 256000,
+    "maximum_tokens_used": 242208,
+    "minimum_token_limit": 125000,
+    "minimum_tokens_used": 3759
+  },
+  "conversation_summary_stats": {
+    "maximum_summary_characters": 127163,
+    "restart_boundary_records": 62,
+    "summary_characters": 3095538,
+    "truncation_boundary_records": 62
+  },
   "decisions": {
+    "contextWindowStatusAtCreation": "retain exact token use, token limit, and percentage remaining as per-bubble observation metadata",
+    "conversationSummary": "retain the bounded plaintext summary as context.compact with exact truncation-boundary identifiers",
+    "messageRequestContext": "retain selected-project request-context JSON as bounded context.inject events",
     "modelInfo.modelName": "store non-default values as vendor-reported exact model selection; default remains source metadata only",
     "toolFormerData": "supported as paired tool call/result evidence with source call and status fields",
     "toolFormerData.userDecision": "accepted/rejected is retained as explicit permission evidence; rejected maps to denied independently of status",
     "toolResults": "do not treat empty arrays as outcomes; retain existing nonempty-array compatibility mapping"
   },
   "evidence": {
-    "modelInfo_modelName_records": 2530,
+    "context_window_status_records": 3000,
+    "conversation_summary_records": 62,
+    "message_request_context_bytes": 3136681,
+    "message_request_context_records": 678,
+    "modelInfo_modelName_records": 3009,
     "nonempty_toolResults_records": 0,
-    "populated_toolFormerData_records": 87767
+    "populated_toolFormerData_records": 94825
   },
+  "generated_at": "2026-07-28T20:13:14.440026+00:00",
+  "messageRequestContext_field_shapes": [
+    {
+      "field": "attachedFoldersListDirResults",
+      "observations": 678,
+      "value_type": "array"
+    },
+    {
+      "field": "currentFileLocationData",
+      "observations": 421,
+      "value_type": "text"
+    },
+    {
+      "field": "cursorRules",
+      "observations": 678,
+      "value_type": "array"
+    },
+    {
+      "field": "deletedFiles",
+      "observations": 678,
+      "value_type": "array"
+    },
+    {
+      "field": "diffsSinceLastApply",
+      "observations": 678,
+      "value_type": "array"
+    },
+    {
+      "field": "gitStatusRaw",
+      "observations": 620,
+      "value_type": "text"
+    },
+    {
+      "field": "ideEditorsState",
+      "observations": 421,
+      "value_type": "text"
+    },
+    {
+      "field": "knowledgeItems",
+      "observations": 678,
+      "value_type": "array"
+    },
+    {
+      "field": "multiFileLinterErrors",
+      "observations": 678,
+      "value_type": "array"
+    },
+    {
+      "field": "projectLayouts",
+      "observations": 678,
+      "value_type": "array"
+    },
+    {
+      "field": "summarizedComposers",
+      "observations": 678,
+      "value_type": "array"
+    },
+    {
+      "field": "terminalFiles",
+      "observations": 678,
+      "value_type": "array"
+    },
+    {
+      "field": "todos",
+      "observations": 678,
+      "value_type": "array"
+    },
+    {
+      "field": "webReferences",
+      "observations": 4,
+      "value_type": "array"
+    }
+  ],
   "modelInfo_field_shapes": [
     {
       "field": "modelName",
-      "observations": 2530,
+      "observations": 3009,
       "value_type": "text"
     }
   ],
@@ -25,16 +117,20 @@
       "observations": 1898
     },
     {
+      "model_selection": "grok-4.5",
+      "observations": 437
+    },
+    {
+      "model_selection": "composer-2.5",
+      "observations": 190
+    },
+    {
       "model_selection": "default",
       "observations": 181
     },
     {
       "model_selection": "composer-2",
       "observations": 169
-    },
-    {
-      "model_selection": "composer-2.5",
-      "observations": 143
     },
     {
       "model_selection": "claude-4.6-opus-high-thinking",
@@ -47,10 +143,6 @@
     {
       "model_selection": "composer-2-fast",
       "observations": 5
-    },
-    {
-      "model_selection": "grok-4.5",
-      "observations": 5
     }
   ],
   "privacy_boundary": "message, argument, result, and attachment values were not retained",
@@ -58,7 +150,7 @@
   "toolFormerData_field_shapes": [
     {
       "field": "additionalData",
-      "observations": 49754,
+      "observations": 54555,
       "value_type": "object"
     },
     {
@@ -68,27 +160,27 @@
     },
     {
       "field": "error",
-      "observations": 3442,
+      "observations": 3528,
       "value_type": "text"
     },
     {
       "field": "modelCallId",
-      "observations": 87767,
+      "observations": 94825,
       "value_type": "text"
     },
     {
       "field": "name",
-      "observations": 87767,
+      "observations": 94825,
       "value_type": "text"
     },
     {
       "field": "params",
-      "observations": 85675,
+      "observations": 92622,
       "value_type": "text"
     },
     {
       "field": "rawArgs",
-      "observations": 76873,
+      "observations": 82382,
       "value_type": "text"
     },
     {
@@ -98,72 +190,72 @@
     },
     {
       "field": "result",
-      "observations": 71864,
+      "observations": 76815,
       "value_type": "text"
     },
     {
       "field": "status",
-      "observations": 87767,
+      "observations": 94825,
       "value_type": "text"
     },
     {
       "field": "tool",
-      "observations": 87767,
+      "observations": 94825,
       "value_type": "integer"
     },
     {
       "field": "toolCallBinary",
-      "observations": 69504,
+      "observations": 76562,
       "value_type": "text"
     },
     {
       "field": "toolCallId",
-      "observations": 87767,
+      "observations": 94825,
       "value_type": "text"
     },
     {
       "field": "toolIndex",
-      "observations": 87767,
+      "observations": 94825,
       "value_type": "integer"
     },
     {
       "field": "userDecision",
-      "observations": 2953,
+      "observations": 3002,
       "value_type": "text"
     }
   ],
   "tool_names_top_50": [
     {
-      "observations": 24255,
+      "observations": 26206,
       "tool_name": "read_file_v2"
     },
     {
-      "observations": 21701,
+      "observations": 23142,
       "tool_name": "edit_file_v2"
     },
     {
-      "observations": 15977,
+      "observations": 17947,
       "tool_name": "ripgrep_raw_search"
     },
     {
-      "observations": 15060,
+      "observations": 16305,
       "tool_name": "run_terminal_command_v2"
     },
     {
-      "observations": 2537,
+      "observations": 2693,
       "tool_name": "glob_file_search"
     },
     {
-      "observations": 1121,
+      "observations": 1184,
+      "tool_name": "todo_write"
+    },
+    {
+      "observations": 1154,
       "tool_name": "web_search"
     },
     {
       "observations": 1100,
       "tool_name": "run_terminal_cmd"
-    },
-    {
-      "observations": 1082,
-      "tool_name": "todo_write"
     },
     {
       "observations": 919,
@@ -174,12 +266,16 @@
       "tool_name": "read_file"
     },
     {
-      "observations": 772,
+      "observations": 781,
       "tool_name": "web_fetch"
     },
     {
       "observations": 591,
       "tool_name": "edit_file"
+    },
+    {
+      "observations": 361,
+      "tool_name": "await"
     },
     {
       "observations": 359,
@@ -190,35 +286,39 @@
       "tool_name": "read_lints"
     },
     {
-      "observations": 277,
-      "tool_name": "await"
-    },
-    {
-      "observations": 178,
+      "observations": 181,
       "tool_name": "delete_file"
     },
     {
-      "observations": 136,
+      "observations": 141,
+      "tool_name": "task_v2"
+    },
+    {
+      "observations": 137,
       "tool_name": "semantic_search_full"
     },
     {
-      "observations": 135,
-      "tool_name": "task_v2"
+      "observations": 133,
+      "tool_name": "mcp-cursor-app-control-move_agent_to_root"
     },
     {
       "observations": 132,
       "tool_name": "list_dir"
     },
     {
-      "observations": 132,
-      "tool_name": "mcp-cursor-app-control-move_agent_to_root"
-    },
-    {
       "observations": 42,
       "tool_name": "list_dir_v2"
     },
     {
-      "observations": 21,
+      "observations": 32,
+      "tool_name": "update_current_step"
+    },
+    {
+      "observations": 25,
+      "tool_name": "get_mcp_tools"
+    },
+    {
+      "observations": 24,
       "tool_name": "mcp-cursor-app-control-open_resource"
     },
     {
@@ -227,7 +327,7 @@
     },
     {
       "observations": 11,
-      "tool_name": "update_current_step"
+      "tool_name": "switch_mode"
     },
     {
       "observations": 11,
@@ -236,10 +336,6 @@
     {
       "observations": 10,
       "tool_name": "codebase_search"
-    },
-    {
-      "observations": 7,
-      "tool_name": "switch_mode"
     },
     {
       "observations": 4,
@@ -259,6 +355,10 @@
     },
     {
       "observations": 2,
+      "tool_name": "mcp-cursor-app-control-cursor_dialog"
+    },
+    {
+      "observations": 2,
       "tool_name": "mcp_Notion_fetch"
     },
     {
@@ -271,16 +371,20 @@
     },
     {
       "observations": 1,
-      "tool_name": "get_mcp_tools"
+      "tool_name": "mcp-cursor-app-control-rename_chat"
+    },
+    {
+      "observations": 1,
+      "tool_name": "set_active_branch"
     }
   ],
   "tool_statuses": [
     {
-      "observations": 84104,
+      "observations": 91064,
       "source_status": "completed"
     },
     {
-      "observations": 3445,
+      "observations": 3531,
       "source_status": "error"
     },
     {
@@ -292,24 +396,24 @@
       "source_status": "loading"
     },
     {
-      "observations": 57,
+      "observations": 69,
       "source_status": "cancelled"
     }
   ],
   "tool_user_decisions": [
     {
       "decision": "accepted",
-      "observations": 2713,
+      "observations": 2756,
       "source_status": "completed"
     },
     {
       "decision": "accepted",
-      "observations": 221,
+      "observations": 223,
       "source_status": "error"
     },
     {
       "decision": "rejected",
-      "observations": 15,
+      "observations": 19,
       "source_status": "cancelled"
     },
     {
@@ -331,10 +435,10 @@
   "workspace_evidence": [
     {
       "catalog_project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-      "composers": 17,
-      "model_name_records": 139,
+      "composers": 24,
+      "model_name_records": 618,
       "nonempty_tool_results_records": 0,
-      "tool_former_records": 41740,
+      "tool_former_records": 48798,
       "workspace_id": "243102c47acab6a728df1a9c7dc7067b"
     },
     {

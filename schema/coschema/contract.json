@@ -39,6 +39,7 @@
         "project_id": {"type": "reference", "nullable": false, "target": "projects"},
         "machine_id": {"type": "text", "nullable": false},
         "observed_path": {"type": "text", "nullable": false},
+        "path_obsolete": {"type": "boolean", "nullable": false},
         "location_kind": {"type": "open_vocabulary", "nullable": false},
         "state": {"type": "taxonomy", "nullable": false, "vocabulary": "location_state"},
         "observed_at": {"type": "rfc3339", "nullable": false},
@@ -54,6 +55,7 @@
         "workspace_id": {"type": "text", "nullable": false},
         "relation_kind": {"type": "open_vocabulary", "nullable": false},
         "source_project_path": {"type": "text", "nullable": true},
+        "path_obsolete": {"type": "boolean", "nullable": false},
         "selection_state": {"type": "open_vocabulary", "nullable": false},
         "metadata": {"type": "json_extension", "nullable": true}
       }
@@ -108,6 +110,7 @@
         "source_id": {"type": "reference", "nullable": true, "target": "sources"},
         "project_id": {"type": "reference", "nullable": true, "target": "projects"},
         "source_cwd": {"type": "text", "nullable": true},
+        "path_obsolete": {"type": "boolean", "nullable": false},
         "started_at": {"type": "unix_ms", "nullable": true},
         "ended_at": {"type": "unix_ms", "nullable": true},
         "source_mtime": {"type": "unix_ms", "nullable": true},
@@ -345,6 +348,7 @@
         "session_id": {"type": "reference", "nullable": true, "target": "sessions"},
         "event_id": {"type": "reference", "nullable": true, "target": "events"},
         "level": {"type": "taxonomy", "nullable": false, "vocabulary": "diagnostic_level"},
+        "severity": {"type": "taxonomy", "nullable": false, "vocabulary": "diagnostic_severity"},
         "reason_code": {"type": "text", "nullable": false},
         "source_field": {"type": "text", "nullable": true},
         "source_value": {"type": "text", "nullable": true},
@@ -382,7 +386,8 @@
     "initiation_kind": ["human", "autonomous", "unknown"],
     "turn_boundary_source": ["vendor", "mapping", "inferred"],
     "normalized_status": ["pending", "running", "succeeded", "failed", "denied", "cancelled", "incomplete", "unknown"],
-    "diagnostic_level": ["source", "record", "field"]
+    "diagnostic_level": ["source", "record", "field"],
+    "diagnostic_severity": ["info", "warn", "error"]
     ,"location_state": ["active", "retired", "missing", "unknown"]
     ,"content_storage_class": ["inline", "raw_object", "derived", "not_retained"]
   }

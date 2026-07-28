@@ -12,11 +12,24 @@
     {
       "path": "/Users/walter/Work/ZK/Zero400",
       "policy": "catalog/policies/zero400.json"
+    },
+    {
+      "path": "/Users/walter/Work/Code/Misses",
+      "policy": "catalog/policies/misses.json"
+    },
+    {
+      "path": "/Users/walter/Work/ZK/insight",
+      "policy": "catalog/policies/insight.json"
+    },
+    {
+      "path": "/Users/walter/Work/WP/wpages",
+      "policy": "catalog/policies/wpages.json"
     }
   ],
   "known_gaps": [
     "lifecycle abort remains fixture-only; real missing-time records are present",
-    "reasoning effort, speed tier, and service tier are absent from selected source records",
-    "Codex parent-session identifiers are absent across the metadata-only local audit"
+    "model effort and service tier are uneven by vendor and speed tier remains absent",
+    "Codex parent-session identifiers are absent across the metadata-only local audit",
+    "eight Misses image-only user records (52 image blocks) remain unsupported attachment evidence"
   ]
 }

@@ -56,15 +56,18 @@ queries.
 
 ## 2. Versioning and immutable baselines
 
-### Two managed versions, several recorded facts
+### Two release versions and two processing profiles
 
-Seven independently managed version numbers would create ceremony without
-useful compatibility. Maintain only these public versions:
+Seven independently managed component releases would create ceremony without
+useful compatibility. Maintain two public release versions and record two
+small processing-profile versions with each build:
 
 | Managed version | Meaning | Changes when |
 |---|---|---|
 | `software_version` | Released Codess application, currently `0.2.0` | CLI, reader, writer, adapter, or query behavior is released |
 | `store_format` | Durable package containing the common logical schema, SQLite layout/DDL, constraints, and normalized taxonomies | A stored baseline can differ in structure or defined meaning |
+| `decoder_version` | Normalization/filter profile, currently `0.2` | The same supported source records would be selected, classified, or decoded differently |
+| `validator_version` | Acceptance interpretation, currently `0.2` | Checks, severity, or policy semantics change even though stored rows do not |
 
 Use a lasting format identifier such as `codess.coschema` plus a small monotonic
 `format_version`. The complete format package contains the logical field
@@ -85,7 +88,10 @@ public version for each layer:
   independently at high frequency, store its vocabulary ID in the data then,
   rather than paying that complexity now.
 
-Everything else is recorded provenance, not a separately governed release:
+The decoder and validator values are compact behavior dates, not independently
+distributed packages. They are repeated in store metadata, snapshots, reports,
+and validation policy requirements. Everything else is recorded provenance,
+not a separately governed release:
 
 | Recorded fact | Why retain it |
 |---|---|
@@ -95,11 +101,12 @@ Everything else is recorded provenance, not a separately governed release:
 | Python, SQLite, and platform versions | Reproduction and diagnosis; the store package may declare a minimum SQLite capability, but the SQLite runtime is not another Codess release train |
 | snapshot ID, policy/configuration digest, and source fingerprints | Identify the exact baseline contents without pretending they are schema versions |
 
-For example, a corrected Codex mapping normally advances the Codess software
-version and produces a new immutable snapshot, but does not advance
-`store_format` if the resulting records obey the same schema and taxonomy. A
-schema or taxonomy change advances the store format. This preserves the useful
-distinctions without exposing seven knobs.
+For example, decoder 0.2 retains Codex reasoning summaries and classifies
+duplicate UI envelopes separately from unknown ignored records. It produces a
+new immutable snapshot without requiring a new CoSchema number: the rows still
+obey format 4. A schema or incompatible taxonomy change advances the store
+format. This preserves the useful distinctions without exposing seven release
+trains.
 
 Per-vendor logical schemas are not separate common schemas. Vendor documents
 describe upstream formats and mappings into CoSchema. A vendor-specific staging
@@ -116,9 +123,9 @@ Encode the store contract at three deliberate levels:
 2. Put the integer CoSchema `format_version` in `PRAGMA user_version`. This is
    the fast physical compatibility check and remains readable from the SQLite
    file header.
-3. Repeat `format_id`, `format_version`, package digest, `created_by` software,
-   and snapshot identity in `store_meta`; put the same contract plus hashes and
-   provenance in the external manifest.
+3. Repeat `format_id`, `format_version`, package digest, decoder/validator
+   versions, `created_by` software, and snapshot identity in `store_meta`; put
+   the same contract plus hashes and provenance in the external manifest.
 
 The repetition is intentional: SQLite header fields survive detachment,
 `store_meta` is descriptive and queryable, and the manifest can be inspected
@@ -648,6 +655,13 @@ with scope (`session`, `project`, `user`, or vendor-defined), target/reference,
 and source evidence. Do not claim a definitive memory write when the source
 only exposes a compact boundary.
 
+When a vendor stores the compact representation, preserve its body as
+communication between harness and model under the same bounded-content policy
+used for other context exchanges. Keep the full source character count,
+truncation state, encoding, boundary/window identifiers, and direct lineage.
+Do not copy repeated replacement history into new normalized events, and do
+not treat an encrypted body as absent merely because Codess cannot decode it.
+
 ### Roles are multivariate
 
 The source roles `user` and `assistant` are repeatedly violated by harness
@@ -707,6 +721,23 @@ The harness-mediated capability is the tool call. An OS process started by that
 capability is a child execution fact, not necessarily a second tool call.
 Avoid duplicating result content in both generic `content` and `tool_output`;
 define one canonical payload with typed projections for display and query.
+
+Normalization is not permission to collapse the interaction graph. Preserve
+the strongest structure each source provides even when it is vendor-specific:
+agent and subagent identity and lineage; harness-to-model context exchanges;
+tool request, approval, status, and ordered result fragments; MCP server,
+method, request, response, notification, resource, and error identities; and
+child process or nested invocation relationships. A common event or invocation
+type is an additional mapping over that evidence.
+
+The minimum acceptable degradation is explicit and reviewable: retain the
+source record and source classification, map the supported portion, leave
+unsupported normalized fields NULL, and emit a mapping diagnostic describing
+the missing specialization. Never turn an unsupported subagent, MCP, or tool
+record into an undifferentiated assistant message merely to fit the common
+model. Content limits may externalize or truncate a payload, but must retain
+its identity, original size, media/encoding information, lineage, and
+truncation or externalization state.
 
 ### Content processing contract
 
@@ -1105,6 +1136,16 @@ second identity catalog. Each retained CoSchema snapshot projects the relevant
 Project, location, and workspace-binding facts so it remains interpretable on
 its own.
 
+The user-facing Project listing should join, rather than denormalize, these
+authorities: Project identity/location from `projects.json`, current and
+retained extraction metadata from verified snapshot manifests/pointers, and
+reverse Assembly membership from `assemblies.json`. This gives “show all
+extractions for this Project” without copying changing snapshot or Assembly
+arrays into the identity record. It also makes stale operational telemetry
+prunable independently. The first A19 catalog command must provide
+machine-readable Project ID, name, location state, curation, current snapshot,
+available vendors/source systems, and Assembly count/filter fields.
+
 Vendor discovery evidence stays vendor-specific: Claude supplies project paths
 through `sessions-index.json` and project storage slugs; Codex supplies `cwd`
 in `session_meta` under active/archive roots; Cursor joins
@@ -1159,10 +1200,10 @@ small compatibility/example case, not a priority corpus.
 ### Review catalog authority
 
 Candidate membership, observations, and review dispositions are live data, not
-design prose. The maintained active-work CSV may seed
-`catalog/active-work-review.json`, but neither an old GitHub list nor this
-document is authoritative for current paths, remotes, session counts, or
-approval.
+design prose. The maintained active-work CSV may seed an on-demand candidate
+review, but the dated July 14 checked-in JSON was deleted. Neither an old
+GitHub list nor this document is authoritative for current paths, remotes,
+session counts, or approval.
 
 The catalog keeps observed facts, policy recommendations, and human decisions
 separate. Remote state is a dated observation and missing remotes do not
@@ -1224,7 +1265,9 @@ never excludes a local Project.
 
 Each candidate keeps facts and decisions separate:
 
-- identity: Project ID when known, observed path, logical name, and topic;
+- identity: an actual UUID Project ID only after catalog binding; otherwise a
+  reproducible `candidate_key`, observed path, logical name, and topic. A
+  candidate path fingerprint never masquerades as a Project ID;
 - vendor evidence: sources, sessions, events, bytes, time range, harness/source
   shape, mapping diagnostics, and last observation;
 - local Git evidence: repository root, HEAD, last commit time, commits since
@@ -1504,6 +1547,127 @@ each SQLite store, stream and heap-merge ordered rows, and profile allocations.
 External recipes consume immutable inputs or typed exports. A vendor-neutral
 SQL view is promoted only after two independent consumers repeat the same row
 contract; DuckDB remains optional and testable at the boundary.
+
+### Cross-Project analytical assemblies
+
+A single mutable global database should **not** replace per-Project immutable
+snapshots. It would mix source refresh, decoder changes, Project selection,
+retention, and analytical indexing into one high-churn authority. It would also
+make “all” ambiguous: all discovered paths, all curated Projects, every
+historical snapshot, or only current accepted observations.
+
+Use a first-class **Assembly** instead. An Assembly is a reproducible selection
+of explicitly resolved Project snapshots plus filters and a projection. It can
+remain virtual for federated queries or have any number of physical
+materializations. `all-current` is a valid selector: at resolution time it
+means every curated Project with a verified current snapshot, never every path
+in the operational scan history and never every superseded snapshot.
+
+The assembly pipeline is vendor-independent:
+
+1. select curated `project_id` values or an explicit saved Project set;
+2. resolve each to exactly one current or named immutable `snapshot_id`;
+3. record package/decoder/validator/policy and source-availability facts;
+4. apply common Project/session/vendor/model/time/event/content filters;
+5. project the normalized read model using stable global and observation IDs;
+6. optionally materialize one or more formats; and
+7. register the Assembly and its inputs only after counts, identities, hashes,
+   and referential checks pass.
+
+Selections include `all-current`, explicit Project IDs, catalog attributes such
+as ownership/topic/curation state, named snapshots, or stable IDs from a saved
+query result. Inputs are canonicalized by `(project_id, snapshot_id)`. If the
+same logical Session appears through more than one Project observation, the
+default is observation-preserving: retain each `observation_id` and Project
+lineage. Logical deduplication is a separate declared policy, never an
+accidental unique constraint.
+
+“All records” means the complete normalized common projection from each
+selected snapshot, including diagnostics and lineage, subject to the
+snapshot's recorded content-processing policy. It does not silently copy raw
+vendor databases, truncated source bodies, or external attachments into every
+materialization. Source IDs, availability, content lengths, truncation state,
+and exact-evidence resolvers remain available so an analytical row can be
+traced back without multiplying multi-gigabyte source objects.
+
+Every Assembly has one small JSON manifest, regardless of materialization:
+
+- `assembly_format`, `assembly_id`, creation time, creating software, and
+  semantic/content digest;
+- the canonical selector/request, filters, projection, limits, and their hash;
+- one input row per Project snapshot with `project_id`, `snapshot_id`, package
+  digest, semantic digest, data-as-of time, source availability, and selected
+  vendor/source-system stores;
+- materialization records with format, schema/profile identity, path, row/byte
+  counts, content hash, partitions, and validation status; and
+- limitations, truncation, deduplication policy, and processing derivations.
+
+The initial shape should be deliberately small and value-oriented:
+
+```json
+{
+  "assembly_format": "codess.assembly/1",
+  "assembly_id": "codess:assembly:<content-identity>",
+  "selector": {"kind": "all-current", "filters": {}},
+  "request_hash": "<canonical-selector-and-projection-hash>",
+  "inputs": [{
+    "project_id": "codess:project:<uuid>",
+    "snapshot_id": "<immutable-snapshot-id>",
+    "package_digest": "<CoSchema-package-digest>",
+    "semantic_digest": "<snapshot-semantic-digest>"
+  }],
+  "projection": {"name": "codess.normalized-observations", "version": 1},
+  "materializations": [{
+    "format": "parquet",
+    "path": "materializations/parquet/",
+    "content_hash": "<materialization-hash>",
+    "rows": 0,
+    "validation_state": "accepted"
+  }]
+}
+```
+
+`assembly_id` identifies the resolved input set, selector, and projection, not
+the filesystem path or preferred output format. Re-materializing identical
+content in another format adds a materialization record; changing selected
+snapshots or filters creates a different Assembly identity. The digest is an
+integrity/content identity under the existing local-writer threat model, not
+authentication.
+
+Each exported entity row carries or joins losslessly to `assembly_id`,
+`project_id`, `snapshot_id`, entity kind, stable entity `global_id`,
+`observation_id` where applicable, and source/source-record identity. This
+supports both directions:
+
+- Assembly → exact Project snapshots, sources, and entity observations; and
+- Project → every registered Assembly whose input relation names that
+  `project_id`.
+
+Do not copy an ever-growing `assemblies` list into every Project record.
+`~/.codess/projects.json` remains the Project identity catalog;
+`~/.codess/assemblies.json` is the Assembly catalog and its input relation is
+the authoritative reverse lookup. A `by_project` index may be regenerated
+inside that catalog for speed. Assembly files live under
+`~/.codess/assemblies/<assembly-id>/`; retention removes materializations only
+through a dry-run plan and never removes their input Project snapshots.
+
+Materialization formats have different roles:
+
+| Format | Role |
+|---|---|
+| JSON manifest | Mandatory identity, selection, provenance, and validation record; not bulk event storage |
+| JSONL | Streamable, inspectable normalized interchange and pipeline boundary |
+| Parquet | Preferred columnar analytical materialization, partitioned by entity kind and optionally Project/time; suitable for pandas, Polars, Arrow, Spark, and ML pipelines |
+| DuckDB | Optional analytical workspace/catalog over Parquet or normalized projections; a `.duckdb` file may cache tables/views but is not authoritative |
+| SQLite | Optional portable merged read model for modest assemblies and existing SQL tools; it is not a naïve copy of CoSchema tables because local surrogate keys collide |
+
+The assembly read/export schema uses stable global/observation keys rather than
+the source SQLite row IDs. Large `all-current` Assemblies should default to a
+manifest plus partitioned Parquet and a DuckDB view layer; duplicating every
+content body into both SQLite and Parquet requires an explicit materialization
+request. Refresh creates a new Assembly revision or a new materialization bound
+to a newly resolved input set; it never edits the provenance of an existing
+one.
 
 ### Broad historical semantics
 

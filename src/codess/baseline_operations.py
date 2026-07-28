@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from codess.acceptance import compare_snapshots
 from codess.baseline_catalog import update_approved_catalog
 from codess.baseline_validation import (
     load_policy, run_query_smoke, validate_project,
@@ -218,7 +219,15 @@ def apply_project(
     if first_ingest["returncode"] != 0:
         raise RuntimeError("ingest failed: " + first_ingest["stderr"].strip())
     raw_root = registry / "raw"
-    first = validate_project(project, policy=policy, raw_store_root=raw_root)
+    verify_reference_current = not bool(
+        policy.get("allow_source_revision_drift")
+    )
+    first = validate_project(
+        project,
+        policy=policy,
+        raw_store_root=raw_root,
+        verify_reference_current=verify_reference_current,
+    )
     if first["status"] == "rejected":
         raise RuntimeError("first validation rejected: " + "; ".join(first["errors"]))
     second = None
@@ -232,17 +241,37 @@ def apply_project(
         )
         if second_ingest["returncode"] != 0:
             raise RuntimeError("repeat ingest failed: " + second_ingest["stderr"].strip())
-        second = validate_project(project, policy=policy, raw_store_root=raw_root)
+        second = validate_project(
+            project,
+            policy=policy,
+            raw_store_root=raw_root,
+            verify_reference_current=verify_reference_current,
+        )
         fixed_point = {
             "source_revisions_match": first.get("source_revisions") == second.get("source_revisions"),
             "semantic_digest_match": first.get("semantic_digest") == second.get("semantic_digest"),
             "normalization_digest_match": first.get("normalization_digest") == second.get("normalization_digest"),
         }
+        prior_paths = snapshot_store_paths(
+            project, first["snapshot_id"], allow_package_mismatch=False
+        )
+        rebuilt_paths = snapshot_store_paths(
+            project, second["snapshot_id"], allow_package_mismatch=False
+        )
+        value_acceptance = compare_snapshots(
+            prior_paths,
+            rebuilt_paths,
+            allow_source_revision_drift=bool(
+                policy.get("allow_source_revision_drift")
+            ),
+        )
+        fixed_point["value_acceptance"] = value_acceptance
         source_stable = fixed_point["source_revisions_match"]
         if policy.get("allow_source_revision_drift"):
             source_stable = fixed_point["normalization_digest_match"]
         fixed_point["passed"] = bool(
             source_stable and fixed_point["normalization_digest_match"]
+            and value_acceptance["accepted"]
             and second["status"] != "rejected"
         )
         if not fixed_point["passed"]:

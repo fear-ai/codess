@@ -293,12 +293,24 @@ def test_query_aggregates_permissions_and_task_review():
                 "VALUES (?, 'task', 'tool_call', 'Task', ?, ?)",
                 (f"s{index}", json.dumps({"description": f"task {index}"}), index + 1),
             )
+            if index == 0:
+                conn.execute(
+                    "INSERT INTO events "
+                    "(session_id, event_id, event_type, subtype, content_len, "
+                    "timestamp, metadata) VALUES (?, 'compact-summary', "
+                    "'system_event', 'context_compaction_summary', 123, 10, ?)",
+                    (
+                        f"s{index}",
+                        json.dumps({"content_truncated": True}),
+                    ),
+                )
             conn.commit()
             conn.close()
         root_args = ["--dir", str(roots[0]), "--dir", str(roots[1])]
 
         permissions = _run(["query", *root_args, "--permissions"])
         audit = _run(["query", *root_args, "--audit", "--limit", "3"])
+        audit_all = _run(["query", *root_args, "--audit"])
         tasks = _run(["query", *root_args, "--task-review"])
 
         assert permissions.returncode == 0
@@ -309,6 +321,8 @@ def test_query_aggregates_permissions_and_task_review():
         assert len(audit_rows) == 4  # header plus one global three-row window
         assert "permission_denied" in audit.stdout
         assert "tool_failure" in audit.stdout
+        assert "context_compaction_summary" in audit_all.stdout
+        assert "characters=123,truncated=true" in audit_all.stdout
         assert tasks.returncode == 0
         assert "Task\t2" in tasks.stdout
         assert "task 0" in tasks.stdout and "task 1" in tasks.stdout

@@ -6,9 +6,11 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from codess.project_catalog import (
+    add_project_location,
     durable_project_root,
     ensure_project_binding,
     get_project_entry,
@@ -66,6 +68,7 @@ def test_project_id_survives_a_new_location(tmp_path):
     first = tmp_path / "first"
     first.mkdir()
     initial = ensure_project_binding(registry, first)
+    uuid.UUID(initial["project_id"].removeprefix("codess:project:"))
     second = tmp_path / "second"
     second.mkdir()
     (second / ".codess").mkdir()
@@ -97,6 +100,7 @@ def test_ingest_discovered_workspace_binding_is_stable(tmp_path):
         "workspace_id": "workspace-1",
         "relation_kind": "local_workspace_path_binding",
         "source_project_path": str(project.resolve()),
+        "path_obsolete": False,
         "target_location_id": binding["location_id"],
         "selection_state": "approved",
     }]
@@ -115,6 +119,77 @@ def test_store_catalog_sync_does_not_rewrite_identical_projection(tmp_path):
         assert sync_project_catalog(conn, entry)
         conn.commit()
         assert not sync_project_catalog(conn, entry)
+
+
+def test_vendor_obsolete_path_is_marked_without_replacing_project_root(
+    tmp_path,
+):
+    registry = tmp_path / "registry"
+    project = tmp_path / "current" / "project"
+    project.mkdir(parents=True)
+    binding = ensure_project_binding(registry, project)
+    entry = get_project_entry(registry, binding["project_id"])
+    store = project / ".codess" / "sessions_codex.db"
+    init_db(store)
+    obsolete = tmp_path / "old" / "project"
+
+    with connect(store) as conn:
+        sync_project_catalog(conn, entry)
+        replace_session_events(
+            conn,
+            {
+                "id": "s1",
+                "source": "Codex",
+                "project_id": binding["project_id"],
+                "project_path": str(obsolete),
+                "source_cwd": str(obsolete),
+            },
+            [],
+            session_id="s1",
+        )
+        root_path = conn.execute(
+            "SELECT root_path FROM projects WHERE id=?",
+            (binding["project_id"],),
+        ).fetchone()[0]
+        path_obsolete = conn.execute(
+            "SELECT path_obsolete FROM sessions WHERE id='s1'"
+        ).fetchone()[0]
+
+    assert root_path == str(project.resolve())
+    assert path_obsolete == 1
+
+
+def test_vendor_path_under_another_active_location_is_not_obsolete(tmp_path):
+    registry = tmp_path / "registry"
+    project = tmp_path / "primary" / "project"
+    worktree = tmp_path / "worktree" / "project"
+    project.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    binding = ensure_project_binding(registry, project)
+    add_project_location(registry, binding["project_id"], worktree)
+    entry = get_project_entry(registry, binding["project_id"])
+    store = project / ".codess" / "sessions_codex.db"
+    init_db(store)
+
+    with connect(store) as conn:
+        sync_project_catalog(conn, entry)
+        replace_session_events(
+            conn,
+            {
+                "id": "s1",
+                "source": "Codex",
+                "project_id": binding["project_id"],
+                "project_path": str(project),
+                "source_cwd": str(worktree),
+            },
+            [],
+            session_id="s1",
+        )
+        path_obsolete = conn.execute(
+            "SELECT path_obsolete FROM sessions WHERE id='s1'"
+        ).fetchone()[0]
+
+    assert path_obsolete == 0
 
 
 def test_snapshot_is_central_and_relocation_preserves_query_access(tmp_path):
@@ -138,5 +213,10 @@ def test_snapshot_is_central_and_relocation_preserves_query_access(tmp_path):
     assert current_store_paths(replacement)
     entry = get_project_entry(registry, project_id)
     states = {item["path"]: item["state"] for item in entry["locations"]}
+    obsolete = {
+        item["path"]: item["path_obsolete"] for item in entry["locations"]
+    }
     assert states[str(project.resolve())] == "retired"
     assert states[str(replacement.resolve())] == "active"
+    assert obsolete[str(project.resolve())] is True
+    assert obsolete[str(replacement.resolve())] is False

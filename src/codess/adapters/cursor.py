@@ -6,11 +6,14 @@ import time
 from pathlib import Path
 from typing import Iterator
 
+from codess import field_state
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
 from codess.content_processing import apply_processing
+from codess.context_content import bound_context_content
 from codess.cursor_source import (
     connect_readonly,
     iter_bubble_rows,
+    iter_message_request_context_rows,
     parse_timestamp as _parse_timestamp,
 )
 from codess.mapping import annotate_mapping, structured_json
@@ -19,7 +22,8 @@ log = logging.getLogger(__name__)
 
 _MAPPED_BUBBLE_FIELDS = frozenset({
     "type", "text", "createdAt", "timingInfo", "serverBubbleId",
-    "toolFormerData", "toolResults", "modelInfo",
+    "toolFormerData", "toolResults", "modelInfo", "conversationSummary",
+    "contextWindowStatusAtCreation",
 })
 _PROGRESS_ROWS = 1000
 _PROGRESS_SECONDS = 5.0
@@ -47,6 +51,132 @@ def _truncate(text: str, limit: int) -> tuple[str, int]:
     if n <= limit:
         return s, n
     return s[: limit - 1] + "…", n
+
+
+def _context_window_metadata(data: dict) -> dict:
+    """Normalize Cursor's per-bubble context-window observation."""
+    source = data.get("contextWindowStatusAtCreation")
+    if not isinstance(source, dict):
+        return {}
+    names = {
+        "percentageRemaining": "context_percentage_remaining",
+        "percentageRemainingFloat": "context_percentage_remaining_float",
+        "tokensUsed": "context_tokens_used",
+        "tokenLimit": "context_token_limit",
+    }
+    values = {
+        target: source[source_name]
+        for source_name, target in names.items()
+        if source.get(source_name) is not None
+        and not isinstance(source[source_name], (dict, list))
+    }
+    if values:
+        values["context_observation_provenance"] = (
+            "bubble.contextWindowStatusAtCreation"
+        )
+    return values
+
+
+def _merge_metadata(event: dict, values: dict) -> None:
+    if not values:
+        return
+    current = json.loads(event.get("metadata") or "{}")
+    current.update(values)
+    event["metadata"] = json.dumps(current, separators=(",", ":"))
+
+
+def _load_message_request_contexts(
+    db_path: Path,
+    composer_id: str,
+) -> dict[str, tuple[str, dict]]:
+    """Read one composer's request contexts and release the SQLite handle."""
+    contexts: dict[str, tuple[str, dict]] = {}
+    conn = connect_readonly(db_path)
+    try:
+        for key, value in iter_message_request_context_rows(
+            conn, {composer_id}
+        ):
+            if value is None:
+                continue
+            try:
+                decoded = json.loads(value)
+            except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+                continue
+            if not isinstance(decoded, dict):
+                continue
+            parts = str(key).split(":", 2)
+            if len(parts) == 3:
+                contexts[parts[2]] = (str(key), decoded)
+    finally:
+        conn.close()
+    return contexts
+
+
+def _request_context_event(
+    composer_id: str,
+    bubble_id: str,
+    source_key: str,
+    value: dict,
+    source_file: str,
+    timestamp: float | None,
+    opts: dict,
+) -> dict | None:
+    """Map a separately stored Cursor harness request-context body."""
+    text = json.dumps(
+        value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
+    text = apply_processing(
+        text, opts, vendor="Cursor",
+        record_type="messageRequestContext",
+        event_kind="context.inject", phase="pre",
+    )
+    if text is None:
+        return None
+    text, content_len, truncated = bound_context_content(text, opts)
+    text = apply_processing(
+        text, opts, vendor="Cursor",
+        record_type="messageRequestContext",
+        event_kind="context.inject", phase="post",
+    )
+    if text is None:
+        return None
+    text, _post_length, post_truncated = bound_context_content(text, opts)
+    truncated = truncated or post_truncated
+    event = {
+        "session_id": composer_id,
+        "event_id": f"{composer_id}:{bubble_id}:request-context",
+        "event_type": "system_event",
+        "subtype": "context_injection",
+        "role": "harness",
+        "content": text,
+        "content_len": content_len,
+        "content_ref": None,
+        "tool_name": None,
+        "tool_input": None,
+        "tool_output": None,
+        "timestamp": timestamp,
+        "file_path": None,
+        "source_file": source_file,
+        "metadata": json.dumps({
+            "context_kind": "message_request_context",
+            "request_bubble_id": bubble_id,
+            "context_fields": sorted(value),
+            "content_truncated": truncated,
+        }, separators=(",", ":")),
+        "source_raw": None,
+        "event_kind": "context.inject",
+        "actor_kind": "harness",
+        "content_role": "context",
+        "origin_kind": "harness_injected",
+    }
+    return annotate_mapping(
+        event,
+        source_record_type="cursorDiskKV.messageRequestContext",
+        source_record_subtype=None,
+        source_record_locator=source_key,
+        mapping_rule="cursor.request-context",
+        source_path="$",
+    )
 
 
 def get_composer_data(db_path: Path) -> list[dict]:
@@ -186,7 +316,12 @@ def process_db(
         if current_composer is not None and composer_id != current_composer:
             finish_read()
             yield from _process_composer(
-                current_composer, bubbles, source_file, opts, diagnostics
+                current_composer,
+                bubbles,
+                _load_message_request_contexts(db_path, current_composer),
+                source_file,
+                opts,
+                diagnostics,
             )
             bubbles.clear()
         if composer_id != current_composer:
@@ -207,7 +342,12 @@ def process_db(
     if current_composer is not None:
         finish_read()
         yield from _process_composer(
-            current_composer, bubbles, source_file, opts, diagnostics
+            current_composer,
+            bubbles,
+            _load_message_request_contexts(db_path, current_composer),
+            source_file,
+            opts,
+            diagnostics,
         )
 
     skipped = sum(
@@ -241,6 +381,7 @@ def process_db(
 def _process_composer(
     composer_id: str,
     bubbles: list[tuple[str, dict]],
+    request_contexts: dict[str, tuple[str, dict]],
     source_file: str,
     opts: dict,
     diagnostics: dict[str, int] | None,
@@ -275,11 +416,44 @@ def _process_composer(
             _bubble_to_events(composer_id, bubble_id, data, source_file, opts)
         )
         if not events and diagnostics is not None:
-            diagnostics["ignored_records"] = (
-                diagnostics.get("ignored_records", 0) + 1
+            empty_assistant_envelope = (
+                data.get("type") == 2
+                and not str(data.get("text") or "").strip()
+                and data.get("toolResults") in (None, [])
+                and not isinstance(data.get("toolFormerData"), dict)
+                and not data.get("conversationSummary")
             )
+            if empty_assistant_envelope or not data:
+                diagnostics["known_ignored_records"] = (
+                    diagnostics.get("known_ignored_records", 0) + 1
+                )
+                reason = (
+                    "empty_assistant_envelope_records"
+                    if empty_assistant_envelope else "empty_bubble_records"
+                )
+                diagnostics[reason] = diagnostics.get(reason, 0) + 1
+            else:
+                diagnostics["ignored_records"] = (
+                    diagnostics.get("ignored_records", 0) + 1
+                )
         for event in events:
             yield composer_id, event
+        request_context = request_contexts.pop(bubble_id, None)
+        if request_context is not None:
+            source_key, value = request_context
+            event = _request_context_event(
+                composer_id, bubble_id, source_key, value, source_file,
+                _bubble_timestamp(data), opts,
+            )
+            if event is not None:
+                yield composer_id, event
+    for bubble_id, (source_key, value) in sorted(request_contexts.items()):
+        event = _request_context_event(
+            composer_id, bubble_id, source_key, value, source_file, None, opts
+        )
+        if event is not None:
+            yield composer_id, event
+    request_contexts.clear()
 
 
 def _bubble_to_events(
@@ -318,6 +492,10 @@ def _bubble_to_events(
         }
 
     def mapped(event: dict, rule: str, source_path: str = "$.bubble") -> dict:
+        metadata = json.loads(event.get("metadata") or "{}")
+        applied_rules = [rule]
+        if metadata.get("context_observation_provenance"):
+            applied_rules.append("cursor.context-window-observation")
         return annotate_mapping(
             event,
             source_record_type="cursorDiskKV.bubble",
@@ -325,6 +503,7 @@ def _bubble_to_events(
             source_record_locator=f"bubbleId:{composer_id}:{bubble_id}",
             mapping_rule=rule,
             source_path=source_path,
+            applied_rules=applied_rules,
         )
 
     if msg_type == 1:
@@ -343,9 +522,11 @@ def _bubble_to_events(
         if truncated is None:
             return
         event = base_ev("user_message", subtype, "user", truncated, content_len)
-        model_info = data.get("modelInfo")
+        model_info, model_info_state = field_state.get_state(data, "modelInfo")
         if isinstance(model_info, dict):
-            selection = model_info.get("modelName")
+            selection, selection_state = field_state.get_state(
+                model_info, "modelName"
+            )
             if isinstance(selection, str) and selection.strip():
                 metadata = {"model_selection": selection.strip()}
                 if selection.strip().lower() != "default":
@@ -358,6 +539,25 @@ def _bubble_to_events(
                         }
                     }
                 event["metadata"] = json.dumps(metadata, separators=(",", ":"))
+            else:
+                if selection_state == field_state.PRESENT:
+                    selection_state = field_state.MALFORMED
+                field_state.attach(
+                    event, field="model", state=selection_state,
+                    source_field="modelInfo.modelName", value=selection,
+                )
+        else:
+            if model_info_state == field_state.PRESENT:
+                model_info_state = field_state.MALFORMED
+            field_state.attach(
+                event, field="model", state=model_info_state,
+                source_field="modelInfo", value=model_info,
+            )
+        field_state.attach(
+            event, field="prompt_origin", state=field_state.ABSENT,
+            source_field="bubble.origin",
+        )
+        _merge_metadata(event, _context_window_metadata(data))
         yield mapped(event, "cursor.bubble")
         return
 
@@ -375,13 +575,75 @@ def _bubble_to_events(
             )
             if truncated is None:
                 return
-            yield mapped(
-                base_ev(
-                    "assistant_message", "response", "assistant",
-                    truncated, content_len,
-                ),
-                "cursor.bubble",
+            response = base_ev(
+                "assistant_message", "response", "assistant",
+                truncated, content_len,
             )
+            _merge_metadata(response, _context_window_metadata(data))
+            yield mapped(response, "cursor.bubble")
+
+        summary_value = data.get("conversationSummary")
+        if isinstance(summary_value, str) and summary_value.strip():
+            try:
+                summary = json.loads(summary_value)
+            except json.JSONDecodeError:
+                summary = {"summary": summary_value}
+            if not isinstance(summary, dict):
+                summary = {"summary": str(summary)}
+            body = summary.get("summary")
+            if isinstance(body, str):
+                body = apply_processing(
+                    body, opts, vendor="Cursor",
+                    record_type="bubble.conversationSummary",
+                    event_kind="context.compact", phase="pre",
+                )
+            if isinstance(body, str):
+                body, summary_len, truncated_summary = bound_context_content(
+                    body, opts
+                )
+                body = apply_processing(
+                    body, opts, vendor="Cursor",
+                    record_type="bubble.conversationSummary",
+                    event_kind="context.compact", phase="post",
+                )
+                if body is not None:
+                    body, _post_length, post_truncated = bound_context_content(
+                        body, opts
+                    )
+                    truncated_summary = (
+                        truncated_summary or post_truncated
+                    )
+                    compact = base_ev(
+                        "system_event", "context_compaction", "harness",
+                        body, summary_len,
+                    )
+                    compact["event_id"] = f"{event_id}:compaction"
+                    compact["event_kind"] = "context.compact"
+                    compact["actor_kind"] = "harness"
+                    compact["content_role"] = "context"
+                    compact["origin_kind"] = "harness_injected"
+                    metadata = {
+                        "audit_kind": "context_compaction",
+                        "context_kind": "conversation_summary",
+                        "content_truncated": truncated_summary,
+                    }
+                    for key in (
+                        "truncationLastBubbleIdInclusive",
+                        "clientShouldStartSendingFromInclusiveBubbleId",
+                        "previousConversationSummaryBubbleId",
+                        "includesToolResults",
+                    ):
+                        if summary.get(key) is not None:
+                            metadata[key] = summary[key]
+                    metadata.update(_context_window_metadata(data))
+                    compact["metadata"] = json.dumps(
+                        metadata, separators=(",", ":")
+                    )
+                    yield mapped(
+                        compact,
+                        "cursor.compaction-summary",
+                        "$.bubble.conversationSummary",
+                    )
 
         tool_former = data.get("toolFormerData")
         if isinstance(tool_former, dict):
@@ -432,6 +694,19 @@ def _bubble_to_events(
                 call["metadata"] = metadata
                 call["source_status"] = status
                 call["normalized_status"] = normalized
+                _input_value, input_state = field_state.get_state(
+                    tool_former,
+                    "rawArgs" if "rawArgs" in tool_former else "params",
+                )
+                field_state.attach(
+                    call, field="tool_input", state=input_state,
+                    source_field=(
+                        "toolFormerData.rawArgs"
+                        if "rawArgs" in tool_former
+                        else "toolFormerData.params"
+                    ),
+                    value=_input_value,
+                )
                 yield mapped(
                     call,
                     "cursor.tool-former-invocation",

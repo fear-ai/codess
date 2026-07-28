@@ -24,6 +24,7 @@ from codess.schema_contract import (
     verify_package,
 )
 from codess.store import connect, init_db, replace_session_events
+from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +60,8 @@ def test_new_store_has_durable_identity_and_contract_tables(tmp_path):
         meta = dict(conn.execute("SELECT key, value FROM store_meta"))
         assert meta["format_id"] == FORMAT_ID
         assert meta["format_version"] == str(FORMAT_VERSION)
+        assert meta["decoder_version"] == DECODER_VERSION
+        assert meta["validator_version"] == VALIDATOR_VERSION
         tables = {
             row[0]
             for row in conn.execute(
@@ -88,6 +91,32 @@ def test_json_contract_is_enforced_by_sqlite(tmp_path):
         conn.execute(
             "INSERT INTO events(session_id,event_id,tool_input) VALUES ('s1','e1','not-json')"
         )
+    conn.close()
+
+
+def test_event_field_diagnostics_materialize_scope_and_severity(tmp_path):
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = connect(path)
+    replace_session_events(
+        conn,
+        {"id": "s1", "source": "Cursor"},
+        [{
+            "session_id": "s1", "event_id": "e1",
+            "event_type": "user_message", "role": "user",
+            "field_diagnostics": [{
+                "diagnostic_level": "field", "level": "info",
+                "reason_code": "field_absent",
+                "source_field": "modelInfo",
+            }],
+        }],
+        session_id="s1",
+    )
+    row = conn.execute(
+        "SELECT level,severity,reason_code,source_field "
+        "FROM mapping_diagnostics"
+    ).fetchone()
+    assert tuple(row) == ("field", "info", "field_absent", "modelInfo")
     conn.close()
 
 

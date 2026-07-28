@@ -27,6 +27,7 @@ CREATE TABLE project_locations (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   machine_id TEXT NOT NULL,
   observed_path TEXT NOT NULL,
+  path_obsolete INTEGER NOT NULL DEFAULT 0 CHECK (path_obsolete IN (0,1)),
   location_kind TEXT NOT NULL DEFAULT 'directory',
   state TEXT NOT NULL CHECK (state IN ('active','retired','missing','unknown')),
   observed_at TEXT NOT NULL,
@@ -42,6 +43,7 @@ CREATE TABLE workspace_bindings (
   workspace_id TEXT NOT NULL,
   relation_kind TEXT NOT NULL,
   source_project_path TEXT,
+  path_obsolete INTEGER NOT NULL DEFAULT 0 CHECK (path_obsolete IN (0,1)),
   selection_state TEXT NOT NULL,
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
   UNIQUE(source_system_id, workspace_id, project_id)
@@ -97,6 +99,7 @@ CREATE TABLE sessions (
   source_id INTEGER REFERENCES sources(id),
   project_id TEXT REFERENCES projects(id),
   source_cwd TEXT,
+  path_obsolete INTEGER NOT NULL DEFAULT 0 CHECK (path_obsolete IN (0,1)),
   started_at REAL,
   ended_at REAL,
   source_mtime REAL,
@@ -110,8 +113,8 @@ CREATE TABLE sessions (
   default_model_config_id INTEGER REFERENCES model_configurations(id),
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
 
-  -- Read compatibility for the 0.1 query surface. These are projections, not
-  -- the v2 functional identity model.
+  -- Read compatibility for the legacy flat query surface. These are
+  -- projections, not the functional identity model.
   source TEXT NOT NULL DEFAULT 'Unknown',
   type TEXT NOT NULL DEFAULT 'Unknown',
   release TEXT,
@@ -336,6 +339,8 @@ CREATE TABLE mapping_diagnostics (
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
   event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
   level TEXT NOT NULL CHECK (level IN ('source','record','field')),
+  severity TEXT NOT NULL DEFAULT 'info'
+    CHECK (severity IN ('info','warn','error')),
   reason_code TEXT NOT NULL,
   source_field TEXT,
   source_value TEXT,

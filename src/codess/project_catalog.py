@@ -106,10 +106,15 @@ def ensure_project_binding(registry_root: Path, project_root: Path) -> dict[str,
         for item in entry.get("locations", [])
         if isinstance(item, dict) and item.get("location_id")
     }
+    for location in locations.values():
+        location.setdefault(
+            "path_obsolete", location.get("state") in {"retired", "missing"}
+        )
     locations[observed_location_id] = {
         "location_id": observed_location_id,
         "machine_id": machine_id,
         "path": resolved,
+        "path_obsolete": False,
         "state": "active",
         "observed_at": _now(),
         "platform": platform.system().lower(),
@@ -120,8 +125,11 @@ def ensure_project_binding(registry_root: Path, project_root: Path) -> dict[str,
         for item in entry.get("workspace_bindings", [])
         if isinstance(item, dict) and item.get("source_system_id") and item.get("workspace_id")
     }
+    for workspace in workspaces.values():
+        workspace.setdefault("path_obsolete", False)
     aliases = set(entry.get("path_aliases", []))
     aliases.add(resolved)
+    obsolete_paths: set[str] = set()
     for link in _source_links(project_root):
         if link.get("selection_state") != "approved":
             continue
@@ -129,21 +137,31 @@ def ensure_project_binding(registry_root: Path, project_root: Path) -> dict[str,
         identity = link.get("source_identity") or {}
         workspace_id = identity.get("workspace_id") if isinstance(identity, dict) else None
         if source_system_id and workspace_id:
+            source_project_path = link.get("source_project_path")
+            path_obsolete = bool(link.get("path_obsolete"))
+            if source_project_path and source_project_path != resolved:
+                path_obsolete = True
             workspaces[(source_system_id, str(workspace_id))] = {
                 "source_system_id": source_system_id,
                 "workspace_id": str(workspace_id),
                 "relation_kind": link.get("relation_kind") or "workspace_binding",
-                "source_project_path": link.get("source_project_path"),
+                "source_project_path": source_project_path,
+                "path_obsolete": path_obsolete,
                 "target_location_id": observed_location_id,
                 "selection_state": "approved",
             }
-        for key in ("source_project_path", "target_project_path"):
-            if link.get(key):
-                aliases.add(str(link[key]))
+        source_path = link.get("source_project_path")
+        if source_path and (
+            link.get("path_obsolete") or str(source_path) != resolved
+        ):
+            obsolete_paths.add(str(source_path))
+        target_path = link.get("target_project_path")
+        if target_path:
+            aliases.add(str(target_path))
     entry["workspace_bindings"] = sorted(
         workspaces.values(), key=lambda item: (item["source_system_id"], item["workspace_id"])
     )
-    entry["path_aliases"] = sorted(aliases)
+    entry["path_aliases"] = sorted(aliases - obsolete_paths)
     by_id[project_id] = entry
     catalog["projects"] = sorted(by_id.values(), key=lambda item: item["project_id"])
     catalog["updated_at"] = _now()
@@ -205,10 +223,15 @@ def add_project_location(
         for item in entry.get("locations", [])
         if item.get("location_id")
     }
+    for location in locations.values():
+        location.setdefault(
+            "path_obsolete", location.get("state") in {"retired", "missing"}
+        )
     locations[observed_location_id] = {
         "location_id": observed_location_id,
         "machine_id": machine,
         "path": resolved,
+        "path_obsolete": False,
         "state": "active",
         "observed_at": _now(),
         "platform": platform.system().lower(),
@@ -257,6 +280,7 @@ def retire_project_location(
     if target.get("state") == "active" and len(active) == 1 and not allow_last_active:
         raise ValueError("refusing to retire the last active location")
     target["state"] = "retired"
+    target["path_obsolete"] = True
     target["retired_at"] = _now()
     entry["updated_at"] = _now()
     catalog["updated_at"] = _now()
@@ -293,6 +317,7 @@ def register_workspace_bindings(
                 "workspace_id": workspace_id,
                 "relation_kind": "local_workspace_path_binding",
                 "source_project_path": source_project_path,
+                "path_obsolete": False,
                 "target_location_id": location_id_value,
                 "selection_state": "approved",
             }
@@ -323,6 +348,7 @@ def register_relocation(
     for location in entry.get("locations", []):
         if location.get("path") == old_path:
             location["state"] = "retired"
+            location["path_obsolete"] = True
             location["retired_at"] = _now()
     catalog["updated_at"] = _now()
     _write_json_atomic(_catalog_path(registry_root), catalog)

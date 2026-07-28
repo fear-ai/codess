@@ -1,7 +1,7 @@
 {
   "catalog_format": "codess.approved-baselines/1",
   "coschema_format": 4,
-  "package_digest": "503bc95059247f0fbfc596295ead26226e288f2e73347028fba0d85cf426ca47",
+  "package_digest": "4be177965524dbfe2d5d0f9577b71aecc2901deec0627d8d9e64851f47707bad",
   "projects": [
     {
       "last_automated_validation": {
@@ -9,7 +9,16 @@
           "normalization_digest_match": true,
           "passed": true,
           "semantic_digest_match": true,
-          "source_revisions_match": true
+          "source_revisions_match": true,
+          "value_acceptance": {
+            "accepted": true,
+            "advisory": [],
+            "advisory_count": 0,
+            "examples_truncated": false,
+            "fatal": [],
+            "fatal_count": 0,
+            "match_count": 33347
+          }
         },
         "query_smoke": {
           "artifacts": true,
@@ -19,22 +28,22 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-18T10:10:20.503249+00:00"
+        "validated_at": "2026-07-28T20:27:20.891121+00:00"
       },
       "mapping_diagnostics": {
         "missing_tool_call_id": 19
       },
-      "parent_snapshot_id": "20260718T074632.166316Z-coschema4-f3bed07f1595",
+      "parent_snapshot_id": "20260728T202016.633319Z-coschema4-5b224a61461d",
       "path": "/Users/walter/Work/Code/SWEmore",
       "project_id": "codess:project:d0294926-1b64-42a0-9d1b-2ff2d0332401",
       "raw_mode": "capture",
       "raw_records": 1,
       "selection_state": "approved",
-      "semantic_digest": "7bd0a00c33704f2df28e7cef0e8c5abdaae9d2b722bade65caf4da5bc41b3321",
-      "snapshot_id": "20260718T074632.498190Z-coschema4-063fadc92862",
+      "semantic_digest": "33bbf80e16b2b06ec3fcef224cf44f31542ee5ba58a77c6bed9b28e8d0ff3998",
+      "snapshot_id": "20260728T202017.158169Z-coschema4-38f97c9ae014",
       "sources": {
         "Codex": {
-          "events": 275,
+          "events": 416,
           "sessions": 1
         }
       },
@@ -47,7 +56,16 @@
           "normalization_digest_match": true,
           "passed": true,
           "semantic_digest_match": true,
-          "source_revisions_match": true
+          "source_revisions_match": true,
+          "value_acceptance": {
+            "accepted": true,
+            "advisory": [],
+            "advisory_count": 0,
+            "examples_truncated": false,
+            "fatal": [],
+            "fatal_count": 0,
+            "match_count": 324688
+          }
         },
         "query_smoke": {
           "artifacts": true,
@@ -57,20 +75,20 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-18T10:10:20.552112+00:00"
+        "validated_at": "2026-07-28T20:27:20.982866+00:00"
       },
       "mapping_diagnostics": {},
-      "parent_snapshot_id": "20260718T074634.298457Z-coschema4-69cd18da6c59",
+      "parent_snapshot_id": "20260728T202026.601773Z-coschema4-96706277ce53",
       "path": "/Users/walter/Work/Spank/spank-py",
       "project_id": "codess:project:5be64477-9245-47a7-9c5b-254e583826b0",
       "raw_mode": "capture",
       "raw_records": 6,
       "selection_state": "approved",
-      "semantic_digest": "cdeb3f2278062a367995a631baa043be382546a9aebad6cc755905e76082ec55",
-      "snapshot_id": "20260718T074635.695308Z-coschema4-9edea1b8645f",
+      "semantic_digest": "10fef3209b10840baf02d81a337276dd0e22e2fde707be8424beea20383c6789",
+      "snapshot_id": "20260728T202028.296121Z-coschema4-ed910a7dceca",
       "sources": {
         "Claude": {
-          "events": 4187,
+          "events": 4188,
           "sessions": 6
         }
       },
@@ -80,13 +98,19 @@
     {
       "last_automated_validation": {
         "fixed_point": {
-          "first_snapshot_id": "20260718T094630.846830Z-coschema4-4f72da502224",
-          "method": "successive-shared-cohort-ingests",
           "normalization_digest_match": true,
           "passed": true,
-          "repeat_snapshot_id": "20260718T095547.634299Z-coschema4-69c5b45934d2",
           "semantic_digest_match": false,
-          "source_revisions_match": false
+          "source_revisions_match": false,
+          "value_acceptance": {
+            "accepted": true,
+            "advisory": [],
+            "advisory_count": 0,
+            "examples_truncated": false,
+            "fatal": [],
+            "fatal_count": 0,
+            "match_count": 5399503
+          }
         },
         "query_smoke": {
           "artifacts": true,
@@ -96,28 +120,165 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-18T10:10:20.832461+00:00"
+        "validated_at": "2026-07-28T20:27:21.285531+00:00"
       },
       "mapping_diagnostics": {},
-      "parent_snapshot_id": "20260718T094630.846830Z-coschema4-4f72da502224",
+      "parent_snapshot_id": "20260728T202259.313389Z-coschema4-86a875b95e50",
       "path": "/Users/walter/Work/ZK/Zero400",
       "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-      "raw_mode": "capture",
+      "raw_mode": "reference",
       "raw_records": 6,
       "selection_state": "approved",
-      "semantic_digest": "cf44543a9679f1e5940107d8ca960f7a8c682f38b8eb22ff083e584b67521a5e",
-      "snapshot_id": "20260718T095547.634299Z-coschema4-69c5b45934d2",
+      "semantic_digest": "980b3f026b1b3e4cdc1e11b48cbff97daf27bf82fd258d5671bbf6a60dec1ae3",
+      "snapshot_id": "20260728T202533.906161Z-coschema4-d32eb4be15fa",
       "sources": {
         "Claude": {
           "events": 1932,
           "sessions": 3
         },
         "Cursor": {
-          "events": 37252,
-          "sessions": 17
+          "events": 76054,
+          "sessions": 28
         }
       },
       "validation_policy": "/Users/walter/Work/Code/CodeSess/catalog/policies/zero400.json",
+      "validation_state": "accepted_with_limitations"
+    },
+    {
+      "last_automated_validation": {
+        "fixed_point": {
+          "normalization_digest_match": true,
+          "passed": true,
+          "semantic_digest_match": true,
+          "source_revisions_match": true,
+          "value_acceptance": {
+            "accepted": true,
+            "advisory": [],
+            "advisory_count": 0,
+            "examples_truncated": false,
+            "fatal": [],
+            "fatal_count": 0,
+            "match_count": 2058136
+          }
+        },
+        "query_smoke": {
+          "artifacts": true,
+          "audit": true,
+          "diagnostics": true,
+          "lineage": true,
+          "sessions": true,
+          "stats": true
+        },
+        "validated_at": "2026-07-28T20:27:28.754138+00:00"
+      },
+      "mapping_diagnostics": {},
+      "parent_snapshot_id": "20260728T202616.022656Z-coschema4-8ff0f10ddd6d",
+      "path": "/Users/walter/Work/Code/Misses",
+      "project_id": "codess:project:1966d4d8-b793-4769-8ae5-863ece164fc1",
+      "raw_mode": "capture",
+      "raw_records": 122,
+      "selection_state": "approved",
+      "semantic_digest": "38b029a094de8911fdf3f72e9e13dd287ca5994c508b3867a44dea11184ee08d",
+      "snapshot_id": "20260728T202632.149387Z-coschema4-83b98e810734",
+      "sources": {
+        "Claude": {
+          "events": 28044,
+          "sessions": 122
+        }
+      },
+      "validation_policy": "/Users/walter/Work/Code/CodeSess/catalog/policies/misses.json",
+      "validation_state": "accepted"
+    },
+    {
+      "last_automated_validation": {
+        "fixed_point": {
+          "normalization_digest_match": true,
+          "passed": true,
+          "semantic_digest_match": true,
+          "source_revisions_match": true,
+          "value_acceptance": {
+            "accepted": true,
+            "advisory": [],
+            "advisory_count": 0,
+            "examples_truncated": false,
+            "fatal": [],
+            "fatal_count": 0,
+            "match_count": 598826
+          }
+        },
+        "query_smoke": {
+          "artifacts": true,
+          "audit": true,
+          "diagnostics": true,
+          "lineage": true,
+          "sessions": true,
+          "stats": true
+        },
+        "validated_at": "2026-07-28T20:27:30.664918+00:00"
+      },
+      "mapping_diagnostics": {},
+      "parent_snapshot_id": "20260728T202646.280405Z-coschema4-5be57d6f8b44",
+      "path": "/Users/walter/Work/ZK/insight",
+      "project_id": "codess:project:5928e03c-3d9e-4539-b86b-56909e5f2884",
+      "raw_mode": "capture",
+      "raw_records": 18,
+      "selection_state": "approved",
+      "semantic_digest": "bcb40c999d16e866bf9f784d357c525cbe03d160bd30bf8f6597fb2ae071e45a",
+      "snapshot_id": "20260728T202649.134508Z-coschema4-87f753b80a06",
+      "sources": {
+        "Claude": {
+          "events": 8650,
+          "sessions": 13
+        }
+      },
+      "validation_policy": "/Users/walter/Work/Code/CodeSess/catalog/policies/insight.json",
+      "validation_state": "accepted"
+    },
+    {
+      "last_automated_validation": {
+        "fixed_point": {
+          "normalization_digest_match": true,
+          "passed": true,
+          "semantic_digest_match": true,
+          "source_revisions_match": true,
+          "value_acceptance": {
+            "accepted": true,
+            "advisory": [],
+            "advisory_count": 0,
+            "examples_truncated": false,
+            "fatal": [],
+            "fatal_count": 0,
+            "match_count": 702782
+          }
+        },
+        "query_smoke": {
+          "artifacts": true,
+          "audit": true,
+          "diagnostics": true,
+          "lineage": true,
+          "sessions": true,
+          "stats": true
+        },
+        "validated_at": "2026-07-28T20:27:31.184281+00:00"
+      },
+      "mapping_diagnostics": {
+        "missing_tool_call_id": 36
+      },
+      "parent_snapshot_id": "20260728T202701.396128Z-coschema4-0687337bcd43",
+      "path": "/Users/walter/Work/WP/wpages",
+      "project_id": "codess:project:c6717985-db6f-4fd9-bd6a-716ded4526c0",
+      "raw_mode": "capture",
+      "raw_records": 3,
+      "selection_state": "approved",
+      "semantic_digest": "a3ac8a00b96ee9ed37519af5bc32da5b56a57c9d310c394c6f699a47df4313ca",
+      "snapshot_id": "20260728T202704.704709Z-coschema4-8b408d74bb23",
+      "sources": {
+        "Codex": {
+          "events": 8209,
+          "sessions": 3
+        }
+      },
+      "validation_policy": "/Users/walter/Work/Code/CodeSess/catalog/policies/wpages.json",
       "validation_state": "accepted"
     }
   ],

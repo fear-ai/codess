@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from codess import field_state
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
+from codess.context_content import bound_context_content
 from codess.sanitize import sanitize_value
 from codess.content_processing import apply_processing
 from codess.mapping import annotate_mapping
@@ -101,6 +103,19 @@ def _extract_text_from_content(content: list) -> str:
     return "\n".join(parts)
 
 
+def _extract_reasoning_summary(summary) -> str:
+    """Extract vendor-exposed summary text, never encrypted reasoning state."""
+    if not isinstance(summary, list):
+        return ""
+    parts = []
+    for item in summary:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+    return "\n".join(part for part in parts if part)
+
+
 def _build_call_map(path: Path) -> dict[str, str]:
     """Map tool call ids to names so later output records retain identity."""
     calls = {}
@@ -108,6 +123,8 @@ def _build_call_map(path: Path) -> dict[str, str]:
         if record.get("type") != "response_item":
             continue
         payload = record.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
         if payload.get("type") not in ("function_call", "custom_tool_call"):
             continue
         call_id = payload.get("call_id")
@@ -199,6 +216,14 @@ def _configuration_values(
 
 
 def _mapping_rule(event: dict) -> str:
+    if event.get("subtype") == "context_compaction":
+        return "codex.compaction"
+    if event.get("subtype") == "context_injection":
+        return "codex.context-injection"
+    if event.get("subtype") in {"task_started", "task_complete"}:
+        return "codex.task-lifecycle"
+    if event.get("subtype") == "reasoning_summary":
+        return "codex.reasoning-summary"
     if event.get("event_type") == "tool_call":
         return "codex.tool-call"
     if event.get("subtype") == "tool_result":
@@ -211,10 +236,38 @@ def _mapping_rule(event: dict) -> str:
 def _annotate_source(
     event: dict, record_type: str, payload: dict, line_num: int,
 ) -> dict:
+    event = dict(event)
+    source_path = event.pop("_source_path", "$.payload")
     rule = _mapping_rule(event)
     applied = [rule]
     if event.get("metadata") and record_type == "response_item":
         applied.append("codex.configuration")
+    if event.get("actor_kind") == "model" or event.get("role") == "assistant":
+        metadata = event.get("metadata")
+        try:
+            configuration = json.loads(metadata) if metadata else {}
+        except (TypeError, json.JSONDecodeError):
+            configuration = {}
+        model, state = field_state.get_state(configuration, "model")
+        field_state.attach(
+            event, field="model", state=state,
+            source_field="effective_configuration.model", value=model,
+        )
+    if event.get("event_type") == "user_message":
+        field_state.attach(
+            event, field="prompt_origin", state=field_state.ABSENT,
+            source_field="payload.origin",
+        )
+    if event.get("event_type") == "tool_call":
+        input_field = (
+            "arguments"
+            if payload.get("type") == "function_call" else "input"
+        )
+        value, state = field_state.get_state(payload, input_field)
+        field_state.attach(
+            event, field="tool_input", state=state,
+            source_field=f"payload.{input_field}", value=value,
+        )
     return annotate_mapping(
         event,
         source_record_type=record_type,
@@ -223,7 +276,7 @@ def _annotate_source(
         ),
         source_record_locator=str(line_num),
         mapping_rule=rule,
-        source_path="$.payload",
+        source_path=source_path,
         applied_rules=applied,
     )
 
@@ -251,6 +304,111 @@ def _failed_status(payload: dict) -> bool:
     }
 
 
+def _compaction_events(
+    payload: dict,
+    *,
+    session_id: str,
+    source_file: str,
+    line_num: int,
+    timestamp: float | None,
+    source_raw: bytes | None,
+    opts: dict,
+) -> Iterator[dict]:
+    """Map each explicit encrypted Codex compaction summary once.
+
+    ``replacement_history`` reconstructs a context window and repeats ordinary
+    transcript messages.  Only its dedicated ``type=compaction`` item is new
+    compaction communication; copying the rest would multiply large messages.
+    """
+    history = payload.get("replacement_history")
+    if not isinstance(history, list):
+        history = []
+    summaries = [
+        (index, item)
+        for index, item in enumerate(history)
+        if isinstance(item, dict) and item.get("type") == "compaction"
+    ]
+    if not summaries:
+        summaries = [(-1, {})]
+    for emitted_index, (history_index, item) in enumerate(summaries):
+        encrypted = item.get("encrypted_content")
+        text = encrypted if isinstance(encrypted, str) else ""
+        text = apply_processing(
+            text,
+            opts,
+            vendor="Codex",
+            record_type="compacted.encrypted_content",
+            event_kind="context.compact",
+            phase="pre",
+        )
+        if text is None:
+            continue
+        text, content_len, truncated = bound_context_content(text, opts)
+        text = apply_processing(
+            text,
+            opts,
+            vendor="Codex",
+            record_type="compacted.encrypted_content",
+            event_kind="context.compact",
+            phase="post",
+        )
+        if text is None:
+            continue
+        text, _post_length, post_truncated = bound_context_content(text, opts)
+        truncated = truncated or post_truncated
+        metadata = {
+            "audit_kind": "context_compaction",
+            "context_kind": "compaction_summary",
+            "content_encoding": (
+                "vendor_encrypted" if isinstance(encrypted, str) else "absent"
+            ),
+            "content_truncated": truncated,
+            "replacement_history_items": len(history),
+            "replacement_history_messages_not_duplicated": sum(
+                isinstance(entry, dict) and entry.get("type") == "message"
+                for entry in history
+            ),
+        }
+        for key in (
+            "window_number", "first_window_id", "previous_window_id", "window_id"
+        ):
+            if payload.get(key) is not None:
+                metadata[key] = payload[key]
+        if item.get("id") is not None:
+            metadata["compaction_item_id"] = item["id"]
+        yield {
+            "session_id": session_id,
+            "event_id": (
+                str(line_num)
+                if len(summaries) == 1
+                else f"{line_num}:{emitted_index}"
+            ),
+            "event_type": "system_event",
+            "subtype": "context_compaction",
+            "role": "harness",
+            "content": text or None,
+            "content_len": content_len if encrypted is not None else None,
+            "content_ref": None,
+            "tool_name": None,
+            "tool_input": None,
+            "tool_output": None,
+            "timestamp": timestamp,
+            "file_path": None,
+            "source_file": source_file,
+            "metadata": json.dumps(metadata, separators=(",", ":")),
+            "source_raw": source_raw,
+            "event_kind": "context.compact",
+            "actor_kind": "harness",
+            "content_role": "context",
+            "origin_kind": "harness_injected",
+            "_source_path": (
+                "$.payload.replacement_history"
+                if history_index < 0
+                else f"$.payload.replacement_history[{history_index}]"
+            ),
+        }
+
+
 def process_file(
     path: Path,
     session_id: str,
@@ -268,6 +426,12 @@ def process_file(
     for line_num, record, raw_line in iter_codex_records(path, diagnostics):
         rtype = record.get("type")
         payload = record.get("payload") or {}
+        if not isinstance(payload, dict):
+            if diagnostics is not None:
+                diagnostics["malformed_records"] = (
+                    diagnostics.get("malformed_records", 0) + 1
+                )
+            continue
         timestamp = _parse_timestamp(record.get("timestamp"))
 
         source_raw = (
@@ -278,9 +442,22 @@ def process_file(
 
         if rtype == "session_meta":
             if diagnostics is not None:
-                diagnostics["ignored_records"] = (
-                    diagnostics.get("ignored_records", 0) + 1
+                diagnostics["session_metadata_records"] = (
+                    diagnostics.get("session_metadata_records", 0) + 1
                 )
+            continue
+
+        if rtype == "compacted":
+            for event in _compaction_events(
+                payload,
+                session_id=session_id,
+                source_file=source_file,
+                line_num=line_num,
+                timestamp=timestamp,
+                source_raw=source_raw,
+                opts=opts,
+            ):
+                yield _annotate_source(event, rtype, payload, line_num)
             continue
 
         if rtype == "turn_context":
@@ -312,13 +489,78 @@ def process_file(
 
         if rtype == "response_item":
             item_type = payload.get("type", "")
+            if item_type == "reasoning":
+                text = _extract_reasoning_summary(payload.get("summary"))
+                if not text:
+                    if diagnostics is not None:
+                        diagnostics["known_ignored_records"] = (
+                            diagnostics.get("known_ignored_records", 0) + 1
+                        )
+                        diagnostics["reasoning_without_summary_records"] = (
+                            diagnostics.get(
+                                "reasoning_without_summary_records", 0
+                            ) + 1
+                        )
+                    continue
+                text = apply_processing(
+                    text, opts, vendor="Codex",
+                    record_type="reasoning_summary",
+                    event_kind="message.reasoning_summary", phase="pre",
+                )
+                if text is None:
+                    continue
+                truncated, content_len = _truncate(text, TRUNCATE_RESPONSE)
+                truncated = apply_processing(
+                    truncated, opts, vendor="Codex",
+                    record_type="reasoning_summary",
+                    event_kind="message.reasoning_summary", phase="post",
+                )
+                if truncated is None:
+                    continue
+                if diagnostics is not None:
+                    diagnostics["reasoning_summary_records"] = (
+                        diagnostics.get("reasoning_summary_records", 0) + 1
+                    )
+                yield _annotate_source({
+                    "session_id": session_id,
+                    "event_id": str(line_num),
+                    "event_type": "assistant_message",
+                    "subtype": "reasoning_summary",
+                    "role": "assistant",
+                    "event_kind": "message.reasoning_summary",
+                    "actor_kind": "model",
+                    "content_role": "reasoning_summary",
+                    "origin_kind": "model_generated",
+                    "content": truncated,
+                    "content_len": content_len,
+                    "content_ref": None,
+                    "tool_name": None,
+                    "tool_input": None,
+                    "tool_output": None,
+                    "timestamp": timestamp,
+                    "file_path": None,
+                    "source_file": source_file,
+                    "metadata": _merge_metadata(
+                        payload, current_configuration
+                    ),
+                    "source_raw": source_raw,
+                }, rtype, payload, line_num)
+                continue
+
             if item_type == "message":
                 role = payload.get("role", "")
                 content = payload.get("content") or []
                 text = _extract_text_from_content(content)
+                message_kind = (
+                    "message.prompt"
+                    if role == "user"
+                    else "message.context"
+                    if role in {"developer", "system"}
+                    else "message.response"
+                )
                 text = apply_processing(
                     text, opts, vendor="Codex", record_type="message",
-                    event_kind="message.prompt" if role == "user" else "message.response",
+                    event_kind=message_kind,
                     phase="pre",
                 )
                 if text is None:
@@ -375,6 +617,47 @@ def process_file(
                         "file_path": None,
                         "source_file": source_file,
                         "metadata": _merge_metadata(payload, current_configuration),
+                        "source_raw": source_raw,
+                    }, rtype, payload, line_num)
+                elif role in {"developer", "system"}:
+                    bounded, content_len, truncated = bound_context_content(
+                        text, opts
+                    )
+                    bounded = apply_processing(
+                        bounded, opts, vendor="Codex", record_type="message",
+                        event_kind="message.context", phase="post",
+                    )
+                    if bounded is None:
+                        continue
+                    bounded, _post_len, post_truncated = bound_context_content(
+                        bounded, opts
+                    )
+                    yield _annotate_source({
+                        "session_id": session_id,
+                        "event_id": str(line_num),
+                        "event_type": "system_event",
+                        "subtype": "context_injection",
+                        "role": role,
+                        "event_kind": "message.context",
+                        "actor_kind": "harness",
+                        "content_role": "context",
+                        "origin_kind": "harness_injected",
+                        "content": bounded,
+                        "content_len": content_len,
+                        "content_ref": None,
+                        "tool_name": None,
+                        "tool_input": None,
+                        "tool_output": None,
+                        "timestamp": timestamp,
+                        "file_path": None,
+                        "source_file": source_file,
+                        "metadata": _merge_metadata(payload, {
+                            **current_configuration,
+                            "source_role": role,
+                            "content_truncated": (
+                                truncated or post_truncated
+                            ),
+                        }),
                         "source_raw": source_raw,
                     }, rtype, payload, line_num)
                 elif diagnostics is not None:
@@ -471,18 +754,136 @@ def process_file(
                 continue
 
             if diagnostics is not None:
-                diagnostics["ignored_records"] = (
-                    diagnostics.get("ignored_records", 0) + 1
-                )
+                if item_type == "ghost_snapshot":
+                    diagnostics["known_ignored_records"] = (
+                        diagnostics.get("known_ignored_records", 0) + 1
+                    )
+                    diagnostics["intermediate_state_records"] = (
+                        diagnostics.get("intermediate_state_records", 0) + 1
+                    )
+                else:
+                    diagnostics["ignored_records"] = (
+                        diagnostics.get("ignored_records", 0) + 1
+                    )
             continue
 
         elif rtype == "event_msg":
             msg_type = payload.get("type", "")
+            if msg_type == "context_compacted":
+                if diagnostics is not None:
+                    diagnostics["known_ignored_records"] = (
+                        diagnostics.get("known_ignored_records", 0) + 1
+                    )
+                continue
+            if msg_type in {"task_started", "task_complete"}:
+                is_start = msg_type == "task_started"
+                metadata = {
+                    key: payload.get(key)
+                    for key in (
+                        "turn_id", "started_at", "completed_at", "duration_ms",
+                        "time_to_first_token_ms", "model_context_window",
+                        "collaboration_mode_kind",
+                    )
+                    if payload.get(key) is not None
+                }
+                if isinstance(payload.get("last_agent_message"), str):
+                    metadata["last_agent_message_characters"] = len(
+                        payload["last_agent_message"]
+                    )
+                    metadata["last_agent_message_not_duplicated"] = True
+                yield _annotate_source({
+                    "session_id": session_id,
+                    "event_id": str(line_num),
+                    "event_type": "lifecycle_event",
+                    "subtype": msg_type,
+                    "role": "harness",
+                    "event_kind": (
+                        "lifecycle.start" if is_start else "lifecycle.complete"
+                    ),
+                    "actor_kind": "harness",
+                    "content_role": "status",
+                    "origin_kind": "harness_generated",
+                    "content": None,
+                    "content_len": None,
+                    "content_ref": None,
+                    "tool_name": None,
+                    "tool_input": None,
+                    "tool_output": None,
+                    "timestamp": timestamp,
+                    "file_path": None,
+                    "source_file": source_file,
+                    "metadata": json.dumps(metadata, separators=(",", ":")),
+                    "source_raw": source_raw,
+                }, rtype, payload, line_num)
+                continue
+            if msg_type in {"web_search_end", "patch_apply_end"}:
+                call_id = payload.get("call_id")
+                failed = (
+                    payload.get("success") is False
+                    or str(payload.get("status") or "").lower()
+                    in {"failed", "failure", "error"}
+                )
+                metadata = {
+                    "call_id": str(call_id) if call_id is not None else None,
+                    "status": payload.get("status"),
+                    "success": payload.get("success"),
+                    "change_count": (
+                        len(payload["changes"])
+                        if isinstance(payload.get("changes"), dict) else None
+                    ),
+                    "duplicate_output_not_retained": True,
+                }
+                yield _annotate_source({
+                    "session_id": session_id,
+                    "event_id": str(line_num),
+                    "event_type": "user_message",
+                    "subtype": "tool_failure" if failed else "tool_result",
+                    "role": "tool",
+                    "event_kind": "tool.result",
+                    "actor_kind": "tool",
+                    "content_role": "tool_result",
+                    "origin_kind": "tool_generated",
+                    "content": None,
+                    "content_len": None,
+                    "content_ref": None,
+                    "tool_name": (
+                        "web_search"
+                        if msg_type == "web_search_end" else "apply_patch"
+                    ),
+                    "tool_input": None,
+                    "tool_output": None,
+                    "timestamp": timestamp,
+                    "file_path": None,
+                    "source_file": source_file,
+                    "source_status": payload.get("status"),
+                    "normalized_status": "failed" if failed else "succeeded",
+                    "metadata": json.dumps(
+                        {key: value for key, value in metadata.items()
+                         if value is not None},
+                        separators=(",", ":"),
+                    ),
+                    "source_raw": source_raw,
+                }, rtype, payload, line_num)
+                continue
             if msg_type != "turn_aborted":
                 if diagnostics is not None:
-                    diagnostics["ignored_records"] = (
-                        diagnostics.get("ignored_records", 0) + 1
-                    )
+                    known_kind = {
+                        "agent_message": "duplicate_envelope_records",
+                        "user_message": "duplicate_envelope_records",
+                        "agent_reasoning": "duplicate_reasoning_records",
+                        "token_count": "usage_records",
+                    }.get(msg_type)
+                    if known_kind:
+                        diagnostics["known_ignored_records"] = (
+                            diagnostics.get("known_ignored_records", 0) + 1
+                        )
+                        diagnostics[known_kind] = (
+                            diagnostics.get(known_kind, 0) + 1
+                        )
+                    else:
+                        diagnostics["ignored_records"] = (
+                            diagnostics.get("ignored_records", 0) + 1
+                        )
                 continue
             content = str(payload.get("reason") or payload.get("info") or "turn aborted")
             content = apply_processing(
@@ -518,9 +919,17 @@ def process_file(
             }
             yield _annotate_source(ev, rtype, payload, line_num)
         elif diagnostics is not None:
-            diagnostics["ignored_records"] = (
-                diagnostics.get("ignored_records", 0) + 1
-            )
+            if rtype == "world_state":
+                diagnostics["known_ignored_records"] = (
+                    diagnostics.get("known_ignored_records", 0) + 1
+                )
+                diagnostics["intermediate_state_records"] = (
+                    diagnostics.get("intermediate_state_records", 0) + 1
+                )
+            else:
+                diagnostics["ignored_records"] = (
+                    diagnostics.get("ignored_records", 0) + 1
+                )
 
 
 def _truncate(text: str, limit: int) -> tuple[str, int]:

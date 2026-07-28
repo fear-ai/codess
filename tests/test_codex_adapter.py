@@ -88,6 +88,61 @@ class TestGetSessionMeta:
 
 
 class TestProcessFile:
+    def test_explicit_compaction_preserves_bounded_encrypted_summary(
+        self, tmp_path
+    ):
+        path = tmp_path / "rollout.jsonl"
+        records = [
+            {
+                "timestamp": "2026-07-10T00:00:00Z",
+                "type": "compacted",
+                "payload": {
+                    "message": "",
+                    "replacement_history": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "repeat"}],
+                        },
+                        {
+                            "type": "compaction",
+                            "encrypted_content": "encrypted-summary-body",
+                            "id": "compact-1",
+                        },
+                    ],
+                    "window_number": 3,
+                    "window_id": "window-3",
+                },
+            },
+            {
+                "timestamp": "2026-07-10T00:00:00Z",
+                "type": "event_msg",
+                "payload": {"type": "context_compacted"},
+            },
+        ]
+        path.write_text(
+            "".join(json.dumps(record) + "\n" for record in records)
+        )
+        diagnostics = {}
+        events = list(process_file(
+            path, "s1", "/p", {
+                "diagnostics": diagnostics,
+                "max_context_content_chars": 10,
+            },
+        ))
+        assert len(events) == 1
+        event = events[0]
+        assert event["subtype"] == "context_compaction"
+        assert event["content"] == "encrypted…"
+        assert event["content_len"] == len("encrypted-summary-body")
+        assert event["mapping_rule"] == "codex.compaction"
+        metadata = json.loads(event["metadata"])
+        assert metadata["content_encoding"] == "vendor_encrypted"
+        assert metadata["replacement_history_items"] == 2
+        assert metadata["replacement_history_messages_not_duplicated"] == 1
+        assert metadata["window_number"] == 3
+        assert diagnostics["known_ignored_records"] == 1
+
     def test_modern_fixture_contract(self, tmp_path):
         fixture = Path(__file__).parent / "fixtures" / "codex_modern.jsonl"
         project = tmp_path / "project"
@@ -212,8 +267,13 @@ class TestProcessFile:
             f.write('{"type":"event_msg","payload":{"type":"token_count"}}\n')
             path = Path(f.name)
         try:
-            events = list(process_file(path, "s1", "/p", {}))
+            diagnostics = {}
+            events = list(process_file(
+                path, "s1", "/p", {"diagnostics": diagnostics}
+            ))
             assert len(events) == 0
+            assert diagnostics["usage_records"] == 1
+            assert diagnostics["known_ignored_records"] == 1
         finally:
             path.unlink()
 
@@ -222,10 +282,42 @@ class TestProcessFile:
             f.write('{"type":"event_msg","payload":{"type":"user_message","info":"note"}}\n')
             path = Path(f.name)
         try:
-            events = list(process_file(path, "s1", "/p", {}))
+            diagnostics = {}
+            events = list(process_file(
+                path, "s1", "/p", {"diagnostics": diagnostics}
+            ))
             assert events == []
+            assert diagnostics["duplicate_envelope_records"] == 1
         finally:
             path.unlink()
+
+    def test_reasoning_summary_is_retained_without_encrypted_state(
+        self, tmp_path
+    ):
+        path = tmp_path / "session.jsonl"
+        path.write_text(json.dumps({
+            "type": "response_item",
+            "payload": {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "Checking the schema"},
+                    {"type": "summary_text", "text": "Planning validation"},
+                ],
+                "encrypted_content": "opaque-private-state",
+            },
+        }) + "\n")
+        diagnostics = {}
+        events = list(process_file(
+            path, "s1", "/p", {"diagnostics": diagnostics}
+        ))
+        assert len(events) == 1
+        assert events[0]["subtype"] == "reasoning_summary"
+        assert events[0]["event_kind"] == "message.reasoning_summary"
+        assert events[0]["content"] == (
+            "Checking the schema\nPlanning validation"
+        )
+        assert "opaque-private-state" not in events[0]["content"]
+        assert diagnostics["reasoning_summary_records"] == 1
 
     def test_turn_aborted_is_sanitized_and_redacted(self, tmp_path):
         path = tmp_path / "session.jsonl"
@@ -313,3 +405,39 @@ class TestProcessFile:
         assert metadata["configuration_provenance"]["reasoning_effort"][
             "source_record_locator"
         ] == "2"
+
+
+def test_hostile_codex_fields_are_diagnosed_and_other_records_survive(tmp_path):
+    path = tmp_path / "session.jsonl"
+    records = [
+        {"type": "response_item", "payload": ["invalid-envelope"]},
+        {"type": "response_item", "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "keep prompt"}],
+        }},
+        {"type": "response_item", "payload": {
+            "type": "function_call", "name": "read_file",
+            "call_id": "call-1", "arguments": None,
+        }},
+    ]
+    path.write_text("".join(json.dumps(item) + "\n" for item in records))
+    diagnostics = {}
+    events = list(process_file(
+        path, "s1", "/project", {"diagnostics": diagnostics}
+    ))
+    assert diagnostics["malformed_records"] == 1
+    assert [event["event_type"] for event in events] == [
+        "user_message", "tool_call",
+    ]
+    prompt_rows = events[0]["field_diagnostics"]
+    assert any(
+        row["source_field"] == "payload.origin"
+        and row["reason_code"] == "field_absent"
+        for row in prompt_rows
+    )
+    tool_rows = events[1]["field_diagnostics"]
+    assert any(
+        row["source_field"] == "payload.arguments"
+        and row["reason_code"] == "field_null"
+        for row in tool_rows
+    )

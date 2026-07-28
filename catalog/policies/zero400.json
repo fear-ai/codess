@@ -1,12 +1,17 @@
 {
   "policy_format": "codess.validation-policy/1",
+  "required_decoder_version": "0.2",
+  "required_validator_version": "0.2",
   "project": "/Users/walter/Work/ZK/Zero400",
   "required_sources": ["Claude", "Cursor"],
   "minimum_sessions": {"Claude": 2, "Cursor": 15},
   "minimum_events": {"Claude": 1000, "Cursor": 1000},
-  "raw_mode": "capture",
+  "raw_mode": "reference",
   "expected_raw_records": 6,
-  "expected_cursor_workspace_ids": ["243102c47acab6a728df1a9c7dc7067b"],
+  "expected_cursor_workspace_ids": [
+    "243102c47acab6a728df1a9c7dc7067b",
+    "e13b0c51d2c8997c2c1cd8583a915c16"
+  ],
   "allowed_diagnostics": {},
   "cursor_turn_policy": "inferred-per-user-interaction",
   "require_fixed_point": true

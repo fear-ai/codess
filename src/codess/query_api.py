@@ -263,6 +263,8 @@ def _store_provenance(store: dict[str, Any]) -> dict[str, Any]:
         "snapshot_created_at": meta.get("snapshot_created_at"),
         "package_digest": meta.get("package_digest"),
         "format_version": meta.get("format_version"),
+        "decoder_version": meta.get("decoder_version"),
+        "validator_version": meta.get("validator_version"),
         "policy_sha256": policies,
         "source_availability": availability,
     }
@@ -389,18 +391,32 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
     predicate = " AND ".join(where) if where else "1"
     rows = []
     for store in stores:
+        session_columns = {
+            row[1] for row in store["conn"].execute("PRAGMA table_info(sessions)")
+        }
+        path_obsolete = (
+            "s.path_obsolete" if "path_obsolete" in session_columns
+            else "0 AS path_obsolete"
+        )
         for row in store["conn"].execute(f"""
             SELECT s.global_id,s.id,s.source_system_id,s.vendor_session_id,
                    s.vendor_name,s.product_name,s.harness_name,s.harness_version,
-                   s.started_at,s.ended_at,s.time_basis,s.project_path,s.archive_state,
+                   s.started_at,s.ended_at,s.time_basis,s.source_cwd,
+                   s.project_path,
+                   {path_obsolete},s.archive_state,
                    (SELECT COUNT(*) FROM interactions i WHERE i.session_id=s.id) interactions,
                    (SELECT COUNT(*) FROM model_turns mt WHERE mt.session_id=s.id) model_turns,
                    (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id) events
             FROM sessions s WHERE {predicate}
             ORDER BY COALESCE(s.ended_at,s.started_at,s.source_mtime) DESC,s.global_id
         """, params):
-            rows.append({**dict(row), "project_path": str(store["project_root"]),
-                         "source_project_path": row["project_path"]})
+            item = dict(row)
+            source_project_path = item.pop("source_cwd") or item["project_path"]
+            rows.append({
+                **item,
+                "project_path": str(store["project_root"]),
+                "source_project_path": source_project_path,
+            })
     rows.sort(key=lambda row: (-(row["ended_at"] or row["started_at"] or 0), row["global_id"]))
     matched = len(rows)
     if request.get("limit") is not None:

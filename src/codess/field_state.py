@@ -137,14 +137,52 @@ def diagnose(opts: dict, *, field: str, state: str, source_field: str,
     diagnostics[reason] = diagnostics.get(reason, 0) + 1
     rows = opts.get("field_diagnostics")
     if rows is not None:
-        rows.append({
-            "level": level,
-            "reason_code": reason,
-            "field": field,
-            "source_field": source_field,
-            "mapping_rule": mapping_rule,
-            "detail": None if state == MALFORMED else _bounded(value),
-        })
+        rows.append(diagnostic(
+            field=field, state=state, source_field=source_field,
+            value=value, mapping_rule=mapping_rule,
+        ))
+
+
+def diagnostic(
+    *,
+    field: str,
+    state: str,
+    source_field: str,
+    value: Any = None,
+    mapping_rule: str | None = None,
+) -> dict | None:
+    """Build one bounded field diagnostic suitable for an Event attachment."""
+    level = diagnostic_level(state)
+    if level is None:
+        return None
+    return {
+        "level": level,
+        "diagnostic_level": "field",
+        "reason_code": f"field_{state}",
+        "field": field,
+        "source_field": source_field,
+        "source_value": None if state == MALFORMED else _bounded(value),
+        "mapping_rule": mapping_rule,
+        "detail": None,
+    }
+
+
+def attach(
+    event: dict,
+    *,
+    field: str,
+    state: str,
+    source_field: str,
+    value: Any = None,
+    mapping_rule: str | None = None,
+) -> None:
+    """Attach a non-present field diagnostic to its normalized Event."""
+    row = diagnostic(
+        field=field, state=state, source_field=source_field,
+        value=value, mapping_rule=mapping_rule,
+    )
+    if row is not None:
+        event.setdefault("field_diagnostics", []).append(row)
 
 
 def _bounded(value: Any, limit: int = 64) -> str | None:

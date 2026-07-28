@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,13 @@ def audit_claude_features(
     malformed = 0
     records = 0
     diagnostics: Counter[str] = Counter()
+    compaction_boundaries = 0
+    compaction_summaries = 0
+    linked_compaction_summaries = 0
+    compaction_summary_characters = 0
+    compaction_summary_max_characters = 0
+    compaction_triggers: Counter[str] = Counter()
+    compact_metadata_fields: Counter[str] = Counter()
     model_settings: dict[str, Counter[str]] = {
         "model": Counter(), "service_tier": Counter(),
     }
@@ -61,8 +69,26 @@ def audit_claude_features(
                 subtype = value.get("subtype")
                 if kind in {"system", "summary"} and subtype:
                     lifecycle[str(subtype)] += 1
+                if kind == "system" and subtype == "compact_boundary":
+                    compaction_boundaries += 1
+                    compact = value.get("compactMetadata")
+                    if isinstance(compact, dict):
+                        compact_metadata_fields.update(str(key) for key in compact)
+                        if compact.get("trigger") is not None:
+                            compaction_triggers[str(compact["trigger"])] += 1
                 message = value.get("message")
                 if isinstance(message, dict):
+                    if value.get("isCompactSummary"):
+                        compaction_summaries += 1
+                        if value.get("parentUuid"):
+                            linked_compaction_summaries += 1
+                        summary_body = message.get("content")
+                        if isinstance(summary_body, str):
+                            size = len(summary_body)
+                            compaction_summary_characters += size
+                            compaction_summary_max_characters = max(
+                                compaction_summary_max_characters, size
+                            )
                     model = message.get("model")
                     if model:
                         model_settings["model"][str(model)] += 1
@@ -84,6 +110,7 @@ def audit_claude_features(
             diagnostics["io_error"] += 1
     return {
         "audit_format": "codess.claude-feature-audit/1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "privacy_boundary": "structure and aggregate counts only; content bodies not retained",
         "root": str(root.expanduser().resolve()),
         "file_limit": max_files,
@@ -103,4 +130,13 @@ def audit_claude_features(
             key: dict(value) for key, value in model_settings.items() if value
         },
         "setting_provenance": dict(setting_provenance),
+        "compaction_evidence": {
+            "compact_boundaries": compaction_boundaries,
+            "compact_summaries": compaction_summaries,
+            "summaries_with_parent_uuid": linked_compaction_summaries,
+            "summary_characters": compaction_summary_characters,
+            "maximum_summary_characters": compaction_summary_max_characters,
+            "triggers": dict(compaction_triggers),
+            "compact_metadata_fields": dict(compact_metadata_fields),
+        },
     }

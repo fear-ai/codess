@@ -86,6 +86,27 @@ def test_request_project_scope_cannot_be_replayed_against_other_stores(tmp_path)
         opened["conn"].close()
 
 
+def test_sessions_exposes_vendor_path_and_obsolete_marker(tmp_path):
+    project, store, _source = _store(tmp_path)
+    obsolete = tmp_path / "old-project"
+    conn = connect(store)
+    conn.execute(
+        "UPDATE sessions SET source_cwd=?,path_obsolete=1 WHERE id='s1'",
+        (str(obsolete),),
+    )
+    conn.commit()
+    conn.close()
+    opened = _scope(project, store)
+    try:
+        row = execute([opened], make_request("sessions"))["rows"][0]
+        assert row["project_path"] == str(project)
+        assert row["source_project_path"] == str(obsolete)
+        assert row["path_obsolete"] == 1
+        assert "source_cwd" not in row
+    finally:
+        opened["conn"].close()
+
+
 def test_search_byte_limit_bounds_tool_fields_not_only_content(tmp_path):
     project, store, _source = _store(tmp_path)
     conn = connect(store)

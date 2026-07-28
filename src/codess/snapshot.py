@@ -18,6 +18,7 @@ from codess import __version__
 from codess.fileio import hash_file
 from codess.raw_store import RAW_FORMAT, RawStore
 from codess.project_catalog import durable_project_root
+from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import (
     APPLICATION_ID, FORMAT_ID, FORMAT_VERSION, SUPPORTED_READ_FORMATS,
     database_identity, require_store, verify_package,
@@ -294,6 +295,8 @@ def create_snapshot(
             "created_at": created_at_text,
             "software_version": __version__,
             "software_revision": _software_revision(),
+            "decoder_version": DECODER_VERSION,
+            "validator_version": VALIDATOR_VERSION,
             "runtime": {
                 "python": platform.python_version(),
                 "sqlite": sqlite3.sqlite_version,
@@ -322,6 +325,8 @@ def create_snapshot(
         "project_id": project_id,
         "format_id": FORMAT_ID,
         "format_version": store_format_version,
+        "decoder_version": DECODER_VERSION,
+        "validator_version": VALIDATOR_VERSION,
         "manifest_sha256": _sha256(final / "manifest.json"),
     }
     local_base.mkdir(parents=True, exist_ok=True)

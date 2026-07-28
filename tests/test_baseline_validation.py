@@ -127,6 +127,24 @@ def test_policy_rejects_unapproved_mapping_diagnostic(tmp_path):
     assert any("policy.diagnostics.known" in error for error in report["errors"])
 
 
+def test_policy_dates_decoder_and_validator_independently(tmp_path):
+    project, raw_root = _snapshot(tmp_path)
+    report = validate_project(
+        project,
+        policy={
+            "policy_format": "codess.validation-policy/1",
+            "required_decoder_version": "0.1",
+            "required_validator_version": "0.1",
+        },
+        raw_store_root=raw_root,
+    )
+    assert report["status"] == "rejected"
+    failed = {
+        check["name"] for check in report["checks"] if not check["passed"]
+    }
+    assert {"decoder_version", "validator_version"} <= failed
+
+
 def test_load_policy_rejects_unknown_fields(tmp_path):
     path = tmp_path / "policy.json"
     path.write_text(

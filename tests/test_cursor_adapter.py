@@ -685,6 +685,73 @@ class TestProcessDb:
         assert sids.count("c1") == 2
         assert sids.count("c2") == 1
 
+    def test_compaction_and_request_context_are_first_class_events(
+        self, tmp_path
+    ):
+        summary = json.dumps({
+            "summary": "cursor compact summary",
+            "truncationLastBubbleIdInclusive": "old-last",
+            "clientShouldStartSendingFromInclusiveBubbleId": "new-first",
+        })
+        db = _make_cursor_db(tmp_path, [
+            (
+                "c1", "b1",
+                {
+                    "type": 1,
+                    "text": "prompt",
+                    "createdAt": "2026-07-10T00:00:00Z",
+                    "contextWindowStatusAtCreation": {
+                        "tokensUsed": 100,
+                        "tokenLimit": 1000,
+                        "percentageRemaining": 90,
+                    },
+                },
+            ),
+            (
+                "c1", "b2",
+                {
+                    "type": 2,
+                    "text": "reply",
+                    "createdAt": "2026-07-10T00:00:01Z",
+                    "conversationSummary": summary,
+                },
+            ),
+        ])
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+                (
+                    "messageRequestContext:c1:b1",
+                    json.dumps({
+                        "cursorRules": ["rule"],
+                        "terminalFiles": [],
+                    }),
+                ),
+            )
+        events = [
+            event for _session, event in process_db(
+                db, "/project",
+                {"max_context_content_chars": 128},
+            )
+        ]
+        assert [event["subtype"] for event in events] == [
+            "prompt", "context_injection", "response", "context_compaction",
+        ]
+        prompt_metadata = json.loads(events[0]["metadata"])
+        assert prompt_metadata["context_tokens_used"] == 100
+        assert prompt_metadata["context_token_limit"] == 1000
+        request_context = events[1]
+        assert json.loads(request_context["content"]) == {
+            "cursorRules": ["rule"], "terminalFiles": [],
+        }
+        assert request_context["mapping_rule"] == "cursor.request-context"
+        compact = events[3]
+        assert compact["content"] == "cursor compact summary"
+        assert compact["mapping_rule"] == "cursor.compaction-summary"
+        assert json.loads(compact["metadata"])[
+            "truncationLastBubbleIdInclusive"
+        ] == "old-last"
+
     def test_process_db_traces_composer_read_buffer(self, tmp_path, monkeypatch):
         monkeypatch.setattr("codess.adapters.cursor._PROGRESS_ROWS", 2)
         db = _make_cursor_db(tmp_path, [
@@ -731,6 +798,23 @@ class TestProcessDb:
         assert out[0][1]["content"] == "first"
         assert out[1][1]["content"] == "second"
 
+    def test_process_db_classifies_empty_assistant_envelope_as_known_state(
+        self, tmp_path,
+    ):
+        db = _make_cursor_db(tmp_path, [
+            ("c1", "b1", {
+                "type": 2, "text": "", "createdAt": 1780000000000,
+                "toolResults": [],
+            }),
+        ])
+        diagnostics = {}
+        assert list(process_db(db, "/proj", {
+            "diagnostics": diagnostics,
+        })) == []
+        assert diagnostics.get("ignored_records", 0) == 0
+        assert diagnostics["known_ignored_records"] == 1
+        assert diagnostics["empty_assistant_envelope_records"] == 1
+
     def test_process_db_deduplicates_server_identity_per_composer(self, tmp_path):
         fixture = json.loads(
             (Path(__file__).parents[1] / "schema/coschema/fixtures/hazard/"
@@ -743,7 +827,13 @@ class TestProcessDb:
             (sid, event["event_id"]) for sid, event in out
         )] == fixture["expected_events"]
         assert diagnostics["duplicate_records"] == fixture["expected_duplicate_records"]
-        assert diagnostics["ignored_records"] == fixture["expected_ignored_records"]
+        # The released fixture's legacy key counts non-emitted envelopes. The
+        # decoder now distinguishes this known state from unknown loss.
+        assert diagnostics.get("ignored_records", 0) == 0
+        assert (
+            diagnostics["known_ignored_records"]
+            == fixture["expected_ignored_records"]
+        )
 
     def test_process_db_places_missing_timestamps_last(self, tmp_path):
         bubbles = [
@@ -784,3 +874,34 @@ class TestCursorTimestamps:
             "timingInfo": {"clientStartTime": 1780000000000},
         }
         assert _bubble_timestamp(data) == pytest.approx(1783641601000.0)
+
+
+def test_hostile_cursor_fields_are_diagnosed_without_losing_events():
+    prompt = list(_bubble_to_events(
+        "c1", "b1",
+        {"type": 1, "text": "keep prompt", "modelInfo": ["bad"]},
+        "/db", False,
+    ))[0]
+    assert prompt["content"] == "keep prompt"
+    assert {
+        (row["source_field"], row["reason_code"])
+        for row in prompt["field_diagnostics"]
+    } >= {
+        ("modelInfo", "field_malformed"),
+        ("bubble.origin", "field_absent"),
+    }
+
+    call = list(_bubble_to_events(
+        "c1", "b2",
+        {"type": 2, "text": "", "toolFormerData": {
+            "name": "read_file", "toolCallId": "call-1",
+            "status": "pending",
+        }},
+        "/db", False,
+    ))[0]
+    assert call["event_type"] == "tool_call"
+    assert any(
+        row["source_field"] == "toolFormerData.params"
+        and row["reason_code"] == "field_absent"
+        for row in call["field_diagnostics"]
+    )

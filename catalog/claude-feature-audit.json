@@ -1,72 +1,96 @@
 {
   "audit_format": "codess.claude-feature-audit/1",
+  "compaction_evidence": {
+    "compact_boundaries": 58,
+    "compact_metadata_fields": {
+      "durationMs": 58,
+      "postTokens": 58,
+      "preCompactDiscoveredTools": 42,
+      "preTokens": 58,
+      "precomputed": 1,
+      "preservedMessages": 30,
+      "preservedSegment": 30,
+      "trigger": 58
+    },
+    "compact_summaries": 58,
+    "maximum_summary_characters": 26039,
+    "summaries_with_parent_uuid": 58,
+    "summary_characters": 923572,
+    "triggers": {
+      "auto": 56,
+      "manual": 2
+    }
+  },
   "content_block_types": {
     "document": 2,
     "fallback": 2,
     "image": 161,
-    "text": 13565,
-    "thinking": 2923,
-    "tool_result": 19456,
-    "tool_use": 19459
+    "text": 14297,
+    "thinking": 2945,
+    "tool_result": 20623,
+    "tool_use": 20626
   },
   "diagnostics": {},
   "file_limit": 200,
   "files_reviewed": 200,
+  "generated_at": "2026-07-28T20:12:24.282589+00:00",
   "lifecycle_subtypes": {
     "api_error": 231,
-    "away_summary": 28,
-    "compact_boundary": 81,
+    "away_summary": 9,
+    "compact_boundary": 58,
     "informational": 1,
-    "local_command": 35,
+    "local_command": 33,
+    "model_consent_fallback": 1,
     "model_refusal_fallback": 2,
-    "scheduled_task_fire": 7,
-    "stop_hook_summary": 1374,
-    "turn_duration": 579
+    "scheduled_task_fire": 2,
+    "stop_hook_summary": 1370,
+    "turn_duration": 549
   },
   "malformed_records": 0,
   "max_record_bytes": 2097152,
   "message_roles": {
-    "assistant": 35725,
-    "user": 22402
+    "assistant": 37638,
+    "user": 23513
   },
   "model_settings": {
     "model": {
-      "<synthetic>": 159,
-      "claude-fable-5": 8030,
+      "<synthetic>": 164,
+      "claude-fable-5": 8097,
       "claude-haiku-4-5-20251001": 260,
       "claude-opus-4-7": 3946,
-      "claude-opus-4-8": 15323,
+      "claude-opus-4-8": 14593,
       "claude-sonnet-4-6": 815,
-      "claude-sonnet-5": 7192
+      "claude-sonnet-5": 9763
     },
     "service_tier": {
-      "standard": 35566
+      "standard": 37474
     }
   },
-  "parent_links": 64701,
+  "parent_links": 67602,
   "privacy_boundary": "structure and aggregate counts only; content bodies not retained",
   "record_types": {
     "agent-name": 1,
-    "ai-title": 3340,
-    "assistant": 35725,
-    "attachment": 4516,
-    "custom-title": 2925,
-    "file-history-snapshot": 825,
-    "fork-context-ref": 3,
-    "last-prompt": 3867,
-    "mode": 2595,
-    "permission-mode": 818,
-    "queue-operation": 3170,
-    "system": 2338,
-    "user": 22402
+    "ai-title": 3543,
+    "assistant": 37638,
+    "attachment": 4452,
+    "custom-title": 2919,
+    "file-history-delta": 204,
+    "file-history-snapshot": 745,
+    "fork-context-ref": 5,
+    "last-prompt": 4073,
+    "mode": 2800,
+    "permission-mode": 1026,
+    "queue-operation": 3234,
+    "system": 2256,
+    "user": 23513
   },
-  "records_reviewed": 82525,
+  "records_reviewed": 86409,
   "root": "/Users/walter/.claude/projects",
   "setting_provenance": {
-    "assistant.message.model": 35725,
-    "assistant.message.usage.service_tier": 35566
+    "assistant.message.model": 37638,
+    "assistant.message.usage.service_tier": 37474
   },
-  "sidechain_records": 2818,
+  "sidechain_records": 2847,
   "versions": {
     "2.1.111": 4551,
     "2.1.119": 557,
@@ -81,20 +105,20 @@
     "2.1.161": 3003,
     "2.1.165": 153,
     "2.1.170": 3198,
-    "2.1.177": 2432,
-    "2.1.181": 1596,
-    "2.1.183": 1168,
-    "2.1.185": 2012,
+    "2.1.177": 1328,
+    "2.1.181": 1572,
+    "2.1.185": 2003,
     "2.1.186": 1383,
-    "2.1.187": 3,
     "2.1.191": 2146,
     "2.1.193": 749,
     "2.1.196": 31,
     "2.1.197": 5149,
-    "2.1.198": 2325,
+    "2.1.198": 864,
     "2.1.202": 842,
-    "2.1.204": 839,
     "2.1.205": 11207,
-    "2.1.209": 10314
+    "2.1.209": 10314,
+    "2.1.214": 1103,
+    "2.1.215": 6258,
+    "2.1.218": 125
   }
 }

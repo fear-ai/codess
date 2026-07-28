@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from codess.baseline_catalog import freeze_reviewed_catalogs, verify_reviewed_catalog
-from codess.baseline_operations import reset_rebuildable_working_stores
+from codess.baseline_operations import apply_project, reset_rebuildable_working_stores
 from codess.baseline_validation import validate_project
 from codess.candidate_review import (
     discover_git_roots, observe_git, recommend, record_decision,
@@ -261,18 +261,34 @@ def test_claude_feature_audit_is_structure_only(tmp_path):
     source = tmp_path / "project" / "session.jsonl"
     source.parent.mkdir()
     source.write_text(
-        json.dumps({
+        "\n".join((json.dumps({
             "type": "assistant", "parentUuid": "p", "isSidechain": True,
             "version": "1.2.3", "message": {"role": "assistant", "content": [
                 {"type": "tool_use", "text": "secret body"}
             ]},
-        }) + "\n",
+        }), json.dumps({
+            "type": "system", "subtype": "compact_boundary", "uuid": "b",
+            "compactMetadata": {"trigger": "auto", "preTokens": 100},
+        }), json.dumps({
+            "type": "user", "isCompactSummary": True, "parentUuid": "b",
+            "message": {"role": "user", "content": "private compact body"},
+        }))) + "\n",
         encoding="utf-8",
     )
     report = audit_claude_features(tmp_path)
     assert report["content_block_types"] == {"tool_use": 1}
-    assert report["parent_links"] == 1
+    assert report["parent_links"] == 2
+    assert report["compaction_evidence"] == {
+        "compact_boundaries": 1,
+        "compact_summaries": 1,
+        "summaries_with_parent_uuid": 1,
+        "summary_characters": 20,
+        "maximum_summary_characters": 20,
+        "triggers": {"auto": 1},
+        "compact_metadata_fields": {"trigger": 1, "preTokens": 1},
+    }
     assert "secret body" not in json.dumps(report)
+    assert "private compact body" not in json.dumps(report)
 
 
 def test_codex_feature_audit_is_bounded_and_tracks_setting_provenance(tmp_path):
@@ -350,6 +366,46 @@ def test_freeze_revalidates_verifies_and_rolls_back_reviewed_baseline(
     assert reviewed.read_bytes() == prior_reviewed
 
 
+def test_freeze_preserves_explicit_accepted_with_limitations_state(
+    tmp_path, monkeypatch,
+):
+    project, registry, _ = _captured_project(tmp_path)
+    policy_path = tmp_path / "policy.json"
+    write_json_atomic(
+        policy_path, {"policy_format": "codess.validation-policy/1"}
+    )
+    validation = validate_project(
+        project,
+        policy={"policy_format": "codess.validation-policy/1"},
+        raw_store_root=registry / "raw",
+    )
+    validation["status"] = "accepted_with_limitations"
+    validation["limitations"] = ["reference-only fixture"]
+    write_json_atomic(project / ".codess/validation-report.json", {
+        "status": "accepted_with_limitations",
+        "final_validation": validation,
+        "fixed_point": {"passed": True},
+    })
+    monkeypatch.setattr(
+        "codess.baseline_catalog.validate_project",
+        lambda *args, **kwargs: dict(validation),
+    )
+    approved, reviewed = tmp_path / "approved.json", tmp_path / "reviewed.json"
+    result = freeze_reviewed_catalogs(
+        {"projects": [{"path": str(project), "policy": str(policy_path)}]},
+        approved_path=approved,
+        reviewed_path=reviewed,
+        repo_root=Path(__file__).parents[1],
+    )
+    assert result["verification"]["status"] == "verified"
+    assert read_json(approved)["projects"][0]["validation_state"] == (
+        "accepted_with_limitations"
+    )
+    assert read_json(reviewed)["projects"][0]["validation_state"] == (
+        "accepted_with_limitations"
+    )
+
+
 def test_relocation_rolls_back_catalog_and_pointer_on_verification_failure(
     tmp_path, monkeypatch,
 ):
@@ -373,3 +429,85 @@ def test_fixed_point_reset_discards_only_rebuildable_working_stores(tmp_path):
     assert not working.exists()
     assert not Path(str(working) + "-journal").exists()
     assert (project / ".codess/current.json").exists()
+
+
+def test_fixed_point_with_allowed_source_drift_does_not_recheck_live_reference(
+    tmp_path, monkeypatch,
+):
+    project = tmp_path / "project"
+    (project / ".codess").mkdir(parents=True)
+    validations = iter((
+        {
+            "status": "accepted_with_limitations",
+            "snapshot_id": "snapshot-one",
+            "source_revisions": ["revision-one"],
+            "semantic_digest": "semantic-one",
+            "normalization_digest": "normalized",
+        },
+        {
+            "status": "accepted_with_limitations",
+            "snapshot_id": "snapshot-two",
+            "source_revisions": ["revision-two"],
+            "semantic_digest": "semantic-two",
+            "normalization_digest": "normalized",
+        },
+    ))
+    reference_checks = []
+
+    monkeypatch.setattr(
+        "codess.baseline_operations.load_policy",
+        lambda _path: {
+            "allow_source_revision_drift": True,
+            "require_fixed_point": True,
+        },
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.run_ingest",
+        lambda *args, **kwargs: {"returncode": 0, "stdout": "", "stderr": ""},
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.reset_rebuildable_working_stores",
+        lambda _project: [],
+    )
+    value_acceptance = {
+        "accepted": True, "fatal": [], "fatal_count": 0,
+        "advisory": [], "advisory_count": 0, "match_count": 10,
+        "examples_truncated": False,
+    }
+    monkeypatch.setattr(
+        "codess.baseline_operations.snapshot_store_paths",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.compare_snapshots",
+        lambda *args, **kwargs: value_acceptance,
+    )
+
+    def fake_validate(*args, **kwargs):
+        reference_checks.append(kwargs["verify_reference_current"])
+        return next(validations)
+
+    monkeypatch.setattr(
+        "codess.baseline_operations.validate_project", fake_validate
+    )
+    result = apply_project(
+        project,
+        source="all",
+        raw_mode="reference",
+        registry=tmp_path / "registry",
+        policy_path=tmp_path / "policy.json",
+        repeat=True,
+        preserve_legacy_stores=False,
+        approve_catalog=None,
+        min_size=0,
+        query_smoke=False,
+        repo_root=Path(__file__).parents[1],
+    )
+    assert reference_checks == [False, False]
+    assert result["fixed_point"] == {
+        "source_revisions_match": False,
+        "semantic_digest_match": False,
+        "normalization_digest_match": True,
+        "value_acceptance": value_acceptance,
+        "passed": True,
+    }

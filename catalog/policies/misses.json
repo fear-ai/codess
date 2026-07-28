@@ -1,11 +1,13 @@
 {
   "policy_format": "codess.validation-policy/1",
+  "required_decoder_version": "0.2",
+  "required_validator_version": "0.2",
   "project": "/Users/walter/Work/Code/Misses",
   "required_sources": ["Claude"],
-  "minimum_sessions": {"Claude": 123},
+  "minimum_sessions": {"Claude": 122},
   "minimum_events": {"Claude": 26000},
   "raw_mode": "capture",
-  "expected_raw_records": 123,
+  "expected_raw_records": 122,
   "allowed_diagnostics": {},
   "require_fixed_point": true
 }

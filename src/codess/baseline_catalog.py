@@ -14,6 +14,7 @@ from codess.schema_contract import FORMAT_VERSION, verify_package
 SELECTION_FORMAT = "codess.baseline-selection/1"
 APPROVED_FORMAT = "codess.approved-baselines/1"
 REVIEWED_FORMAT = "codess.reviewed-baselines/1"
+ACCEPTED_STATES = frozenset({"accepted", "accepted_with_limitations"})
 
 
 def approved_entry(
@@ -105,7 +106,10 @@ def _accepted_from_reports(
             policy = repo_root / policy
         report = read_json(project / ".codess/validation-report.json")
         final = report.get("final_validation") or {}
-        if report.get("status") != "accepted" or final.get("status") != "accepted":
+        if (
+            report.get("status") not in ACCEPTED_STATES
+            or final.get("status") not in ACCEPTED_STATES
+        ):
             raise RuntimeError(f"project is not fully accepted: {project}")
         if final.get("package_digest") != package_digest:
             raise RuntimeError(f"project package differs from current package: {project}")
@@ -120,7 +124,7 @@ def _accepted_from_reports(
             raw_store_root=Path(registry) / "raw",
             verify_reference_current=False,
         )
-        if current.get("status") != "accepted":
+        if current.get("status") not in ACCEPTED_STATES:
             raise RuntimeError(f"current baseline validation rejected: {project}")
         for field in ("snapshot_id", "semantic_digest", "package_digest"):
             if current.get(field) != final.get(field):
@@ -137,7 +141,7 @@ def _accepted_from_reports(
             "project_id": pointer.get("project_id"),
             "snapshot_id": final["snapshot_id"],
             "semantic_digest": final["semantic_digest"],
-            "validation_state": "accepted",
+            "validation_state": final["status"],
             "policy": str(policy.relative_to(repo_root)) if policy.is_relative_to(repo_root) else str(policy),
         })
     if len(registries) != 1:

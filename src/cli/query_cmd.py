@@ -666,6 +666,14 @@ def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
         conn = store["conn"]
         if not _has_table(conn, "mapping_diagnostics"):
             continue
+        diagnostic_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(mapping_diagnostics)")
+        }
+        severity_projection = (
+            "d.severity" if "severity" in diagnostic_columns
+            else "'warn' AS severity"
+        )
         where = ""
         params: tuple[str, ...] = ()
         if scope.source_tokens:
@@ -682,7 +690,8 @@ def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
             params = (*session_params, *source_ids)
         for row in conn.execute(
             f"""
-            SELECT d.level, d.reason_code, d.source_field, d.source_value,
+            SELECT d.level, {severity_projection}, d.reason_code,
+                   d.source_field, d.source_value,
                    d.mapping_rule, d.detail, d.created_at, d.session_id,
                    e.event_id
             FROM mapping_diagnostics d
@@ -704,10 +713,10 @@ def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
     rows = _limited(rows, limit)
     if not rows:
         return 0
-    print("project_path\tsession_id\tevent_id\tlevel\treason_code\tsource_field\tsource_value\tmapping_rule\tdetail")
+    print("project_path\tsession_id\tevent_id\tlevel\tseverity\treason_code\tsource_field\tsource_value\tmapping_rule\tdetail")
     for row in rows:
         print("\t".join(sanitize_tabular(row.get(key)) for key in (
-            "project", "session_id", "event_id", "level", "reason_code",
+            "project", "session_id", "event_id", "level", "severity", "reason_code",
             "source_field", "source_value", "mapping_rule", "detail",
         )))
     return 0
@@ -800,6 +809,8 @@ def _taxonomy(_scope: QueryScope) -> int:
     print("  turn_aborted")
     print("system_event")
     print("  context_compaction")
+    print("  context_compaction_summary")
+    print("  context_injection")
     return 0
 
 
@@ -1296,6 +1307,7 @@ def _audit(scope: QueryScope, limit: int | None = None) -> int:
         "tool_failure",
         "turn_aborted",
         "context_compaction",
+        "context_compaction_summary",
     )
     placeholders = ",".join("?" for _ in supported)
     for store_index, store in enumerate(scope.stores):
@@ -1303,7 +1315,7 @@ def _audit(scope: QueryScope, limit: int | None = None) -> int:
         cur = store["conn"].execute(
             f"""
             SELECT e.session_id, e.event_id, e.timestamp, e.subtype,
-                   e.tool_name, e.metadata, s.source
+                   e.tool_name, e.content_len, e.metadata, s.source
             FROM events e
             JOIN sessions s ON s.id = e.session_id
             WHERE e.subtype IN ({placeholders}) AND {predicate}
@@ -1342,6 +1354,11 @@ def _audit(scope: QueryScope, limit: int | None = None) -> int:
         detail = ""
         if row["subtype"] == "context_compaction":
             detail = f"trigger={metadata.get('trigger', 'unknown')}"
+        elif row["subtype"] == "context_compaction_summary":
+            detail = (
+                f"characters={row['content_len'] or 0},"
+                f"truncated={str(bool(metadata.get('content_truncated'))).lower()}"
+            )
         elif metadata.get("status") is not None:
             detail = f"status={metadata['status']}"
         print(

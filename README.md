@@ -88,7 +88,51 @@ deleted workspace can break their association with the Project. Maintainers
 should follow **[Operations.md](Operations.md)** before relocation, raw capture,
 baseline publication, or retention cleanup.
 
-## Selecting Project and vendor scope
+## Terms and catalogs
+
+Codess uses **Project** for a stable continuing body of work. A directory is one
+machine-local Project location; a Git repository is version-control evidence;
+a Claude/Codex/Cursor workspace is a source-system binding. These may often
+coincide, but none is a synonym for another. A **Session** is one namespaced
+source-system conversation. A **Project snapshot** is one dated immutable
+normalized extraction of a Project. An **Assembly** is a reproducible
+cross-Project selection over named Project snapshots; SQLite, JSONL, Parquet,
+and DuckDB are possible materializations of that Assembly, not new source
+systems. The complete glossary is in **[Codess.md](Codess.md#5-glossary)**.
+
+The current CLI spelling `--dir` accepts a Project location and resolves it to
+a Project binding. `--source cc|codex|cursor` selects a source-system
+adapter/store family. Some compatibility code and reports still call that
+selector `vendor` or `vendor_filter`; this does not make vendor, product,
+harness, and source system the same concept. A future naming cleanup must
+preserve existing CLI aliases and stored source designations.
+
+Project listings currently have distinct purposes:
+
+| Location | Meaning |
+|---|---|
+| `~/.codess/projects.json` | Authoritative curated Project IDs, logical names, locations, aliases, and workspace bindings |
+| `~/.codess/projects/<project-id>/current.json` | Verified current Project snapshot pointer; sibling `snapshots/` contains retained immutable observations |
+| `~/.codess/ingested_projects.json` | Path-keyed scan/ingest/query telemetry; useful for discovery and cleanup, but not an identity catalog or an “all Projects” selection |
+| `catalog/approved-baselines.json` and `catalog/reviewed-baselines.json` | Small compatibility/release corpus, not the complete personal Project catalog |
+| `~/.codess/assemblies.json` | Planned Assembly catalog and Project↔Assembly input relation; not implemented yet |
+
+Inspect the curated catalog without opening Session content:
+
+```sh
+jq -r '.projects[] |
+  [.project_id, .logical_name,
+   ([.locations[] | select(.state == "active") | .path][0] // "")] |
+  @tsv' ~/.codess/projects.json
+```
+
+Until the catalog selector is implemented, use those active paths to create a
+reviewed `--dirs` CSV. Do not feed all entries from
+`ingested_projects.json` into ingest, query, or an eventual `all-current`
+Assembly: that file may retain obsolete, missing, scan-only, and old temporary
+paths.
+
+## Selecting Project and source-system scope
 
 `--dir PATH` is repeatable. `--dirs FILE` accepts either one path per line or a
 CSV containing a `directory_path` column; file entries are applied first and
@@ -101,10 +145,11 @@ bindings, not requests to recursively traverse every descendant. A work tree
 that contains several repositories therefore needs an explicit Project list or
 the Projects returned by `scan`.
 
-Use `--source cc`, `--source codex`, or `--source cursor` to select one vendor.
+Use `--source cc`, `--source codex`, or `--source cursor` to select one
+source-system adapter/store family.
 Query additionally accepts comma-separated unions such as `cc,codex` and
-`all`. Select the Project set before vendor, session, time, or report filters so
-every result has an explicit, reproducible scope.
+`all`. Select the Project set before source system, Session, time, or report
+filters so every result has an explicit, reproducible scope.
 
 ## Investigation and research
 
@@ -119,8 +164,8 @@ active-work and known-gap registers in **CoPlan.md §8**.
 | Use case | Current support | Commands and export | Limits |
 |----------|-----------------|---------------------|--------|
 | **UC1 — list sessions for one or more Projects** | Direct typed result for current stores; one explicit historical snapshot is also supported | `query sessions --dir P`; repeat `--dir` or use `--dirs FILE`; legacy `--sessions --id` remains | Catalog-wide selection and historical union/diff remain: **L-S1**, **L-S3** |
-| **UC2 — select sessions by vendor** | Direct; comma-separated union; typed events add time/model/kind/status/artifact filters | Add `--source`, `--since`, `--until`, `--model`, `--event-kind`, or `--status` to typed actions | Tool-name predicate and catalog selection remain: **L-S1–L-S2** |
-| **UC3 — orient by size, activity, and time** | Typed overview reports sessions, Interactions, turns, events, text/tool/artifact/model volume, elapsed span, event days, and 5/30/120-minute active-time sensitivity | `query overview --dir P`; legacy `--stats`, `--tool`, `--artifacts`; `storage report` | Time buckets, gap histogram, token/cost confidence, and scale goldens remain: **L-M1–L-M3** |
+| **UC2 — select sessions by source system** | Direct; comma-separated union; typed events add time/model/kind/status/artifact filters | Add `--source`, `--since`, `--until`, `--model`, `--event-kind`, or `--status` to typed actions | Tool-name predicate and catalog selection remain: **L-S1–L-S2** |
+| **UC3 — orient by size, activity, and time** | Typed overview reports Session entities, Interactions, turns, events, text/tool/artifact/model volume, elapsed span, event days, and 5/30/120-minute active-time sensitivity | `query overview --dir P`; legacy `--stats`, `--tool`, `--artifacts`; `storage report` | Current Session totals include subagents and do not partition relation kind; time buckets, gap histogram, token/cost confidence, and scale goldens remain: **L-M1–L-M4** |
 | **UC4 — open a known session** | Direct by list ordinal, stable global ID, or an unambiguous vendor ID | `-sess N` or `--session-id ID`; `--show prompt pr agent tool perm` | Whole-session display only; terminal excerpts: **L-S2**, **L-O1**, **L-C2** |
 | **UC5 — find an exchange, Interaction, or event group** | Typed event rows select stable event/session/Interaction/Model-Turn IDs in canonical order | `query events --event-id ID`; `--interaction-id`, `--model-turn-id`, time/kind/status/model/artifact filters | Sequence-window convenience and richer projections remain: **L-S2**, **L-O2** |
 | **UC6 — find text, a path, error, symbol, or topic** | First-class bounded substring search over normalized content, tool input/output, and artifact paths | `query search --text TEXT --limit N --byte-limit N`; scope with Project/vendor/session/time/type | No ranking/topic/FTS; a miss cannot prove raw absence: **L-C1–L-C2**, **L-E2** |
@@ -128,8 +173,9 @@ active-work and known-gap registers in **CoPlan.md §8**.
 | **UC8 — correlate work across vendors/artifacts** | Direct aggregate plus read-only SQL drill-down | `--artifacts --source ...`; SQL through `event_artifacts` to sessions/events | Aggregate output omits constituent event IDs: **L-O2**, **L-P1** |
 | **UC9 — export and compose** | Typed actions return `codess.query-result/1`; requests/results save atomically, prior result IDs can restrict the next request, and comparisons use exit 3 for changed row identities | `--save-request`, `--save-result`, `--result-input`, `--compare-result`; legacy sessions/stats JSONL/CSV remain | Derivation records and historical union/diff remain: **L-O1–L-O3** |
 | **UC10 — verify exact source evidence** | Exact event resolver follows event → source record → verified sealed/central-captured/live candidates without copying the object and reports changed/unavailable revisions | `query evidence --event-id GLOBAL_ID` | Three-vendor representative evidence smoke remains: **L-C2–L-C3** |
+| **UC11 — assemble cross-Project analytical data** | Repeated `--dir`/`--dirs` queries provide virtual cross-Project reads today; a cataloged materialized Assembly is designed but not implemented | Today: typed saved results or JSONL/CSV plus external DuckDB/pandas; target: `all-current` or filtered Assembly with JSON manifest and SQLite/JSONL/Parquet/DuckDB materializations | Project catalog selector, Assembly manifest/catalog, common export projection, reverse lookup, and retention remain: **A19/L-S1/L-E5** |
 
-Operationally, UC1–UC10 may be run interactively with live progress or under
+Operationally, UC1–UC11 may be run interactively with live progress or under
 automation with `--no-progress`; both modes retain the same per-Project trace
 and status evidence.
 

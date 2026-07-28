@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from codess.catalog import CATALOG_FORMAT, classify_project_path, load_candidate_csv, project_id_for_path
+from codess.catalog import (
+    CATALOG_FORMAT,
+    candidate_key_for_path,
+    classify_project_path,
+    load_candidate_csv,
+)
 from codess.fileio import read_json, write_json_atomic
 from codess.helpers import should_prune_directory, unsafe_traversal_root_reason
 from codess.codex_source import build_session_index as build_codex_session_index
@@ -204,6 +209,12 @@ def refresh_candidates(
         loaded = read_json(catalog_path)
         if loaded.get("catalog_format") != CATALOG_FORMAT:
             raise ValueError("unsupported candidate catalog format")
+        for item in loaded.get("projects", []):
+            if str(item.get("project_id") or "").startswith("project:path:"):
+                item.pop("project_id", None)
+                item["candidate_key"] = candidate_key_for_path(
+                    Path(item["path"])
+                )
         existing_by_path = {item["path"]: item for item in existing.get("projects", [])}
         for item in loaded.get("projects", []):
             prior = existing_by_path.get(item.get("path"), {})
@@ -227,7 +238,7 @@ def refresh_candidates(
             path = Path(row.get("dir_path") or (root / row["path"])).resolve()
             key = str(path)
             item = projects.get(key, {
-                "project_id": project_id_for_path(path), "path": key,
+                "candidate_key": candidate_key_for_path(path), "path": key,
                 "logical_name": path.name,
                 "curation": classify_project_path(path, work_root=root),
                 "observations": {},
@@ -247,7 +258,7 @@ def refresh_candidates(
         for path in discover_git_roots(roots, max_depth=max_depth):
             key = str(path)
             projects.setdefault(key, {
-                "project_id": project_id_for_path(path), "path": key,
+                "candidate_key": candidate_key_for_path(path), "path": key,
                 "logical_name": path.name,
                 "curation": classify_project_path(path, work_root=roots[0] if len(roots) == 1 else None),
                 "observations": {"vendors": {}},
@@ -282,7 +293,9 @@ def record_decision(
     catalog = read_json(catalog_path)
     matches = [
         item for item in catalog.get("projects", [])
-        if item.get("project_id") == project_ref or item.get("path") == str(Path(project_ref).expanduser().resolve())
+        if item.get("candidate_key") == project_ref
+        or item.get("project_id") == project_ref
+        or item.get("path") == str(Path(project_ref).expanduser().resolve())
     ]
     if len(matches) != 1:
         raise ValueError(f"candidate reference resolves to {len(matches)} projects")

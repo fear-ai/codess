@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from codess.catalog import CatalogError, classify_project_path, load_candidate_csv, project_id_for_path
+from codess.catalog import (
+    CatalogError,
+    candidate_key_for_path,
+    classify_project_path,
+    load_candidate_csv,
+)
 
 
 def test_path_defaults_separate_active_reference_and_dormant(tmp_path):
@@ -34,8 +39,9 @@ def test_candidate_csv_does_not_assume_remote_availability(tmp_path):
     assert item["observations"]["remote"]["status"] == "unchecked"
     assert item["observations"]["local_availability"] == "present"
     assert item["review"]["decision"] is None
-    assert item["project_id"] == project_id_for_path(local)
-    assert item["project_id"].startswith("project:path:")
+    assert item["candidate_key"] == candidate_key_for_path(local)
+    assert item["candidate_key"].startswith("candidate:path:")
+    assert "project_id" not in item
 
 
 def test_candidate_csv_rejects_duplicate_paths(tmp_path):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,11 @@ def audit_codex_features(
     diagnostics: Counter[str] = Counter()
     records = 0
     session_meta_versions: Counter[str] = Counter()
+    compaction_envelopes = compaction_items = 0
+    compaction_encrypted_chars = 0
+    compaction_encrypted_max_chars = 0
+    compaction_replacement_messages = 0
+    context_compacted_notifications = 0
     for root_kind, path in files:
         try:
             iterator = iter_bounded_jsonl(
@@ -97,6 +103,30 @@ def audit_codex_features(
                 if not isinstance(payload, dict):
                     continue
                 payload_fields[record_type].update(str(key) for key in payload)
+                if record_type == "compacted":
+                    compaction_envelopes += 1
+                    history = payload.get("replacement_history")
+                    if isinstance(history, list):
+                        for item in history:
+                            if not isinstance(item, dict):
+                                continue
+                            if item.get("type") == "message":
+                                compaction_replacement_messages += 1
+                            if item.get("type") != "compaction":
+                                continue
+                            compaction_items += 1
+                            encrypted = item.get("encrypted_content")
+                            if isinstance(encrypted, str):
+                                size = len(encrypted)
+                                compaction_encrypted_chars += size
+                                compaction_encrypted_max_chars = max(
+                                    compaction_encrypted_max_chars, size
+                                )
+                if (
+                    record_type == "event_msg"
+                    and payload.get("type") == "context_compacted"
+                ):
+                    context_compacted_notifications += 1
                 if record_type == "session_meta" and payload.get("cli_version"):
                     session_meta_versions[str(payload["cli_version"])] += 1
                 setting_payload = payload
@@ -121,6 +151,7 @@ def audit_codex_features(
             diagnostics["io_error"] += 1
     return {
         "audit_format": CODEX_AUDIT_FORMAT,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "privacy_boundary": (
             "record/payload field names, selected scalar configuration values, "
             "and aggregate counts only; message, reasoning, and tool bodies omitted"
@@ -139,4 +170,18 @@ def audit_codex_features(
         },
         "setting_provenance": dict(setting_provenance),
         "cli_versions": dict(session_meta_versions),
+        "compaction_evidence": {
+            "compacted_envelopes": compaction_envelopes,
+            "compaction_items": compaction_items,
+            "encrypted_summary_characters": compaction_encrypted_chars,
+            "maximum_encrypted_summary_characters": (
+                compaction_encrypted_max_chars
+            ),
+            "replacement_history_messages_not_normalized": (
+                compaction_replacement_messages
+            ),
+            "context_compacted_notifications": (
+                context_compacted_notifications
+            ),
+        },
     }

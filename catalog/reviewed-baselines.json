@@ -2,37 +2,62 @@
   "catalog_format": "codess.reviewed-baselines/1",
   "known_gaps": [
     "lifecycle abort remains fixture-only; real missing-time records are present",
-    "reasoning effort, speed tier, and service tier are absent from selected source records",
-    "Codex parent-session identifiers are absent across the metadata-only local audit"
+    "model effort and service tier are uneven by vendor and speed tier remains absent",
+    "Codex parent-session identifiers are absent across the metadata-only local audit",
+    "eight Misses image-only user records (52 image blocks) remain unsupported attachment evidence"
   ],
-  "package_digest": "503bc95059247f0fbfc596295ead26226e288f2e73347028fba0d85cf426ca47",
+  "package_digest": "4be177965524dbfe2d5d0f9577b71aecc2901deec0627d8d9e64851f47707bad",
   "projects": [
     {
       "path": "/Users/walter/Work/Code/SWEmore",
       "policy": "catalog/policies/swemore.json",
       "project_id": "codess:project:d0294926-1b64-42a0-9d1b-2ff2d0332401",
-      "semantic_digest": "7bd0a00c33704f2df28e7cef0e8c5abdaae9d2b722bade65caf4da5bc41b3321",
-      "snapshot_id": "20260718T074632.498190Z-coschema4-063fadc92862",
+      "semantic_digest": "33bbf80e16b2b06ec3fcef224cf44f31542ee5ba58a77c6bed9b28e8d0ff3998",
+      "snapshot_id": "20260728T202017.158169Z-coschema4-38f97c9ae014",
       "validation_state": "accepted"
     },
     {
       "path": "/Users/walter/Work/Spank/spank-py",
       "policy": "catalog/policies/spank-py.json",
       "project_id": "codess:project:5be64477-9245-47a7-9c5b-254e583826b0",
-      "semantic_digest": "cdeb3f2278062a367995a631baa043be382546a9aebad6cc755905e76082ec55",
-      "snapshot_id": "20260718T074635.695308Z-coschema4-9edea1b8645f",
+      "semantic_digest": "10fef3209b10840baf02d81a337276dd0e22e2fde707be8424beea20383c6789",
+      "snapshot_id": "20260728T202028.296121Z-coschema4-ed910a7dceca",
       "validation_state": "accepted"
     },
     {
       "path": "/Users/walter/Work/ZK/Zero400",
       "policy": "catalog/policies/zero400.json",
       "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
-      "semantic_digest": "cf44543a9679f1e5940107d8ca960f7a8c682f38b8eb22ff083e584b67521a5e",
-      "snapshot_id": "20260718T095547.634299Z-coschema4-69c5b45934d2",
+      "semantic_digest": "980b3f026b1b3e4cdc1e11b48cbff97daf27bf82fd258d5671bbf6a60dec1ae3",
+      "snapshot_id": "20260728T202533.906161Z-coschema4-d32eb4be15fa",
+      "validation_state": "accepted_with_limitations"
+    },
+    {
+      "path": "/Users/walter/Work/Code/Misses",
+      "policy": "catalog/policies/misses.json",
+      "project_id": "codess:project:1966d4d8-b793-4769-8ae5-863ece164fc1",
+      "semantic_digest": "38b029a094de8911fdf3f72e9e13dd287ca5994c508b3867a44dea11184ee08d",
+      "snapshot_id": "20260728T202632.149387Z-coschema4-83b98e810734",
+      "validation_state": "accepted"
+    },
+    {
+      "path": "/Users/walter/Work/ZK/insight",
+      "policy": "catalog/policies/insight.json",
+      "project_id": "codess:project:5928e03c-3d9e-4539-b86b-56909e5f2884",
+      "semantic_digest": "bcb40c999d16e866bf9f784d357c525cbe03d160bd30bf8f6597fb2ae071e45a",
+      "snapshot_id": "20260728T202649.134508Z-coschema4-87f753b80a06",
+      "validation_state": "accepted"
+    },
+    {
+      "path": "/Users/walter/Work/WP/wpages",
+      "policy": "catalog/policies/wpages.json",
+      "project_id": "codess:project:c6717985-db6f-4fd9-bd6a-716ded4526c0",
+      "semantic_digest": "a3ac8a00b96ee9ed37519af5bc32da5b56a57c9d310c394c6f699a47df4313ca",
+      "snapshot_id": "20260728T202704.704709Z-coschema4-8b408d74bb23",
       "validation_state": "accepted"
     }
   ],
   "registry": "/Users/walter/.codess",
   "review_state": "accepted_with_known_gaps",
-  "reviewed_at": "2026-07-18T10:10:26.519286+00:00"
+  "reviewed_at": "2026-07-28T20:27:31.844046+00:00"
 }

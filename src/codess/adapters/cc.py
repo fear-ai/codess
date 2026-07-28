@@ -18,6 +18,7 @@ from codess.config import (
 )
 from codess.sanitize import apply_sanitization, sanitize_value
 from codess.bounded_jsonl import iter_bounded_jsonl
+from codess.context_content import bound_context_content
 from codess.mapping import annotate_mapping
 
 log = logging.getLogger(__name__)
@@ -65,11 +66,17 @@ def iter_cc_records(
 
 def get_session_metadata(path: Path) -> dict:
     """Return bounded session facts observed directly in Claude records."""
-    for _line_num, record, _raw in iter_cc_records(path, warn=False):
+    facts = {}
+    for line_num, record, _raw in iter_cc_records(path, warn=False):
         version = record.get("version") or record.get("claudeCodeVersion")
-        if version is not None:
-            return {"harness_version": str(version)}
-    return {}
+        if version is not None and "harness_version" not in facts:
+            facts["harness_version"] = str(version)
+        cwd = record.get("cwd")
+        if isinstance(cwd, str) and cwd and "source_cwd" not in facts:
+            facts["source_cwd"] = cwd
+        if len(facts) == 2 or line_num >= 256:
+            break
+    return facts
 
 
 def get_session_lineage(path: Path) -> dict:
@@ -118,11 +125,22 @@ def _normalize_compaction(
     session_id: str,
     source_file: str,
 ) -> dict:
-    """Retain a compact boundary without its summary or token-accounting body."""
+    """Retain an explicit compact boundary and its observed accounting."""
     compact = record.get("compactMetadata") or {}
     metadata = {"audit_kind": "context_compaction"}
-    if compact.get("trigger") is not None:
-        metadata["trigger"] = compact["trigger"]
+    field_names = {
+        "trigger": "trigger",
+        "preTokens": "pre_tokens",
+        "postTokens": "post_tokens",
+        "durationMs": "duration_ms",
+        "preCompactDiscoveredTools": "pre_compact_discovered_tools",
+        "preservedSegment": "preserved_segment",
+        "preservedMessages": "preserved_messages",
+        "precomputed": "precomputed",
+    }
+    for source_name, common_name in field_names.items():
+        if compact.get(source_name) is not None:
+            metadata[common_name] = compact[source_name]
     return {
         "session_id": session_id,
         "event_id": str(line_num),
@@ -149,6 +167,8 @@ def _mapping_rule(event: dict) -> str:
     subtype = event.get("subtype")
     if event_type == "system_event" and subtype == "context_compaction":
         return "claude.compaction"
+    if event_type == "system_event" and subtype == "context_compaction_summary":
+        return "claude.compaction-summary"
     if event_type == "external_content":
         return "claude.persisted-tool-result"
     if event_type == "tool_call":
@@ -399,6 +419,75 @@ def _base_event(
     }
 
 
+def _attach_timestamp_state(event: dict, record: dict, timestamp) -> None:
+    if timestamp is not None:
+        return
+    value, state = field_state.get_state(record, "timestamp")
+    if state == field_state.PRESENT:
+        state = field_state.MALFORMED
+    field_state.attach(
+        event, field="event_at", state=state,
+        source_field="timestamp", value=value,
+    )
+
+
+def _attach_configuration_state(event: dict, record: dict) -> None:
+    message, message_state = field_state.get_state(record, "message")
+    if message_state == field_state.PRESENT and not isinstance(message, dict):
+        field_state.attach(
+            event, field="model", state=field_state.MALFORMED,
+            source_field="message", value=message,
+        )
+        return
+    message = message if isinstance(message, dict) else {}
+    model, model_state = field_state.get_state(message, "model")
+    if model_state == field_state.PRESENT and isinstance(model, (dict, list)):
+        model_state = field_state.MALFORMED
+    field_state.attach(
+        event, field="model", state=model_state,
+        source_field="message.model", value=model,
+    )
+    usage = message.get("usage")
+    if usage is None:
+        return
+    if not isinstance(usage, dict):
+        field_state.attach(
+            event, field="service_tier", state=field_state.MALFORMED,
+            source_field="message.usage", value=usage,
+        )
+        return
+    tier, tier_state = field_state.get_state(usage, "service_tier")
+    if tier_state == field_state.PRESENT and isinstance(tier, (dict, list)):
+        tier_state = field_state.MALFORMED
+    field_state.attach(
+        event, field="service_tier", state=tier_state,
+        source_field="message.usage.service_tier", value=tier,
+    )
+
+
+def _attach_prompt_origin_state(event: dict, record: dict) -> None:
+    origin, origin_state = field_state.get_state(record, "origin")
+    prompt_source, prompt_state = field_state.get_state(record, "promptSource")
+    if origin_state == field_state.PRESENT and not isinstance(origin, (dict, str)):
+        origin_state = field_state.MALFORMED
+    if (
+        origin_state == field_state.ABSENT
+        and prompt_state != field_state.ABSENT
+    ):
+        return
+    field_state.attach(
+        event, field="prompt_origin", state=origin_state,
+        source_field="origin", value=origin,
+    )
+    if prompt_state == field_state.PRESENT and isinstance(
+        prompt_source, (dict, list)
+    ):
+        field_state.attach(
+            event, field="prompt_origin", state=field_state.MALFORMED,
+            source_field="promptSource", value=prompt_source,
+        )
+
+
 def normalize_product_state(
     record: dict, line_num: int, session_id: str, source_file: str, opts: dict,
 ) -> dict | None:
@@ -484,8 +573,10 @@ def normalize_assistant(
     """Extract assistant events; return (events, tool_map)."""
     events = []
     tool_map = {}
-    content = record.get("message", {}).get("content") or []
-    role = record.get("message", {}).get("role", "assistant")
+    message = record.get("message")
+    message = message if isinstance(message, dict) else {}
+    content = message.get("content") or []
+    role = message.get("role", "assistant")
     ts = _get_timestamp(record)
     redact_enabled = opts.get("redact", False)
     model_configuration = _assistant_configuration(record)
@@ -497,7 +588,7 @@ def normalize_assistant(
             if tid and tname:
                 tool_map[tid] = tname
 
-    stop_reason = record.get("message", {}).get("stop_reason", "")
+    stop_reason = message.get("stop_reason", "")
     emitted_index = 0
 
     for i, block in enumerate(content):
@@ -546,11 +637,20 @@ def normalize_assistant(
                 "metadata": _event_metadata(record, extra=model_configuration),
                 "source_raw": None,
             })
+            _attach_timestamp_state(events[-1], record, ts)
+            _attach_configuration_state(events[-1], record)
             emitted_index += 1
 
         elif btype == "tool_use":
             tname = block.get("name")
-            tinput = block.get("input") or {}
+            raw_input, input_state = field_state.get_state(block, "input")
+            if input_state == field_state.PRESENT and not isinstance(
+                raw_input, dict
+            ):
+                input_state = field_state.MALFORMED
+                tinput = {}
+            else:
+                tinput = raw_input if isinstance(raw_input, dict) else {}
             tool_input = extract_tool_input(tname or "", tinput)
             tool_input = sanitize_value(tool_input, redact_enabled)
             tool_use_id = block.get("id")
@@ -577,6 +677,12 @@ def normalize_assistant(
                 ),
                 "source_raw": None,
             })
+            _attach_timestamp_state(events[-1], record, ts)
+            _attach_configuration_state(events[-1], record)
+            field_state.attach(
+                events[-1], field="tool_input", state=input_state,
+                source_field="message.content[].input", value=raw_input,
+            )
             emitted_index += 1
 
     return events, tool_map
@@ -592,16 +698,61 @@ def normalize_user(
 ) -> list[dict]:
     """Extract user events."""
     events = []
-    content = record.get("message", {}).get("content")
-    role = record.get("message", {}).get("role", "user")
+    message = record.get("message")
+    message = message if isinstance(message, dict) else {}
+    content = message.get("content")
+    role = message.get("role", "user")
     ts = _get_timestamp(record)
     emitted_index = 0
 
-    # The post-compaction summary is harness-generated replacement context, not
-    # a human prompt.  The preceding compact_boundary is the retained audit fact.
+    # The post-compaction summary is harness-injected replacement context, not
+    # a typed human prompt.  Preserve it as communication and link it to the
+    # preceding compact boundary through parentUuid.
     if record.get("isCompactSummary"):
-        _diagnostic(opts, "known_ignored_records")
-        return []
+        if not isinstance(content, str):
+            _diagnostic(opts, "unsupported_records")
+            if opts.get("strict_mapping"):
+                raise SourceCompatibilityError(
+                    "Claude compact summary content is not text"
+                )
+            return []
+        text = _process_text(
+            content, opts, phase="pre", record_type="context.compact.summary"
+        )
+        if text is None:
+            return []
+        text, content_len, truncated = bound_context_content(text, opts)
+        text = _process_text(
+            text, opts, phase="post", record_type="context.compact.summary"
+        )
+        if text is None:
+            return []
+        text, _post_length, post_truncated = bound_context_content(text, opts)
+        truncated = truncated or post_truncated
+        event = _base_event(
+            session_id=session_id,
+            event_id=str(line_num),
+            event_type="system_event",
+            subtype="context_compaction_summary",
+            role="harness",
+            timestamp=ts,
+            source_file=source_file,
+        )
+        event.update({
+            "content": text,
+            "content_len": content_len,
+            "event_kind": "context.inject",
+            "actor_kind": "harness",
+            "content_role": "context",
+            "origin_kind": "harness_injected",
+            "metadata": _event_metadata(record, extra={
+                "context_kind": "compaction_summary",
+                "compaction_boundary_uuid": record.get("parentUuid"),
+                "content_truncated": truncated,
+            }),
+        })
+        _attach_timestamp_state(event, record, ts)
+        return [event]
 
     if isinstance(content, str):
         text = _process_text(content, opts, phase="pre", record_type="user.prompt")
@@ -640,6 +791,8 @@ def normalize_user(
                 "user_type": record.get("userType"),
             }),
         })
+        _attach_timestamp_state(event, record, ts)
+        _attach_prompt_origin_state(event, record)
         return [event]
     if content is None:
         content = []
@@ -683,6 +836,8 @@ def normalize_user(
                 "metadata": _event_metadata(record),
                 "source_raw": None,
             })
+            _attach_timestamp_state(events[-1], record, ts)
+            _attach_prompt_origin_state(events[-1], record)
             emitted_index += 1
 
         elif btype == "tool_result":
@@ -735,6 +890,7 @@ def normalize_user(
                 "metadata": _event_metadata(record, tool_use_id),
                 "source_raw": None,
             })
+            _attach_timestamp_state(events[-1], record, ts)
             emitted_index += 1
 
     persisted = record.get("toolUseResult")
@@ -872,9 +1028,28 @@ def process_file(
         if rtype == "assistant":
             evs, _ = normalize_assistant(record, line_num, session_id, source_file, opts)
             if not evs and diagnostics is not None:
-                diagnostics["ignored_records"] = (
-                    diagnostics.get("ignored_records", 0) + 1
+                blocks = (record.get("message") or {}).get("content") or []
+                block_types = {
+                    block.get("type") for block in blocks
+                    if isinstance(block, dict)
+                }
+                empty_thinking = bool(blocks) and block_types == {"thinking"} and all(
+                    not block.get("thinking")
+                    for block in blocks if isinstance(block, dict)
                 )
+                if empty_thinking or block_types == {"fallback"}:
+                    diagnostics["known_ignored_records"] = (
+                        diagnostics.get("known_ignored_records", 0) + 1
+                    )
+                    reason = (
+                        "empty_reasoning_state_records"
+                        if empty_thinking else "fallback_state_records"
+                    )
+                    diagnostics[reason] = diagnostics.get(reason, 0) + 1
+                else:
+                    diagnostics["ignored_records"] = (
+                        diagnostics.get("ignored_records", 0) + 1
+                    )
             for ev in evs:
                 if source_raw is not None:
                     ev["source_raw"] = source_raw
@@ -884,9 +1059,21 @@ def process_file(
                 record, line_num, session_id, source_file, tool_map, opts
             )
             if not evs and diagnostics is not None:
-                diagnostics["ignored_records"] = (
-                    diagnostics.get("ignored_records", 0) + 1
-                )
+                blocks = (record.get("message") or {}).get("content") or []
+                if blocks and all(
+                    isinstance(block, dict) and block.get("type") == "image"
+                    for block in blocks
+                ):
+                    diagnostics["unsupported_records"] = (
+                        diagnostics.get("unsupported_records", 0) + 1
+                    )
+                    diagnostics["attachment_only_records"] = (
+                        diagnostics.get("attachment_only_records", 0) + 1
+                    )
+                else:
+                    diagnostics["ignored_records"] = (
+                        diagnostics.get("ignored_records", 0) + 1
+                    )
             for ev in evs:
                 if source_raw is not None:
                     ev["source_raw"] = source_raw

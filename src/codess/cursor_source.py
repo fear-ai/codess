@@ -364,7 +364,7 @@ def _selection_marker(
     )
 
     digest = _fingerprint_digest()
-    selected_bytes = bubble_count = 0
+    selected_bytes = bubble_count = request_context_count = 0
     latest_timestamp: float | None = None
     for workspace_id in sorted(workspace_ids):
         _fingerprint_value(digest, "workspace")
@@ -408,6 +408,28 @@ def _selection_marker(
             _fingerprint_value(digest, value_size)
             _fingerprint_value(digest, leading)
             _fingerprint_value(digest, trailing)
+        context_lower = f"messageRequestContext:{composer_id}:"
+        context_upper = (
+            f"messageRequestContext:{composer_id}:\U0010ffff"
+        )
+        context_rows = conn.execute(
+            "SELECT key, length(value), "
+            "CAST(substr(value, 1, ?) AS BLOB), "
+            "CAST(substr(value, -?) AS BLOB) "
+            "FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key",
+            (
+                CURSOR_SELECTION_EDGE_BYTES, CURSOR_SELECTION_EDGE_BYTES,
+                context_lower, context_upper,
+            ),
+        )
+        for key, value_size, leading, trailing in context_rows:
+            request_context_count += 1
+            selected_bytes += int(value_size or 0)
+            _fingerprint_value(digest, "message_request_context")
+            _fingerprint_value(digest, key)
+            _fingerprint_value(digest, value_size)
+            _fingerprint_value(digest, leading)
+            _fingerprint_value(digest, trailing)
     return {
         "source_revision": (
             f"cursor-selection-md5-fingerprint:{digest.hexdigest()}"
@@ -421,6 +443,7 @@ def _selection_marker(
         "workspace_count": len(workspace_ids),
         "composer_count": len(headers),
         "bubble_count": bubble_count,
+        "message_request_context_count": request_context_count,
         "edge_bytes": CURSOR_SELECTION_EDGE_BYTES,
     }
 
@@ -511,6 +534,30 @@ def iter_bubble_size_rows(
         yield from conn.execute(
             "SELECT key, length(value) FROM cursorDiskKV WHERE key >= ? AND key < ?",
             (f"bubbleId:{composer_id}:", f"bubbleId:{composer_id}:\U0010ffff"),
+        )
+
+
+def iter_message_request_context_rows(
+    conn: sqlite3.Connection, composer_ids: set[str] | None = None,
+) -> Iterator[tuple[str, object]]:
+    """Yield Cursor's separately stored per-message request-context records."""
+    if composer_ids == set():
+        return
+    if composer_ids is None:
+        yield from conn.execute(
+            "SELECT key, value FROM cursorDiskKV "
+            "WHERE key >= 'messageRequestContext:' "
+            "AND key < 'messageRequestContext;' ORDER BY key"
+        )
+        return
+    for composer_id in sorted(composer_ids):
+        yield from conn.execute(
+            "SELECT key, value FROM cursorDiskKV "
+            "WHERE key >= ? AND key < ? ORDER BY key",
+            (
+                f"messageRequestContext:{composer_id}:",
+                f"messageRequestContext:{composer_id}:\U0010ffff",
+            ),
         )
 
 

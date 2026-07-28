@@ -1,5 +1,6 @@
 {
   "mapping_id": "codess.codex",
+  "decoder_version": "0.2",
   "direction": "source_to_common",
   "vendor": "openai",
   "product": "codex",
@@ -7,9 +8,13 @@
   "storage_formats": ["codex-jsonl"],
   "rules": [
     {"id": "codex.message", "source": "response_item.message", "target": "events", "operation": "from", "retention": "core"},
+    {"id": "codex.context-injection", "source": "response_item.message[role=developer|system]", "target": "events.message.context", "operation": "from", "retention": "core"},
+    {"id": "codex.reasoning-summary", "source": "response_item.reasoning.summary[].text", "target": "events.message.reasoning_summary", "operation": "from_each", "retention": "core"},
     {"id": "codex.tool-call", "source": "response_item.function_call|custom_tool_call|web_search_call", "target": "tool_invocations", "operation": "from_any", "retention": "specialized"},
     {"id": "codex.tool-result", "source": "response_item.function_call_output|custom_tool_call_output", "target": "tool_results", "operation": "from_any", "retention": "specialized"},
     {"id": "codex.abort", "source": "event_msg.turn_aborted", "target": "events.lifecycle.abort", "operation": "from", "retention": "core"},
+    {"id": "codex.task-lifecycle", "source": "event_msg.task_started|task_complete", "target": "events.lifecycle", "operation": "from_any", "retention": "core"},
+    {"id": "codex.compaction", "source": "compacted.payload.replacement_history[].compaction", "target": "events.context.compact", "operation": "from_each", "retention": "core"},
     {"id": "codex.session-meta", "source": "session_meta.payload", "target": "sessions", "operation": "from", "retention": "extension"},
     {"id": "codex.configuration", "source": "turn_context.payload|event_msg.thread_settings_applied.payload.thread_settings", "target": "model_configurations+model_turns.model_config_id", "operation": "from_any", "retention": "specialized"},
     {"id": "codex.turn-identity", "source": "turn_context.payload.turn_id", "target": "model_turns.source_turn_id", "operation": "from", "retention": "core"},

@@ -16,6 +16,7 @@ from codess.adapters.cc import (
     should_skip,
     truncate_content,
 )
+from codess.content_processing import ContentPolicy, ContentProcessor
 from codess.schema_contract import validate_mapped_event
 
 
@@ -411,9 +412,66 @@ class TestProcessFile:
         compact = audit["context_compaction"]
         assert compact["content"] is None
         assert json.loads(compact["metadata"]) == {
-            "audit_kind": "context_compaction", "trigger": "auto"
+            "audit_kind": "context_compaction",
+            "trigger": "auto",
+            "pre_tokens": 64000,
+            "post_tokens": 8000,
+            "duration_ms": 1200,
         }
-        assert all("summary body" not in (event.get("content") or "") for event in events)
+        summary = next(
+            event for event in events
+            if event["subtype"] == "context_compaction_summary"
+        )
+        assert summary["content"] == "summary body is not retained"
+        assert summary["content_len"] == len(summary["content"])
+        assert summary["event_kind"] == "context.inject"
+        assert summary["actor_kind"] == "harness"
+        assert summary["mapping_rule"] == "claude.compaction-summary"
+        assert json.loads(summary["metadata"])["compaction_boundary_uuid"] == (
+            "compact-1"
+        )
+
+    def test_compaction_summary_uses_context_limit(self, tmp_path):
+        path = tmp_path / "compact.jsonl"
+        path.write_text(json.dumps({
+            "type": "user",
+            "isCompactSummary": True,
+            "parentUuid": "boundary",
+            "message": {"role": "user", "content": "0123456789abcdef"},
+        }) + "\n")
+        event = list(process_file(
+            path, "s1",
+            {"redact": False, "max_context_content_chars": 8},
+        ))[0]
+        assert event["content"] == "0123456…"
+        assert event["content_len"] == 16
+        assert json.loads(event["metadata"])["content_truncated"] is True
+
+    def test_context_limit_is_reapplied_after_processing(self, tmp_path):
+        path = tmp_path / "compact.jsonl"
+        path.write_text(json.dumps({
+            "type": "user",
+            "isCompactSummary": True,
+            "message": {"role": "user", "content": "xxxx"},
+        }) + "\n")
+        processor = ContentProcessor(ContentPolicy.from_mapping({
+            "scopes": [{
+                "when": {
+                    "phase": "post",
+                    "record_type": "context.compact.summary",
+                },
+                "privacy_patterns": [{
+                    "pattern": "x", "replacement": "YYYY",
+                }],
+            }],
+        }))
+        event = list(process_file(path, "s1", {
+            "max_context_content_chars": 5,
+            "content_processor": processor,
+        }))[0]
+        assert event["content"] == "YYYY…"
+        assert event["content_len"] == 4
+        assert json.loads(event["metadata"])["content_truncated"] is True
 
     def test_redaction_disables_raw_debug_capture(self, tmp_path):
         path = tmp_path / "session.jsonl"
@@ -424,6 +482,46 @@ class TestProcessFile:
         events = list(process_file(path, "s1", {"debug": True, "redact": True}))
         assert events
         assert all(event["source_raw"] is None for event in events)
+
+    def test_nonsemantic_reasoning_state_and_image_only_input_are_explicit(
+        self, tmp_path
+    ):
+        path = tmp_path / "session.jsonl"
+        records = [
+            {
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{
+                    "type": "thinking", "thinking": "",
+                    "signature": "opaque",
+                }]},
+            },
+            {
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{
+                    "type": "fallback", "from": "a", "to": "b",
+                }]},
+            },
+            {
+                "type": "user",
+                "message": {"role": "user", "content": [{
+                    "type": "image",
+                    "source": {"type": "base64", "data": "AA=="},
+                }]},
+            },
+        ]
+        path.write_text(
+            "".join(json.dumps(record) + "\n" for record in records)
+        )
+        diagnostics = {}
+        assert list(process_file(
+            path, "s1", {"diagnostics": diagnostics}
+        )) == []
+        assert diagnostics["empty_reasoning_state_records"] == 1
+        assert diagnostics["fallback_state_records"] == 1
+        assert diagnostics["known_ignored_records"] == 2
+        assert diagnostics["attachment_only_records"] == 1
+        assert diagnostics["unsupported_records"] == 1
+        assert diagnostics.get("ignored_records", 0) == 0
 
     def test_multiple_blocks_on_one_line_have_unique_stable_ids(self, tmp_path):
         path = tmp_path / "session.jsonl"
@@ -567,3 +665,50 @@ def test_get_timestamp_reports_field_state():
     levels = [(r["level"], r["reason_code"]) for r in opts["field_diagnostics"]]
     assert ("warn", "field_malformed") in levels
     assert ("info", "field_absent") in levels
+
+
+def test_hostile_assistant_fields_are_diagnosed_without_losing_record(tmp_path):
+    transcript = tmp_path / "hostile.jsonl"
+    transcript.write_text(json.dumps({
+        "type": "assistant",
+        "timestamp": "not-a-date",
+        "message": {
+            "role": "assistant",
+            "model": {"unexpected": "shape"},
+            "content": [
+                {"type": "text", "text": "still retained"},
+                {"type": "tool_use", "id": "call-1", "name": "Read",
+                 "input": ["wrong-shape"]},
+            ],
+        },
+    }) + "\n")
+    events = list(process_file(
+        transcript, "session-id", {"redact": False, "diagnostics": {}}
+    ))
+    assert len(events) == 2
+    reasons = {
+        (row["source_field"], row["reason_code"], row["level"])
+        for event in events for row in event.get("field_diagnostics", [])
+    }
+    assert ("timestamp", "field_malformed", "warn") in reasons
+    assert ("message.model", "field_malformed", "warn") in reasons
+    assert (
+        "message.content[].input", "field_malformed", "warn"
+    ) in reasons
+
+
+def test_hostile_prompt_origin_is_advisory_and_prompt_is_retained(tmp_path):
+    transcript = tmp_path / "origin.jsonl"
+    transcript.write_text(json.dumps({
+        "type": "user", "origin": 42,
+        "message": {"role": "user", "content": "keep me"},
+    }) + "\n")
+    event = list(process_file(
+        transcript, "session-id", {"redact": False, "diagnostics": {}}
+    ))[0]
+    assert event["content"] == "keep me"
+    assert any(
+        row["source_field"] == "origin"
+        and row["reason_code"] == "field_malformed"
+        for row in event["field_diagnostics"]
+    )

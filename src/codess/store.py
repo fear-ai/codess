@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ from codess.schema_contract import (
     verify_package,
 )
 from codess.mapping import canonical_json, structured_json
+from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 
 
 SOURCE_PROFILES = {
@@ -94,11 +96,53 @@ def _profile(source: str | None) -> dict[str, str]:
     )
 
 
-def _project_id(path: str | None) -> str | None:
+def _existing_project_id(
+    conn: sqlite3.Connection, path: str | None,
+) -> str | None:
     if not path:
         return None
     normalized = os.path.normcase(os.path.realpath(os.path.expanduser(path)))
-    return "project:path:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+    for row in conn.execute("SELECT id, root_path FROM projects"):
+        root = row["root_path"]
+        if root and os.path.normcase(os.path.realpath(os.path.expanduser(root))) == normalized:
+            return str(row["id"])
+    return None
+
+
+def _path_is_obsolete(
+    conn: sqlite3.Connection, project_id: str | None, path: str | None,
+) -> bool:
+    """Return whether a vendor path is outside every registered active location."""
+    if not project_id or not path or not os.path.isabs(path):
+        return False
+    roots = [
+        row["observed_path"]
+        for row in conn.execute(
+            """
+            SELECT observed_path
+            FROM project_locations
+            WHERE project_id=? AND state='active' AND path_obsolete=0
+            """,
+            (project_id,),
+        )
+        if row["observed_path"]
+    ]
+    project = conn.execute(
+        "SELECT root_path FROM projects WHERE id=?", (project_id,)
+    ).fetchone()
+    if project is not None and project["root_path"]:
+        roots.append(project["root_path"])
+    if not roots:
+        return False
+    source = Path(os.path.realpath(os.path.expanduser(path)))
+    for value in roots:
+        root = Path(os.path.realpath(os.path.expanduser(value)))
+        try:
+            source.relative_to(root)
+            return False
+        except ValueError:
+            pass
+    return True
 
 
 def init_db(db_path: Path) -> None:
@@ -124,6 +168,8 @@ def init_db(db_path: Path) -> None:
             "format_version": str(FORMAT_VERSION),
             "application_id": str(APPLICATION_ID),
             "package_digest": package_digest,
+            "decoder_version": DECODER_VERSION,
+            "validator_version": VALIDATOR_VERSION,
             "created_by": __version__,
             "created_at": _now(),
         }
@@ -157,7 +203,11 @@ def connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
 
 def _ensure_project(conn: sqlite3.Connection, session: dict[str, Any]) -> str | None:
     path = session.get("project_path")
-    project_id = session.get("project_id") or _project_id(path)
+    project_id = (
+        session.get("project_id")
+        or _existing_project_id(conn, path)
+        or f"codess:project:{uuid.uuid4()}"
+    )
     if not project_id:
         return None
     conn.execute(
@@ -165,9 +215,7 @@ def _ensure_project(conn: sqlite3.Connection, session: dict[str, Any]) -> str | 
         INSERT INTO projects(id, logical_name, root_path, source_cwd, ownership,
                              activity_state, selection_state, metadata)
         VALUES (?, ?, ?, ?, 'unknown', 'unknown', 'needs_review', NULL)
-        ON CONFLICT(id) DO UPDATE SET
-          root_path=COALESCE(excluded.root_path, projects.root_path),
-          source_cwd=COALESCE(excluded.source_cwd, projects.source_cwd)
+        ON CONFLICT(id) DO NOTHING
         """,
         (
             project_id,
@@ -194,6 +242,24 @@ def sync_project_catalog(
         (item for item in project.get("locations", []) if item.get("state") == "active"),
         None,
     )
+    path_observations = [
+        {
+            "path": item.get("path"),
+            "path_obsolete": bool(item.get("path_obsolete")),
+            "source": "project_location",
+        }
+        for item in project.get("locations", [])
+        if item.get("path")
+    ]
+    path_observations.extend(
+        {
+            "path": item.get("source_project_path"),
+            "path_obsolete": bool(item.get("path_obsolete")),
+            "source": item.get("source_system_id"),
+        }
+        for item in project.get("workspace_bindings", [])
+        if item.get("source_project_path")
+    )
     conn.execute(
         """
         INSERT INTO projects(id, logical_name, root_path, source_cwd, ownership,
@@ -215,24 +281,33 @@ def sync_project_catalog(
             project_id, project.get("logical_name"),
             active.get("path") if active else None,
             active.get("path") if active else None,
-            json.dumps({"path_aliases": project.get("path_aliases", [])}, separators=(",", ":")),
+            json.dumps(
+                {
+                    "path_aliases": project.get("path_aliases", []),
+                    "path_observations": path_observations,
+                },
+                separators=(",", ":"),
+            ),
         ),
     )
     for location in project.get("locations", []):
         conn.execute(
             """
             INSERT INTO project_locations(
-              id, project_id, machine_id, observed_path, location_kind, state,
-              observed_at, metadata)
-            VALUES (?, ?, ?, ?, 'directory', ?, ?, ?)
+              id, project_id, machine_id, observed_path, path_obsolete,
+              location_kind, state, observed_at, metadata)
+            VALUES (?, ?, ?, ?, ?, 'directory', ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET state=excluded.state,
+              path_obsolete=excluded.path_obsolete,
               metadata=excluded.metadata
             WHERE project_locations.state IS NOT excluded.state
+               OR project_locations.path_obsolete IS NOT excluded.path_obsolete
                OR project_locations.metadata IS NOT excluded.metadata
             """,
             (
                 location["location_id"], project_id, location["machine_id"],
-                location["path"], location.get("state", "unknown"),
+                location["path"], int(bool(location.get("path_obsolete"))),
+                location.get("state", "unknown"),
                 location.get("observed_at") or _now(),
                 json.dumps({"platform": location.get("platform")}, separators=(",", ":")),
             ),
@@ -248,15 +323,18 @@ def sync_project_catalog(
             """
             INSERT INTO workspace_bindings(
               id, project_id, location_id, source_system_id, workspace_id,
-              relation_kind, source_project_path, selection_state, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+              relation_kind, source_project_path, path_obsolete,
+              selection_state, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             ON CONFLICT(id) DO UPDATE SET
               location_id=excluded.location_id,
               source_project_path=excluded.source_project_path,
+              path_obsolete=excluded.path_obsolete,
               selection_state=excluded.selection_state
             WHERE workspace_bindings.location_id IS NOT excluded.location_id
                OR workspace_bindings.source_project_path
                   IS NOT excluded.source_project_path
+               OR workspace_bindings.path_obsolete IS NOT excluded.path_obsolete
                OR workspace_bindings.selection_state
                   IS NOT excluded.selection_state
             """,
@@ -265,6 +343,7 @@ def sync_project_catalog(
                 workspace["source_system_id"], workspace["workspace_id"],
                 workspace.get("relation_kind") or "workspace_binding",
                 workspace.get("source_project_path"),
+                int(bool(workspace.get("path_obsolete"))),
                 workspace.get("selection_state") or "approved",
             ),
         )
@@ -401,7 +480,7 @@ def _ensure_model_configuration(
 
 
 def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
-    """Upsert a common session while retaining the 0.1 query projection."""
+    """Upsert a common session while retaining the legacy query projection."""
     source = str(session.get("source") or "Unknown")
     profile = _profile(source)
     metadata = _json_dict(session.get("metadata"))
@@ -435,6 +514,10 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         source_row["source_revision"] if source_row else "unobserved",
         project_id,
     )
+    source_cwd = session.get("source_cwd") or session.get("project_path")
+    path_obsolete = session.get("path_obsolete")
+    if path_obsolete is None:
+        path_obsolete = _path_is_obsolete(conn, project_id, source_cwd)
     values = (
         session.get("id"),
         session_global_id,
@@ -450,7 +533,8 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         session.get("harness_version") or session.get("release"),
         session.get("source_id"),
         project_id,
-        session.get("source_cwd") or session.get("project_path"),
+        source_cwd,
+        int(bool(path_obsolete)),
         started_at,
         session.get("ended_at"),
         session.get("source_mtime"),
@@ -473,11 +557,11 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         INSERT INTO sessions(
           id, global_id, observation_id, source_system_id, vendor_session_id, vendor_name, product_name,
           harness_name, storage_format, surface_kind, session_purpose,
-          harness_version, source_id, project_id, source_cwd, started_at,
-          ended_at, source_mtime, observed_at, ingested_at, time_basis,
+          harness_version, source_id, project_id, source_cwd, path_obsolete,
+          started_at, ended_at, source_mtime, observed_at, ingested_at, time_basis,
           parent_session_id, session_relation_kind, archive_state, archive_source,
           default_model_config_id, metadata, source, type, release, project_path)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
           global_id=excluded.global_id,
           observation_id=excluded.observation_id,
@@ -493,6 +577,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
           source_id=COALESCE(excluded.source_id, sessions.source_id),
           project_id=COALESCE(excluded.project_id, sessions.project_id),
           source_cwd=excluded.source_cwd,
+          path_obsolete=excluded.path_obsolete,
           started_at=excluded.started_at,
           ended_at=excluded.ended_at,
           source_mtime=excluded.source_mtime,
@@ -522,8 +607,10 @@ def _event_semantics(event: dict[str, Any]) -> dict[str, str | None]:
         return {"event_kind": "tool.result", "actor_kind": "tool", "content_role": "tool_result", "origin_kind": "tool_generated"}
     if etype == "tool_call":
         return {"event_kind": "tool.call", "actor_kind": "model", "content_role": "tool_request", "origin_kind": "model_generated"}
-    if subtype == "context_compaction":
+    if subtype in {"context_compaction", "context_compaction_summary"}:
         return {"event_kind": "context.compact", "actor_kind": "harness", "content_role": "context", "origin_kind": "harness_injected"}
+    if subtype == "context_injection":
+        return {"event_kind": "context.inject", "actor_kind": "harness", "content_role": "context", "origin_kind": "harness_injected"}
     if subtype == "turn_aborted":
         return {"event_kind": "lifecycle.abort", "actor_kind": "harness", "content_role": "status", "origin_kind": "harness_injected"}
     if etype == "user_message":
@@ -927,6 +1014,8 @@ def _record_diagnostic(
     source_field: str | None = None,
     source_value: Any = None,
     detail: str | None = None,
+    level: str = "field",
+    severity: str = "warn",
 ) -> None:
     mapping_rule = event.get("mapping_rule")
     if mapping_rule is None:
@@ -937,12 +1026,13 @@ def _record_diagnostic(
     conn.execute(
         """
         INSERT INTO mapping_diagnostics(
-          source_id, session_id, event_id, level, reason_code, source_field,
+          source_id, session_id, event_id, level, severity, reason_code, source_field,
           source_value, mapping_rule, detail, created_at)
-        VALUES (?, ?, ?, 'field', ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            event.get("source_id"), event.get("session_id"), row_id,
+            event.get("source_id"), event.get("session_id"), row_id, level,
+            severity,
             reason_code, source_field,
             None if source_value is None else str(source_value),
             mapping_rule, detail, _now(),
@@ -1241,6 +1331,20 @@ def replace_session_events(
         event["source_id"] = source_id
         row_id = upsert_event(conn, event)
         _record_source_and_content(conn, event, row_id)
+        for diagnostic in event.get("field_diagnostics") or ():
+            if not isinstance(diagnostic, dict):
+                continue
+            _record_diagnostic(
+                conn, event, row_id,
+                reason_code=str(
+                    diagnostic.get("reason_code") or "field_malformed"
+                ),
+                source_field=diagnostic.get("source_field"),
+                source_value=diagnostic.get("source_value"),
+                detail=diagnostic.get("detail"),
+                level=str(diagnostic.get("diagnostic_level") or "field"),
+                severity=str(diagnostic.get("level") or "warn"),
+            )
         if _resolved_event_semantics(event)["event_kind"] == "unknown":
             _record_diagnostic(
                 conn, event, row_id,

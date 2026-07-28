@@ -1,8 +1,10 @@
 {
   "policy_format": "codess.validation-policy/1",
+  "required_decoder_version": "0.2",
+  "required_validator_version": "0.2",
   "project": "/Users/walter/Work/ZK/insight",
   "required_sources": ["Claude"],
-  "minimum_sessions": {"Claude": 14},
+  "minimum_sessions": {"Claude": 13},
   "minimum_events": {"Claude": 8600},
   "raw_mode": "capture",
   "expected_raw_records": 18,

@@ -608,16 +608,30 @@ Preserve useful vendor/release evidence, normalized common mappings, exact
 source designations, and dated immutable snapshots. `--force` remains the
 escape hatch for suspected fingerprint sampling or vendor-timestamp gaps.
 
-The format-4 package and reviewed corpus are current. SWEmore, spank-py, and
-Zero400 passed policy, query-smoke, integrity, foreign-key, and repeat-ingest
-fixed-point checks; approved and reviewed catalogs were frozen to those
-snapshots. The retained raw set uses one shared Cursor cohort for Zero400,
-zerowalletmac, and Spank/Logs. Superseded format-3/intermediate snapshots,
-obsolete Cursor captures, and temporary working archives were pruned through a
-validated retention receipt. Future schema changes return to the same
-compare/rebuild/freeze sequence rather than mutating these stores.
+The released format-4 decoder/validator-0.2 package is
+`4be177965524dbfe2d5d0f9577b71aecc2901deec0627d8d9e64851f47707bad`.
+`catalog/approved-baselines.json` and `catalog/reviewed-baselines.json` bind it
+to six current immutable snapshots: SWEmore, spank-py, Zero400, Misses, insight,
+and wpages. All six pass policy, query smoke, SQLite integrity/foreign keys,
+repeat-build normalization, and the streaming row-value acceptance gate.
+SWEmore, spank-py, Misses, insight, and wpages retain exact raw captures.
+Zero400 deliberately uses six reference records and remains
+`accepted_with_limitations`, because its live Cursor database is about 5.8 GB
+and a second unrequested copy is not retained. Its source revisions advanced
+between reads, while selected normalized content and all critical row values
+remained accepted.
 
-The current shared Cursor object is `sha256:ae3c2380…`. Two successive exact
+The post-freeze retention run removed 20 superseded snapshots, all six
+temporary pre-package working-archive trees, and one unreferenced small raw
+object. It reclaimed 3,029,913,600 allocated bytes and left zero candidates;
+every current Project pointer and reviewed catalog reference remains
+resolvable. Future mapping or schema changes use the same
+preflight → two rebuilds → row comparison → policy/query/integrity validation →
+atomic freeze sequence rather than mutating these stores.
+
+The last deliberate shared Cursor raw object is `sha256:ae3c2380…`. It remains
+the July 18 exact cohort evidence; it is not an exact backup of the much larger
+July 25 live source. Two successive exact
 global revisions differed while all three Project selection markers and
 normalization digests matched. Per-Project workspace/header/bubble-edge markers
 therefore replace whole-DB invalidation. After suppressing unchanged derived
@@ -627,43 +641,62 @@ selection). An immediate repeat with the stable 2.3-KiB main/WAL selection
 cache and snapshot-bound evidence-summary reuse completed in 0.066 seconds with
 effectively zero marker-scan time. Both
 processed 0 records, retained the same three snapshot IDs, and recorded 11–14
-progress events plus independent accepted status per Project. A changed full run remains dominated
-by Zero400 composer normalization at about 7.5 minutes and 559 MB peak RSS;
-composer read buffers and writes now have separate live and retained progress
-events for the next profile. Retention has a zero-candidate postcondition after
-removing the superseded revisions and snapshots.
+progress events plus independent accepted status per Project.
+
+The current Zero400 baseline selects 28 Cursor sessions with 76,054 Events and
+three Claude sessions with 1,932 Events. Its preflight completed in 132.4
+seconds at 587,595,776 bytes peak RSS; the full two-rebuild acceptance operation
+took about 314 seconds while the live Cursor source continued to advance.
+SWEmore contains one Codex Session with 416 Events. Spank-py contains five
+top-level Claude Sessions plus one subagent Session (4,188 Events total).
+Misses contains 17 top-level Claude Sessions plus 105 subagent Sessions
+(28,044 Events total); 105 subagents belong to only five parents and account
+for 1,121 Events. Insight similarly contains ten top-level plus three subagent
+Claude Sessions (8,650 Events total), while wpages has three Codex Sessions and
+8,209 Events. Total stored Session entities remain useful for lineage and
+storage accounting, but must not be presented as the number of independently
+initiated work Sessions. An exact multi-gigabyte Cursor backup remains
+an explicit retention decision rather than an automatic duplicate. Composer
+read buffers and writes have separate live and retained progress events for
+continued profiling.
 
 ZeroPerf is the `perf-401` linked Git worktree of Zero400's repository, whose
 current primary worktree is on `testfix-401`; it is not an unrelated repository.
-It remains a separate CodeSess Project/session scope for now, while candidate
-Git observations record the shared common Git directory so repository-level
-queries and future correlation can group them explicitly.
+It remains a separate CodeSess Project/session scope only pending **A21**.
+The leading resolution is to keep one Project for the continuing Zero400 Git
+repository, represent ZeroPerf as a worktree/Project location and branch
+observation, and skip it as an independently ingested Project. Existing
+ZeroPerf snapshots and source evidence must remain traceable until the merge
+and retention consequences are validated.
 
 ### 8.2 Active work
 
 | Order | ID | Work item | Completion evidence |
 |------:|----|-----------|---------------------|
 | 1 | **A1** | **Vertical prototype implemented:** `codess.query-request/1`, typed `sessions\|overview\|events\|search`, vendor/session/time/event/Interaction/turn/kind/status/model/artifact/text scope, named snapshot input, and rejection of unknown predicates. Remaining: catalog/Project-ID selector, tool predicate, projections/order/grouping, multi-store pushdown parity tests | Cross-store tests prove identical scope across renderers and no out-of-scope rows |
+| parallel | **A20** | **Terminology implementation alignment:** apply the Codess.md glossary to user-visible output, schemas, and new code. Rename internal adapter/store selectors from ambiguous `vendor` to `source_system` where they do not mean the organization; preserve `--source` and stored compatibility fields. Keep Project, directory/location, repository, Workspace binding, Source, Session, model, and harness/surface distinct. Do this incrementally with serialization/CLI compatibility tests rather than a broad mechanical rewrite. | Glossary lint/review plus tests show that each public field has one declared meaning and old CLI requests/results remain readable |
 | 2 | **A2** | **Prototype implemented:** overview counts sessions, Interactions, turns, events, content characters, tools, artifacts, model configurations, vendor/kind/model distributions, elapsed span, event days, and 5/30/120-minute active-time sensitivity. Remaining: time buckets/gap histogram and scale goldens | Golden reports cover empty, tiny, multi-vendor, long-idle, many-small-session, and one-huge-session stores |
 | 3 | **A3** | **Prototype implemented:** typed stable event rows, event/Interaction/Model-Turn filters, canonical order, source locators, and completeness. Remaining: explicit complete-Interaction/turn expansion, sequence windows, and three-vendor semantic fixtures | Known Claude, Codex, and Cursor exchanges reconstruct in canonical order |
 | 4 | **A4** | **Prototype implemented:** bounded normalized substring search with Project/vendor/session/time/type/model/status/artifact prefilters, row/byte limits, and completeness/missing-source warning. Remaining: repeated-state facets, benchmarks, ranking evaluation; FTS5 stays conditional | Known hits, truncated false-negative warnings, repeated-state noise tests, and bounded resource evidence |
 | 5 | **A5** | Streaming raw capture/restore, transactional SQLite backup, selected Cursor markers/cache, staged zstd, content-addressed reuse, no-op suppression, atomic snapshot promotion, and retention apply are implemented. Injected compression and snapshot-backup failures now prove no partial promotion; cache restore emits bytes/duration and is fixture-validated | Measure restore I/O/RSS on the next newly selected real Project; retain documented stat-prefilter and 512-byte edge/header false-negative boundaries |
+| 6 | **A21** | **Resolve Git worktree versus Project identity, starting with Zero400/ZeroPerf.** Evaluate and prototype a repository-default curation rule: one continuing Project per main Git repository, with linked worktrees recorded as locations carrying worktree Git directory, common Git directory/repository identity, branch, HEAD, and observation time. Promote a worktree to a separate Project only when an independently meaningful body of work or vendor workspace/session scope requires it. For ZeroPerf, dry-run retirement/aliasing of its separate Project, attach its active location and Git observations to Zero400, stop separate discovery/ingest by default, and preserve all historical snapshots, Source/Session identities, artifact correlations, and Project aliases through an explicit mapping. Do not reassign or delete evidence merely because the catalog identity changes. Validate existing eight Claude Sessions, the Zero400-owned Cursor Sessions that involve ZeroPerf, stable IDs, current pointers, reviewed baselines, Assemblies, reverse references, query counts, and retention candidates before applying. | A reviewed dry-run shows before/after catalog and query shapes with no lost or duplicated Sessions/Events; repository/worktree facts are queryable; ZeroPerf no longer appears as a separate default ingest target; historical `project_id` and snapshot references resolve through the recorded alias/merge relation; repeat scan and ingest are fixed points |
 | 7 | **A7** | **Vertical prototype implemented:** `codess.query-result/1`, atomic saved requests/results, stable-ID result input, request/result hashes, prior-membership comparison, and stable success/change codes. Remaining: derivation records, richer predicate replay, historical diff/union | A multi-step investigation replays against the same snapshots and cites every evidence row |
 | 8 | **A8** | Expected behavior and layering are specified in **Designs.md §13**. Implement deterministic Project → overview → bounded search → result selection → Interaction/window → exact evidence → cited summary; optional question formulation remains externally orchestrated until evaluated | The complete path works without handwritten SQL and exposes every request, bound, limitation, and citation |
-| 9 | **A9** | Performance and ecosystem: predicate/limit pushdown, heap merge, allocation profiling, justified read-only views, and Datasette/notebook/DuckDB recipes. Live/persisted rolling `codess.progress/1` tracing, Cursor buffer/backup heartbeats, no-op derived-correlation suppression, null-safe catalog synchronization, and snapshot-bound evidence-summary reuse are implemented | Use traces plus allocation profiles to bound rows, bytes, phase time, and RSS in scale fixtures; external recipes remain read-only |
+| 9 | **A9** | Performance and ecosystem: predicate/limit pushdown, heap merge, allocation profiling, justified read-only views, and Datasette/notebook/DuckDB recipes. Live/persisted rolling `codess.progress/1` tracing, Cursor buffer/backup heartbeats, no-op derived-correlation suppression, null-safe catalog synchronization, snapshot-bound evidence-summary reuse, once-per-vendor-batch orphan pruning, and reverse-reference cleanup indexes are implemented. The current Zero400 preflight maps 76,054 Cursor Events in 132.4 seconds at 587,595,776 bytes peak RSS; its two-rebuild acceptance takes about 314 seconds. A forced Misses replacement of 17 top-level plus 105 subagent Session entities/28,044 Events takes 235 seconds, almost entirely in normalized row replacement; normal incremental ingest skips unchanged sources. | Use retained per-source/composer traces to target forced-replacement and large-session write amplification; external recipes remain read-only |
 | maintenance | **A11** | **First consolidation implemented:** `codess.ingest_pipeline` owns Claude/Codex source validation, incremental admission, and post-commit state advancement. Remaining: shared normalized transaction shell and explicit keep/remove decision for compatibility wrappers including `retire_project.py` | Shared control flow has one tested owner; retained wrappers are thin, documented, and have an explicit keep/remove decision |
 | parallel | **A12** | **Audit prototype implemented:** `query configurations` reports per-vendor Model Turn linkage, nullable provider/family/exact/revision/effort/speed/service/mode values, exact `source_config`, and provenance limitations. Continue vendor/release fixture review and event-occurrence provenance validation | Claude, Codex, and Cursor fixtures prove exact available settings, preserve absent values as NULL, and never infer one setting from another |
-| 11 | **A14** | **Implemented (D17):** `src/codess/acceptance.py` — `compare_row`/`accept` report `match`/`mismatch`/`vacant` per field via `field_state.compare`, partition by `field_state.criticality` over `CRITICAL_FIELDS` (identity/order/lineage), and fail only on `fatal`. `tests/test_acceptance.py` proves advisory vs. fatal and `vacant`-over-`mismatch`. **Remaining:** wire `accept()` into the two-store `apply_and_verify` promotion path (currently digest-only) | The gate blocks a critical-field `mismatch`/`vacant`, passes non-critical vacancy; wired into promotion |
-| 13 | **A16** | **In progress (D18):** `field_state.py` classifies present/absent/empty/null/sentinel/malformed (`vacant` umbrella, `info`/`warn`, never-raising `diagnose()`); wired into `cc._get_timestamp` so a malformed timestamp emits `warn` and absent emits `info` (`tests/test_cc_adapter.py`). **Remaining:** thread through the remaining `cc`/`codex`/`cursor` field reads (model config, tool input, prompt origin), materialize field-level `mapping_diagnostics` rows, and add a hostile-input fixture per vendor. | Every adapter processes malformed/absent/empty/sentinel inputs without aborting; each bad field yields the correct diagnostic level and the record still normalizes |
-| 14 | **A17** | **Implemented:** autonomous-model interactions. `store.py` opens an `inferred`/`autonomous` interaction (confidence 0.5) for model activity with no preceding human prompt (e.g. `/loop`, scheduled fires), attributing turns that were previously orphaned; human prompts stay `human`/`mapping`/0.8. New `interactions.initiation_kind` column (`human`/`autonomous`/`unknown`) in contract/DDL/manifest. **Remaining:** re-ingest Zero400 to confirm the ~7,311 orphaned events attribute; expose `initiation_kind` in query surface | Model events without a human prompt open an inferred autonomous interaction and receive a turn; `initiation_kind` distinguishes them |
-| 15 | **A18** | **Reverted — no evidence.** A structure-only scan of all 26 local Codex transcripts found **no `compaction` record type**; the earlier Tier-1 parser keyed on a `type=compaction`/`encrypted_content` shape that does not exist in real data (that field is the encrypted `reasoning` trace, unrelated to compaction). Codex compaction detection reopens only on an observed real record (**T4**). **Newly observed unmapped types worth review:** `reasoning`, `ghost_snapshot` (1,031), `tool_search_call/output` | No `context.compact` is emitted for Codex without a verified source record |
+| done | **A14** | **Implemented and baseline-validated (D17):** `acceptance.py` streams canonical rows from both immutable stores, compares every field as `match`/`mismatch`/`vacant`, treats identity/order/lineage differences as fatal, bounds diagnostic examples, and is mandatory in the repeated-build promotion path. All six 0.2 baselines passed it. | Reopen only if a new entity or critical identity field is added |
+| done | **A16** | **Implemented for the three current adapters (D18):** `field_state.py` classifies present/absent/empty/null/sentinel/malformed without raising. Claude, Codex, and Cursor apply it to timestamps, model/configuration values, prompt origin, and tool input; event-attached field diagnostics persist with structural scope plus independent `info`/`warn`/`error` severity. Hostile-shape fixtures prove malformed fields do not abort usable records. | Extend the same pattern whenever a newly mapped vendor field crosses a decoding boundary |
+| 14 | **A17** | **Implemented and real-data validated:** autonomous-model interactions. `store.py` opens an `inferred`/`autonomous` interaction (confidence 0.5) for model activity with no preceding human prompt (e.g. `/loop`, scheduled fires), while human prompts stay `human`/`mapping`/0.8. The current Zero400 Cursor baseline has 2 autonomous and 2,075 human Interactions, zero Events without an Interaction, and zero model Events without a Model Turn. **Remaining:** expose `initiation_kind` in the query surface | Query output distinguishes autonomous from human-initiated work without orphan Events |
+| 15 | **A18** | **Implemented from direct three-vendor evidence.** Claude compact boundaries and their linked plaintext summaries, Codex `compacted` envelopes and dedicated encrypted `compaction` items, Cursor `conversationSummary` bodies/boundary IDs, per-bubble context-window observations, and selected `messageRequestContext` objects are mapped. Every context body is bounded independently (128 Ki characters by default), retains full source length/truncation state, and remains resolvable from raw evidence. Codex replacement-history messages and notification records are not duplicated. Current structure-only catalogs record 58 Claude boundary/summary pairs, 226 bounded-audit Codex envelopes (three oversize records explicitly diagnosed), 62 Cursor summaries, 3,000 context-window observations, and 678 request contexts | Three-vendor fixtures plus real-source checks prove body retention, lineage, bounded size, no duplicated history, and source-only recovery of truncated content |
+| 10 | **A19** | **Cross-Project analytical Assemblies (D20), implemented iteratively:** (1) catalog Project listing, stable Project-ID/current-snapshot selectors, and dry-run cleanup/quarantine for stale operational path telemetry; (2) `codess.assembly/1` manifest, central Assembly catalog, virtual `all-current` and explicit filtered input resolution; (3) stable observation-preserving read/export projection and streaming JSONL; (4) partitioned Parquet plus DuckDB views/recipes; (5) optional merged SQLite read model, incremental refresh/diff, reverse Project lookup, validation, storage reporting, and retention. The implementation consumes the common read model and must not add vendor decoding. | A fixture and a real multi-Project corpus prove deterministic selection, Project↔Assembly provenance, global/observation identity, bounded streaming, format parity, no implicit historical union, and safe rebuild/removal |
 
 ### 8.3 Decision register
 
 Resolve a decision immediately before its first consuming work item; do not
 block unrelated work.
 
-**State:** **D1–D18 are resolved.** D4 postpones; D7's composition is adopted but
+**State:** **D1–D20 are resolved.** D4 postpones; D7's composition is adopted but
 each method still requires evaluation; D11 adopts normalized identity while
 occurrence representation stays at R3a/R3b. Reopen a decision only with contrary
 implementation or vendor evidence.
@@ -684,10 +717,12 @@ implementation or vendor evidence.
 | **D12** | Supported provenance window | **A12**, D13 | **Adopted:** model change, harness change, or any other readable/deducible parameter can define the minimum acceptable level for a given Codess release. The cutoff is rooted in major breaking format incompatibilities, never model capability. Below the window → source-quarantine diagnostic, not silent best-effort. Model choice stays evidence (`model_configurations`), never a support gate. |
 | **D13** | Vendor vs session behavior | D12, D17 | **Adopted:** behavior seen across *all* sessions at a given model/harness provenance is vendor-specific; only behaviors explicitly declared `unsupported` (→ diagnostic), `ignored` (→ `retention: discard`), or `adjusted/mapped` (→ named rule + `mapping_trace`) are exceptions. One-session variance never drives a mapping rule. |
 | **D14** | Cross-vendor renditions are separate artifacts | **T5**, `correlation_assertions` | **Adopted:** resolve each vendor → common (N mappings). Do **not** require every vendor combination → each other (N² resolution is an explicit non-goal). Cross-vendor linkage is an optional additive search/process step via `correlation_assertions` + shared `relative_path`; it never rewrites identities. Intra-session model attribution beyond `model_turn_id` coverage is a separate confidence-graded inference, not a normalization requirement. |
-| **D15** | Compaction is evidence-graded | **T4** | **Adopted:** map a direct vendor record → `event_kind=context.compact` with no inference. Only **Claude `compact_boundary`** is a verified local record; Codex has **no observed compaction record** (26-transcript scan) and Cursor's stored form is unconfirmed. Absent a record, emit a `confidence`-scored assertion or `indeterminate`, never a binary claim. |
+| **D15** | Compaction is evidence-graded | **A18**, **T4** | **Adopted and implemented:** map only a direct vendor record. Claude supplies a boundary plus a linked plaintext summary; Codex supplies a `compacted` envelope with a dedicated encrypted `compaction` item; Cursor supplies a plaintext `conversationSummary` with boundary IDs. Preserve the body even when encrypted, but classify by the containing record rather than by field spelling. Repeated history and notification records are provenance, not duplicate Events. An unsupported shape remains `indeterminate`, never inferred from error-looking prose. |
 | **D16** | Capture consistency and optional quiesce | **A6** | **Adopted:** rely on the SQLite online-backup-over-live-WAL primitive plus a capture-verify-recapture stability loop that records `consistency=source_advanced` when a write lands mid-capture. Orderly harness shutdown is an **opt-in hint only** (detect running harness, suggest closing, prefer idle windows); never a forced kill. |
 | **D17** | Acceptance-gate outcomes (with D18) | **A12**, D13, D16, D18 | **Adopted:** the value-level gate compares rebuilt vs. prior store per field/row and reports `match` / `mismatch` / `vacant` (`field_state.compare`), where `vacant` (a non-present side) takes precedence over `mismatch` (both present, differing). A `mismatch` or `vacant` on an identity/order/lineage field is `fatal`; else `advisory`. The structural contract gate (`validate_database_contract`) is unaffected. Prerequisite for v4 promotion. |
 | **D18** | Field-state resilience | **A16**, D13, D17 | **Adopted:** every adapter field is classified `present`/`absent`/`empty`/`null`/`sentinel`/`malformed` (umbrella `vacant` = absent-family, excludes `malformed`). Non-present states emit `info` (or `warn` for `malformed`) diagnostics; **no input ever crashes the program** — a bad field is dropped with a diagnostic and the record still lands; only an unreadable source quarantines. Shares the `vacant` token and `fatal`/`advisory` scale with D17. Impl: `field_state.py`. |
+| **D19** | Decoder/validator dating and path identity | **A12**, D10, D17 | **Adopted:** CoSchema continues to version readable stored meaning/layout; independent decoder and validator profiles begin at `0.2` for the current capability/filter update and are recorded in stores, manifests, reports, and policy requirements. Logical Projects use generated UUIDv4 IDs as cross-store keys. Path hashes remain only for machine-local location identity and idempotent evidence identities. Vendor-observed historical paths remain provenance and carry explicit `path_obsolete`; they never replace the active Project root. |
+| **D20** | Global database versus reproducible analytical Assemblies | **A1**, **A7**, **A9**, **A19** | **Adopted:** retain immutable per-Project CoSchema snapshots as authority and add cataloged Assemblies above them. `all-current` resolves all curated Projects with verified current pointers; filtered and named-snapshot Assemblies are explicit. One manifest records selector, inputs, provenance, hashes, limits, and materializations. JSONL, Parquet, DuckDB, and optional merged SQLite are interchangeable derivatives over a stable common projection, never vendor parsers or second authorities. The Assembly input relation provides both Assembly→Project and Project→Assembly lookup. |
 
 ### 8.4 Postponed topics
 
@@ -740,7 +775,7 @@ its active item or trigger.
 
 | ID | Known gap | Disposition |
 |----|-----------|-------------|
-| **L-S1** | No catalog-wide current selector by Project ID, topic, ownership, or curation state | **A1** |
+| **L-S1** | No catalog-wide current selector by Project ID, topic, ownership, or curation state | **A1/A19** |
 | **L-S2** | Typed selection now covers date/model/event/Interaction/turn/status/artifact and stable event ID; tool/actor/role predicates, projections/order/grouping, sequence windows, and full legacy parity remain | **A1–A3** |
 | **L-S3** | No historical union or semantic snapshot-diff operation | Implement the adopted **D9** semantics under **A1/A7** |
 | **L-O1** | Typed actions emit one structured reusable JSON result; nested-result CSV projection and streaming row envelopes remain external/legacy-only | **A7/A9**; add only with a demonstrated consumer |
@@ -749,6 +784,7 @@ its active item or trigger.
 | **L-M1** | Typed orientation is implemented; time buckets, gap histogram, distribution limits, and scale/skew goldens remain | **A2/A9** |
 | **L-M2** | D3 active-time sensitivity is implemented for 5/30/120-minute caps; the gap histogram and event-bearing interval presentation remain | **A2** |
 | **L-M3** | Utilization differs by vendor: Codex cumulative attribution is permanently non-billing evidence, Cursor lacks verified local tokens, and quota/price facts are dated external evidence | Preserve the A10 boundary; reopen only under **T4**; never infer tokens from text |
+| **L-M4** | Session metrics flatten top-level, subagent, fork, and other related Session entities. Claude scan excludes subagents by default while ingest preserves them; Misses therefore scans as 17 but overview reports 122. Typed Session rows do not yet expose `parent_session_id` or `session_relation_kind`, although both are stored | **A2/A3**: report total and relation-partitioned counts, expose lineage fields and filters, and make headline/default semantics explicit; validation policies must be able to require top-level Sessions independently of total entities |
 | **L-C1** | First-class bounded substring search and saved results exist; ranking, topic classification, repeated-state facets, and a named saved-search catalog do not | **A4**, **A7–A8** |
 | **L-C2** | Normalized content may be sanitized, filtered, redacted, or truncated; a miss does not prove raw absence | Preserve completeness in **A3–A6** |
 | **L-P1** | Interaction, Model Turn, phase, and cross-vendor correlation confidence varies; shared evidence is not authorship | Preserve method/confidence in **A2–A8** |
@@ -757,13 +793,17 @@ its active item or trigger.
 | **L-E2** | Repeated substring search has no rebuildable policy-aware index | Benchmark after **A4**; decide under **D4** |
 | **L-E3** | Cursor selection and SQLite writes are composer-streamed, but ordering/deduplication and Interaction construction still buffer one complete composer; a real 19,661-event composer reached about 531 MiB RSS. Store-wide orphan pruning is now deferred to once per source transaction instead of once per composer, eliminating a repeated full-store scan; phase tracing separates read-buffer and write work | **A9**: measure the batch-pruning improvement and use allocation profiles to make per-composer grouping/stateful writes incremental without weakening rollback or canonical ordering |
 | **L-E4** | First capture of changed selected Cursor evidence still requires one transactional backup and streaming compression; a newly selected Project may require one verified streaming restore of an unchanged cached cohort. Real exact revisions `368bb3…` and `ae3c23…` differed while all three selected markers and normalization digests matched, proving whole-DB invalidation was too coarse | **A5/A9**: selected markers are implemented; measure cache-restore I/O/RSS and keep `--force` for suspected vendor timestamp/edge-sampling gaps |
+| **L-E5** | No cataloged virtual/materialized cross-Project Assembly, `all-current` resolver, Parquet projection, DuckDB workspace, merged SQLite read model, or reverse Project→Assembly lookup. Current typed results record store-level Project/snapshot provenance, but event rows still expose a Project path rather than directly carrying `project_id`, `snapshot_id`, and observation lineage required for a durable Assembly row contract | **A19**, in the documented five-stage order; do not gate common analytical work on vendor adapters |
 | **V-CC1** | Claude slug decoding is lossy when the index lacks an explicit Project path | Prefer indexed paths; reopen mapping only with new evidence |
 | **V-CC2** | Claude model/service settings, custom/AI titles, agent names, direct fork references, and bounded product state are mapped; richer runtime-context snapshots remain only partially specialized | Validate under **A12**; other context remains evidence-triggered |
-| **V-CTX1** | Runtime context such as memory, skills/tool schemas, reasoning/turn context, and detailed token snapshots is not represented as a first-class common model | Evidence- and use-case-triggered; define semantics before adding entities |
+| **V-CC3** | Decoder 0.2 classifies signature-only empty thinking and fallback markers as known raw state, but image-only user records are still unsupported attachment evidence (8 records/52 image blocks in the current Misses source set) | Add bounded attachment identities/content links without copying base64 bodies; validate on Misses before allowing the diagnostic in policy |
+| **V-CTX1** | Compaction summaries and selected Cursor request-context/context-window observations are represented as bounded context operations, but memory, skills/tool schemas, arbitrary attachment/context selections, reasoning state, and detailed token snapshots are not a complete first-class common model | Continue evidence- and use-case-triggered specialization; do not collapse semantically different context into one JSON dump |
 | **V-CX1** | Codex supplies no direct referential parent-session identifier | Unsupported until **T4** |
 | **V-CU1** | Cursor's current header list is incomplete for historical sessions. Workspace `composer.composerData` fallback recovery is implemented and current headers take precedence; composers absent from both indexes or ambiguously bound remain unattributed | Validate fallback provenance across releases; evidence-triggered mapping maintenance under **T1** |
 | **V-CU2** | Cursor scan time range is incomplete when headers lack usable timestamps | Preserve coverage diagnostics; do not decode all bubbles merely for dates |
 | **V-CU3** | Cursor exposes exact `modelInfo.modelName` and accepted/rejected `toolFormerData.userDecision`, but no separate observed effort, speed, or service-tier fields | Validate model/permission provenance under **A12**; retain absent settings as NULL |
+| **V-CU4** | Cursor subagent Sessions are preserved and classified, but reviewed Zero400 records do not currently yield parent composer/session IDs; two ZeroPerf-referencing subagents therefore have NULL parent lineage. Cursor tool-derived ZeroPerf artifacts and event links are preserved, while repository-object identity is not yet populated | Inspect the surrounding composer/bubble/task records for evidence-backed parent linkage and repository/worktree identity; retain NULL plus diagnostics when the source does not provide them |
+| **V-INT1** | Agent/subagent/tool/MCP preservation is normative, but cross-vendor fixtures do not yet prove every available identifier, relationship, ordered result fragment, status, and bounded payload survives normalization | Extend **A3/A6** semantic validation per vendor/release: compare source interaction inventories with normalized projections and require an explicit mapping diagnostic for every unsupported retained source shape |
 | **E-1** | Lifecycle abort is fixture-only in the reviewed corpus | Add a real shape only under **T4** |
 | **E-2** | Settings are uneven: Codex records model/effort and newer service tier; Claude records model/service tier; Cursor records model only; no distinct speed-tier evidence was observed | **A12**; preserve exact values and field provenance, never derive speed from a model label |
 
@@ -801,19 +841,20 @@ Only completed capabilities that constrain current work are retained here:
 
 Behaviors to confirm against real records. The operator supplies (or notes) the
 interaction just prior; Codess checks the corresponding session/event/tool rows.
-Answers feed **T1** and the postponed compaction/attribution work.
+Answers feed **T1** and remaining attribution/context-specialization work.
 
 - **Codex:** `/archive` then `codex resume --last` (archive state, resume
   lineage); `codex fork` (fork lineage); mid-session model/effort/service change
   via `thread_settings_applied` (does it update `model_configurations`);
-  whether any local compaction record exists (none observed to date).
-- **Claude:** `/compact` (`compact_boundary` retained, summary discarded);
+  compare older/newer `compacted` window-ID shapes without interpreting the
+  encrypted summary.
+- **Claude:** `/compact` (boundary, accounting, and linked summary retained);
   slash command vs task-notification vs typed prompt (the four-way
   `direct_user_input`/`harness_injected`/`task_notification`/`slash_command`
   split); subagent or `--fork` (`parent_session_id`, `session_relation_kind`).
-- **Cursor:** auto-summarization or `/compress` (does a `composerData`/bubble
-  marker survive in `state.vscdb` — probe with `get_composer_data`); mid-session
-  model switch (per-turn `modelInfo.modelName`, surrounding-event attribution);
+- **Cursor:** compare auto-summary and manual `/compress`
+  `conversationSummary`/boundary shapes across releases; mid-session model
+  switch (per-turn `modelInfo.modelName`, surrounding-event attribution);
   accept/reject a tool permission (`toolFormerData.userDecision` →
   `normalized_status`).
 - **Cross-vendor:** same file in two vendors (shared `relative_path` +

@@ -15,6 +15,7 @@ from typing import Any, Iterable
 
 from codess.raw_store import RawCaptureError, RawStore, verify_captured_object
 from codess.fileio import hash_file, source_fingerprint
+from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import FORMAT_VERSION, require_store, verify_package
 from codess.snapshot import SnapshotError, current_store_paths
 
@@ -27,6 +28,7 @@ POLICY_FIELDS = {
     "cursor_turn_policy", "expected_cursor_workspace_ids",
     "expected_raw_records", "require_fixed_point",
     "allow_source_revision_drift",
+    "required_decoder_version", "required_validator_version",
 }
 REQUIRED_ARTIFACT_INDEXES = {
     "idx_artifacts_identity_path",
@@ -120,7 +122,7 @@ def load_policy(path: Path | None) -> dict[str, Any]:
     return policy
 
 
-def _canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sqlite3.Row]]]:
+def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sqlite3.Row]]]:
     """Yield stable logical rows; exclude build timestamps and surrogate keys."""
     queries = {
         "projects": """
@@ -130,12 +132,13 @@ def _canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sq
         """,
         "project_locations": """
             SELECT id, project_id, machine_id, observed_path, location_kind,
-                   state, metadata
+                   path_obsolete, state, metadata
             FROM project_locations ORDER BY id
         """,
         "workspace_bindings": """
             SELECT id, project_id, location_id, source_system_id, workspace_id,
-                   relation_kind, source_project_path, selection_state, metadata
+                   relation_kind, source_project_path, path_obsolete,
+                   selection_state, metadata
             FROM workspace_bindings ORDER BY id
         """,
         "sources": """
@@ -147,7 +150,8 @@ def _canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sq
         "sessions": """
             SELECT id, global_id, observation_id, source_system_id, vendor_session_id, vendor_name,
                    product_name, harness_name, storage_format, surface_kind,
-                   session_purpose, harness_version, source_cwd, started_at,
+                   session_purpose, harness_version, source_cwd,
+                   path_obsolete, started_at,
                    ended_at, source_mtime, time_basis, parent_session_id,
                    session_relation_kind, archive_state, archive_source,
                    metadata, source, type, release, project_path
@@ -256,7 +260,7 @@ def _canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sq
                      a.relative_path, a.uri, ea.operation
         """,
         "mapping_diagnostics": """
-            SELECT d.session_id, e.event_id, d.level, d.reason_code,
+            SELECT d.session_id, e.event_id, d.level, d.severity, d.reason_code,
                    d.source_field, d.source_value, d.mapping_rule, d.detail
             FROM mapping_diagnostics d
             LEFT JOIN events e ON e.id=d.event_id
@@ -285,7 +289,7 @@ def semantic_digest(
         conn.row_factory = sqlite3.Row
         try:
             require_store(conn, write=False)
-            for table, rows in _canonical_rows(conn):
+            for table, rows in canonical_rows(conn):
                 if table in exclude_tables:
                     continue
                 digest.update(f"{path.name}\0{table}\n".encode("utf-8"))
@@ -434,7 +438,8 @@ def _validate_store(
         diagnostic_counts = {
             row[0]: int(row[1])
             for row in conn.execute(
-                "SELECT reason_code, COUNT(*) FROM mapping_diagnostics GROUP BY reason_code"
+                "SELECT reason_code, COUNT(*) FROM mapping_diagnostics "
+                "WHERE severity!='info' GROUP BY reason_code"
             )
         }
     except sqlite3.Error as exc:
@@ -672,6 +677,8 @@ def validate_project(
             "package_digest": manifest.get("package_digest"),
             "software_version": manifest.get("software_version"),
             "software_revision": manifest.get("software_revision"),
+            "decoder_version": manifest.get("decoder_version"),
+            "validator_version": VALIDATOR_VERSION,
             "raw_mode": manifest.get("build_policy", {}).get("raw_mode"),
         }
     )
@@ -679,6 +686,25 @@ def validate_project(
         report, "package_digest",
         manifest.get("package_digest") == verify_package(),
         manifest.get("package_digest"),
+    )
+    required_decoder = policy.get(
+        "required_decoder_version", DECODER_VERSION
+    )
+    required_validator = policy.get(
+        "required_validator_version", VALIDATOR_VERSION
+    )
+    _add_check(
+        report, "decoder_version",
+        manifest.get("decoder_version") == required_decoder,
+        {
+            "observed": manifest.get("decoder_version"),
+            "required": required_decoder,
+        },
+    )
+    _add_check(
+        report, "validator_version",
+        VALIDATOR_VERSION == required_validator,
+        {"observed": VALIDATOR_VERSION, "required": required_validator},
     )
 
     counts_by_source: dict[str, dict[str, int]] = {}

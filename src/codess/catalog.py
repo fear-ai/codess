@@ -42,10 +42,12 @@ def classify_project_path(path: Path, *, work_root: Path | None = None) -> dict[
     return {"topic": topic, "ownership": "own" if parts else "unknown", "activity_state": "active", "selection_state": "candidate"}
 
 
-def project_id_for_path(path: Path) -> str:
-    """Match the v2 store's stable path-derived identity without exposing it as a path."""
+def candidate_key_for_path(path: Path) -> str:
+    """Return a reproducible review key, never a logical Project identity."""
     normalized = str(path.expanduser().resolve())
-    return "project:path:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+    return "candidate:path:" + hashlib.sha256(
+        normalized.encode("utf-8")
+    ).hexdigest()[:24]
 
 
 def load_candidate_csv(path: Path, *, work_root: Path | None = None) -> dict[str, Any]:
@@ -72,7 +74,7 @@ def load_candidate_csv(path: Path, *, work_root: Path | None = None) -> dict[str
             seen.add(key)
             remote = (row.get("repo_url") or "").strip() or None
             projects.append({
-                "project_id": project_id_for_path(local),
+                "candidate_key": candidate_key_for_path(local),
                 "path": key,
                 "logical_name": (row.get("title") or local.name).strip(),
                 "curation": classify_project_path(local, work_root=work_root),
