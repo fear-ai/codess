@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable
 
 from codess.resources import ResourceLimitError, check_source
 from codess.store import (
-    ingest_state_marker, load_ingest_state, save_ingest_state, should_ingest,
+    connect, ingest_state_marker, load_ingest_state, replace_session_events,
+    save_ingest_state, should_ingest,
 )
 
 
@@ -52,3 +54,27 @@ def mark_source_complete(state_path: Path, path: Path) -> None:
     state = load_ingest_state(state_path)
     state[str(path.resolve())] = ingest_state_marker(path)
     save_ingest_state(state_path, state)
+
+
+def commit_source_replacement(
+    store_path: Path,
+    *,
+    session: dict[str, Any] | None,
+    events: list[dict[str, Any]],
+    session_id: str,
+    after_replace: Callable[[Any], None] | None = None,
+) -> None:
+    """Atomically replace normalized rows and related source observations."""
+    conn = connect(store_path)
+    try:
+        replace_session_events(
+            conn, session, events, session_id=session_id, prune=False
+        )
+        if after_replace is not None:
+            after_replace(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

@@ -77,9 +77,24 @@ Common record-envelope fields include `sessionId`, `uuid`, `parentUuid`,
 `timestamp`, `cwd`, `gitBranch`, `version`, and `isSidechain`. Field presence
 varies by record type.
 
+AI/custom title records are source-system name evidence, not Session identity
+and not an automatic Codess user alias. Claude transcript recency, `last-prompt`,
+or an unanswered final record can show that the observed Source is open-ended;
+none proves a currently running Claude process. Runtime state remains unknown
+unless a separate dated runtime observation supplies it.
+
 The current adapter emits conversation events from `user` and `assistant`
 records, distinguishes typed human prompts from harness/system inputs carried
 in user envelopes, and emits bounded product-state and lifecycle events. It
+recognizes Claude's tagged local-command trio in either observed release
+envelope: `<local-command-caveat>` is harness context,
+`<command-name>/…</command-name>` is a human-initiated command, and
+`<local-command-stdout>` is a harness-produced command result. Some releases
+store these as `user.message.content`; others use `system/local_command`.
+Their source envelope role therefore never decides the normalized actor.
+Command-only Sessions remain valid operational evidence, but Session
+orientation should de-emphasize them relative to substantive conversations.
+The adapter
 maps a `system` `compact_boundary` to `context.compact` and preserves its
 trigger, pre/post token counts, duration, preserved-segment/message counts, and
 other observed compact metadata. The paired `user` record marked
@@ -135,6 +150,17 @@ preserves them for lineage. User-facing orientation must partition top-level
 and related Sessions instead of presenting the flattened total as independent
 work Sessions.
 
+Claude's directory and record fields provide strong subagent-Session evidence,
+including parent linkage in the observed layouts. `userType=external` occurs
+on both top-level and subagent records and is not evidence of human authorship.
+For a record with `isSidechain=true`, an `agentId`, or a source path below
+`subagents/`, Codess maps a `user`-role task as a harness-carried
+`delegated_prompt` with `origin_kind=harness_delegated`; it does not contribute
+to human-prompt metrics. The exact source role and the structural evidence are
+retained in metadata. Main-session records without a delegated/harness marker
+remain human prompts; direct `origin.kind` and typed/queued prompt evidence are
+stronger than that fallback.
+
 ---
 
 ## 7. Scan metrics (Codess)
@@ -180,6 +206,21 @@ locator. The scalar `mapping_rule` names the primary rule in
 additional lineage/configuration rules. Common event/configuration names are
 the cross-vendor query surface, while original Claude names and values remain
 available for release-specific investigation.
+
+Tool names such as `Agent`, `TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`,
+and MCP-qualified operations are preserved as source tool evidence. A
+versioned derived classifier may summarize them as planning, delegation, or
+automation for reports, but those categories are not substituted for the
+exact name and do not by themselves prove a distinct runtime actor.
+Likewise, a historical MCP-qualified name does not prove a current
+user-configured Claude CLI server. Claude product integrations can expose
+session administration, visualization, or desktop/browser capabilities in a
+particular surface. Codess treats each invocation and linked result as the
+evidence: rendered visualization and successful chapter/task operations are
+real outcomes; an empty browser list is a useful availability diagnostic; an
+oversize instruction result is a real but inefficient failure. Current
+configuration must be inventoried separately with the harness configuration
+command.
 
 Richer product state remains raw or metadata. Compaction boundaries and
 summaries are specialized context-operation events, not a generic memory

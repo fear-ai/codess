@@ -1,10 +1,13 @@
-"""Administrative command families for catalog, baseline, evidence, and schema."""
+"""Administrative command families for catalog, Sessions, evidence, and schema."""
 
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from codess.baseline_catalog import (
@@ -20,8 +23,21 @@ from codess.cursor_feature_audit import audit_cursor_features
 from codess.evidence import build_evidence_inventory
 from codess.fileio import read_json, write_json_atomic
 from codess.helpers import parse_dir_list, unsafe_traversal_root_reason
-from codess.project_catalog import add_project_location, load_catalog
+from codess.mcp_audit import audit_mcp_interactions
+from codess.orientation_audit import audit_orientation
+from codess.project_annotations import build_project_annotations
+from codess.refresh_operations import (
+    REFRESH_DESIGNATORS,
+    refresh_projects,
+)
+from codess.project_catalog import (
+    add_project_location, catalog_readiness, load_catalog,
+    set_project_selection_state,
+)
 from codess.schema_evolution import RANK, compare, required
+from codess.session_names import (
+    load_session_names, remove_session_name, set_session_name,
+)
 from codess.storage_report import build_storage_report, current_store_paths
 from codess.token_usage import source_paths, validate_codex_token_usage
 from codess.retention import apply_retention_plan, build_retention_plan
@@ -59,13 +75,140 @@ def _candidate_parser(subparsers) -> None:
     parser.set_defaults(handler=_catalog_candidates)
 
 
+def _refresh(args) -> int:
+    receipt = args.receipt
+    if receipt is None and args.stage != "plan":
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        receipt = (
+            args.registry.expanduser().resolve()
+            / "reports" / f"refresh-{stamp}.json"
+        )
+    result = refresh_projects(
+        args.registry,
+        repo_root=REPO_ROOT,
+        stage=args.stage,
+        project_references=args.projects,
+        project_list=args.project_list,
+        designator=args.designator,
+        source=args.source,
+        raw_mode=args.raw_mode,
+        baseline_selection=args.baseline_selection,
+        reviewed_catalog=args.reviewed,
+        large_event_count=args.large_events,
+        large_store_bytes=args.large_bytes,
+        min_size=args.min_size,
+        force=args.force,
+        resource_policy=args.resource_policy,
+        timeout_seconds=args.timeout_seconds,
+        receipt_path=receipt,
+    )
+    _json(result)
+    return 0 if result["status"] in {
+        "planned", "preflight_accepted", "applied"
+    } else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codess")
     families = parser.add_subparsers(dest="family", required=True)
 
+    refresh = families.add_parser("refresh")
+    refresh_selector = refresh.add_mutually_exclusive_group(required=True)
+    refresh_selector.add_argument(
+        "--project", action="append", dest="projects",
+        help="known Project ID, unique name, or active catalog path; repeatable",
+    )
+    refresh_selector.add_argument(
+        "--project-list", type=Path,
+        help="JSON, CSV, or line-oriented file of known Project references",
+    )
+    refresh_selector.add_argument(
+        "--designator", choices=sorted(REFRESH_DESIGNATORS),
+        help="one computed catalog-annotation cohort",
+    )
+    refresh.add_argument(
+        "--stage", choices=("plan", "preflight", "apply"), default="plan",
+        help="plan is read-only; apply first preflights every selected Project",
+    )
+    refresh.add_argument(
+        "--registry", type=Path, default=Path.home() / ".codess"
+    )
+    refresh.add_argument(
+        "--source", choices=("all", "cc", "codex", "cursor"), default="all"
+    )
+    refresh.add_argument(
+        "--raw-mode",
+        choices=("auto", "none", "reference", "capture", "seal"),
+        default="auto",
+    )
+    refresh.add_argument(
+        "--baseline-selection", type=Path,
+        default=REPO_ROOT / "catalog/baseline-selection.json",
+    )
+    refresh.add_argument(
+        "--reviewed", type=Path,
+        default=REPO_ROOT / "catalog/reviewed-baselines.json",
+    )
+    refresh.add_argument("--large-events", type=int, default=25_000)
+    refresh.add_argument(
+        "--large-bytes", type=int, default=128 * 1024 * 1024
+    )
+    refresh.add_argument("--min-size", type=int, default=0)
+    refresh.add_argument("--force", action="store_true")
+    refresh.add_argument("--resource-policy", type=Path)
+    refresh.add_argument("--timeout-seconds", type=int, default=3_600)
+    refresh.add_argument(
+        "--receipt", type=Path,
+        help="checkpointed JSON receipt (automatic for preflight/apply)",
+    )
+    refresh.set_defaults(handler=_refresh)
+
     catalog = families.add_parser("catalog")
     catalog_commands = catalog.add_subparsers(dest="catalog_command", required=True)
     _candidate_parser(catalog_commands)
+    status = catalog_commands.add_parser("status")
+    status.add_argument(
+        "--registry", type=Path, default=Path.home() / ".codess"
+    )
+    status.set_defaults(handler=_catalog_status)
+    annotations = catalog_commands.add_parser("annotations")
+    annotations.add_argument(
+        "--registry", type=Path, default=Path.home() / ".codess"
+    )
+    annotations.add_argument(
+        "--baseline-selection", type=Path,
+        default=REPO_ROOT / "catalog/baseline-selection.json",
+    )
+    annotations.add_argument(
+        "--reviewed", type=Path,
+        default=REPO_ROOT / "catalog/reviewed-baselines.json",
+    )
+    annotations.add_argument(
+        "--large-events", type=int, default=25_000
+    )
+    annotations.add_argument(
+        "--large-bytes", type=int, default=128 * 1024 * 1024
+    )
+    annotations.add_argument("--label", action="append", default=[])
+    annotations.add_argument(
+        "--format", choices=("table", "json", "csv"), default="table"
+    )
+    annotations.add_argument("--output", type=Path)
+    annotations.set_defaults(handler=_catalog_annotations)
+    state = catalog_commands.add_parser("state")
+    state.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    state.add_argument("--project-id", required=True)
+    state.add_argument(
+        "--state",
+        choices=(
+            "priority", "candidate", "deferred", "excluded", "needs_review",
+            "worktree",
+        ),
+        required=True,
+    )
+    state.add_argument("--related-project-id")
+    state.add_argument("--note")
+    state.set_defaults(handler=_catalog_state)
     decide = catalog_commands.add_parser("decide")
     decide.add_argument("--catalog", type=Path, required=True)
     decide.add_argument("--project", required=True)
@@ -84,6 +227,11 @@ def build_parser() -> argparse.ArgumentParser:
     onboard_mode.add_argument("--apply", action="store_true")
     onboard.add_argument("--stop-after", choices=("plan", "preflight"))
     onboard.add_argument("--receipt", type=Path)
+    onboard.add_argument(
+        "--resource-policy",
+        type=Path,
+        help="apply one ingest resource-policy file to preflight and apply",
+    )
     onboard.set_defaults(handler=_catalog_onboard)
     location = catalog_commands.add_parser("location")
     location_commands = location.add_subparsers(dest="location_command", required=True)
@@ -156,6 +304,23 @@ def build_parser() -> argparse.ArgumentParser:
     cursor.add_argument("--registry", type=Path, default=Path.home() / ".codess")
     cursor.add_argument("--output", type=Path)
     cursor.set_defaults(handler=_audit_cursor)
+    mcp = audits.add_parser("mcp-interactions")
+    mcp.add_argument(
+        "--registry", type=Path, default=Path.home() / ".codess"
+    )
+    mcp.add_argument("--codex-rollout", type=Path, action="append", default=[])
+    mcp.add_argument("--include-excerpts", action="store_true")
+    mcp.add_argument("--output", type=Path)
+    mcp.set_defaults(handler=_audit_mcp)
+    orientation = audits.add_parser("orientation")
+    orientation.add_argument(
+        "--registry", type=Path, default=Path.home() / ".codess"
+    )
+    orientation.add_argument(
+        "--project-id", action="append", default=[]
+    )
+    orientation.add_argument("--output", type=Path)
+    orientation.set_defaults(handler=_audit_orientation)
 
     schema = families.add_parser("schema")
     schema_commands = schema.add_subparsers(dest="schema_command", required=True)
@@ -164,6 +329,26 @@ def build_parser() -> argparse.ArgumentParser:
     compare_parser.add_argument("new", type=Path)
     compare_parser.add_argument("--declared", choices=RANK, default="same")
     compare_parser.set_defaults(handler=_schema_compare)
+
+    session = families.add_parser("session")
+    session_commands = session.add_subparsers(
+        dest="session_command", required=True
+    )
+    name = session_commands.add_parser("name")
+    name.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    name.add_argument("--project-id", required=True)
+    name.add_argument("--session-id", required=True)
+    name.add_argument("--name", required=True)
+    name.set_defaults(handler=_session_name)
+    unname = session_commands.add_parser("unname")
+    unname.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    unname.add_argument("--project-id", required=True)
+    unname.add_argument("--session-id", required=True)
+    unname.set_defaults(handler=_session_unname)
+    names = session_commands.add_parser("names")
+    names.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    names.add_argument("--project-id")
+    names.set_defaults(handler=_session_names)
 
     storage = families.add_parser("storage")
     storage_commands = storage.add_subparsers(dest="storage_command", required=True)
@@ -210,6 +395,11 @@ def _apply_arguments(parser) -> None:
     parser.add_argument("--approve-catalog", type=Path)
     parser.add_argument("--min-size", type=int, default=0)
     parser.add_argument("--no-query-smoke", action="store_true")
+    parser.add_argument(
+        "--resource-policy",
+        type=Path,
+        help="apply one ingest resource-policy file to both rebuilds",
+    )
 
 
 def _roots(args) -> list[Path]:
@@ -281,11 +471,96 @@ def _catalog_decide(args) -> int:
     return 0
 
 
+def _catalog_status(args) -> int:
+    report = catalog_readiness(args.registry)
+    _json(report)
+    return 0 if report["summary"]["not_query_ready_projects"] == 0 else 1
+
+
+def _catalog_annotations(args) -> int:
+    report = build_project_annotations(
+        args.registry,
+        baseline_selection=args.baseline_selection,
+        reviewed_catalog=args.reviewed,
+        large_event_count=args.large_events,
+        large_store_bytes=args.large_bytes,
+    )
+    required_labels = set(args.label)
+    if required_labels:
+        report = {
+            **report,
+            "projects": [
+                item for item in report["projects"]
+                if required_labels <= set(item["labels"])
+            ],
+        }
+        report["summary"] = {
+            **report["summary"],
+            "filtered_projects": len(report["projects"]),
+            "required_labels": sorted(required_labels),
+        }
+    if args.format == "json":
+        if args.output:
+            write_json_atomic(args.output, report)
+        else:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+
+    rows = [{
+        "name": item.get("name") or "",
+        "labels": ",".join(item["labels"]),
+        "query_status": item["query_status"],
+        "sources": ",".join(item["source_systems"]),
+        "sessions": item["sessions"],
+        "events": item["events"],
+        "store_bytes": item["normalized_store_bytes"],
+        "workspaces": item["workspace_bindings"],
+        "path": item.get("path") or "",
+        "project_id": item["project_id"],
+        "note": item.get("note") or "",
+    } for item in report["projects"]]
+    fields = (
+        "name", "labels", "query_status", "sources", "sessions", "events",
+        "store_bytes", "workspaces", "path", "project_id", "note",
+    )
+    output = io.StringIO()
+    if args.format == "csv":
+        writer = csv.DictWriter(output, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    else:
+        output.write("\t".join(fields) + "\n")
+        for row in rows:
+            output.write("\t".join(
+                str(row[field]).replace("\t", " ").replace("\n", " ")
+                for field in fields
+            ) + "\n")
+    text = output.getvalue()
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(text, encoding="utf-8")
+    else:
+        print(text, end="")
+    return 0
+
+
+def _catalog_state(args) -> int:
+    _json(set_project_selection_state(
+        args.registry,
+        args.project_id,
+        args.state,
+        related_project_id=args.related_project_id,
+        note=args.note,
+    ))
+    return 0
+
+
 def _catalog_onboard(args) -> int:
     result = onboard_catalog(
         args.catalog, registry=args.registry, repo_root=REPO_ROOT,
         decision=args.review_decision, source=args.source, raw_mode=args.raw_mode,
         apply=args.apply, stop_after=args.stop_after, receipt_path=args.receipt,
+        resource_policy=args.resource_policy,
     )
     _json(result)
     return 0 if result["status"] not in {"preflight_rejected", "apply_failed"} else 1
@@ -331,6 +606,7 @@ def _baseline_apply(args) -> int:
         approve_catalog=args.approve_catalog, min_size=args.min_size,
         query_smoke=not args.no_query_smoke, repo_root=REPO_ROOT,
         report_path=args.report,
+        resource_policy=args.resource_policy,
     )
     _json(result)
     return 0
@@ -397,6 +673,23 @@ def _audit_cursor(args) -> int:
     return 0
 
 
+def _audit_mcp(args) -> int:
+    _write_optional(args.output, audit_mcp_interactions(
+        args.registry,
+        codex_rollouts=args.codex_rollout,
+        include_excerpts=args.include_excerpts,
+    ))
+    return 0
+
+
+def _audit_orientation(args) -> int:
+    report = audit_orientation(
+        args.registry, project_ids=args.project_id,
+    )
+    _write_optional(args.output, report)
+    return 1 if report["summary"]["projects_failed"] else 0
+
+
 def _schema_compare(args) -> int:
     findings = list(compare(read_json(args.old), read_json(args.new)))
     need = required(findings)
@@ -405,6 +698,34 @@ def _schema_compare(args) -> int:
         for level, path, message in findings
     ]})
     return 1 if need == "manual" or RANK[args.declared] < RANK[need] else 0
+
+
+def _session_name(args) -> int:
+    _json(set_session_name(
+        args.registry, args.project_id, args.session_id, args.name
+    ))
+    return 0
+
+
+def _session_unname(args) -> int:
+    _json(remove_session_name(
+        args.registry, args.project_id, args.session_id
+    ))
+    return 0
+
+
+def _session_names(args) -> int:
+    value = load_session_names(args.registry)
+    if args.project_id:
+        value = {
+            **value,
+            "names": [
+                item for item in value["names"]
+                if item.get("project_id") == args.project_id
+            ],
+        }
+    _json(value)
+    return 0
 
 
 def _storage_report(args) -> int:

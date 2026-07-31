@@ -9,22 +9,29 @@ from pathlib import Path
 import pytest
 
 from codess.baseline_catalog import freeze_reviewed_catalogs, verify_reviewed_catalog
-from codess.baseline_operations import apply_project, reset_rebuildable_working_stores
+from codess.baseline_operations import (
+    apply_project, reset_rebuildable_working_stores, run_ingest,
+)
 from codess.baseline_validation import validate_project
 from codess.candidate_review import (
     discover_git_roots, observe_git, recommend, record_decision,
     refresh_candidates, validate_policy,
 )
-from codess.catalog_operations import onboard_catalog, relocate_project
+from codess.catalog_operations import (
+    _run_ingest_stage, onboard_catalog, relocate_project, retire_location,
+)
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.project import parse_and_run
 from codess.project_catalog import (
     add_project_location, ensure_project_binding, get_project_entry,
-    retire_project_location,
+    durable_project_root, retire_project_location, set_project_selection_state,
 )
 from codess.raw_store import RawStore
 from codess.schema_evolution import compare, required
-from codess.snapshot import create_snapshot
+from codess.session_names import (
+    alias_index, remove_session_name, set_session_name,
+)
+from codess.snapshot import create_snapshot, current_raw_records, publish_snapshot
 from codess.store import connect, init_db, replace_session_events, sync_project_catalog
 from codess.vendor_audits.claude_features import audit_claude_features
 from codess.vendor_audits.codex_features import audit_codex_features
@@ -38,6 +45,50 @@ def _git_project(path: Path) -> None:
     (path / "README.md").write_text("test\n", encoding="utf-8")
     subprocess.run(["git", "add", "README.md"], cwd=path, check=True)
     subprocess.run(["git", "commit", "-qm", "initial"], cwd=path, check=True)
+
+
+def test_admin_ingest_paths_forward_resource_policy(tmp_path, monkeypatch):
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return Result()
+
+    monkeypatch.setattr(
+        "codess.baseline_operations.subprocess.run", fake_run
+    )
+    policy = tmp_path / "resources.json"
+    run_ingest(
+        tmp_path / "project",
+        source="all",
+        raw_mode="reference",
+        registry=tmp_path / "registry",
+        min_size=0,
+        repo_root=tmp_path,
+        resource_policy=policy,
+    )
+    assert calls[0][-2:] == ["--resource-policy", str(policy)]
+
+    calls.clear()
+    monkeypatch.setattr(
+        "codess.catalog_operations.subprocess.run", fake_run
+    )
+    _run_ingest_stage(
+        {"projects": [{"path": str(tmp_path / "project")}]},
+        validate=True,
+        source="all",
+        raw_mode="reference",
+        registry=tmp_path / "registry",
+        repo_root=tmp_path,
+        resource_policy=policy,
+    )
+    assert ["--resource-policy", str(policy)] == calls[0][-3:-1]
+    assert calls[0][-1] == "--validate"
 
 
 def _captured_project(tmp_path: Path) -> tuple[Path, Path, str]:
@@ -83,6 +134,37 @@ def test_fileio_hash_and_atomic_json(tmp_path):
     write_json_atomic(path, {"b": 2, "a": 1})
     assert read_json(path) == {"a": 1, "b": 2}
     assert len(hash_file(path)) == 64
+
+
+def test_session_names_resolve_prefix_without_replacing_identity(tmp_path):
+    _project, registry, project_id = _captured_project(tmp_path)
+
+    named = set_session_name(registry, project_id, "s1", "slash_model")
+    assert named["name"] == "slash_model"
+    assert named["global_session_id"].startswith("codess:session:")
+    assert alias_index(registry)[
+        (project_id, named["global_session_id"])
+    ] == "slash_model"
+
+    removed = remove_session_name(registry, project_id, "s1")
+    assert removed["global_session_id"] == named["global_session_id"]
+    assert alias_index(registry) == {}
+
+
+def test_session_name_registry_rejects_session_id_as_the_mapping_field(
+    tmp_path,
+):
+    write_json_atomic(tmp_path / "session-names.json", {
+        "format": "codess.session-names/1",
+        "names": [{
+            "project_id": "codess:project:p",
+            "session_id": "codess:session:s",
+            "name": "old-shape",
+            "source": "user_alias",
+        }],
+    })
+    with pytest.raises(ValueError, match="global_session_id"):
+        alias_index(tmp_path)
 
 
 def test_candidate_refresh_uses_scan_and_preserves_review(tmp_path, monkeypatch):
@@ -243,6 +325,23 @@ def test_location_add_retire_and_conflict(tmp_path):
     other_binding = ensure_project_binding(registry, other)
     with pytest.raises(ValueError, match="another Project"):
         add_project_location(registry, other_binding["project_id"], second)
+
+
+def test_excluded_project_can_retire_its_last_location(tmp_path):
+    registry = tmp_path / "registry"
+    project = tmp_path / "deleted-later"
+    project.mkdir()
+    binding = ensure_project_binding(registry, project)
+    set_project_selection_state(
+        registry, binding["project_id"], "excluded", note="temporary test path"
+    )
+
+    result = retire_location(registry, binding["project_id"], project)
+
+    assert result["state"] == "retired"
+    location = get_project_entry(registry, binding["project_id"])["locations"][0]
+    assert location["state"] == "retired"
+    assert location["path_obsolete"] is True
 
 
 def test_schema_evolution_package_and_admin_dispatch(tmp_path, capsys):
@@ -406,6 +505,52 @@ def test_freeze_preserves_explicit_accepted_with_limitations_state(
     )
 
 
+def test_reviewed_baseline_verifies_its_exact_retained_snapshot_after_current_advances(
+    tmp_path,
+):
+    project, registry, project_id = _captured_project(tmp_path)
+    policy_path = tmp_path / "policy.json"
+    policy = {"policy_format": "codess.validation-policy/1"}
+    write_json_atomic(policy_path, policy)
+    validation = validate_project(
+        project, policy=policy, raw_store_root=registry / "raw",
+    )
+    write_json_atomic(project / ".codess/validation-report.json", {
+        "status": "accepted", "final_validation": validation,
+        "fixed_point": {"passed": True},
+    })
+    approved, reviewed = tmp_path / "approved.json", tmp_path / "reviewed.json"
+    freeze_reviewed_catalogs(
+        {"projects": [{"path": str(project), "policy": str(policy_path)}]},
+        approved_path=approved, reviewed_path=reviewed,
+        repo_root=Path(__file__).parents[1],
+    )
+    reviewed_snapshot = read_json(reviewed)["projects"][0]["snapshot_id"]
+
+    store = project / ".codess/sessions_codex.db"
+    conn = connect(store)
+    try:
+        conn.execute("UPDATE events SET content='later' WHERE event_id='e1'")
+        conn.commit()
+    finally:
+        conn.close()
+    create_snapshot(
+        project, [store], current_raw_records(project),
+        raw_store=RawStore(registry / "raw"),
+        build_policy={"raw_mode": "capture"},
+        registry_root=registry, project_id=project_id,
+    )
+    assert read_json(project / ".codess/current.json")["snapshot_id"] != (
+        reviewed_snapshot
+    )
+
+    result = verify_reviewed_catalog(
+        reviewed, repo_root=Path(__file__).parents[1]
+    )
+    assert result["projects"][0]["snapshot_id"] == reviewed_snapshot
+    assert result["projects"][0]["project_id"] == project_id
+
+
 def test_relocation_rolls_back_catalog_and_pointer_on_verification_failure(
     tmp_path, monkeypatch,
 ):
@@ -429,6 +574,188 @@ def test_fixed_point_reset_discards_only_rebuildable_working_stores(tmp_path):
     assert not working.exists()
     assert not Path(str(working) + "-journal").exists()
     assert (project / ".codess/current.json").exists()
+
+
+def test_candidate_snapshot_does_not_publish_before_validation(tmp_path, monkeypatch):
+    project, registry, project_id = _captured_project(tmp_path)
+    local_pointer = project / ".codess/current.json"
+    central_pointer = durable_project_root(registry, project_id) / "current.json"
+    prior_local = local_pointer.read_bytes()
+    prior_central = central_pointer.read_bytes()
+    store = project / ".codess/sessions_codex.db"
+    candidate = create_snapshot(
+        project,
+        [store],
+        current_raw_records(project),
+        raw_store=RawStore(registry / "raw"),
+        registry_root=registry,
+        project_id=project_id,
+        publish=False,
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.preserve_legacy", lambda *args: None
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.archive_stale_working_stores",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.reset_rebuildable_working_stores",
+        lambda *args: [],
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.run_ingest",
+        lambda *args, **kwargs: {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "candidate_snapshot_path": str(candidate),
+        },
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.validate_project",
+        lambda *args, **kwargs: {
+            "status": "rejected",
+            "errors": ["injected policy failure"],
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="first validation rejected"):
+        apply_project(
+            project,
+            source="all",
+            raw_mode="capture",
+            registry=registry,
+            policy_path=None,
+            repeat=False,
+            preserve_legacy_stores=False,
+            approve_catalog=None,
+            min_size=0,
+            query_smoke=False,
+            repo_root=Path(__file__).parents[1],
+        )
+
+    assert local_pointer.read_bytes() == prior_local
+    assert central_pointer.read_bytes() == prior_central
+    assert candidate.is_dir()
+
+
+def test_pointer_pair_publication_rolls_back_on_second_replace(
+    tmp_path, monkeypatch,
+):
+    project, registry, project_id = _captured_project(tmp_path)
+    local_pointer = project / ".codess/current.json"
+    central_pointer = durable_project_root(registry, project_id) / "current.json"
+    prior_local = local_pointer.read_bytes()
+    prior_central = central_pointer.read_bytes()
+    candidate = create_snapshot(
+        project,
+        [project / ".codess/sessions_codex.db"],
+        current_raw_records(project),
+        raw_store=RawStore(registry / "raw"),
+        registry_root=registry,
+        project_id=project_id,
+        publish=False,
+    )
+    calls = 0
+
+    def fail_second(source, target):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected second-pointer failure")
+        source.replace(target)
+
+    monkeypatch.setattr("codess.snapshot._replace_pointer", fail_second)
+    with pytest.raises(Exception, match="prior pointers restored"):
+        publish_snapshot(
+            project,
+            candidate,
+            registry_root=registry,
+            project_id=project_id,
+        )
+
+    assert local_pointer.read_bytes() == prior_local
+    assert central_pointer.read_bytes() == prior_central
+    assert candidate.is_dir()
+
+
+def test_repeat_build_failure_leaves_prior_pointers_current(
+    tmp_path, monkeypatch,
+):
+    project, registry, project_id = _captured_project(tmp_path)
+    local_pointer = project / ".codess/current.json"
+    central_pointer = durable_project_root(registry, project_id) / "current.json"
+    prior_local = local_pointer.read_bytes()
+    prior_central = central_pointer.read_bytes()
+    candidate = create_snapshot(
+        project,
+        [project / ".codess/sessions_codex.db"],
+        current_raw_records(project),
+        raw_store=RawStore(registry / "raw"),
+        registry_root=registry,
+        project_id=project_id,
+        publish=False,
+    )
+    ingests = iter((
+        {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "candidate_snapshot_path": str(candidate),
+        },
+        {
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "injected repeat failure",
+            "candidate_snapshot_path": None,
+        },
+    ))
+    monkeypatch.setattr(
+        "codess.baseline_operations.preserve_legacy", lambda *args: None
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.archive_stale_working_stores",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.reset_rebuildable_working_stores",
+        lambda *args: [],
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.run_ingest",
+        lambda *args, **kwargs: next(ingests),
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.validate_project",
+        lambda *args, **kwargs: {
+            "status": "accepted",
+            "snapshot_id": candidate.name,
+            "project_id": project_id,
+            "source_revisions": [],
+            "semantic_digest": "one",
+            "normalization_digest": "one",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="repeat ingest failed"):
+        apply_project(
+            project,
+            source="all",
+            raw_mode="capture",
+            registry=registry,
+            policy_path=None,
+            repeat=True,
+            preserve_legacy_stores=False,
+            approve_catalog=None,
+            min_size=0,
+            query_smoke=False,
+            repo_root=Path(__file__).parents[1],
+        )
+
+    assert local_pointer.read_bytes() == prior_local
+    assert central_pointer.read_bytes() == prior_central
+    assert candidate.is_dir()
 
 
 def test_fixed_point_with_allowed_source_drift_does_not_recheck_live_reference(
@@ -461,9 +788,16 @@ def test_fixed_point_with_allowed_source_drift_does_not_recheck_live_reference(
             "require_fixed_point": True,
         },
     )
+    candidates = iter((
+        tmp_path / "registry/projects/p/snapshots/snapshot-one",
+        tmp_path / "registry/projects/p/snapshots/snapshot-two",
+    ))
     monkeypatch.setattr(
         "codess.baseline_operations.run_ingest",
-        lambda *args, **kwargs: {"returncode": 0, "stdout": "", "stderr": ""},
+        lambda *args, **kwargs: {
+            "returncode": 0, "stdout": "", "stderr": "",
+            "candidate_snapshot_path": str(next(candidates)),
+        },
     )
     monkeypatch.setattr(
         "codess.baseline_operations.reset_rebuildable_working_stores",
@@ -475,7 +809,7 @@ def test_fixed_point_with_allowed_source_drift_does_not_recheck_live_reference(
         "examples_truncated": False,
     }
     monkeypatch.setattr(
-        "codess.baseline_operations.snapshot_store_paths",
+        "codess.baseline_operations.snapshot_store_paths_from_base",
         lambda *args, **kwargs: [],
     )
     monkeypatch.setattr(
@@ -489,6 +823,10 @@ def test_fixed_point_with_allowed_source_drift_does_not_recheck_live_reference(
 
     monkeypatch.setattr(
         "codess.baseline_operations.validate_project", fake_validate
+    )
+    monkeypatch.setattr(
+        "codess.baseline_operations.publish_snapshot",
+        lambda *args, **kwargs: {"snapshot_id": "snapshot-two"},
     )
     result = apply_project(
         project,

@@ -9,14 +9,22 @@ import sys
 import uuid
 from pathlib import Path
 
+import pytest
+
+from codess.project_annotations import build_project_annotations
 from codess.project_catalog import (
     add_project_location,
+    catalog_readiness,
     durable_project_root,
     ensure_project_binding,
     get_project_entry,
+    load_project_set,
     register_workspace_bindings,
+    resolve_project_query_scopes,
+    set_project_selection_state,
 )
 from codess.raw_store import RawStore
+from codess.session_names import set_session_name
 from codess.snapshot import create_snapshot, current_store_paths
 from codess.store import connect, init_db, replace_session_events, sync_project_catalog
 
@@ -61,6 +69,61 @@ def _captured_project(tmp_path: Path) -> tuple[Path, Path, str]:
         project_id=binding["project_id"],
     )
     return project, registry, binding["project_id"]
+
+
+def test_project_annotations_combine_curation_readiness_and_size(tmp_path):
+    project, registry, project_id = _captured_project(tmp_path)
+    selection = tmp_path / "selection.json"
+    selection.write_text(json.dumps({
+        "selection_format": "codess.baseline-selection/1",
+        "projects": [{"path": str(project)}],
+    }))
+    reviewed = tmp_path / "reviewed.json"
+    reviewed.write_text(json.dumps({
+        "catalog_format": "codess.reviewed-baselines/1",
+        "projects": [{"project_id": project_id, "path": str(project)}],
+    }))
+
+    report = build_project_annotations(
+        registry,
+        baseline_selection=selection,
+        reviewed_catalog=reviewed,
+        large_event_count=1,
+        large_store_bytes=1024**3,
+    )
+    item = report["projects"][0]
+    assert item["labels"] == [
+        "included", "core", "query_ready", "large",
+    ]
+    assert item["events"] == 1
+    assert item["source_systems"] == {"openai.codex": 1}
+    assert report["definitions"]["core"].startswith(
+        "member of the reviewed compatibility"
+    )
+
+
+def test_project_annotations_reserve_suspect_for_direct_evidence(tmp_path):
+    _project, registry, project_id = _captured_project(tmp_path)
+    set_project_selection_state(
+        registry, project_id, "needs_review", note="inspect identity"
+    )
+
+    report = build_project_annotations(registry)
+    item = report["projects"][0]
+    assert "not_selected" in item["labels"]
+    assert "suspect" in item["labels"]
+    assert "included" not in item["labels"]
+
+
+def test_personal_registry_rejects_ephemeral_project_location(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    project = tmp_path / "temporary-project"
+    project.mkdir()
+
+    with pytest.raises(ValueError, match="ephemeral system location"):
+        ensure_project_binding(tmp_path / ".codess", project)
 
 
 def test_project_id_survives_a_new_location(tmp_path):
@@ -220,3 +283,258 @@ def test_snapshot_is_central_and_relocation_preserves_query_access(tmp_path):
     assert states[str(replacement.resolve())] == "active"
     assert obsolete[str(project.resolve())] is True
     assert obsolete[str(replacement.resolve())] is False
+
+
+def test_exact_project_id_resolves_central_snapshot_without_mutation(tmp_path):
+    project, registry, project_id = _captured_project(tmp_path)
+    before = (registry / "projects.json").read_bytes()
+
+    scopes = resolve_project_query_scopes(registry, [project_id, project_id])
+
+    assert len(scopes) == 1
+    assert scopes[0]["project_id"] == project_id
+    assert scopes[0]["project_root"] == project.resolve()
+    assert scopes[0]["snapshot_base"] == durable_project_root(
+        registry, project_id
+    )
+    assert scopes[0]["snapshot_id"]
+    assert scopes[0]["selection_kind"] == "project_ids"
+    assert len(scopes[0]["resolved_selection_sha256"]) == 64
+    assert (registry / "projects.json").read_bytes() == before
+
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "main", "query", "sessions",
+            "--project-id", project_id, "--registry", str(registry),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    document = json.loads(result.stdout)
+    assert document["request"]["project_ids"] == [project_id]
+    assert document["request"]["project_snapshots"] == [{
+        "project_id": project_id,
+        "snapshot_id": scopes[0]["snapshot_id"],
+    }]
+    assert document["rows"][0]["project_id"] == project_id
+
+
+def test_saved_project_set_and_all_current_resolve_exact_snapshots(tmp_path):
+    _project, registry, project_id = _captured_project(tmp_path)
+    current = resolve_project_query_scopes(registry, [project_id])[0]
+    saved_path = tmp_path / "selection.json"
+    saved_path.write_text(json.dumps({
+        "format": "codess.project-set/1",
+        "name": "reviewed",
+        "projects": [{
+            "project_id": project_id,
+            "snapshot_id": current["snapshot_id"],
+        }],
+    }), encoding="utf-8")
+
+    loaded = load_project_set(saved_path)
+    assert len(loaded["selection_sha256"]) == 64
+    saved = resolve_project_query_scopes(
+        registry, project_set=saved_path
+    )
+    assert saved[0]["selection_kind"] == "project_set"
+    assert saved[0]["snapshot_id"] == current["snapshot_id"]
+
+    all_current = resolve_project_query_scopes(registry, all_current=True)
+    assert [
+        (item["project_id"], item["snapshot_id"])
+        for item in all_current
+    ] == [(project_id, current["snapshot_id"])]
+
+    for selector in (
+        ["--project-set", str(saved_path)],
+        ["--all-current"],
+    ):
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "main", "query", "sessions",
+                *selector, "--registry", str(registry),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        document = json.loads(result.stdout)
+        assert document["request"]["project_snapshots"] == [{
+            "project_id": project_id,
+            "snapshot_id": current["snapshot_id"],
+        }]
+
+    catalog_path = registry / "projects.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    catalog["projects"][0]["selection_state"] = "excluded"
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    with pytest.raises(ValueError, match="no eligible Projects"):
+        resolve_project_query_scopes(registry, all_current=True)
+
+
+def test_catalog_readiness_reports_per_project_and_coverage(tmp_path):
+    _project, registry, project_id = _captured_project(tmp_path)
+    report = catalog_readiness(registry)
+    assert report["summary"] == {
+        "eligible_projects": 1,
+        "query_ready_projects": 1,
+        "not_query_ready_projects": 0,
+        "query_ready_coverage": "1/1",
+        "all_eligible_query_ready": True,
+        "source_refresh_assessed_projects": 0,
+    }
+    row = report["projects"][0]
+    assert row["project_id"] == project_id
+    assert row["query_status"] == "query_ready"
+    assert row["source_refresh_status"] == "not_assessed"
+
+    (durable_project_root(registry, project_id) / "current.json").unlink()
+    report = catalog_readiness(registry)
+    assert report["summary"]["query_ready_coverage"] == "0/1"
+    assert report["projects"][0]["query_status"] == "missing_current_snapshot"
+
+
+def test_worktree_disposition_preserves_entry_but_excludes_broad_query(tmp_path):
+    _project, registry, primary_id = _captured_project(tmp_path)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    duplicate = ensure_project_binding(registry, worktree)
+
+    result = set_project_selection_state(
+        registry,
+        duplicate["project_id"],
+        "worktree",
+        related_project_id=primary_id,
+        note="duplicate identity for linked repository worktree",
+    )
+
+    assert result["selection_state"] == "worktree"
+    assert result["catalog_disposition"]["related_project_id"] == primary_id
+    report = catalog_readiness(registry)
+    row = next(
+        item for item in report["projects"]
+        if item["project_id"] == duplicate["project_id"]
+    )
+    assert row["query_status"] == "not_selected"
+    assert row["catalog_disposition"]["relation_kind"] == "worktree_of"
+    scopes = resolve_project_query_scopes(registry, all_current=True)
+    assert [item["project_id"] for item in scopes] == [primary_id]
+
+
+def test_catalog_query_names_project_and_snapshot_on_incompatibility(tmp_path):
+    _project, registry, project_id = _captured_project(tmp_path)
+    scope = resolve_project_query_scopes(registry, [project_id])[0]
+    manifest_path = (
+        Path(scope["snapshot_base"])
+        / "snapshots"
+        / scope["snapshot_id"]
+        / "manifest.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["package_digest"] = "sha256:" + ("0" * 64)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "main", "query", "sessions",
+            "--project-id", project_id, "--registry", str(registry),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert project_id in result.stderr
+    assert scope["snapshot_id"] in result.stderr
+    assert "package digest mismatch" in result.stderr
+
+
+def test_catalog_status_distinguishes_package_mismatch(tmp_path):
+    _project, registry, project_id = _captured_project(tmp_path)
+    scope = resolve_project_query_scopes(registry, [project_id])[0]
+    manifest_path = (
+        Path(scope["snapshot_base"])
+        / "snapshots"
+        / scope["snapshot_id"]
+        / "manifest.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["package_digest"] = "sha256:" + ("0" * 64)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    row = next(
+        item for item in catalog_readiness(registry)["projects"]
+        if item["project_id"] == project_id
+    )
+    assert row["query_status"] == "package_mismatch"
+
+
+def test_catalog_status_reports_snapshot_fail_for_invalid_store(tmp_path):
+    _project, registry, project_id = _captured_project(tmp_path)
+    scope = resolve_project_query_scopes(registry, [project_id])[0]
+    snapshot = (
+        Path(scope["snapshot_base"]) / "snapshots" / scope["snapshot_id"]
+    )
+    next(snapshot.glob("sessions_*.db")).write_bytes(b"invalid")
+
+    row = next(
+        item for item in catalog_readiness(registry)["projects"]
+        if item["project_id"] == project_id
+    )
+    assert row["query_status"] == "snapshot_fail"
+
+
+def test_human_session_name_lists_and_opens_current_session(tmp_path):
+    _project, registry, project_id = _captured_project(tmp_path)
+    set_session_name(registry, project_id, "s1", "welcome")
+
+    listed = subprocess.run(
+        [
+            sys.executable, "-m", "main", "query", "--sessions",
+            "--project-id", project_id, "--registry", str(registry),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+    opened = subprocess.run(
+        [
+            sys.executable, "-m", "main", "query",
+            "--project-id", project_id, "--registry", str(registry),
+            "--session-id", "welcome", "--show", "prompt",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+
+    assert listed.returncode == 0
+    assert "\twelcome\t" in listed.stdout
+    assert opened.returncode == 0
+    assert "hello" in opened.stdout
+
+
+def test_project_set_rejects_duplicate_or_unknown_inputs(tmp_path):
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_text(json.dumps({
+        "format": "codess.project-set/1",
+        "projects": [
+            {"project_id": "p1"},
+            {"project_id": "p1"},
+        ],
+    }), encoding="utf-8")
+    with pytest.raises(ValueError, match="repeats"):
+        load_project_set(duplicate)
+
+    unknown = tmp_path / "unknown.json"
+    unknown.write_text(json.dumps({
+        "format": "codess.project-set/1",
+        "unexpected": True,
+        "projects": [{"project_id": "p1"}],
+    }), encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported"):
+        load_project_set(unknown)

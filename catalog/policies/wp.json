@@ -4,10 +4,7 @@
   "required_validator_version": "0.2",
   "project": "/Users/walter/Work/WP/wp",
   "required_sources": ["Codex"],
-  "minimum_sessions": {"Codex": 1},
-  "minimum_events": {"Codex": 300},
   "raw_mode": "capture",
-  "expected_raw_records": 1,
   "allowed_diagnostics": {},
   "require_fixed_point": true
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -251,24 +252,64 @@ class IngestRunOptions:
     raw_mode: str
     strict_mapping: bool
     content_policy: str | None
+    resource_policy: dict[str, Any]
     validate_only: bool
     max_source_bytes: int | None
+    max_cursor_container_bytes: int | None
     max_events_per_source: int | None
     max_events_per_session: int | None
     max_context_content_chars: int | None
     live_progress: bool
+    candidate_snapshot: bool
 
 
 def build_ingest_run_options(args: Any) -> IngestRunOptions:
     from codess.config import (
         CONTENT_POLICY, DEBUG, FORCE, INGEST_REDACT, MIN_SIZE, RAW_MODE,
-        STOP, STRICT_MAPPING, MAX_SOURCE_BYTES, MAX_EVENTS_PER_SOURCE,
-        MAX_EVENTS_PER_SESSION, MAX_CONTEXT_CONTENT_CHARS,
+        RESOURCE_POLICY, STOP, STRICT_MAPPING,
     )
+    from codess.resource_policy import load_resource_policy
 
     raw_ms = getattr(args, "min_size", None)
     # Do not use `or MIN_SIZE`: --min-size 0 is valid (falsy int).
     min_size = int(MIN_SIZE if raw_ms is None else raw_ms)
+
+    policy_path = getattr(args, "resource_policy", None) or RESOURCE_POLICY
+    policy = load_resource_policy(policy_path)
+    env_overrides: dict[str, int] = {}
+    for env_name, key in (
+        ("CODESS_MAX_SOURCE_BYTES", "transcript_bytes"),
+        ("CODESS_MAX_TRANSCRIPT_BYTES", "transcript_bytes"),
+        ("CODESS_MAX_CURSOR_CONTAINER_BYTES", "cursor_container_bytes"),
+        ("CODESS_MAX_EVENTS_PER_SOURCE", "events_per_source"),
+        ("CODESS_MAX_EVENTS_PER_SESSION", "events_per_session"),
+        ("CODESS_MAX_CONTEXT_CONTENT_CHARS", "context_content_chars"),
+    ):
+        if env_name in os.environ:
+            try:
+                env_overrides[key] = int(os.environ[env_name])
+            except ValueError:
+                # validate_config reports the corresponding environment error.
+                continue
+    if env_overrides:
+        policy = policy.with_overrides(env_overrides, origin="environment")
+
+    cli_overrides: dict[str, int] = {}
+    for attr, key in (
+        ("max_source_bytes", "transcript_bytes"),
+        ("max_cursor_container_bytes", "cursor_container_bytes"),
+        ("max_events_per_source", "events_per_source"),
+        ("max_events_per_session", "events_per_session"),
+        ("max_context_content_chars", "context_content_chars"),
+    ):
+        value = getattr(args, attr, None)
+        if value is not None:
+            cli_overrides[key] = int(value)
+    if cli_overrides:
+        policy = policy.with_overrides(cli_overrides, origin="command-line")
+    if getattr(args, "no_resource_limits", False):
+        policy = policy.disabled(origin="--no-resource-limits")
+    maximums = policy.maximums
 
     return IngestRunOptions(
         stop_on_error=flag_or_env(args, "stop", STOP),
@@ -279,12 +320,15 @@ def build_ingest_run_options(args: Any) -> IngestRunOptions:
         raw_mode=str(getattr(args, "raw_mode", None) or RAW_MODE).lower(),
         strict_mapping=flag_or_env(args, "strict_mapping", STRICT_MAPPING),
         content_policy=getattr(args, "content_policy", None) or CONTENT_POLICY,
+        resource_policy=policy.report(),
         validate_only=bool(getattr(args, "validate", False)),
-        max_source_bytes=(None if getattr(args, "no_resource_limits", False) else int(getattr(args, "max_source_bytes", None) or MAX_SOURCE_BYTES)),
-        max_events_per_source=(None if getattr(args, "no_resource_limits", False) else int(getattr(args, "max_events_per_source", None) or MAX_EVENTS_PER_SOURCE)),
-        max_events_per_session=(None if getattr(args, "no_resource_limits", False) else int(getattr(args, "max_events_per_session", None) or MAX_EVENTS_PER_SESSION)),
-        max_context_content_chars=(None if getattr(args, "no_resource_limits", False) else int(getattr(args, "max_context_content_chars", None) or MAX_CONTEXT_CONTENT_CHARS)),
+        max_source_bytes=maximums["transcript_bytes"],
+        max_cursor_container_bytes=maximums["cursor_container_bytes"],
+        max_events_per_source=maximums["events_per_source"],
+        max_events_per_session=maximums["events_per_session"],
+        max_context_content_chars=maximums["context_content_chars"],
         live_progress=not bool(getattr(args, "no_progress", False)),
+        candidate_snapshot=bool(getattr(args, "candidate_snapshot", False)),
     )
 
 
@@ -319,7 +363,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "query_action",
         nargs="?",
-        choices=("sessions", "overview", "events", "search", "evidence", "configurations"),
+        choices=(
+            "sessions", "overview", "events", "search", "evidence",
+            "configurations", "cite",
+        ),
         help="query action (typed interface); legacy query report flags remain compatible",
     )
 
@@ -335,6 +382,23 @@ def build_parser() -> argparse.ArgumentParser:
         dest="dir_list",
         default=None,
         help="Add directory root (repeatable)",
+    )
+    p.add_argument(
+        "--project-id",
+        action="append",
+        dest="project_ids",
+        default=None,
+        help="query: select an exact catalog Project ID (repeatable)",
+    )
+    p.add_argument(
+        "--project-set",
+        type=Path,
+        help="query: select the exact Projects/snapshots in codess.project-set/1",
+    )
+    p.add_argument(
+        "--all-current",
+        action="store_true",
+        help="query: select every eligible catalog Project with a verified central current snapshot",
     )
 
     p.add_argument(
@@ -407,6 +471,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="ingest: raw evidence mode [CODESS_RAW_MODE] (default reference)",
     )
     p.add_argument(
+        "--candidate-snapshot",
+        action="store_true",
+        help=(
+            "ingest: build an immutable candidate snapshot without changing "
+            "Project-local or central current pointers"
+        ),
+    )
+    p.add_argument(
         "--strict-mapping",
         action="store_true",
         help="ingest: fail a source on unsupported/lossy records [CODESS_STRICT_MAPPING]",
@@ -418,8 +490,29 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="ingest: scoped content pre/post-processing policy [CODESS_CONTENT_POLICY]",
     )
+    p.add_argument(
+        "--resource-policy",
+        type=str,
+        metavar="JSON",
+        default=None,
+        help=(
+            "ingest: versioned resource-limit policy "
+            "[CODESS_RESOURCE_POLICY]"
+        ),
+    )
     p.add_argument("--validate", action="store_true", help="ingest: parse and validate using temporary stores; do not mutate project or registry")
-    p.add_argument("--max-source-bytes", type=int, metavar="N", help="ingest: maximum bytes per source")
+    p.add_argument(
+        "--max-source-bytes",
+        type=int,
+        metavar="N",
+        help="ingest: maximum bytes per Claude/Codex transcript",
+    )
+    p.add_argument(
+        "--max-cursor-container-bytes",
+        type=int,
+        metavar="N",
+        help="ingest: maximum bytes in a Cursor SQLite source container",
+    )
     p.add_argument("--max-events-per-source", type=int, metavar="N", help="ingest: maximum normalized events per source")
     p.add_argument("--max-events-per-session", type=int, metavar="N", help="ingest: maximum normalized events per session")
     p.add_argument(
@@ -434,7 +527,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--no-resource-limits",
         action="store_true",
-        help="ingest: explicitly disable source, event, and context-content maximums",
+        help=(
+            "ingest: explicitly disable transcript, Cursor-container, event, "
+            "and context-content maximums"
+        ),
     )
     p.add_argument(
         "--no-progress", action="store_true",
@@ -548,17 +644,43 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--event-kind", action="append", dest="event_kinds", help="query: normalized event kind (repeatable)")
     p.add_argument("--status", action="append", dest="query_statuses", help="query: normalized/source status (repeatable)")
     p.add_argument("--model", action="append", dest="query_models", help="query: exact model name (repeatable)")
+    p.add_argument("--tool-name", action="append", dest="query_tool_names", help="query: exact tool name (repeatable)")
+    p.add_argument("--actor-kind", action="append", dest="query_actor_kinds", help="query: normalized actor kind (repeatable)")
+    p.add_argument("--content-role", action="append", dest="query_content_roles", help="query: normalized content role (repeatable)")
+    p.add_argument("--origin-kind", action="append", dest="query_origin_kinds", help="query: normalized origin kind (repeatable)")
+    p.add_argument("--parent-session-id", action="append", dest="parent_session_ids", help="query: exact parent Session ID (repeatable)")
+    p.add_argument("--session-relation", action="append", dest="session_relation_kinds", help="query: Session relation kind (repeatable)")
+    p.add_argument("--initiation-kind", action="append", dest="initiation_kinds", help="query: human, autonomous, or unknown Interaction initiation (repeatable)")
     p.add_argument("--artifact", dest="query_artifact", help="query: artifact-path substring")
     p.add_argument("--text", dest="query_text", help="query search: normalized content/tool/artifact substring")
     p.add_argument("--since", type=float, help="query: inclusive Unix timestamp in milliseconds")
     p.add_argument("--until", type=float, help="query: inclusive Unix timestamp in milliseconds")
     p.add_argument("--byte-limit", type=int, default=None, help="typed query: maximum returned inline content bytes (default 16 MiB)")
     p.add_argument("--active-gap-cap", type=int, action="append", dest="active_gap_caps", help="overview: active-time gap cap in minutes (repeatable; default 5,30,120)")
+    p.add_argument("--expand", choices=("interaction", "model-turn"), help="events: expand selected IDs to a complete Interaction or Model Turn")
+    p.add_argument("--before", type=int, default=0, help="events: include N preceding sequence events around each --event-id")
+    p.add_argument("--after", type=int, default=0, help="events: include N following sequence events around each --event-id")
+    p.add_argument("--group-repetitions", action="store_true", help="events/search: report bounded exact repetition groups without removing occurrences")
+    p.add_argument("--facet-limit", type=int, default=50, help="typed events/search: maximum values per facet and repetition groups")
     p.add_argument("--request", dest="query_request", help="typed query: load codess.query-request/1 JSON")
     p.add_argument("--save-request", help="typed query: atomically save canonical request JSON")
     p.add_argument("--save-result", help="typed query: atomically save codess.query-result/1 JSON")
     p.add_argument("--result-input", help="typed query: restrict by stable IDs from a prior result")
     p.add_argument("--compare-result", help="typed query: compare stable row identities with a prior result; exit 3 when changed")
+    p.add_argument(
+        "--summary-file",
+        type=Path,
+        help="query cite: UTF-8 summary body to bind to a saved result",
+    )
+    p.add_argument(
+        "--processor-id",
+        help="query cite: identity/version of the human, model, or process producing the summary",
+    )
+    p.add_argument(
+        "--save-investigation",
+        type=Path,
+        help="query cite: atomically save codess.investigation/1",
+    )
     return p
 
 
@@ -568,7 +690,10 @@ def parse_and_run(argv: list[str] | None = None) -> int:
     Lazy-imports command modules to avoid import cycles (they import this package).
     """
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    if raw_argv and raw_argv[0] in {"catalog", "baseline", "evidence", "schema", "storage"}:
+    if raw_argv and raw_argv[0] in {
+        "refresh", "catalog", "baseline", "evidence", "schema", "session",
+        "storage",
+    }:
         from cli.admin_cmd import run as run_admin
         return run_admin(raw_argv)
     if raw_argv and raw_argv[0] == "candidate-review":
@@ -597,3 +722,15 @@ def parse_and_run(argv: list[str] | None = None) -> int:
 
 def main() -> int:
     return parse_and_run()
+
+
+def console_main() -> int:
+    """Console-script entry point with quiet downstream-pipe handling."""
+    try:
+        return main()
+    except BrokenPipeError:
+        # Avoid a second BrokenPipeError during interpreter shutdown after a
+        # downstream consumer such as ``head`` closes stdout.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        return 0

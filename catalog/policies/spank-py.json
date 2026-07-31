@@ -4,10 +4,7 @@
   "required_validator_version": "0.2",
   "project": "/Users/walter/Work/Spank/spank-py",
   "required_sources": ["Claude"],
-  "minimum_sessions": {"Claude": 5},
-  "minimum_events": {"Claude": 2500},
   "raw_mode": "capture",
-  "expected_raw_records": 6,
   "allowed_diagnostics": {},
   "require_fixed_point": true
 }

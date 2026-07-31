@@ -199,6 +199,44 @@ class TestNormalizeUser:
         evs = normalize_user(rec, 1, "s1", "/f", {}, {"redact": False})
         assert evs[0]["subtype"] == "slash_command"
 
+    @pytest.mark.parametrize(
+        ("text", "event_type", "subtype", "actor_kind", "event_kind"),
+        [
+            (
+                "<local-command-caveat>Caveat</local-command-caveat>",
+                "system_event", "local_command_notice", "harness",
+                "message.context",
+            ),
+            (
+                "<command-name>/model</command-name>\n"
+                "<command-message>model</command-message>",
+                "user_message", "slash_command", "human", "command.invoke",
+            ),
+            (
+                "<local-command-stdout>Set model to Opus</local-command-stdout>",
+                "system_event", "local_command_output", "harness",
+                "command.result",
+            ),
+        ],
+    )
+    def test_tagged_local_command_user_envelope(
+        self, text, event_type, subtype, actor_kind, event_kind,
+    ):
+        rec = {
+            "type": "user",
+            "userType": "external",
+            "message": {"role": "user", "content": text},
+        }
+        event = normalize_user(
+            rec, 1, "s1", "/f", {}, {"redact": False}
+        )[0]
+        assert event["event_type"] == event_type
+        assert event["subtype"] == subtype
+        assert event["actor_kind"] == actor_kind
+        assert event["event_kind"] == event_kind
+        if subtype == "slash_command":
+            assert json.loads(event["metadata"])["command_name"] == "/model"
+
     def test_tool_result(self):
         rec = {"message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": "ok", "is_error": False}
@@ -224,6 +262,27 @@ class TestNormalizeUser:
         evs = normalize_user(rec, 1, "s1", "/f", {"t1": "Read"}, {"redact": False})
         assert evs[0]["subtype"] == "tool_failure"
 
+    def test_mcp_error_body_overrides_false_is_error_flag(self):
+        rec = {"message": {"role": "user", "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "t1",
+                "content": "Error: result exceeds maximum allowed tokens",
+                "is_error": False,
+            }
+        ]}}
+        evs = normalize_user(
+            rec, 1, "s1", "/f",
+            {"t1": "mcp__visualize__read_me"},
+            {"redact": False},
+        )
+        assert evs[0]["subtype"] == "tool_failure"
+        assert evs[0]["source_status"] == "application_error"
+        assert evs[0]["normalized_status"] == "failed"
+        metadata = json.loads(evs[0]["metadata"])
+        assert metadata["source_is_error"] is False
+        assert metadata["application_status"] == "failed"
+
     def test_tool_result_content_as_list(self):
         rec = {"uuid": "result-record", "parentUuid": "call-record",
                "message": {"role": "user", "content": [
@@ -241,6 +300,48 @@ class TestNormalizeUser:
             "parent_uuid": "call-record",
             "tool_use_id": "t1",
         }
+
+    def test_subagent_text_envelope_is_harness_delegated_not_human(self):
+        rec = {
+            "type": "user",
+            "userType": "external",
+            "isSidechain": True,
+            "agentId": "agent-1",
+            "message": {"role": "user", "content": "Investigate this"},
+        }
+        event = normalize_user(
+            rec, 1, "s1",
+            "/tmp/session/subagents/agent-1.jsonl", {},
+            {"redact": False},
+        )[0]
+        assert event["event_type"] == "system_event"
+        assert event["subtype"] == "delegated_prompt"
+        assert event["actor_kind"] == "harness"
+        assert event["content_role"] == "delegated_task"
+        assert event["origin_kind"] == "harness_delegated"
+        metadata = json.loads(event["metadata"])
+        assert set(metadata["actor_evidence"]) == {
+            "record.isSidechain",
+            "record.agentId",
+            "source_path.subagents",
+        }
+
+    def test_subagent_list_text_envelope_is_harness_delegated(self):
+        rec = {
+            "type": "user",
+            "userType": "external",
+            "isSidechain": True,
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "Continue"}],
+            },
+        }
+        event = normalize_user(
+            rec, 1, "s1", "/tmp/subagents/agent.jsonl", {},
+            {"redact": False},
+        )[0]
+        assert event["actor_kind"] == "harness"
+        assert event["origin_kind"] == "harness_delegated"
 
     def test_tool_result_no_pairing(self):
         rec = {"message": {"role": "user", "content": [
@@ -365,6 +466,22 @@ class TestProcessFile:
             pytest.skip("fixture missing")
         evs = list(process_file(fixtures, "s1", {"redact": False}))
         assert any(e.get("subtype") == "slash_command" for e in evs)
+
+    def test_system_local_command_release_variant_is_preserved(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        path.write_text(json.dumps({
+            "type": "system",
+            "subtype": "local_command",
+            "content": (
+                "<local-command-stdout>Kept model as Sonnet</local-command-stdout>"
+            ),
+        }) + "\n")
+        event = list(process_file(path, "s1", {"redact": False}))[0]
+        assert event["event_type"] == "system_event"
+        assert event["subtype"] == "local_command_output"
+        assert event["actor_kind"] == "harness"
+        assert event["event_kind"] == "command.result"
+        assert event["mapping_rule"] == "claude.message"
 
     def test_assistant_model_and_service_tier_have_source_provenance(self, tmp_path):
         path = tmp_path / "session.jsonl"

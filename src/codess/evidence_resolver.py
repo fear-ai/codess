@@ -146,7 +146,9 @@ def resolve_event(store: dict[str, Any], event_identifier: str) -> dict[str, Any
                         "verification_method": "complete-sha256",
                     })
             else:
-                revision, _mtime, _size, method, consistency = source_fingerprint(live_path)
+                revision, _mtime, _size, method, consistency = (
+                    source_fingerprint(live_path)
+                )
                 live.update({
                     "revision": revision,
                     "equality": "exact" if revision == row["source_revision"] else "mismatch",

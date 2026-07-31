@@ -180,6 +180,106 @@ class TestProcessFile:
         finally:
             path.unlink()
 
+    def test_user_role_is_partitioned_by_direct_submission_evidence(
+        self, tmp_path
+    ):
+        path = tmp_path / "rollout.jsonl"
+        records = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "direct request"}
+                    ],
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "direct request",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "<environment_context>injected"
+                                "</environment_context>"
+                            ),
+                        }
+                    ],
+                },
+            },
+        ]
+        path.write_text(
+            "".join(json.dumps(record) + "\n" for record in records)
+        )
+        diagnostics = {}
+        events = list(process_file(
+            path, "s1", "/p", {"diagnostics": diagnostics}
+        ))
+        assert [(event["event_kind"], event["actor_kind"]) for event in events] == [
+            ("message.prompt", "human"),
+            ("message.context", "harness"),
+        ]
+        assert json.loads(events[0]["metadata"])["actor_evidence"] == (
+            "event_msg.user_message"
+        )
+        context_metadata = json.loads(events[1]["metadata"])
+        assert context_metadata["source_role"] == "user"
+        assert context_metadata["actor_evidence"] == (
+            "unpaired_response_item_user_role"
+        )
+        assert diagnostics["direct_user_message_records"] == 1
+        assert diagnostics["harness_user_role_context_records"] == 1
+
+    def test_assistant_message_retains_source_role_and_actor_evidence(
+        self, tmp_path
+    ):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(json.dumps({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "response"}],
+            },
+        }) + "\n")
+        event = list(process_file(path, "s1", "/p", {}))[0]
+        assert event["actor_kind"] == "model"
+        metadata = json.loads(event["metadata"])
+        assert metadata["source_role"] == "assistant"
+        assert metadata["actor_evidence"] == (
+            "response_item_assistant_role"
+        )
+        assert metadata["content_truncated"] is False
+
+    def test_legacy_user_role_without_notifications_remains_human(
+        self, tmp_path
+    ):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(json.dumps({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "legacy"}],
+            },
+        }) + "\n")
+        event = list(process_file(path, "s1", "/p", {}))[0]
+        assert event["actor_kind"] == "human"
+        assert json.loads(event["metadata"])["actor_evidence"] == (
+            "legacy_user_role_fallback"
+        )
+
     def test_function_and_custom_tool_call_lineage(self, tmp_path):
         path = tmp_path / "rollout.jsonl"
         records = [
@@ -230,6 +330,232 @@ class TestProcessFile:
         assert json.loads(events[0]["tool_input"]) == {"command": "pwd"}
         assert json.loads(events[2]["tool_input"]) == {"input": "*** patch ***"}
         assert json.loads(events[3]["metadata"]) == {"call_id": "call-2"}
+
+    def test_subagent_session_metadata_preserves_direct_lineage(
+        self, tmp_path
+    ):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(json.dumps({
+            "type": "session_meta",
+            "payload": {
+                "id": "child-thread",
+                "cwd": "/project",
+                "source": {
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": "parent-thread",
+                            "depth": 1,
+                        }
+                    }
+                },
+                "thread_source": "subagent",
+                "parent_thread_id": "parent-thread",
+                "agent_nickname": "researcher",
+                "agent_role": "explorer",
+                "agent_path": "1",
+            },
+        }) + "\n")
+        metadata = get_session_metadata(path)
+        assert metadata["parent_session_id"] == "parent-thread"
+        assert metadata["session_relation_kind"] == "subagent"
+        assert metadata["lineage_provenance"] == (
+            "session_meta.parent_thread_id"
+        )
+        assert metadata["agent_nickname"] == "researcher"
+        assert metadata["agent_role"] == "explorer"
+        assert metadata["agent_path"] == "1"
+
+    def test_forked_session_metadata_is_not_misclassified_as_subagent(
+        self, tmp_path
+    ):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(json.dumps({
+            "type": "session_meta",
+            "payload": {
+                "id": "fork", "cwd": "/project", "source": "vscode",
+                "thread_source": "user", "forked_from_id": "original",
+            },
+        }) + "\n")
+        metadata = get_session_metadata(path)
+        assert metadata["parent_session_id"] == "original"
+        assert metadata["session_relation_kind"] == "fork"
+
+    def test_collaboration_events_preserve_participants_and_prompt(
+        self, tmp_path
+    ):
+        path = tmp_path / "rollout.jsonl"
+        records = [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "collab_agent_spawn_begin",
+                    "call_id": "spawn-1",
+                    "sender_thread_id": "parent",
+                    "prompt": "Investigate the parser",
+                    "model": "gpt-5",
+                    "reasoning_effort": "high",
+                    "started_at_ms": 123,
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "collab_agent_spawn_end",
+                    "call_id": "spawn-1",
+                    "sender_thread_id": "parent",
+                    "new_thread_id": "child",
+                    "new_agent_nickname": "researcher",
+                    "new_agent_role": "explorer",
+                    "status": "completed",
+                    "prompt": "Investigate the parser",
+                    "model": "gpt-5",
+                    "reasoning_effort": "high",
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "sub_agent_activity",
+                    "event_id": "activity-1",
+                    "agent_thread_id": "child",
+                    "agent_path": "1",
+                    "kind": "started",
+                    "occurred_at_ms": 124,
+                },
+            },
+        ]
+        path.write_text(
+            "".join(json.dumps(record) + "\n" for record in records)
+        )
+        begin, end, activity = list(
+            process_file(path, "parent", "/project", {})
+        )
+        assert begin["event_kind"] == "collaboration.spawn.begin"
+        assert begin["actor_kind"] == "harness"
+        assert begin["content_role"] == "delegated_task"
+        assert begin["content"] == "Investigate the parser"
+        assert begin["mapping_rule"] == "codex.collaboration"
+        end_metadata = json.loads(end["metadata"])
+        assert end_metadata["new_thread_id"] == "child"
+        assert end_metadata["new_agent_role"] == "explorer"
+        assert activity["subtype"] == "subagent_activity"
+        assert json.loads(activity["metadata"])["agent_path"] == "1"
+
+    def test_tool_search_and_mcp_transport_are_preserved(self, tmp_path):
+        path = tmp_path / "rollout.jsonl"
+        records = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "tool_search_call",
+                    "call_id": "search-1",
+                    "status": "completed",
+                    "execution": "server",
+                    "arguments": {"query": "github issue search"},
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "tool_search_output",
+                    "call_id": "search-1",
+                    "status": "completed",
+                    "execution": "server",
+                    "tools": [{"name": "github.search_issues"}],
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "mcp_tool_call_end",
+                    "call_id": "mcp-1",
+                    "invocation": {
+                        "server": "codex_apps",
+                        "tool": "github.search_issues",
+                        "arguments": {"query": "CodexBar"},
+                    },
+                    "connector_id": "connector-1",
+                    "app_name": "GitHub",
+                    "action_name": "search_issues",
+                    "duration": {"secs": 2, "nanos": 500_000_000},
+                    "result": {"Ok": {"content": []}},
+                },
+            },
+        ]
+        path.write_text(
+            "".join(json.dumps(record) + "\n" for record in records)
+        )
+        events = list(process_file(path, "s1", "/p", {}))
+        assert [event["event_kind"] for event in events] == [
+            "tool.call", "tool.result", "tool.transport",
+        ]
+        assert [event["actor_kind"] for event in events] == [
+            "model", "harness", "harness",
+        ]
+        assert json.loads(events[0]["tool_input"]) == {
+            "query": "github issue search"
+        }
+        assert events[1]["tool_name"] == "tool_search"
+        transport = events[2]
+        assert transport["tool_name"] == "github.search_issues"
+        metadata = json.loads(transport["metadata"])
+        assert metadata["mcp_server"] == "codex_apps"
+        assert metadata["connector_id"] == "connector-1"
+        assert metadata["duration_ms"] == 2500.0
+        assert metadata["result_status"] == "succeeded"
+        assert transport["normalized_status"] == "succeeded"
+
+    def test_mcp_transport_success_preserves_application_failure(
+        self, tmp_path
+    ):
+        path = tmp_path / "rollout.jsonl"
+        records = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "github.search_issues",
+                    "arguments": '{"query":"bad"}',
+                    "call_id": "mcp-1",
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "mcp_tool_call_end",
+                    "call_id": "mcp-1",
+                    "invocation": {
+                        "server": "codex_apps",
+                        "tool": "github.search_issues",
+                    },
+                    "result": {"Ok": {"content": []}},
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "mcp-1",
+                    "output": json.dumps({
+                        "error": "GitHub API error: Validation Failed",
+                    }),
+                },
+            },
+        ]
+        path.write_text(
+            "".join(json.dumps(record) + "\n" for record in records)
+        )
+        call, transport, result = list(
+            process_file(path, "s1", "/p", {})
+        )
+        assert call["tool_name"] == "github.search_issues"
+        assert transport["normalized_status"] == "succeeded"
+        transport_metadata = json.loads(transport["metadata"])
+        assert transport_metadata["transport_status"] == "succeeded"
+        assert transport_metadata["application_status"] == "failed"
+        assert result["subtype"] == "tool_failure"
+        assert result["source_status"] == "application_error"
+        assert result["normalized_status"] == "failed"
 
     def test_web_search_is_a_tool_call(self, tmp_path):
         path = tmp_path / "rollout.jsonl"
@@ -290,6 +616,20 @@ class TestProcessFile:
             assert diagnostics["duplicate_envelope_records"] == 1
         finally:
             path.unlink()
+
+    def test_thread_rollback_is_preserved_as_context_lifecycle(self, tmp_path):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(json.dumps({
+            "type": "event_msg",
+            "payload": {
+                "type": "thread_rolled_back",
+                "num_turns": 2,
+            },
+        }) + "\n")
+        event = list(process_file(path, "s1", "/p", {}))[0]
+        assert event["event_kind"] == "context.rollback"
+        assert event["actor_kind"] == "harness"
+        assert json.loads(event["metadata"]) == {"removed_user_turns": 2}
 
     def test_reasoning_summary_is_retained_without_encrypted_state(
         self, tmp_path

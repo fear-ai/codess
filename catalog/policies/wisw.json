@@ -1,0 +1,10 @@
+{
+  "policy_format": "codess.validation-policy/1",
+  "required_decoder_version": "0.2",
+  "required_validator_version": "0.2",
+  "project": "/Users/walter/Work/Code/wisw",
+  "required_sources": ["Claude"],
+  "raw_mode": "capture",
+  "allowed_diagnostics": {},
+  "require_fixed_point": true
+}

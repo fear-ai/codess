@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -12,6 +13,7 @@ from codess.context_content import bound_context_content
 from codess.sanitize import sanitize_value
 from codess.content_processing import apply_processing
 from codess.mapping import annotate_mapping
+from codess.tool_result_status import application_failure_evidence
 
 log = logging.getLogger(__name__)
 
@@ -62,11 +64,48 @@ def get_session_metadata(path: Path) -> dict:
         if record.get("type") != "session_meta":
             continue
         payload = record.get("payload") or {}
-        return {
+        values = {
             key: payload[key]
-            for key in ("cli_version", "model_provider", "originator", "source")
+            for key in (
+                "cli_version", "model_provider", "originator", "source",
+                "thread_source", "agent_nickname", "agent_role", "agent_path",
+                "multi_agent_version", "subagent_history_start_ordinal",
+            )
             if payload.get(key) is not None
         }
+        parent = payload.get("parent_thread_id")
+        forked = payload.get("forked_from_id")
+        thread_source = str(payload.get("thread_source") or "").lower()
+        source = payload.get("source")
+        source_text = (
+            json.dumps(source, sort_keys=True)
+            if isinstance(source, dict) else str(source or "")
+        ).lower()
+        if parent is not None:
+            values["parent_session_id"] = str(parent)
+            values["session_relation_kind"] = (
+                "subagent"
+                if (
+                    thread_source == "subagent"
+                    or "subagent" in source_text
+                )
+                else "continuation"
+            )
+            values["lineage_provenance"] = (
+                "session_meta.parent_thread_id"
+            )
+        elif forked is not None:
+            values["parent_session_id"] = str(forked)
+            values["session_relation_kind"] = "fork"
+            values["lineage_provenance"] = (
+                "session_meta.forked_from_id"
+            )
+        elif thread_source == "subagent" or "subagent" in source_text:
+            values["session_relation_kind"] = "subagent"
+            values["lineage_provenance"] = (
+                "session_meta.thread_source/source"
+            )
+        return values
     return {}
 
 
@@ -116,22 +155,77 @@ def _extract_reasoning_summary(summary) -> str:
     return "\n".join(part for part in parts if part)
 
 
-def _build_call_map(path: Path) -> dict[str, str]:
-    """Map tool call ids to names so later output records retain identity."""
-    calls = {}
+def _user_message_key(value: str) -> str:
+    """Canonical comparison key for paired Codex user-message envelopes."""
+    return str(value).strip()
+
+
+def _build_record_maps(
+    path: Path,
+) -> tuple[
+    dict[str, str],
+    Counter[str],
+    set[str],
+    dict[str, str],
+]:
+    """Collect call names and direct-user evidence in one bounded pre-pass.
+
+    Current Codex rollouts persist direct UI submissions twice: a canonical
+    ``response_item.message`` and an ``event_msg.user_message`` notification.
+    Harness-injected context can use the same Responses ``user`` role without
+    the notification.  The pairing therefore distinguishes observed human
+    submissions from harness-carried model input without inspecting meaning.
+    Older rollouts with no notifications retain the legacy role-based fallback.
+    """
+    calls: dict[str, str] = {}
+    direct_user_messages: Counter[str] = Counter()
+    mcp_call_ids: set[str] = set()
+    output_by_call: dict[str, object] = {}
     for _line_num, record, _raw in iter_codex_records(path, warn=False):
-        if record.get("type") != "response_item":
-            continue
         payload = record.get("payload") or {}
         if not isinstance(payload, dict):
             continue
-        if payload.get("type") not in ("function_call", "custom_tool_call"):
+        if (
+            record.get("type") == "event_msg"
+            and payload.get("type") == "user_message"
+            and isinstance(payload.get("message"), str)
+        ):
+            direct_user_messages[_user_message_key(payload["message"])] += 1
+            continue
+        if (
+            record.get("type") == "event_msg"
+            and payload.get("type") == "mcp_tool_call_end"
+            and payload.get("call_id")
+        ):
+            mcp_call_ids.add(str(payload["call_id"]))
+            continue
+        if record.get("type") != "response_item":
+            continue
+        item_type = payload.get("type")
+        if item_type in ("function_call_output", "custom_tool_call_output"):
+            call_id = payload.get("call_id")
+            if call_id:
+                output_by_call[str(call_id)] = payload.get("output")
+            continue
+        if item_type == "tool_search_call":
+            call_id = payload.get("call_id")
+            if call_id:
+                calls[str(call_id)] = "tool_search"
+            continue
+        if item_type not in ("function_call", "custom_tool_call"):
             continue
         call_id = payload.get("call_id")
         name = payload.get("name")
         if call_id and name:
             calls[str(call_id)] = str(name)
-    return calls
+    mcp_failures = {
+        call_id: evidence
+        for call_id in mcp_call_ids
+        if (evidence := application_failure_evidence(
+            output_by_call.get(call_id)
+        ))
+    }
+    return calls, direct_user_messages, mcp_call_ids, mcp_failures
 
 
 def _tool_input(payload: dict, redact_enabled: bool) -> str | None:
@@ -224,6 +318,10 @@ def _mapping_rule(event: dict) -> str:
         return "codex.task-lifecycle"
     if event.get("subtype") == "reasoning_summary":
         return "codex.reasoning-summary"
+    if str(event.get("subtype") or "").startswith("collab_") or (
+        event.get("subtype") == "subagent_activity"
+    ):
+        return "codex.collaboration"
     if event.get("event_type") == "tool_call":
         return "codex.tool-call"
     if event.get("subtype") == "tool_result":
@@ -420,7 +518,13 @@ def process_file(
     redact_enabled = opts.get("redact", False)
     debug = opts.get("debug", False)
     diagnostics = opts.get("diagnostics")
-    call_map = _build_call_map(path)
+    (
+        call_map,
+        direct_user_messages,
+        mcp_call_ids,
+        mcp_failures,
+    ) = _build_record_maps(path)
+    has_direct_user_notifications = bool(direct_user_messages)
     current_configuration: dict = {}
 
     for line_num, record, raw_line in iter_codex_records(path, diagnostics):
@@ -551,11 +655,23 @@ def process_file(
                 role = payload.get("role", "")
                 content = payload.get("content") or []
                 text = _extract_text_from_content(content)
+                direct_user = False
+                if role == "user":
+                    key = _user_message_key(text)
+                    direct_user = (
+                        not has_direct_user_notifications
+                        or direct_user_messages.get(key, 0) > 0
+                    )
+                    if (
+                        has_direct_user_notifications
+                        and direct_user_messages.get(key, 0) > 0
+                    ):
+                        direct_user_messages[key] -= 1
                 message_kind = (
                     "message.prompt"
-                    if role == "user"
+                    if role == "user" and direct_user
                     else "message.context"
-                    if role in {"developer", "system"}
+                    if role in {"developer", "system", "user"}
                     else "message.response"
                 )
                 text = apply_processing(
@@ -566,7 +682,7 @@ def process_file(
                 if text is None:
                     continue
 
-                if role == "user":
+                if role == "user" and direct_user:
                     subtype = "slash_command" if text.strip().startswith("/") else "prompt"
                     truncated, content_len = _truncate(text, TRUNCATE_PROMPT)
                     truncated = apply_processing(
@@ -581,6 +697,10 @@ def process_file(
                         "event_type": "user_message",
                         "subtype": subtype,
                         "role": "user",
+                        "event_kind": "message.prompt",
+                        "actor_kind": "human",
+                        "content_role": "prompt",
+                        "origin_kind": "direct_user_input",
                         "content": truncated,
                         "content_len": content_len,
                         "content_ref": None,
@@ -590,9 +710,76 @@ def process_file(
                         "timestamp": timestamp,
                         "file_path": None,
                         "source_file": source_file,
-                        "metadata": _merge_metadata(payload, current_configuration),
+                        "metadata": _merge_metadata(payload, {
+                            **current_configuration,
+                            "source_role": "user",
+                            "actor_evidence": (
+                                "event_msg.user_message"
+                                if has_direct_user_notifications
+                                else "legacy_user_role_fallback"
+                            ),
+                            "content_truncated": (
+                                content_len > TRUNCATE_PROMPT
+                            ),
+                        }),
                         "source_raw": source_raw,
                     }, rtype, payload, line_num)
+                    if diagnostics is not None:
+                        diagnostics["direct_user_message_records"] = (
+                            diagnostics.get("direct_user_message_records", 0)
+                            + 1
+                        )
+                elif role == "user":
+                    bounded, content_len, truncated = bound_context_content(
+                        text, opts
+                    )
+                    bounded = apply_processing(
+                        bounded, opts, vendor="Codex",
+                        record_type="message",
+                        event_kind="message.context", phase="post",
+                    )
+                    if bounded is None:
+                        continue
+                    bounded, _post_len, post_truncated = bound_context_content(
+                        bounded, opts
+                    )
+                    yield _annotate_source({
+                        "session_id": session_id,
+                        "event_id": str(line_num),
+                        "event_type": "system_event",
+                        "subtype": "context_injection",
+                        "role": "user",
+                        "event_kind": "message.context",
+                        "actor_kind": "harness",
+                        "content_role": "context",
+                        "origin_kind": "harness_injected",
+                        "content": bounded,
+                        "content_len": content_len,
+                        "content_ref": None,
+                        "tool_name": None,
+                        "tool_input": None,
+                        "tool_output": None,
+                        "timestamp": timestamp,
+                        "file_path": None,
+                        "source_file": source_file,
+                        "metadata": _merge_metadata(payload, {
+                            **current_configuration,
+                            "source_role": "user",
+                            "actor_evidence": (
+                                "unpaired_response_item_user_role"
+                            ),
+                            "content_truncated": (
+                                truncated or post_truncated
+                            ),
+                        }),
+                        "source_raw": source_raw,
+                    }, rtype, payload, line_num)
+                    if diagnostics is not None:
+                        diagnostics["harness_user_role_context_records"] = (
+                            diagnostics.get(
+                                "harness_user_role_context_records", 0
+                            ) + 1
+                        )
                 elif role == "assistant":
                     truncated, content_len = _truncate(text, TRUNCATE_RESPONSE)
                     truncated = apply_processing(
@@ -607,6 +794,10 @@ def process_file(
                         "event_type": "assistant_message",
                         "subtype": "response",
                         "role": "assistant",
+                        "event_kind": "message.response",
+                        "actor_kind": "model",
+                        "content_role": "response",
+                        "origin_kind": "model_generated",
                         "content": truncated,
                         "content_len": content_len,
                         "content_ref": None,
@@ -616,7 +807,14 @@ def process_file(
                         "timestamp": timestamp,
                         "file_path": None,
                         "source_file": source_file,
-                        "metadata": _merge_metadata(payload, current_configuration),
+                        "metadata": _merge_metadata(payload, {
+                            **current_configuration,
+                            "source_role": "assistant",
+                            "actor_evidence": "response_item_assistant_role",
+                            "content_truncated": (
+                                content_len > TRUNCATE_RESPONSE
+                            ),
+                        }),
                         "source_raw": source_raw,
                     }, rtype, payload, line_num)
                 elif role in {"developer", "system"}:
@@ -664,6 +862,88 @@ def process_file(
                     diagnostics["ignored_records"] = (
                         diagnostics.get("ignored_records", 0) + 1
                     )
+                continue
+
+            if item_type == "tool_search_call":
+                arguments = sanitize_value(
+                    payload.get("arguments") or {}, redact_enabled
+                )
+                yield _annotate_source({
+                    "session_id": session_id,
+                    "event_id": str(line_num),
+                    "event_type": "tool_call",
+                    "subtype": "tool_failure" if _failed_status(payload) else None,
+                    "role": "assistant",
+                    "event_kind": "tool.call",
+                    "actor_kind": "model",
+                    "content_role": "tool_request",
+                    "origin_kind": "model_generated",
+                    "content": None,
+                    "content_len": None,
+                    "content_ref": None,
+                    "tool_name": "tool_search",
+                    "tool_input": json.dumps(
+                        arguments, separators=(",", ":"), ensure_ascii=False
+                    ),
+                    "tool_output": None,
+                    "timestamp": timestamp,
+                    "file_path": None,
+                    "source_file": source_file,
+                    "metadata": _merge_metadata(
+                        payload, current_configuration
+                    ),
+                    "source_raw": source_raw,
+                }, rtype, payload, line_num)
+                continue
+
+            if item_type == "tool_search_output":
+                tools = sanitize_value(
+                    payload.get("tools") or [], redact_enabled
+                )
+                text = json.dumps(
+                    tools, separators=(",", ":"), ensure_ascii=False
+                )
+                text = apply_processing(
+                    text, opts, vendor="Codex",
+                    record_type="tool_search_output",
+                    event_kind="tool.result", phase="pre",
+                )
+                if text is None:
+                    continue
+                truncated, content_len = _truncate(
+                    text, TRUNCATE_TOOL_RESULT
+                )
+                truncated = apply_processing(
+                    truncated, opts, vendor="Codex",
+                    record_type="tool_search_output",
+                    event_kind="tool.result", phase="post",
+                )
+                if truncated is None:
+                    continue
+                yield _annotate_source({
+                    "session_id": session_id,
+                    "event_id": str(line_num),
+                    "event_type": "system_event",
+                    "subtype": "tool_result",
+                    "role": "harness",
+                    "event_kind": "tool.result",
+                    "actor_kind": "harness",
+                    "content_role": "tool_result",
+                    "origin_kind": "harness_generated",
+                    "content": truncated,
+                    "content_len": content_len,
+                    "content_ref": None,
+                    "tool_name": "tool_search",
+                    "tool_input": None,
+                    "tool_output": truncated,
+                    "timestamp": timestamp,
+                    "file_path": None,
+                    "source_file": source_file,
+                    "metadata": _merge_metadata(
+                        payload, current_configuration
+                    ),
+                    "source_raw": source_raw,
+                }, rtype, payload, line_num)
                 continue
 
             if item_type in ("function_call", "custom_tool_call"):
@@ -715,6 +995,8 @@ def process_file(
 
             if item_type in ("function_call_output", "custom_tool_call_output"):
                 call_id = payload.get("call_id")
+                call_id_text = str(call_id) if call_id else ""
+                application_failure = mcp_failures.get(call_id_text)
                 output = payload.get("output")
                 if isinstance(output, str):
                     text = output
@@ -737,7 +1019,10 @@ def process_file(
                     "session_id": session_id,
                     "event_id": str(line_num),
                     "event_type": "user_message",
-                    "subtype": "tool_result",
+                    "subtype": (
+                        "tool_failure"
+                        if application_failure else "tool_result"
+                    ),
                     "role": "user",
                     "content": truncated,
                     "content_len": content_len,
@@ -748,7 +1033,20 @@ def process_file(
                     "timestamp": timestamp,
                     "file_path": None,
                     "source_file": source_file,
-                    "metadata": _merge_metadata(payload, current_configuration),
+                    "source_status": (
+                        "application_error"
+                        if application_failure else payload.get("status")
+                    ),
+                    "normalized_status": (
+                        "failed" if application_failure else None
+                    ),
+                    "metadata": _merge_metadata(payload, {
+                        **current_configuration,
+                        **({
+                            "application_status": "failed",
+                            "result_status_evidence": application_failure,
+                        } if application_failure else {}),
+                    }),
                     "source_raw": source_raw,
                 }, rtype, payload, line_num)
                 continue
@@ -769,11 +1067,163 @@ def process_file(
 
         elif rtype == "event_msg":
             msg_type = payload.get("type", "")
+            collaboration = {
+                "collab_agent_spawn_begin": (
+                    "collab_agent_spawn_begin",
+                    "collaboration.spawn.begin",
+                    "delegated_task",
+                ),
+                "collab_agent_spawn_end": (
+                    "collab_agent_spawn_end",
+                    "collaboration.spawn.end",
+                    "status",
+                ),
+                "collab_agent_interaction_begin": (
+                    "collab_agent_interaction_begin",
+                    "collaboration.message.begin",
+                    "delegated_task",
+                ),
+                "collab_agent_interaction_end": (
+                    "collab_agent_interaction_end",
+                    "collaboration.message.end",
+                    "status",
+                ),
+                "collab_waiting_begin": (
+                    "collab_waiting_begin",
+                    "collaboration.wait.begin",
+                    "status",
+                ),
+                "collab_waiting_end": (
+                    "collab_waiting_end",
+                    "collaboration.wait.end",
+                    "status",
+                ),
+                "collab_close_begin": (
+                    "collab_close_begin",
+                    "collaboration.close.begin",
+                    "status",
+                ),
+                "collab_close_end": (
+                    "collab_close_end",
+                    "collaboration.close.end",
+                    "status",
+                ),
+                "collab_resume_begin": (
+                    "collab_resume_begin",
+                    "collaboration.resume.begin",
+                    "status",
+                ),
+                "collab_resume_end": (
+                    "collab_resume_end",
+                    "collaboration.resume.end",
+                    "status",
+                ),
+                "sub_agent_activity": (
+                    "subagent_activity",
+                    "collaboration.activity",
+                    "status",
+                ),
+                "subagent_activity": (
+                    "subagent_activity",
+                    "collaboration.activity",
+                    "status",
+                ),
+            }.get(msg_type)
+            if collaboration is not None:
+                subtype, event_kind, content_role = collaboration
+                prompt = payload.get("prompt")
+                content = None
+                content_len = None
+                if isinstance(prompt, str) and prompt:
+                    prompt = apply_processing(
+                        prompt, opts, vendor="Codex",
+                        record_type=msg_type,
+                        event_kind=event_kind, phase="pre",
+                    )
+                    if prompt is None:
+                        continue
+                    content, content_len = _truncate(
+                        prompt, TRUNCATE_PROMPT
+                    )
+                    content = apply_processing(
+                        content, opts, vendor="Codex",
+                        record_type=msg_type,
+                        event_kind=event_kind, phase="post",
+                    )
+                    if content is None:
+                        continue
+                metadata_fields = (
+                    "call_id", "sender_thread_id", "receiver_thread_id",
+                    "new_thread_id", "agent_thread_id", "agent_path", "kind",
+                    "status", "model", "reasoning_effort",
+                    "new_agent_nickname", "new_agent_role",
+                    "receiver_agent_nickname", "receiver_agent_role",
+                    "started_at_ms", "completed_at_ms", "occurred_at_ms",
+                    "receiver_thread_ids", "agents_states",
+                )
+                metadata = {
+                    key: sanitize_value(payload[key], redact_enabled)
+                    for key in metadata_fields
+                    if payload.get(key) is not None
+                }
+                metadata.update(current_configuration)
+                yield _annotate_source({
+                    "session_id": session_id,
+                    "event_id": str(line_num),
+                    "event_type": "system_event",
+                    "subtype": subtype,
+                    "role": "harness",
+                    "event_kind": event_kind,
+                    "actor_kind": "harness",
+                    "content_role": content_role,
+                    "origin_kind": "harness_generated",
+                    "content": content,
+                    "content_len": content_len,
+                    "content_ref": None,
+                    "tool_name": None,
+                    "tool_input": None,
+                    "tool_output": None,
+                    "timestamp": timestamp,
+                    "file_path": None,
+                    "source_file": source_file,
+                    "metadata": (
+                        json.dumps(metadata, separators=(",", ":"))
+                        if metadata else None
+                    ),
+                    "source_raw": source_raw,
+                }, rtype, payload, line_num)
+                continue
             if msg_type == "context_compacted":
                 if diagnostics is not None:
                     diagnostics["known_ignored_records"] = (
                         diagnostics.get("known_ignored_records", 0) + 1
                     )
+                continue
+            if msg_type == "thread_rolled_back":
+                yield _annotate_source({
+                    "session_id": session_id,
+                    "event_id": str(line_num),
+                    "event_type": "system_event",
+                    "subtype": "thread_rolled_back",
+                    "role": "harness",
+                    "event_kind": "context.rollback",
+                    "actor_kind": "harness",
+                    "content_role": "status",
+                    "origin_kind": "harness_generated",
+                    "content": None,
+                    "content_len": None,
+                    "content_ref": None,
+                    "tool_name": None,
+                    "tool_input": None,
+                    "tool_output": None,
+                    "timestamp": timestamp,
+                    "file_path": None,
+                    "source_file": source_file,
+                    "metadata": json.dumps({
+                        "removed_user_turns": payload.get("num_turns"),
+                    }, separators=(",", ":")),
+                    "source_raw": source_raw,
+                }, rtype, payload, line_num)
                 continue
             if msg_type in {"task_started", "task_complete"}:
                 is_start = msg_type == "task_started"
@@ -860,6 +1310,92 @@ def process_file(
                     "metadata": json.dumps(
                         {key: value for key, value in metadata.items()
                          if value is not None},
+                        separators=(",", ":"),
+                    ),
+                    "source_raw": source_raw,
+                }, rtype, payload, line_num)
+                continue
+            if msg_type == "mcp_tool_call_end":
+                invocation = payload.get("invocation") or {}
+                if not isinstance(invocation, dict):
+                    invocation = {}
+                duration = payload.get("duration") or {}
+                duration_ms = None
+                if isinstance(duration, dict):
+                    seconds = duration.get("secs")
+                    nanos = duration.get("nanos")
+                    if isinstance(seconds, int) and isinstance(nanos, int):
+                        duration_ms = seconds * 1000 + nanos / 1_000_000
+                result = payload.get("result")
+                succeeded = (
+                    isinstance(result, dict)
+                    and "Ok" in result
+                )
+                failed = (
+                    isinstance(result, dict)
+                    and "Err" in result
+                )
+                metadata = {
+                    "call_id": payload.get("call_id"),
+                    "mcp_server": invocation.get("server"),
+                    "mcp_tool": invocation.get("tool"),
+                    "connector_id": payload.get("connector_id"),
+                    "app_name": payload.get("app_name"),
+                    "action_name": payload.get("action_name"),
+                    "link_id": payload.get("link_id"),
+                    "plugin_id": payload.get("plugin_id"),
+                    "read_only_hint": payload.get("read_only_hint"),
+                    "duration_ms": duration_ms,
+                    "result_status": (
+                        "succeeded" if succeeded
+                        else "failed" if failed
+                        else "unknown"
+                    ),
+                    "transport_status": (
+                        "succeeded" if succeeded
+                        else "failed" if failed
+                        else "unknown"
+                    ),
+                    "application_status": (
+                        "failed"
+                        if str(payload.get("call_id")) in mcp_failures
+                        else None
+                    ),
+                    "result_status_evidence": mcp_failures.get(
+                        str(payload.get("call_id"))
+                    ),
+                    "duplicate_result_body_not_retained": True,
+                }
+                yield _annotate_source({
+                    "session_id": session_id,
+                    "event_id": str(line_num),
+                    "event_type": "system_event",
+                    "subtype": "mcp_tool_call_end",
+                    "role": "harness",
+                    "event_kind": "tool.transport",
+                    "actor_kind": "harness",
+                    "content_role": "status",
+                    "origin_kind": "harness_generated",
+                    "content": None,
+                    "content_len": None,
+                    "content_ref": None,
+                    "tool_name": invocation.get("tool"),
+                    "tool_input": None,
+                    "tool_output": None,
+                    "timestamp": timestamp,
+                    "file_path": None,
+                    "source_file": source_file,
+                    "source_status": metadata["result_status"],
+                    "normalized_status": (
+                        "succeeded" if succeeded
+                        else "failed" if failed
+                        else None
+                    ),
+                    "metadata": json.dumps(
+                        {
+                            key: value for key, value in metadata.items()
+                            if value is not None
+                        },
                         separators=(",", ":"),
                     ),
                     "source_raw": source_raw,

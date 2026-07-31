@@ -2,9 +2,11 @@ from pathlib import Path
 
 import pytest
 
+from codess.context_content import bound_context_content
 from codess.resources import (
     ResourceLimitError, check_events, check_source, file_usage,
-    peak_rss_bytes, storage_usage, tree_usage,
+    peak_rss_bytes, searchable_event_payload, storage_usage,
+    summarize_event_payload, summarize_resource_observations, tree_usage,
 )
 
 
@@ -19,10 +21,38 @@ def test_source_and_event_limits_are_enforced(tmp_path: Path):
     except ResourceLimitError as exc:
         assert (exc.limit_kind, exc.observed, exc.maximum) == ("source_bytes", 4, 3)
     assert check_events({"s": [{}, {}]}, max_source=2, max_session=2) == (2, 2)
+    with pytest.raises(ResourceLimitError) as source_error:
+        check_events(
+            {"s1": [{}, {}], "s2": [{}]},
+            max_source=2, max_session=2,
+        )
+    assert (
+        source_error.value.limit_kind,
+        source_error.value.observed,
+        source_error.value.maximum,
+    ) == ("source_events", 3, 2)
     with pytest.raises(ResourceLimitError, match="session produced"):
         check_events({"s": [{}, {}]}, max_source=3, max_session=1)
     peak = peak_rss_bytes()
     assert peak is None or peak > 0
+
+
+def test_context_character_boundary_and_override_are_exact():
+    exact = "x" * 250_000
+    assert bound_context_content(exact, {}) == (exact, 250_000, False)
+
+    bounded, full_length, truncated = bound_context_content(exact + "x", {})
+    assert len(bounded) == 250_000
+    assert bounded.endswith("…")
+    assert (full_length, truncated) == (250_001, True)
+
+    # The unit is Unicode characters, not UTF-8 bytes.
+    assert bound_context_content("ééé", {
+        "max_context_content_chars": 2,
+    }) == ("é…", 3, True)
+    assert bound_context_content("unbounded", {
+        "max_context_content_chars": None,
+    }) == ("unbounded", 9, False)
 
 
 def test_storage_usage_is_shared_and_hardlink_aware(tmp_path: Path):
@@ -38,3 +68,60 @@ def test_storage_usage_is_shared_and_hardlink_aware(tmp_path: Path):
     assert measured["unique_allocated_bytes"] > 0
     assert storage_usage([tmp_path]) == measured
     assert file_usage([first])["files"] == 1
+
+
+def test_resource_summary_deduplicates_containers_and_never_sums_rss():
+    summary = summarize_resource_observations([
+        {
+            "source": "cursor:a", "container": "/state.vscdb",
+            "source_bytes": 100, "events": 3,
+            "retained_searchable_characters": 7,
+            "retained_searchable_utf8_bytes": 8,
+            "largest_session_events": 2, "peak_rss_bytes": 40,
+        },
+        {
+            "source": "cursor:b", "container": "/state.vscdb",
+            "source_bytes": 110, "events": 5,
+            "retained_searchable_characters": 11,
+            "retained_searchable_utf8_bytes": 12,
+            "largest_session_events": 4, "peak_rss_bytes": 60,
+        },
+        {
+            "source": "claude:c", "container": "/c.jsonl",
+            "source_bytes": 20, "events": 1,
+            "retained_searchable_characters": 13,
+            "retained_searchable_utf8_bytes": 14,
+            "largest_session_events": 1, "peak_rss_bytes": 50,
+        },
+    ])
+    assert summary == {
+        "observations": 3,
+        "unique_source_containers": 2,
+        "unique_source_container_bytes": 130,
+        "emitted_events": 9,
+        "retained_searchable_characters": 31,
+        "retained_searchable_utf8_bytes": 34,
+        "largest_session_events": 4,
+        "peak_rss_bytes": 60,
+    }
+
+
+def test_searchable_payload_distinguishes_characters_bytes_and_aliases():
+    event = {
+        "content": "é",
+        "tool_input": "{}",
+        "tool_output": "é",
+        "artifact_path": "a",
+        "metadata": "not searchable payload",
+    }
+    assert searchable_event_payload(event) == (4, 5)
+    assert summarize_event_payload({
+        "s1": [event, {"content": None, "tool_output": ""}],
+        "s2": [{}],
+    }) == (4, 5)
+
+
+def test_equal_distinct_searchable_fields_are_not_treated_as_aliases():
+    assert searchable_event_payload({
+        "content": "x", "tool_input": "x", "artifact_path": "x",
+    }) == (3, 3)

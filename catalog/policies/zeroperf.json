@@ -4,10 +4,7 @@
   "required_validator_version": "0.2",
   "project": "/Users/walter/Work/ZK/ZeroPerf",
   "required_sources": ["Claude"],
-  "minimum_sessions": {"Claude": 8},
-  "minimum_events": {"Claude": 7000},
   "raw_mode": "capture",
-  "expected_raw_records": 9,
   "allowed_diagnostics": {},
   "require_fixed_point": true
 }

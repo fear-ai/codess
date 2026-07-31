@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from codess.helpers import (
+    ephemeral_project_location_reason,
     is_excluded,
     is_under_pruned_directory,
     parse_dir_list,
@@ -13,7 +14,6 @@ from codess.helpers import (
     slug_to_path,
     should_prune_directory,
     unsafe_traversal_root_reason,
-    user_root_string_disallowed,
     validate_dirs_file,
     write_csv,
 )
@@ -82,6 +82,13 @@ class TestIsExcluded:
         assert unsafe_traversal_root_reason(Path("/var"))
         assert unsafe_traversal_root_reason(Path.home()) is None
         assert unsafe_traversal_root_reason(Path("/var/www/project")) is None
+
+    def test_ephemeral_system_locations_are_not_durable_projects(self):
+        assert ephemeral_project_location_reason(
+            Path("/private/var/folders/example/T/tmp/project")
+        )
+        assert ephemeral_project_location_reason(Path("/tmp/project"))
+        assert ephemeral_project_location_reason(Path("/Users/walter/Work/project")) is None
 
 
 class TestWriteCsv:

@@ -36,6 +36,29 @@ queries.
    directory, ownership, meaningful source records, activity, and mapping value
    all matter. Repository recency alone is a poor selector.
 
+### Engineering and evidence principles
+
+This section is the central statement of how Codess is designed and how design
+choices become implementation. Detailed entity, storage, operational, and
+research rules remain in their respective sections below.
+
+| Principle | Present application | Continued enforcement |
+|---|---|---|
+| Preserve source designations and add normalized classifications | Events retain source system, record type/subtype, locator, source status, and mapping trace alongside common Event, actor, role, origin, and status values | Every new vendor field or record shape requires a named mapping or an explicit diagnostic; normalization never erases the source value |
+| Keep classification, filtering, search, validation, and authorization distinct | Adapters classify; selectors and content policy filter; typed search matches normalized projections; preflight and acceptance validate; explicit mutation commands authorize writes | Interfaces and reports name which operation occurred and never use a recommendation, search miss, or validation result as implicit authorization |
+| Select scope explicitly and reproducibly | Project locations and source systems are selected before Session, time, Event, or content predicates; saved results retain canonical requests and snapshot/package/policy identity | Stable Project-ID/catalog selectors replace path-only setup while preserving paths as observed provenance |
+| Separate durable identity from location | Projects use UUID identities; Sessions, Events, Sources, and records use namespaced stable IDs; paths/worktrees/workspaces remain locations or bindings | Relocation and repository/worktree consolidation update bindings without rewriting historical evidence |
+| Treat evidence, normalized storage, and analytical derivatives as separate authorities | Vendor Sources and raw objects remain evidence; immutable per-Project CoSchema snapshots are normalized authority; exports, DuckDB, Parquet, notebooks, and search indexes are derivatives | Derived formats carry Project, snapshot, source, observation, processor, and limitation provenance and never become a second vendor decoder |
+| Preserve occurrence and interaction structure | Ordered human, harness, model, agent, subagent, tool, MCP, lifecycle, and context Events remain distinct and are grouped into Interactions and Model Turns | Grouping, repetition analysis, and correlation retain constituent stable IDs and support lossless expansion |
+| Make loss explicit and bounded | Sanitization, redaction, suppression, truncation, and externalization record policy, original length, completeness, and derivation evidence | A normalized search miss never proves source absence; exact evidence resolution is a separate operation |
+| Prefer observation to inference and grade unavoidable inference | Exact vendor values remain nullable; inferred Interaction boundaries and correlations record method, confidence, and diagnostics | New inferences require a versioned method, evidence references, evaluation data, and no identity rewrite |
+| Build immutable snapshots and rebuild derived data | Ingest builds and validates a new snapshot before atomic promotion; schema/mapping changes rebuild rather than mutate accepted rows | Copy-forward is reserved for non-regenerable curation and must still produce a new snapshot with explicit lineage |
+| Bound resources and stream large evidence | Source/Event/content ceilings, JSONL streaming, paged SQLite backup, zstd streaming, row/byte query limits, and progress/RSS observations are implemented | Lower bounds remain optional selection heuristics; upper bounds remain default safety controls with explicit reviewed overrides |
+| Build domain interpretation and reuse mature primitives | Codess owns vendor decoding, mapping, identity, provenance, and typed research behavior; it reuses SQLite, JSON, CSV, Git, zstd, Unicode, regex, and maintained digest implementations | Add a runtime dependency only for a measured missing primitive or two implemented workflows sharing a stable boundary |
+| Keep one authority per concern | Designs owns functional rationale, vendor documents own upstream facts, CoSchema owns logical records, DDL owns SQLite layout, CoPlan owns work and gaps, and Operations owns procedures | Repartition or link duplicated material instead of creating another overlapping document, schema model, registry, or wrapper |
+| Validate boundaries in proportion to consequence | Field-state diagnostics preserve usable malformed records; preflight checks decoding and temporary writes; acceptance checks fixed-point values; exact evidence checks revision equality | Tests include hostile shapes, large/skewed data, cross-vendor fixtures, multi-store scope parity, atomic failure, and representative real snapshots |
+| Measure before optimizing or adding infrastructure | Cursor selection markers, progress phases, storage allocation, RSS, query limitations, and coverage are measured | Alternative indexes, SQLite bindings, graph/search services, dataframe engines, and new hashes enter the core only after a benchmark and lifecycle analysis |
+
 ### Accepted removals and corrections
 
 - `release_value` is removed from v2. Its packed integer encoding was
@@ -64,7 +87,7 @@ small processing-profile versions with each build:
 
 | Managed version | Meaning | Changes when |
 |---|---|---|
-| `software_version` | Released Codess application, currently `0.2.0` | CLI, reader, writer, adapter, or query behavior is released |
+| `software_version` | Released Codess application, currently `0.2.3` | CLI, reader, writer, adapter, or query behavior is released |
 | `store_format` | Durable package containing the common logical schema, SQLite layout/DDL, constraints, and normalized taxonomies | A stored baseline can differ in structure or defined meaning |
 | `decoder_version` | Normalization/filter profile, currently `0.2` | The same supported source records would be selected, classified, or decoded differently |
 | `validator_version` | Acceptance interpretation, currently `0.2` | Checks, severity, or policy semantics change even though stored rows do not |
@@ -470,13 +493,15 @@ Git remote identity, repository UUID, or content/commit evidence can help
 correlate moved checkouts, but none should automatically merge forks or
 uncommitted worktrees.
 
-Linked Git worktrees require both identities. Record the worktree Git directory,
-common Git directory, branch, HEAD, and remote observation. Two CodeSess
-Projects may remain separate analysis/curation units when their vendor
-workspaces and session purposes differ while still sharing one repository
-identity for repository-level correlation. A shared common Git directory is
-strong local evidence of that relationship, but does not by itself merge their
-Project IDs or session scopes.
+For Git-backed work, repository identity is the Codess Project boundary:
+exactly one Project per repository. Record every clone or linked worktree as a
+Project location, including its worktree Git directory, common Git directory,
+branch, HEAD, remote observation, and observation time. Vendor workspaces with
+their own directories remain workspace bindings and locations under the same
+Project. Their independent directories, session purposes, activity, or branches
+do not justify additional Project IDs. A common Git directory is definitive
+local evidence that linked worktrees belong to the same Project; other clone or
+remote correlations retain their evidence and confidence.
 
 ### File meanings
 
@@ -504,6 +529,29 @@ result rather than sentinel strings in functional fields. `NULL` means no
 normalized value; the mapping diagnostic explains why when that distinction is
 important.
 
+### Validity, value, attribution, and currency
+
+One status cannot answer every question about a discovered record. Assess these
+dimensions independently before deciding what to ingest or investigate:
+
+| Question | Suggested descriptions | Consequence |
+|---|---|---|
+| Is it a supported source object? | supported, malformed, unsupported, not a Session | Controls decoding and diagnostics |
+| What kind of content is present? | substantive conversation, operational command/configuration, informational state, empty/noise, oversized-suspect | Controls orientation and review priority, not source existence |
+| Which Project does it concern? | confirmed, probable, mixed, ambiguous, unattributed | Controls Project binding or review; storage directory alone is evidence, not proof |
+| Is the Source observation closed? | stable, open-ended, truncated, unknown | Describes the observed evidence; an unanswered final prompt or recent mtime does not prove a running process |
+| What was the observed runtime state? | active, idle, not loaded, system error, unknown | Requires runtime evidence and an observation time; transcript or Git recency alone is insufficient |
+| Is the Project snapshot caught up? | source unchanged, source newer, repository-only change, changed global container without selected change, unknown | Controls re-ingest assessment |
+| Is it useful in the current selection? | include, de-emphasize, historical-only, defer, exclude | Controls a query/cohort; it must not erase retained evidence |
+
+Examples therefore react differently: a command-only `/model` Session is a
+supported operational micro-session, not malformed drivel; a huge build log
+inside a message is a supported Session with suspect/misclassified payload; a
+Claude file stored under one Project but operating in another directory is
+valid source evidence with ambiguous or corrected Project attribution; and a
+deleted temporary directory with no snapshot is a catalog artifact to exclude,
+not an invalid vendor message.
+
 ## 7. Time, ordering, and observation
 
 ### Session and event time
@@ -516,8 +564,11 @@ file mtime into the same field. Suggested time facts are:
 | `started_at` / `ended_at` | Vendor-supported session bounds; nullable |
 | `event_at` | Vendor-supported event occurrence time; nullable |
 | `source_mtime` | Filesystem modification time observed for a source |
+| `file_mtime` | Filesystem modification time observed for a Project work file; Git does not store it |
 | `observed_at` | Time Codess inspected the source |
 | `ingested_at` | Time the normalized baseline was built |
+| `commit_author_at` / `commit_at` | Git author and committer times stored in the commit object |
+| `ref_observed_at` | Time Codess observed a local/upstream ref and its commit; not the time that ref moved |
 | `effective_at` | Optional derived application fallback for display/filtering |
 | `effective_at_basis` | `event`, `session`, `source_mtime`, `ingested`, or `unknown` |
 
@@ -539,6 +590,20 @@ several events remains deterministic. A useful ordering tuple is
 Cross-session chronology remains probabilistic. Correlation queries should use
 time plus uncertainty, project/artifact evidence, and source provenance rather
 than manufacture a global sequence.
+
+Manual work is a separate observation stream. A file edited after a Session
+can be observed through its mtime and Git dirty/index state, but neither proves
+who edited it. Git commits preserve author and committer dates, not working-file
+mtimes. Local reflogs may preserve when a local ref changed. A normal Git commit
+object does not record push time; Codess can only record when it observed an
+upstream ref, or optionally retain a dated hosting-provider event/audit result.
+
+Compare tool-linked Artifact operations with repository observations:
+tool-linked changes are attributed to that invocation; remaining dirty/staged,
+committed, or upstream changes are **Project activity**. They may be manual,
+another tool, an IDE, a hook, or a background process. Record the facts and
+time bases without converting them into conversation Events or guessing
+authorship.
 
 ## 8. Core fields, specialized data, JSON, and “not recorded”
 
@@ -627,6 +692,27 @@ model-turn override. Candidate fields are:
 configuration. A harness or agent can emit assistant-shaped records without
 those records being direct model output.
 
+Treat the candidate list as independently nullable facts, not one “model
+settings” JSON object:
+
+| Field | Meaning and maintenance | Current vendor evidence | Impact |
+|---|---|---|---|
+| `provider` | Exact service/provider namespace when supplied; store with reusable configuration plus occurrence provenance | Codex supplies provider in session/turn/settings records; Claude supplies service evidence in reviewed assistant usage; Cursor lacks a separate mapped provider | High for cross-provider scope; P1 |
+| `model_name_exact` | Exact selected/reported string, never normalized away | All three vendors provide it in at least some mapped records | High for filtering/comparison; P0/P1 |
+| `model_family` | Rebuildable grouping derived from exact name under a versioned alias table | Potentially all vendors; not a source fact unless explicitly supplied | Useful, not urgent; P2 |
+| `model_revision` | Exact immutable revision/deployment identifier only when the source distinguishes it | No general reviewed evidence; a model-name suffix is not automatically a revision | Leave NULL; evidence-triggered |
+| `reasoning_effort` | Exact user/harness-selectable effort | Codex turn/settings records; not separately observed in current Claude/Cursor mappings | High where available; A12 P1 |
+| `speed_tier` | Exact selectable speed/latency value, separate from model name | No distinct reviewed three-vendor evidence | Leave NULL; T4 |
+| `service_tier` | Exact service/priority tier supplied separately | Newer Codex settings and Claude usage evidence; not Cursor | P1; retain source field/release |
+| `mode` | Exact collaboration/agent/interaction mode from an identified field; never reuse sandbox or truncation “mode” | Codex collaboration mode; Cursor product mode and Claude agent/permission concepts require separate mappings | P1 only for demonstrated queries |
+| sampling/capability/context declarations | Exact configuration or declaration, never inferred from text or model marketing | Uneven and mostly outside current local mappings | P3/evidence-triggered |
+
+The common columns normalize formats but never erase the exact source value or
+field path. `source_config` is occurrence provenance and vendor extension, not
+a dumping ground for unrelated product state. Promote a new common field only
+after A12 shows exact evidence, repeatable meaning, and a concrete query or
+validation need.
+
 ## 10. Events, roles, commands, tools, context, and memory
 
 ### Vendor and normalized event types
@@ -666,20 +752,134 @@ not treat an encrypted body as absent merely because Codess cannot decode it.
 
 The source roles `user` and `assistant` are repeatedly violated by harness
 inputs, project instructions, skills, agent output, tool results, and developer
-messages being serialized into message-shaped records. Use independent axes:
+messages being serialized into message-shaped records. The current Codex
+rollout provides a concrete discriminator: direct UI submissions have paired
+`event_msg.user_message` records, while additional environment/plugin context
+can be sent to the model as `response_item.message role=user` without that
+pair. The envelope role is therefore evidence, not an actor assignment.
 
-- `actor_kind`: `human`, `model`, `harness`, `agent`, `skill`, `tool`,
-  `system`, `developer`, or `unknown`;
+Use independent axes:
+
+- `source_role`: the exact vendor role, retained even when it disagrees with
+  the normalized actor;
+- `actor_kind`: the immediate observed producer, with the core values `human`,
+  `model`, `harness`, and `tool`; use `agent` only when the source exposes a
+  distinct runtime participant rather than merely another model Session;
 - `content_role`: `instruction`, `prompt`, `response`, `context`,
   `tool_request`, `tool_result`, `status`, `memory`, or `audit`;
 - `origin_kind`: `direct_user_input`, `harness_injected`,
-  `project_instruction`, `skill_generated`, `agent_generated`,
+  `harness_delegated`, `project_instruction`, `skill_generated`,
+  `agent_generated`,
   `tool_generated`, `model_generated`, or `unknown`; and
-- participant/actor identity when known.
+- participant/runtime identity when known;
+- Interaction `initiation_kind`, independently indicating whether the
+  Interaction began from direct human input, autonomous harness work,
+  delegation, or unknown evidence; and
+- Session relation plus parent/caused-by links for subagents, forks,
+  resumptions, and delegated prompts.
 
-Retain the exact vendor role separately. These dimensions should be nullable or
-`unknown` when the source does not prove them; mapping a record labeled `user`
-to a human actor without checking its origin would preserve the current error.
+These dimensions should be nullable or `unknown` when the source does not
+prove them. A subagent's `user`-role task can be harness-carried and
+model-authored; it must not become human merely because the receiving model API
+uses `user`. Conversely, Session relation alone does not prove who authored
+every Event in that Session.
+
+No new common column is approved merely by this vocabulary. A27 first tests
+whether exact `source_role` and actor evidence remain adequate in mapping
+trace/metadata, which initiation values are repeatedly required, and which
+runtime identities require relational projection. Only demonstrated
+cross-source query predicates justify a CoSchema layout change.
+
+The current A27 implementation applies the conservative rule at the record
+boundary: Claude sidechain/agent-path and Cursor `isSubagent` user envelopes
+become harness-delegated prompts while their exact vendor role remains
+evidence. Current Codex protocol parent/fork/thread-source and collaboration
+fields are mapped directly, but their reviewed local occurrence is still
+absent and therefore fixture-backed. Missing parent evidence remains NULL.
+
+#### Actor, activity, and configuration field programme
+
+The proposed fields are not one schema migration. They fall into four
+implementation classes:
+
+| Concept | Source or derivation | Current representation | Next treatment | Priority |
+|---|---|---|---|---:|
+| Exact source role and actor evidence | Vendor record/envelope and paired-record evidence | Mapping trace or Event metadata | Audit each supported release; correct actor/origin mapping before changing layout | P0 |
+| `actor_kind`, `content_role`, `origin_kind` | Normalized from exact source evidence | Common Event columns | Keep separately queryable; never derive human solely from `role=user` | P0 |
+| Interaction initiation | Direct prompt, harness start, or delegation evidence | Common Interaction value, sometimes `unknown` | Refine only where the source proves delegation/autonomy | P1 |
+| Session relation and parent | Vendor parent/fork/subagent fields | Session columns plus metadata | Map direct Codex protocol evidence and validate Claude/Cursor differences | P1 |
+| Runtime participant ID/name/role/path | Vendor collaboration/subagent records | Vendor metadata where observed | Promote relationally only after repeated lineage queries require it | P1 |
+| Exact tool name and namespace | Source call/invocation | Free-text tool name plus metadata | Preserve exact value; add a versioned alias/classification registry, not an enum replacement | P1 |
+| MCP server/tool, connector, app, action, plugin, duration, result status | Codex transport event; vendor-qualified tool records elsewhere | Tool/Event metadata and transport status Event | Validate occurrence linkage; promote only frequently filtered fields | P1 |
+| Planning, delegation, and automation class | Derived from exact tool/lifecycle shapes | Not a source fact; exact tool names remain queryable | Add a versioned derived classifier after a reviewed cross-vendor rule set | P2 |
+| Provider, model family/exact name/revision, effort, speed, service tier, mode | Exact vendor configuration fields; family may be normalized from exact name | Nullable independent configuration fields plus source provenance | Continue A12 vendor/release fixtures; absence stays NULL and ambiguity stays diagnostic | P1 |
+| Event/content/input/output lengths and truncation | Store-time observation | Common lengths plus policy/metadata, uneven for older mappings | Make truncation disposition explicit before using lengths for completeness claims | P1 |
+| Daily/monthly counts, characters, distinct Sessions/Interactions, spans, latencies, tool totals | SQL/query derivation over selected snapshots | Typed overview result | Return the observed numbers; displays may derive ratios and percentages | P1 |
+
+The test for a common stored field is repeated source availability plus a
+demonstrated filter, join, ordering, or completeness need. Otherwise retain the
+exact value in namespaced metadata and offer a rebuildable projection. Derived
+activity facts require exact cohort, snapshot, UTC/time basis, and algorithm
+identity; they are not copied into every Event row.
+
+#### MCP evidence and outcome model
+
+MCP support is not one boolean. Keep these evidence layers distinct:
+
+1. **configuration** — a user file, CLI registry, installed plugin, or app
+   connector says a server is available;
+2. **discovery** — a harness asks for tools/resources and may learn that the
+   target is empty, unavailable, or authentication-only;
+3. **invocation** — a named operation with a source call ID and arguments;
+4. **transport** — the harness received an MCP response or transport error;
+5. **application result** — the returned body says the requested operation
+   succeeded, failed, was cancelled, or is ambiguous; and
+6. **use assessment** — evidence-backed description such as visualization,
+   session administration, workspace control, or availability diagnostic.
+
+Only layers 1–5 are source facts. Usefulness is a review classification and
+must cite the actual operation/result. A successful transport never overrides
+an explicit application error. A successful discovery never proves a target
+operation occurred. Vendor copies of one source call ID across Sessions remain
+separate stored occurrences but one distinct source operation for audit
+counts.
+
+#### Utilization without reading conversation meaning
+
+Orientation queries may read byte/character lengths already stored with the
+Events, but do not classify the topic or meaning of prompt/response bodies.
+The primary output is the actual observation: counts, character lengths,
+distinct Session/Interaction identities, timestamps/spans, tool names and
+call/result totals. Ratios and percentages are display calculations over those
+facts, not additional authoritative measures.
+
+Human-inclusive daily/weekly views answer engagement questions. Vendor,
+model, Project, Session, relation, tool, and monthly totals answer system
+activity questions and remain meaningful without a human denominator. The two
+response intervals are deliberately different: last human prompt to the last
+later model output in that same Interaction approximates the tail response
+window, while first prompt to that output spans the day's observed human/model
+exchange window. Neither is a request latency when an Interaction contains
+multiple model/tool cycles.
+
+#### Harness telemetry and controlled transport capture
+
+Local transcripts are the required historical source for current Codess
+ingest. Harness-native telemetry is the first addition for prospective
+experiments because it can label requests, turns, tools, MCP operations,
+durations, and errors without retaining content by default. Codex's opt-in
+OpenTelemetry and hooks provide that path.
+
+A router/proxy can capture exact outbound request envelopes and streamed model
+transport only for traffic deliberately sent through it. That is useful for
+studies of request assembly, retries, stream timing, and transcript omissions,
+but it is not required for the current session/investigation use cases. It
+still cannot reveal server-hidden reasoning and does not observe local tool
+execution unless combined with harness instrumentation. Any experiment must
+state provider endpoint/configuration, capture interval, software versions,
+content-retention/redaction policy, credential boundary, and mapping from
+transport IDs to the local Session. Full content capture is opt-in; metric-only
+telemetry is the default.
 
 ### Commands and skills
 
@@ -722,6 +922,14 @@ capability is a child execution fact, not necessarily a second tool call.
 Avoid duplicating result content in both generic `content` and `tool_output`;
 define one canonical payload with typed projections for display and query.
 
+`source_call_id` is vendor free text, not a global identity. Codess preserves
+the exact source value in Event metadata/raw evidence and uses a bounded
+100-byte relational key. Values within the ceiling remain unchanged; longer
+values retain a UTF-8-safe prefix plus the full SHA-256 digest so truncation
+does not practically merge equal-prefix calls. The functional identity remains
+qualified by source system and Session; the bounded call key alone is never
+treated as globally unique or authenticating.
+
 Normalization is not permission to collapse the interaction graph. Preserve
 the strongest structure each source provides even when it is vendor-specific:
 agent and subagent identity and lineage; harness-to-model context exchanges;
@@ -739,12 +947,403 @@ model. Content limits may externalize or truncate a payload, but must retain
 its identity, original size, media/encoding information, lineage, and
 truncation or externalization state.
 
+### Provenance checks
+
+“Semantic goldens” was too broad: it could imply identical vendor meaning or a
+Cartesian fixture matrix. “Mapping conformance” was also too narrow because
+the required result includes namespaced evidence that does not map to a common
+field. A **provenance check** is the plainer unit: exact source records, the
+expected Codess rows, and the assertions connecting them. A *golden* is only
+that checked expected output; it does not claim cross-vendor equivalence.
+
+The active **A3** scope is deliberately smaller than everything the vendor
+stores may expose. It proves only four producer classes—`human`, `harness`,
+`tool`, and `model`—and the ordered exchange among them. Agent/subagent, MCP,
+and context/compaction structures remain preserved where current adapters
+already support them, but they are not A3 acceptance gates and do not block
+UC5 or the narrowed UC7.
+
+Conformance is prioritized by use case:
+
+| Tier | Required cases | Use cases and exit |
+|---|---|---|
+| 0 | Source, Session, Event identity; order; Source locator; unsupported-shape diagnostic | Foundation for every use case; one case per source system must pass |
+| 1 | Human request → harness mediation → model response/tool request → tool result → harness/model response, including absent direct links | UC5; one representative complete exchange per source system with all observed core actors |
+| 2 | Tool status, ordered result fragments, permission/denial, failure, and abort evidence produced by the four scoped actors | UC7; one representative case for each behavior currently claimed for a source system |
+| Later evidence-triggered work | Runtime-component lineage, context operations, release variants, malformed/ambiguous fields, attachments, and rare lifecycle shapes | Separate promotion under T1/T4 only when a recorded use case needs it; not an A3 completion condition |
+
+Do not multiply every record type by every source system. Absence can be a
+documented source-system difference rather than a missing fixture. Common
+fields must agree on their normalized contract; source-specific fields and
+structures must remain exact and queryable without pretending equivalence.
+
+Each mapping check follows one reviewable path:
+
+1. name the use-case question and exact retained Source revision/record range;
+2. inventory the source entities, ordering, identifiers, and relationships;
+3. write the smallest expected mapping worksheet, including intentional NULLs,
+   vendor-specific retention, and diagnostics;
+4. derive a privacy-safe minimal fixture without losing the structural shape;
+5. compare adapter output and stored CoSchema entities to the worksheet;
+6. execute the relevant standard typed query and compare ordered result rows;
+7. resolve at least one result back to exact fixture/retained evidence; and
+8. rebuild twice when identity or ordering behavior changed.
+
+The A3 executable contract is now complete in
+`tests/test_provenance_checks.py`. Its Claude, Codex, and Cursor cases each
+start at an actual vendor storage shape, run the production adapter and store
+mapping, expand one status-bearing Event through the typed query API, prove all
+four scoped actors occur in the Interaction, inspect retained mapping
+locators/traces, and resolve the selected Event to exact live source evidence.
+The cases deliberately cover both denial and failure. Broader agent, MCP, and
+context variants continue under evidence-triggered mapping maintenance; they
+do not reopen A3 by themselves.
+
+The expected rows conform to these specific properties:
+
+1. **Source identity:** exact source-system, Source revision, record locator,
+   and captured/live availability are retained.
+2. **Entity identity:** Session, Interaction, Model Turn, Event, tool, agent,
+   and Artifact IDs are namespaced, deterministic, and never path-only aliases.
+3. **Order:** source record/block order and normalized `sequence_no` reproduce
+   the exchange without timestamp-based invention.
+4. **Boundaries:** Session, Interaction, turn, compaction, and lifecycle
+   boundaries use direct vendor evidence where available and label inference.
+5. **Actors and origins:** human, model, harness, agent, tool, MCP, command, and
+   injected-context contributions remain distinguishable.
+6. **Relationships:** parent/child Session, call/result, permission, tool/MCP
+   request/response, artifact, and multi-fragment result links survive.
+7. **Values and states:** content, model/settings, status, time basis, NULL,
+   empty, malformed, truncated, externalized, and unavailable states preserve
+   their declared meaning.
+8. **Common and source-specific fields:** common fields follow CoSchema while
+   useful upstream designations and structures remain namespaced and
+   queryable; a common NULL is not permission to discard source evidence.
+9. **Diagnostics:** unsupported, lossy, ambiguous, and inferred mappings are
+   explicit at source/record/field scope.
+10. **Query behavior:** the standard use-case query returns the expected rows,
+    stable IDs, ordering, completeness, and bounds.
+11. **Evidence lookup:** representative result IDs resolve back to the exact
+    asserted source values or clearly report changed/unavailable evidence.
+12. **Repeatability:** unchanged source revision, decoder, mapping, policy, and
+    schema produce the same identities and values on a second build.
+
 ### Content processing contract
 
 Content processing is the configurable boundary between vendor evidence and
 normalized query content. Vendor record shapes remain in the vendor schema
 documents; persisted content and derivation entities remain in **CoSchema.md**.
 Implementation wiring is indexed from **CoPlan.md §5**.
+
+#### Source admission bounds
+
+Minimum and maximum sizes serve different purposes, but one byte limit cannot
+describe every ingestion unit:
+
+- the minimum is an optional selection heuristic intended to avoid parsing
+  historical noise; it is not a validity or safety control and can hide valid
+  short records such as `y`, `1`, `go`, or `no`;
+- a zero-byte Source is an empty observation, not a Session or Event. It may
+  trigger stale-source replacement and an informational diagnostic, but does
+  not produce an empty prompt, statement, or response;
+- a textual message Event requires nonempty decoded text. Whitespace-only text
+  is empty for this purpose;
+- a structured Event may have no text body when its useful payload is a tool
+  name/input/output, choice identifier or label, status transition, model/mode
+  setting, compaction evidence, attachment identity, or another explicitly
+  mapped field. Size accounting must include the canonical representation of
+  those semantic fields rather than treating the Event as zero-content;
+- upper bounds separately control a transcript/container file, one source
+  record, one normalized payload, selected bytes for one Session or Project,
+  and an exact raw capture. Cursor's machine-wide SQLite database is a vendor
+  container observation, not a Project or Session payload.
+
+The current ordinary ingest default of 20 KiB is too strong for a general
+compatibility system. Curated onboarding already uses zero. The target is a
+zero selection floor plus structural admission: parse tiny supported Sources,
+classify zero-byte and parsed-empty outcomes without creating empty Sessions or
+message Events, retain valid tiny records, and let an explicit discovery policy
+request a nonzero floor.
+
+Software 0.2.3 removes the generic 8 GiB guard from active defaults. One
+versioned `codess.resource-policy/1` file now owns the implemented maximums:
+256 MiB per Claude/Codex transcript, 10 GiB per Cursor SQLite container,
+200,000 Events per Source, 100,000 Events per Session, and 250,000 characters
+per context or compaction body. Built-ins apply when no file is supplied; a
+partial file may override or disable individual limits. Environment and CLI
+overrides remain compatible. Runtime and preflight reports retain effective
+values and per-value provenance.
+
+This completes the configuration and transcript/container separation part of
+CoPlan P14. Runtime and preflight reports now also provide a reconciled
+`resource_summary`: repeated observations of one container are counted once
+for container bytes, emitted Events are additive, the largest Session is a
+maximum, and process RSS is a non-additive high-water mark. The remaining
+approved P14/P16 sequence is:
+
+1. report selected source-record and source-semantic payload bytes separately
+   from the now-reconciled container/Event/RSS summary; retained searchable
+   Event characters and UTF-8 bytes are now measured;
+2. add record, Event-payload, Project-run, and raw-capture ceilings only when
+   their measured unit and failure mode justify them;
+3. classify an over-limit observation before deciding its disposition; a
+   source/container admission guard stops ingest and creates a review item,
+   while a legitimate oversized textual field may retain a bounded searchable
+   projection plus original length/truncation/link evidence, and an external
+   object may retain only an excerpt and reference;
+4. validate the approved ceilings across representative real Projects and
+   repeated builds.
+
+Do not sum repeated source-observation container sizes as retained or selected
+Project data. Report physical retained allocation, distinct source revisions,
+and selected semantic payload as separate quantities.
+
+Exceeding a byte limit is not synonymous with discarding content. The
+implemented source/container guard runs before parsing, leaves the source
+untouched, records the observed/maximum unit and likely
+misclassification/legitimate-oversize alternatives, and does not advance
+ingest state or partially commit a replacement. Field bounding is different:
+the searchable projection may be truncated only after type/classification
+review, with full source length, truncation state, and recoverable source or
+sidecar reference. Query byte limits truncate only returned inline content,
+not stored Events. The remaining gap is to make ordinary prompt/response/tool
+field truncation metadata as explicit and uniform as current context bounding;
+**CoPlan A27/P16** owns that completeness audit.
+
+#### Measurement and assessment method
+
+P14–P16 use a common measurement vocabulary so an investigation cannot compare
+container allocation with semantic text or count one Cursor database once per
+Project:
+
+| Unit | Measurement method | Attribution and reconciliation |
+|---|---|---|
+| Source container bytes | Filesystem `st_size`; for SQLite also main/WAL/SHM and backup output separately | One physical revision/object observation; never multiply by selected Projects |
+| Selected raw-record bytes | JSONL byte span consumed per record; Cursor `length(key)+length(value)` only for selected keys/rows; external Source size when selected | Source revision → record locator → mapped Session/Project candidates |
+| Source semantic payload | UTF-8 bytes and characters of authorized source values before truncation, with raw type and field path | Record/field; do not add container overhead |
+| Retained Event payload | UTF-8 bytes and characters per distinct searchable field: content, tool input, tool output, artifact/attachment excerpt, and specialized context | Event → Session → Project run; a value copied into two physical columns is counted once by a declared logical-field rule |
+| Result payload | Canonical serialized row/result bytes plus separately reported retained inline-content bytes | Query request/result; distinguishes network/file output from searchable content |
+| Raw retained allocation | Unique content-addressed object sizes grouped by object ID plus manifest allocation | Count one object once even when referenced by many snapshots |
+| SQLite allocation | `page_size * page_count`, freelist bytes, table/index bytes through `dbstat` when available, and logical payload totals | Store and snapshot; do not infer semantic payload from allocated pages |
+| Working memory | `resource.getrusage` process RSS high-water mark for routine evidence; `tracemalloc` for Python attribution; Memray only for focused native/Python profiles | Phase, Source, composer, Session, and Project run; RSS is a high-water observation, not deallocation proof |
+
+Existing tests and observations already cover useful pieces:
+
+- `tests/test_resource_policy.py` checks configured maximum resolution,
+  precedence, disabling, and file SHA-256;
+- `tests/test_snapshot_raw.py` checks streamed capture, compressed-object sizes,
+  verification, and manifest/store allocation identities;
+- `tests/test_cursor_cohort.py` and Cursor adapter tests check selected markers,
+  cache boundaries, backup/capture behavior, and bounded selection;
+- `tests/test_scale.py` checks ordered bounded queries across 60 independent
+  stores without attaching or materializing the corpus; and
+- baseline reports and progress phases retain per-Source/Event counts, source
+  bytes, phase time, and the observed 19,661-Event composer/approximately
+  531-MiB RSS case.
+
+They do not yet attribute allocations inside composer construction, distinguish
+Python/native/SQLite memory, measure selected/pre-truncation source payload,
+or measure result-serialization amplification. Runtime/preflight reports now
+measure retained searchable Event characters and UTF-8 bytes while treating an
+identical `content`/`tool_output` tool-result projection as one logical value.
+The next profiling design is:
+
+1. add content-free per-phase counters and RSS sampling to existing progress
+   boundaries;
+2. use `tracemalloc` on synthetic fixture cases to attribute Python objects;
+3. use SQLite `dbstat`, page/freelist totals, and query plans for physical
+   allocation and read amplification;
+4. use one retained real large composer and one large typed result for focused
+   Memray profiles only after the routine counters identify a phase; and
+5. compare before/after code changes with identical snapshots, requests, and
+   bounds.
+
+Deeper real-corpus profiles are approved only when routine counters identify a
+specific phase or outlier. Ordinary rebuilds are not repurposed as uncontrolled
+profiling experiments, and no additional resource limit is promoted without
+the staged evidence below.
+
+Routine measurement is streaming. Histograms use fixed, versioned logarithmic
+or domain buckets and bounded top-N outliers; an explicit corpus-analysis run
+may compute exact sorted percentiles in SQLite/DuckDB. Every distribution
+records the selected Project/snapshot set, source systems, decoder/validator/
+policy versions, count of NULL/empty/nonempty/malformed values, units, and
+observation time.
+
+Assessment always follows an outlier back to exact evidence before proposing a
+limit. Review in this order:
+
+1. wrong Project/Source scope or a global Cursor container attributed as
+   Project content;
+2. binary/base64/archive/database content misclassified as conversation text;
+3. one vendor record incorrectly treated as a Session or one field duplicated
+   across normalized columns;
+4. genuine large prompt, response, context, tool input/output, attachment, or
+   log;
+5. repeated but individually valid records; and
+6. implementation buffering or serialization amplification.
+
+The resulting classification is `expected`, `large_but_valid`,
+`mapping_defect`, `source_misclassification`, `duplicate_accounting`,
+`resource_amplification`, or `needs_review`, with evidence identity and notes.
+A percentile alone never promotes a ceiling.
+
+#### P14–P16 staged architecture
+
+**P14 measures before it limits.** Add versioned observations and counters at
+Source admission, vendor-record selection, normalized Event emission,
+transaction commit, raw capture, snapshot creation, query serialization, and
+process-phase completion. Counters flow forward in small aggregates; content
+bodies do not enter telemetry. Reconciliation checks prove child units sum to
+their parent where definitions permit and explicitly label non-additive
+container/RSS observations.
+
+**P15 decides semantic admission independently of size.** A textual
+prompt/response/statement/context requires at least one meaningful decoded
+character after the declared normalization policy. Tiny values remain valid.
+Bodyless structured tool, status, permission, lifecycle, mode, and attachment
+records may be valid when their canonical structured payload is nonempty.
+Missing preferred fields, irregular numbering, or alternate record shapes are
+informational mapping/compliance facts, not automatic rejection. Rejected
+message emission still retains Source-record identity and a reason.
+
+**P16 promotes only evidence-backed ceilings.** Candidate policies begin as
+report-only warnings, then enter opt-in preflight rejection, and only then may
+become built-in defaults. Each stage records distributions and classifications,
+tests exact boundaries, verifies error/override behavior, runs recent
+three-vendor preflight, and completes two clean fixed-point rebuilds. Promotion
+requires no unexplained outlier, no silent loss, stable counts/identities below
+the boundary, bounded allocation before rejection, and documented recovery.
+
+The executable task and acceptance breakdown is centralized in
+**CoPlan P14.1–P16.6**.
+
+#### Cursor architecture and performance programme
+
+Current understanding separates five components that must not be timed as one
+opaque “Cursor ingest”:
+
+1. **cheap assessment:** catalog and Project activity, selected workspace/
+   composer markers, source-container metadata, and prior accepted revision;
+2. **consistent access:** an online SQLite backup only when selected evidence
+   changed or a forced run requires it;
+3. **selective decode:** SQL reads for the selected workspace/composer keys and
+   their required bubbles, not a decode of every record in the machine-wide
+   database;
+4. **normalization:** per-composer ordering, identity/deduplication, Event,
+   Interaction, and Model-Turn construction; and
+5. **write/finalize:** transactional replacement, deferred once-per-Source
+   orphan pruning, indexes, diagnostics, resource reconciliation, and snapshot
+   validation.
+
+Selection and SQLite writes are streamed, and once-per-Source pruning removed
+a repeated full-store scan. The remaining dominant risk is that normalization
+still materializes a complete composer while establishing canonical order,
+deduplication, and Interaction membership. A large real composer has already
+shown that the resulting RSS can greatly exceed retained payload size.
+
+Measure load across orthogonal ranges rather than selecting one “large
+Project”:
+
+| Axis | Required range |
+|---|---|
+| Cursor container | small fixture; ordinary current store; large global store with a small selected cohort |
+| Selected cohort | zero, one, several, and many composers/workspaces |
+| Composer shape | many small; one very large; tool-heavy; repeated-state-heavy; sparse/partially mapped |
+| Change shape | no change; append-only; changed existing bubbles; removed composer; forced full selection |
+| Payload shape | short text; bounded tool results; large-but-valid text; rejected oversized/misclassified record |
+| Output state | empty target; replacement of an existing Source; repeat fixed-point rebuild; rollback/failure injection |
+
+Every benchmark records exact input revision and selection marker, software/
+schema/decoder/policy versions, selected row/key/byte counts, emitted and
+retained Events/characters/bytes, phase wall and CPU time, peak RSS, SQLite page
+and write changes, cache/backup decisions, and final identity/count
+reconciliation. Medians and dispersion over repeated warm and cold runs matter
+more than a single fastest time. No benchmark includes transcript bodies in its
+telemetry.
+
+The review and experiment order is:
+
+1. confirm call graph, ownership, transaction boundaries, and which phase still
+   owns a complete composer;
+2. add/verify counters at the five boundaries above and reproduce the retained
+   large-composer case plus diverse small/multi-composer cases;
+3. inspect query plans and allocation profiles only in the measured dominant
+   phases;
+4. try one change at a time: incremental ordered grouping, bounded
+   deduplication state, stateful Interaction construction, removal of duplicate
+   payload representations, and write-batch sizing;
+5. compare each attempt against the identical snapshot/selection and reject it
+   if canonical order, stable IDs, rollback, diagnostics, or fixed-point output
+   changes; and
+6. retain the change only when it lowers the targeted resource measure without
+   shifting an unexplained cost to backup, serialization, SQLite, or a later
+   phase.
+
+Outcome review uses a compact table per experiment: hypothesis, exact input,
+before/after phase measures, correctness checks, unexpected effects, decision,
+and follow-up. The immediate goal is bounded memory proportional to the
+incremental grouping state rather than total composer Event count. Deeper
+allocation work remains evidence-triggered; it does not block ordinary
+correctness fixes or the already approved streaming path.
+
+#### Observed text-length distribution
+
+A read-only 2026-07-29 inventory covered 40 current per-source-system working
+stores, 199 Session entities, and 182,479 Events from active catalog locations.
+It measured characters and UTF-8 bytes without copying content. A subsequent
+fixed-point rebuild and retention pass brought current supported-format
+normalized Source revisions to SHA-256. Four deliberately unrebuilt CoSchema-3
+catalog pointers contain older revision labels and are ineligible for exact
+current-package queries. The size distribution below remains a dated content
+measurement; its hash inventory does not describe current supported-format
+state.
+
+| Retained field | Nonempty occurrences | p50 characters | p99 characters | p99.9 characters | Maximum characters |
+|---|---:|---:|---:|---:|---:|
+| Event body | 94,698 | 237 | 2,000 | 2,443 | 148,780 |
+| Tool input | 66,427 | 193 | 5,582 | 18,847 | 72,875 |
+| Tool output | 58,218 | 480 | 2,000 | 2,000 | 2,000 |
+
+The source-length view explains why retained and source sizes must remain
+distinct:
+
+| Event kind | Source p99 characters | Source p99.9 characters | Source maximum | Retained maximum |
+|---|---:|---:|---:|---:|
+| Prompt | 1,920 | 8,971 | 148,780 | 148,780 |
+| Response | 6,112 | 12,943 | 31,609 | 2,000 |
+| Tool result | 40,070 | 208,864 | 1,160,389 | 2,000 |
+| Context or compaction | below 44,866 | below 44,866 | 44,866 | 44,866 |
+
+No zero-length normalized prompt, response, statement, or context body was
+observed when selected by normalized `event_kind`. Fifty-four prompts and two
+responses contained one through four characters, confirming that semantic
+nonemptiness—not an arbitrary byte minimum—is the useful lower bound. Some
+legacy compatibility `event_type` values call tool results `user_message`;
+those must not be counted as empty prompts.
+
+#### Resource-bound status
+
+The transcript and context rows are implemented through the resource policy.
+The other rows remain reviewable P14/P16 candidates rather than defaults:
+
+| Unit | Candidate | Status and handling |
+|---|---:|---|
+| Textual prompt, response, or statement | at least one non-whitespace decoded character | Do not emit an empty message Event; retain an informational Source-record diagnostic |
+| One decoded vendor record | 4 MiB | Recognized binary/attachment/external content goes directly to raw or sidecar handling; otherwise stop before an unbounded JSON/text allocation |
+| Injected context or compaction body retained for search | 250,000 characters | **Implemented default.** Retain bounded searchable text plus full character length and truncation state |
+| Tool input retained for search | 128 KiB | Preserve structured identity and parameters; externalize an oversized body |
+| Tool output or external/log excerpt retained for search | 32 KiB | Prefer a bounded head and tail rather than indexing a multi-megabyte listing |
+| All searchable fields in one Event | 512 KiB | Prevent several individually valid fields from defeating the Event bound |
+| One transcript file | 256 MiB | **Implemented default.** Stream records; Cursor's machine-wide SQLite container has its own 10 GiB guard and bounded selection queries |
+| Retained searchable payload in one Session | 64 MiB warning | Orient and investigate before increasing; do not allocate the Session as one in-memory object |
+| Retained searchable payload added by one Project run | 256 MiB warning | Require reviewed override or narrower scope; cumulative Project storage remains a separate physical-allocation report |
+
+The current largest retained Session is approximately 20 million characters;
+the largest Project is approximately 72 million. The candidates therefore
+provide headroom while making accidental binary ingestion, giant terminal
+listings, and component-sized context dumps conspicuous. They do not authorize
+raising the current 2,000-character adapter excerpts; a ceiling is not a target.
 
 #### Policy entry points and order
 
@@ -970,15 +1569,50 @@ and backup-policy questions, not differences in the local corruption threat.
 They must not be used to imply that one of these file types is tamper-resistant
 or to postpone removal of redundant current captures.
 
-Digest roles remain deliberately separate. MD5 is the approved fast,
-non-authenticating routine update fingerprint; it is not used for durable raw
-identity. `codess.raw/1`, snapshot manifests, and established global IDs use
-SHA-256. BLAKE3 would be a good high-throughput cryptographic content digest
+Digest roles remain deliberately separate even though current Codess digests
+use one algorithm. Software 0.2.1 and later use SHA-256 for routine update
+fingerprints,
+durable raw identity, `codess.raw/1`, snapshot manifests, and established
+global IDs. A full-file update fingerprint reads all bytes; a bounded sampled
+fingerprint still does not become complete content identity merely because its
+algorithm is SHA-256. The transition verifier was removed after all current
+supported-format normalized Source revisions were rebuilt under SHA-256. Four
+unrebuilt CoSchema-3 catalog pointers retain older mtime/size revision labels
+and fail the current package contract before live-reference verification.
+Unsupported historical digest labels require a rebuild, not silent acceptance.
+
+BLAKE3 would be a good high-throughput cryptographic content digest
 only through a maintained implementation such as the Rust-backed Python
-package—not a local reimplementation. It is not currently installed, and
-changing existing IDs or `objects/sha256/` paths would be a format/identity
-migration with little threat-model benefit. Evaluate it for `codess.raw/2` or a
-new measured digest role rather than silently applying it “across the board.”
+package—not a local reimplementation. The maintained `blake3` 1.0.9 package is
+installed in the current development pyenv but is not a declared Codess
+dependency and is not used by the implementation.
+
+Applying BLAKE3 everywhere is rejected. Existing global IDs, content-object
+IDs, `content_sha256` columns, raw object paths, manifests, package digests,
+accepted baselines, and saved result identities explicitly use SHA-256.
+Replacing those would require a new format or multi-digest compatibility
+model, would invalidate stable IDs and deduplication paths, and would force a
+complete rebuild or long-lived dual lookup. Small canonical JSON and identity
+hashes have no material throughput problem.
+
+A targeted BLAKE3 experiment remains reasonable only for a future new
+large-byte role. Actual Source and raw-object work may be disk-, SQLite-,
+compression-, or memory-bandwidth-bound, and automatic threading increases CPU
+contention.
+The implemented disposition is:
+
+1. generate algorithm-labelled SHA-256 revisions for complete, sampled,
+   main-plus-WAL, Cursor selected-row, and combined-cohort fingerprints;
+2. invalidate the Cursor selected-marker cache at its format boundary and
+   rebuild every current supported-format normalized Source revision under
+   SHA-256;
+3. reject unsupported digest-labelled live-reference comparisons instead of
+   retaining permanent compatibility algorithms;
+4. do not compute BLAKE3 in addition to mandatory SHA-256 unless a second
+   consumer needs it, because dual hashing adds work without removing the
+   existing identity pass; and
+5. introduce `codess.raw/2` or a new digest field only if measured large-object
+   savings justify a durable compatibility change.
 
 The default retention invariant is one retained revision of a shared logical
 source when an uncompressed revision is at least 1 GiB. Multiple such current
@@ -1146,6 +1780,39 @@ prunable independently. The first A19 catalog command must provide
 machine-readable Project ID, name, location state, curation, current snapshot,
 available vendors/source systems, and Assembly count/filter fields.
 
+### Catalog-wide Project selection
+
+Catalog-wide selection must resolve stable Project identities before opening
+stores. Five interface shapes are useful, but they are not equivalent:
+
+| Alternative | Use | Disposition |
+|---|---|---|
+| Repeated `--project-id ID` | Exact, scriptable, unambiguous selection | Implement first as the primitive selector |
+| `--project-set FILE` | Reviewed or generated saved list of Project IDs plus optional expected snapshot IDs | Implement second; canonicalize and hash the resolved set |
+| Catalog predicates such as topic, ownership, activity, selection state, and source availability | Dynamic cohorts for orientation and Assembly construction | Implement through a typed selector object; display the resolved Projects before mutation |
+| `--all-current` | Compatibility spelling for an eligible broad catalog cohort | Query convenience only; inspect `catalog status` first. Never means source-fresh, every scan-history path, or every historical snapshot |
+| Repeated `--dir` and `--dirs` | Location-oriented compatibility and ad hoc local work | Retain as aliases that resolve through Project bindings; warn on ambiguity |
+
+Do not use `ingested_projects.json` as an `all` selector and do not create a
+mutable global Event database merely to select Projects. The path telemetry
+contains missing, obsolete, scan-only, and temporary locations; a global Event
+copy would conflate selection with storage authority.
+
+Implementation proceeds through one shared resolver:
+
+1. use the implemented read-only `catalog status` result joining catalog
+   identity, current compatibility, active locations, and curation; source
+   refresh stays a separate observed status;
+2. use the implemented resolver for exact IDs, `codess.project-set/1`, and the
+   compatibility broad-cohort selector, returning canonical Project/snapshot
+   inputs;
+3. add typed catalog predicates and compatibility-path resolution without
+   weakening the stable-ID result;
+4. require mutation-oriented ingest/onboarding to display and hash the resolved
+   set, pass preflight, and re-resolve it unchanged immediately before apply;
+5. make A19 Assemblies consume the same resolver and persist the resolved
+   `(project_id, snapshot_id)` inputs rather than reimplementing catalog logic.
+
 Vendor discovery evidence stays vendor-specific: Claude supplies project paths
 through `sessions-index.json` and project storage slugs; Codex supplies `cwd`
 in `session_meta` under active/archive roots; Cursor joins
@@ -1222,6 +1889,26 @@ scanner and not ingest authorization. It consumes `run_scan()` results, an
 optional maintained candidate CSV or catalog, and bounded local repository
 observations. It must not duplicate Claude, Codex, or Cursor discovery.
 
+Authorization has four separate levels:
+
+1. scan, candidate refresh, recommendation, and preflight are read-only and
+   authorize no persistent ingest;
+2. a direct `ingest --dir/--dirs` without `--validate` is an explicit operator
+   authorization to mutate only the named Project locations, selected source
+   systems, and declared policy; it does not mark the Project curated or
+   approved for the compatibility corpus;
+3. curated onboarding requires a saved explicit review decision, successful
+   preflight, an unchanged selection/package check, and the separate
+   `catalog onboard --apply` action; the review decision makes the Project
+   eligible, while `--apply` authorizes the mutation; and
+4. acceptance and publication are separate: `baseline apply`, `freeze`, and
+   reviewed catalog replacement authorize promotion only after their
+   validation gates.
+
+Automation receives no broader authority from a recommendation, `consider`
+outcome, successful preflight, or prior approval. It must invoke the explicit
+mutation action over a canonical resolved selection.
+
 Recursive repository discovery prunes dependency, build-output, cache,
 environment, and VCS-internal descendants (`build`, `debug`, `dist`, `out`,
 `target`, `node_modules`, `.cache`, `.ccache`, `.pyenv`, `.git`, and comparable
@@ -1236,9 +1923,11 @@ entire home directory. Broad system roots such as `/`, `/var`, `/usr`,
 scoped descendant (including a real project under `/var` or `/opt`) remains
 eligible.
 
-The compatibility spelling is `codess candidate-review`; its primary
-command-family location is `codess catalog candidates`. The interface is
-read-only unless an explicit output/update option is given:
+The compatibility action is `candidate-review`; its primary command-family
+location is `catalog candidates`. From the source tree, invoke both through
+`codess`. The source-tree compatibility spelling is `python -m main`. The
+interface is read-only unless an explicit output/update
+option is given:
 
 ```text
 codess catalog candidates \
@@ -1276,6 +1965,16 @@ Each candidate keeps facts and decisions separate:
   (`approved`, `deferred`, or `excluded`), reviewer, notes, and reviewed time;
   and
 - policy result: `consider`, `defer`, or `exclude`, with named rules and reasons.
+
+The established catalog receives a separate computed annotation view rather
+than another identity list. Labels are non-exclusive and evidence-backed:
+selection eligibility (`included`/`not_selected`), reviewed compatibility
+membership (`core`), current package readability
+(`query_ready`/`incomplete`), measured size (`large`), raw-evidence mode
+(`limited`), direct inconsistency/review evidence (`suspect`), and current
+source-system plurality (`multi_vendor`). Each label carries its reason.
+Thresholds and definitions are part of the dated report; derived counts are
+not written back into the identity catalog.
 
 Policy results are recommendations. They never overwrite a human decision or
 become equivalent to `approved`. This replaces the opaque historical
@@ -1325,6 +2024,7 @@ administrative commands by the object and decision they manage:
 |---|---|---|
 | Developer or analyst | `scan`, `query`, `candidate-review` alias | Explore without changing curation |
 | Project operator | `ingest`; `catalog location ...` | Preflight/apply one Project; manage locations |
+| Project operator | `refresh` | Stage a routine explicit-set or annotated-cohort refresh |
 | Corpus curator | `catalog candidates|decide|onboard` | Refresh observations, decide, onboard a set |
 | Release maintainer | `baseline validate|apply|freeze|verify` | Rebuild and publish a verified reviewed set |
 | Evidence maintainer | `evidence gather|audit` | Refresh aggregate and vendor structural evidence |
@@ -1339,9 +2039,16 @@ Baseline freeze and verification follow this rule. Keep `baseline verify` as a
 read-only CI and diagnostic command. `baseline freeze --selection FILE`
 verifies proposed members and package/policy identities before writing,
 atomically replaces each catalog, rolls the pair back on a detected failure,
-then verifies the written set before success. `baseline apply` remains the
-expensive per-Project rebuild and fixed-point operation. A composed refresh, if
-promoted under **CoPlan P8**, preserves every per-Project result.
+then verifies the written set before success. Later verification resolves each
+reviewed member by exact Project ID and retained snapshot ID; it does not
+silently substitute, or require equality with, the mutable current pointer.
+`baseline apply` remains the expensive per-Project rebuild and fixed-point
+operation. Routine `refresh` is a separate native composition: resolve an
+explicit list or one annotation designator, preflight every Project, verify
+unchanged selection/catalog/package fingerprints, and apply each Project
+independently. It deliberately has no cross-Project rollback; its checkpointed
+receipt preserves every per-Project result. The stricter composed baseline
+publication discussed in **CoPlan P8** remains postponed.
 
 Evidence audits are capability-specific rather than symmetrical wrappers for
 their own sake. Cursor feature, Codex parentage, and Claude feature evidence use
@@ -1356,7 +2063,9 @@ Project-location lifecycle needs explicit complementary operations:
   location after identity and conflict checks;
 - `catalog location retire --project-id ID --path PATH` retires a location
   without inventing a replacement, requiring captured durable evidence when it
-  would remove the last reproducible source location; and
+  would remove the last reproducible source location of a selectable Project.
+  An explicitly excluded Project may retire its final stale location while
+  retaining the Project ID and catalog disposition; and
 - `catalog relocate --project-id ID --from OLD --to NEW` composes add, pointer
   installation, retained-snapshot read verification, and retirement.
 
@@ -1385,9 +2094,13 @@ Prefer cohesive modules over a generic `utils` bucket:
 ```text
 codess.candidate_review       scan composition, Git observations, policy reasons
 codess.catalog_operations     decisions, selection, locations, onboard receipts
+codess.project_annotations    computed reason-bearing catalog review labels
+codess.refresh_operations     staged routine Project refresh and durable receipts
 codess.baseline_operations    preserve/archive/apply/fixed-point orchestration
 codess.baseline_catalog       catalog construction, freeze, rollback, and verification
 codess.evidence               common store summaries and aggregate inventory
+codess.orientation_audit      independent typed-overview/SQLite reconciliation
+codess.mcp_audit              occurrence and outcome audit for MCP-qualified tools
 codess.vendor_audits.*        capability-specific Claude/Codex/Cursor audits
 codess.schema_evolution       contract comparison and declared-change gate
 codess.fileio                 file hashing and atomic versioned JSON writes
@@ -1444,6 +2157,133 @@ Usage/reset/burn-rate views in
 are useful precedents, but Codess keeps observed counters, derived estimates,
 external quota/price facts, and billed cost distinct.
 
+### A2 precedent review: usage and activity time series
+
+CodexBar is a useful current implementation precedent because it collects two
+different families of history and does not pretend they are the same:
+
+1. **Quota-window samples.** Each sample is an observation time, used percent,
+   and optional reset boundary, grouped by provider, account identity, named
+   window, and window duration. Sampling is at most hourly, histories are
+   bounded to 17,520 samples per series, and provider files are atomically
+   persisted as versioned JSON. Account/window identity and reset-boundary
+   reconciliation prevent an apparent discontinuity from being silently
+   treated as one stable series.
+2. **Token and cost reconstruction.** Provider APIs supply some histories;
+   Codex and Claude can also be reconstructed from known local JSONL
+   locations. The local scanner caches per-file mtime, size, parsed offset,
+   parser/pricing identity, normalized rows, and daily/model aggregates. It
+   resumes append-only files, invalidates changed dependencies, processes
+   newest files first, and applies per-file and per-refresh byte budgets.
+
+The display layer then derives daily spend/tokens, recent totals, model and
+Project breakdowns, quota history, pace, expected usage, reset countdown, and
+run-out estimates. The same data can be shown in the menu, widgets, a persistent
+spend dashboard, or structured CLI/dashboard JSON. “Reported” versus
+“estimated” cost and selected-account ownership are material parts of the
+meaning, not presentation footnotes.
+
+A targeted review of open/closed issues and pull requests found these recurring
+requirements:
+
+- **scope and attribution:** workspace/project spend, the actual model rather
+  than only the calling harness, multi-account separation, and provider-specific
+  windows ([#1995](https://github.com/steipete/CodexBar/issues/1995),
+  [#2350](https://github.com/steipete/CodexBar/issues/2350),
+  [#2393](https://github.com/steipete/CodexBar/issues/2393));
+- **time-series interpretation:** visible scoped weekly pace, restored pace
+  percentage, stable reset/run-out projections, and daily/monthly history
+  ([#2360](https://github.com/steipete/CodexBar/issues/2360),
+  [#2348](https://github.com/steipete/CodexBar/issues/2348),
+  [#2182](https://github.com/steipete/CodexBar/pull/2182),
+  [#2296](https://github.com/steipete/CodexBar/pull/2296));
+- **freshness and reproducibility:** stale automatic refreshes, menu-open forced
+  refresh with measured scan duration, history-identity migration, and a
+  versioned redacted one-shot snapshot
+  ([#2089](https://github.com/steipete/CodexBar/issues/2089),
+  [#2388](https://github.com/steipete/CodexBar/pull/2388),
+  [#2373](https://github.com/steipete/CodexBar/issues/2373),
+  [#2497](https://github.com/steipete/CodexBar/issues/2497)); and
+- **bounded operation:** runaway CLI memory, refresh latency, background write
+  volume, cache invalidation, and bounded retention
+  ([#1999](https://github.com/steipete/CodexBar/issues/1999),
+  [#2117](https://github.com/steipete/CodexBar/issues/2117),
+  [#2369](https://github.com/steipete/CodexBar/issues/2369),
+  [#2457](https://github.com/steipete/CodexBar/pull/2457)).
+
+Comparable systems sharpen the boundary:
+
+| System | Collection and organization | Display/query | Lesson for Codess |
+|---|---|---|---|
+| [ccusage](https://github.com/ryoppippi/ccusage) | Reads known local stores for many coding harnesses; groups usage by day, week, month, Session, Project/instance, model, and Claude billing block | Responsive terminal tables, live/status-line modes, date/source/Project filters, model breakdown, JSON | Reuse the intuitive cohort/time buckets and machine-readable output; retain Codess provenance and completeness rather than importing its report schema |
+| [Claude Code Usage Monitor](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor) | Reads Claude history into current-window, daily, and monthly measures; computes burn rate, cost, percentile-derived limits, and depletion forecasts | Real-time Rich terminal view, daily/monthly tables, warnings, saved view/timezone/refresh settings, optional logs | Useful experiment design for declared-versus-learned limits and prediction uncertainty; its plan constants and inferred limits are external hypotheses, not vendor or Codess facts |
+| [CodeBurn](https://github.com/getagentseal/codeburn) | Reads local files/SQLite across coding products, deduplicates source-specifically, marks estimates, and attributes by tool/model/Project/task | TUI, text overview, web/menu surfaces, JSON/CSV, per-day charts, cache/call/session ratios and heuristic “waste” findings | Strong precedent for one local collector feeding several views and for separating exact versus estimated measures; its behavioral classifications are hypotheses, not Codess facts |
+| [Langfuse](https://langfuse.com/docs/observability/features/token-and-cost-tracking) | Instrumented generation/trace/session observations; ingested usage/cost outranks inference; arbitrary non-overlapping usage buckets and model/pricing definitions | Metrics API and dashboards by time, user, Session, model, prompt version, tags, cost, latency, volume, and scores | Useful downstream analytical shape. Codess imports vendor evidence after the fact, so it must retain source/observation identity and cannot assume live instrumentation completeness |
+| [LiteLLM](https://docs.litellm.ai/) | Gateway/library observes calls and tracks spend and budgets per key, user, team, or Project | Administrative dashboard, budgets, rate limits, callbacks | Applicable when Codess later consumes gateway evidence; not a substitute for local historical extraction |
+| [OpenTelemetry GenAI conventions](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/) | Standard trace/event attributes for provider, conversation, model, input/output/cache/reasoning tokens, tools, and errors | Existing telemetry backends and time-series systems | Candidate names and interchange mapping, with caution: conventions are evolving, sensitive content is opt-in, and inclusive token definitions can differ from vendor billing buckets |
+| [QuotaMeter](https://www.quotameter.app/) | Reads website/API quota and cost observations locally and synchronizes its own app surfaces | Unified quota dashboard, reset timers, model breakdown, alerts, browser/menu/editor surfaces | Confirms user demand for immediate limits and reset orientation; offers less evidence about durable local-session provenance |
+
+Codess should borrow the following, in order:
+
+1. define every statistic as an **observation** with cohort, time basis,
+   source/snapshot identity, measure name, unit, exact/derived/estimated state,
+   and algorithm/pricing identity when applicable;
+2. expose daily/weekly/monthly and Session/Project/source/model breakdowns only
+   as reproducible queries over exact observations;
+3. preserve reset-window samples separately from token/cost/activity measures;
+4. use incremental source markers and bounded refresh work, with an explicit
+   forced-rebuild path and visible freshness; and
+5. add displays only after the typed result can reproduce the underlying
+   series and reconcile it to read-only SQL.
+
+Do not copy CodexBar's two-year/hourly constants or any other product limit
+into Codess. First collect distributions from Codess's own dated invocations,
+then choose retention and resolution per measure. Do not infer billed cost from
+text, merge quota percentage with reconstructed tokens, or relabel a harness
+attribution as model attribution.
+
+#### Implemented daily exchange activity
+
+The immediate A2 tranche uses Codess's distinctive normalized exchange
+evidence rather than reproducing vendor billing dashboards. `query overview`
+now returns `daily_exchange_activity_utc`, limited to the most recent
+`facet_limit` observed days and accompanied by total-day, limit, and truncation
+fields. Events without an observed timestamp remain in overall totals but
+cannot enter a dated bucket.
+
+Each day records Event and retained-character volume; distinct Sessions and
+Interactions; human-prompt and model-response counts and characters; the first
+and last observed Event; the first and last human prompt; and the prompt span.
+For the day's last prompt it also reports the final later model response in the
+same normalized Interaction, plus last-prompt→response and
+first-prompt→response spans. A NULL endpoint means the selected evidence cannot
+establish that response. The Interaction link is stronger than timestamp
+proximity but is still a normalized grouping, not a causal or attentional
+claim.
+
+`actor_activity` gives per-day counts, characters, distinct Sessions and
+Interactions, first/last observations, and observed span for every actor found,
+while always exposing zero-valued human, harness, tool, model, and agent
+entries. `combined_harness_model_agent_activity` provides raw union
+Session/Interaction counts without double-counting the union. Ratios and
+percentages remain display-layer calculations. `subagent_session_activity`
+separately counts Events, characters,
+Sessions, Interactions, and actor Events inside Sessions explicitly classified
+`subagent`; Events inside such a Session retain their source-mapped normalized
+actor. Claude sidechain and Cursor `isSubagent` user envelopes are specifically
+mapped as harness-delegated prompts rather than humans. Distinct counts are
+scoped to selected store
+observations so an explicit historical union cannot cross-link two snapshots.
+Agent is intentionally present here as an A2 observation even though it is
+outside A3's narrowed provenance gate.
+
+These are **engagement observations**, not model utilization in a billing,
+capacity, availability, or active-work sense. Observed spans may include idle
+gaps. For now Codess does not add price, quota utilization, token burn,
+timeouts, cost, or run-out projections: established COTS/FOSS tools already
+serve those views, and Codess's higher-value contribution is evidence-rich
+human/harness/model/agent/tool exchange analysis.
+
 ### Typed request and result contract
 
 A first vertical `codess.query-request/1` / `codess.query-result/1` path is
@@ -1451,40 +2291,351 @@ implemented for sessions, overview, event rows, and bounded search. It is
 independent of the physical SQLite schema. The implemented request contains:
 
 - a stable action;
-- CLI-resolved Project scope plus vendor, session, snapshot, and time scope;
+- CLI-resolved path or exact stable Project-ID scope plus source-system,
+  Session, snapshot, and time scope;
 - typed filters for text, event kind/ID, Interaction, Model Turn, status, exact
-  model, and artifact path;
+  model, tool, actor, content role, origin, parent/relation, initiation, and
+  artifact path;
+- optional complete Interaction/Model-Turn expansion, same-Session sequence
+  windows, and lossless exact repetition grouping;
 - action-appropriate row and byte limits; and
 - explicit current or named-snapshot freshness.
 
-Catalog/location/workspace selectors, actor/role/tool predicates, projection,
-grouping, caller-selected ordering, saved-query names, and content-policy
-selection are planned extensions, not silently accepted fields.
+Saved Project sets and a fail-closed broad catalog-cohort selector (currently
+spelled `--all-current` for compatibility) are implemented. `catalog status`
+reports each Project and `N/N` query readiness without claiming source
+freshness. Catalog-attribute selectors remain possible A1 extensions.
+Caller-selected fields/order, a layered version-2 carrier, and named query
+packages are postponed together under CoPlan P17, not silently accepted fields.
 
-The target planner resolves stable Project identities, rejects ambiguous or
-stale scope, pushes indexed identity/time/tool/path predicates into each
-read-only store, streams bounded rows, merges deterministically, and only then
-aggregates or summarizes. The prototype rejects unsupported fields and pushes
-its implemented predicates into each store, but cross-store heap merge and
-complete limit pushdown remain A9 work. Exact identity and bounded predicates use ordinary indexes.
-Text search is first bounded by Project, time, and record kind. Any FTS
-projection is a separately versioned, rebuildable derivative rather than part
-of durable CoSchema.
+#### Query-specification layers
+
+The table below is a **P17 research decomposition**, not an approved
+version-2 contract or current implementation plan. If that phase restarts, the
+public specification must not serialize SQL or expose table, column, join, or
+index choices, and it should evaluate these layers distinctly:
+
+| Layer | Purpose | Values supplied by |
+|---|---|---|
+| Scope selector | Resolve Projects and current or named snapshots | Caller or a saved Project set |
+| Parameters | Bind reusable values such as source system, date, text, status, or limit | Caller, defaults, or a named package |
+| Filter | Decide which typed entities qualify | Bound predicates over common or explicitly namespaced source-specific fields |
+| Expansion | Follow an Interaction, Model Turn, sequence window, or declared relation | Query specification |
+| Derivation or aggregate | Compute declared counts, buckets, facets, or correlation rows | Named core operation with versioned semantics |
+| Projection | Choose returned fields from the qualifying/derived entities | Caller or named package |
+| Ordering and bounds | Define deterministic presentation order and stopping conditions | Query specification plus resource policy |
+| Renderer | Present the same result contract as JSON, table, chart, or another supported view | Caller or named package |
+
+Projection therefore does **not** list fields used internally by a filter and
+does not make a template useful without parameter values. A reusable query
+package declares its parameter schema, binds those parameters into filters,
+then declares output projection and renderer. Some predicates require internal
+identity/order/lineage fields that are not returned. Conversely, a projected
+field need not participate in filtering.
+
+Every result retains a non-removable identity envelope: Project and snapshot,
+entity kind and stable/observation IDs, request/specification identity, Source
+availability and content-completeness state, row/byte limits, and truncation or
+limitation reasons. Caller projection controls the payload, not the evidence
+needed to interpret it.
+
+Projection is also separate from developer execution reporting. Requested
+result fields describe the investigation product. SQL plans, phase timings,
+rows examined, allocation counters, cache behavior, and RSS describe one
+execution and belong in bounded maintainer observations under A9/P14. They may
+refer to the request/result identity, but are neither projected domain fields
+nor part of stable result meaning.
+
+#### Filter planning and execution
+
+The filter is declarative. Its JSON member order is not execution order. The
+planner may reorder conjunctive predicates and push eligible work into each
+read-only SQLite store when doing so preserves the specified meaning. Initial
+classes are:
+
+1. identity, equality, range, membership, and indexed relation predicates,
+   which are normally safe to push down;
+2. literal substring and artifact-path predicates, which are pushable with
+   Codess-defined escaping and case semantics;
+3. Interaction/turn expansion, global k-way ordering, cross-store limits, and
+   returned-byte bounds, which remain core executor stages; and
+4. evidence resolution, raw-source access, or derived interpretation, which
+   require separately named operations and cannot be disguised as SQL
+   predicates.
+
+An explain result should show resolved inputs, normalized predicates, chosen
+pushdowns, retained core stages, estimated/read row counts, and bounds without
+exposing conversation content. Static optimization can use available indexes,
+declared cardinality, and measured selectivity. It must not change the request
+or make correctness depend on one backend.
+
+SQL equivalence is proved per operation, not assumed globally. A small
+backend-neutral reference executor should evaluate fixture-sized typed rows;
+the optimized SQLite planner is compared against it for pushable predicates,
+NULL handling, literal `%`/`_`/backslash, ordering, and bounds. Operations that
+cannot share the same semantics remain core stages and are tested through their
+public result contract. This differential approach determines where SQL
+pushdown is viable while preserving one standard application path.
+
+A9 validates SQL in four increasing-cost layers:
+
+1. fixture-level reference-versus-SQL equality for each pushable predicate,
+   including NULL, multivalue, timestamp boundary, and literal metacharacter
+   cases;
+2. aggregate reconciliation against short, independently written read-only SQL
+   for UC1/UC3 counts and constituent IDs;
+3. `EXPLAIN QUERY PLAN` checks only for required access properties, such as an
+   indexed identity lookup or bounded range, never brittle full plan text; and
+4. read-only smoke/reconciliation on diverse immutable snapshots: SWEmore,
+   spank-py, Misses, insight, and wpages as well as large Cursor-heavy Zero400.
+
+The first mismatch stops promotion and is reduced to a fixture. Real snapshots
+test diversity and scale; they do not replace deterministic unit/differential
+tests.
+
+#### JSON carrier evaluation (postponed P17)
+
+JSON is a candidate because current requests/results already use JSON Schema,
+external programs can create and validate it without linking SQLite, and it
+can preserve a typed AST better than command-line strings. The exact
+version-2 shape and need are not approved. A later focused external-composition
+prototype must compare:
+
+| Candidate | Useful precedent | Boundary |
+|---|---|---|
+| Codess-specific JSON AST | Small, intuitive, preserves current v1 concepts and exact domain types | Codess owns validation, tooling, and documentation |
+| CQL2 JSON-style operator tree | Standardized boolean/comparison expression structure | Geospatial property assumptions and broader surface are unnecessary |
+| JSON Logic or MongoDB-style predicates | Familiar nested operators and broad implementation experience | Weak typing or backend-specific NULL/array semantics must not leak into Codess |
+| GraphQL selection concepts | Clear field selection and mature client tooling | Projection is strong, but snapshot resolution, bounded execution, and JSON carriage need separate conventions |
+| SQL | Excellent expert escape hatch and optimization oracle | Physical-schema coupling makes it unsuitable as the public query specification |
+
+The prototype should bind the same intuitive UC1, UC3, UC5, UC6, and UC7
+queries through at least one shell/JQ workflow, one Python client, and one
+generic JSON-Schema-aware tool. Selection, filter, projection, execution, and
+result hashes must match the direct CLI path. Adopt borrowed syntax only where
+its NULL, array, comparison, and escaping semantics can be stated exactly.
+
+#### Query packages and governance (postponed P17)
+
+A candidate `codess.query-package/1` wraps one parameterized query
+specification with:
+
+- stable package name/version, title, use cases, maturity, and visibility;
+- parameter JSON Schema, defaults, examples, and invalid cases;
+- selector/filter/expansion/derivation/projection/order/bounds;
+- supported renderers and visualization field requirements;
+- expected completeness limitations and evidence behavior; and
+- fixture, real-corpus, performance, and privacy validation records.
+
+One executor and one core operation registry serve every package. A specialized
+need that cannot use them should first be proposed as a generally useful typed
+operation. If it remains proprietary or domain-specific, it is isolated as an
+extension/fork rather than implemented as an untracked side channel.
+
+Package classes are separate:
+
+| Class | Location and distribution | Required state |
+|---|---|---|
+| Standard | Versioned with Codess and intended for public distribution | Reviewed, documented, stable parameter/result contract, representative fixtures, renderer checks |
+| User or Project internal | User/Project registry outside the public package | Same schema/executor; explicit private visibility and owner |
+| Ad hoc | Supplied for one invocation or saved investigation | Same validator; no stability promise |
+| Experimental | Separate registry or extension namespace | Explicit experimental maturity, version, limitations, and no shadowing of a standard package |
+
+If package work restarts, the candidates should remain use-case driven:
+Project/Session inventory (UC1–UC2), Project orientation (UC3), known Session
+display (UC4), Interaction context window (UC5/UC7), bounded literal finding
+(UC6), tool failure/permission review (UC7), artifact cross-source evidence
+(UC8), and exact-evidence/citation export (UC9–UC10). UC11 Assembly export waits
+for the Assembly investigation.
+
+The first-tranche scenarios are retained for requirements and acceptance
+mapping, not scheduled as package implementations:
+
+| Candidate package | Primary inputs | Stable result/display |
+|---|---|---|
+| `project-session-inventory` | exact/saved Project scope; optional source system and date range | bounded Session rows plus counts; table/CSV |
+| `project-orientation` | same scope; declared activity-gap caps | volume, time, relation, and initiation summary; table/timeline-ready JSON |
+| `exchange-window` | one Event, Interaction, or Model-Turn identity; sequence bounds | canonical complete exchange/window; transcript table |
+| `normalized-findings` | scope plus literal text/path and typed predicates | occurrence-preserving Event rows, facets, and completeness; table |
+| `tool-outcome-review` | scope plus tool/status/permission predicates | calls, results, lineage, failures, and denials; table/status chart |
+
+These scenarios map to A1/A2/A3/A4/A7 as recorded in CoPlan §8.2.3; P17 owns
+only a future wrapper/carrier/renderer investigation. They are not separate
+query engines. A missing behavior enters the shared typed operation registry
+only when its meaning, bounds, provenance, and cross-source behavior can be
+specified.
+
+#### Result identity and completeness
+
+Use four related identities rather than one overloaded “current result” label:
+
+1. `query_package_id` identifies a named versioned template;
+2. `request_id` identifies the bound canonical selector, parameters, filters,
+   projection, ordering, and bounds;
+3. `result_id` identifies the resolved Project/snapshot inputs plus the
+   canonical result meaning/content; and
+4. a dated execution observation records when, with which software/package/
+   decoder/validator/schema versions, the request ran and what it returned.
+
+The compatibility `--all-current` spelling is only a transient selector.
+Resolution produces an exact dated
+cohort record naming Projects, snapshots, filter, algorithm/package versions,
+CoSchema release, outcomes, and limitations. Research and publications cite
+that record/result identity, not the word `current`. A later execution may
+again request a broad catalog cohort and legitimately resolve differently.
+
+Completeness is multidimensional rather than one Boolean:
+
+- cohort completeness: every requested Project resolved or the request failed;
+- source availability: captured, sealed, exact live, reference-only,
+  unavailable, or changed;
+- mapping coverage: mapped, vendor-specific retained, diagnosed unsupported,
+  or rejected;
+- content coverage: complete, policy-transformed, truncated, external, opaque,
+  or absent; and
+- result coverage: complete within scope or stopped by row/byte/time/other
+  declared bound.
+
+An incompatible current snapshot is never skipped. It means the pointer/store
+cannot satisfy the requested CoSchema/package/query contract—for example,
+required format-4 columns are absent. Omitting that Project would make the
+requested cohort falsely appear complete, so the entire resolution fails and
+names the Project, snapshot, and incompatibility. The caller may then rebuild
+it, choose an explicit compatible snapshot, or deliberately exclude it in a
+new request.
+
+Common fields require stable normalized meaning, not identical vendor storage.
+That does not forbid vendor-specific information. A query may explicitly
+project namespaced source fields or retained source-record classifications;
+other source systems report `not_applicable` or absent according to the field
+contract. Common and source-specific projections must be clearly separated so
+an Assembly never claims that the common subset exhausts vendor evidence.
+
+Cross-Project execution of one homogeneous query is implemented by ordered
+virtual composition. Sequentially feeding one saved result into another query
+is also implemented. Union/intersection of homogeneous entity results,
+heterogeneous joins, and merging outputs of several queries across Projects
+and source systems are larger typed-composition requirements; they need
+explicit key, conflict, ordering, completeness, and provenance contracts and
+must not be inferred from “projection” or ordinary row concatenation.
+
+`text` and `artifact` in `codess.query-request/1` mean literal substring, not
+SQL pattern. The SQLite implementation escapes backslash, `%`, and `_`, then
+uses `LIKE ? ESCAPE '\\'`; callers never need to know the physical escape
+syntax. If wildcard matching becomes a demonstrated use case, add a separately
+named `text_pattern` or operator-bearing predicate with explicit syntax,
+escape, case, and normalization semantics. Do not overload `text` or pass raw
+user input into `LIKE`, regular expressions, or another backend whose
+metacharacters change the request meaning.
+
+### Raw-source search versus normalized search
+
+The postponed feature previously called **full-source search** is more
+precisely **raw-source search**. “Full” incorrectly suggests complete semantic
+coverage: encrypted values, unavailable reference Sources, binary attachments,
+and unknown encodings may remain unsearchable. Raw-source search means a
+bounded search over authorized fields in exact vendor Source revisions,
+including values that were not projected into CoSchema. It is not raw capture,
+exact-evidence lookup, or a fallback performed after normalized search misses.
+
+| Architectural aspect | Normalized schema-compliant search | Raw-source search |
+|---|---|---|
+| Authority | CoSchema Event and typed relation rows | Exact Source revision plus raw record/field locator |
+| Storage read | Immutable per-Project CoSchema SQLite stores | Snapshot raw manifest followed by sealed, captured, or exact live Source |
+| Organization | Project → Session → Interaction/turn → Event | Source system → container/record → field path; Session association may be mapped, absent, or ambiguous |
+| Value meaning | Mapped event kind, actor, role, origin, status, tool, model, artifact, and bounded content | Vendor field name/path, raw JSON/SQLite type, encoding, record kind/subtype, and unmodified or explicitly decoded value |
+| Searchable values | Retained normalized content, tool input/output, artifact paths, and typed predicates | Only policy-authorized scalar/text fields; encrypted, opaque, binary, secret-suppressed, or undecodable values remain identified but unsearched |
+| Matching | Literal substring with `%`, `_`, and backslash treated literally | Start with identical literal semantics; regular expression, JSONPath, or backend patterns require separate named operators |
+| Bounds | Project/snapshot/source/session/time/type predicates plus row and returned-content byte limits | Add Source, raw-record, decoded-byte, field-count, match-count, excerpt, and total-read bounds before opening large content |
+| Provenance | Stable Event/Session IDs, snapshot, Source locator, completeness and policy | Project/snapshot, Source ID/revision/object ID, availability/equality, record locator/type/subtype, field path/type, decoder, and match offsets |
+| Missing result | Qualified by normalized completeness, filters, policy, and truncation | Also qualified by Source availability, authorization, encrypted/opaque fields, decoding failures, and unvisited records |
+| Lifecycle | Rebuilt with the Project snapshot | Any derivative index is revision- and policy-bound, rebuildable, deletion-aware, and never authoritative |
+
+The first implementation should use a distinct `query raw-search` action with
+the existing Project selector, source-system scope, `--text`, `--limit`, and
+`--byte-limit` conventions. Raw-specific predicates are additive:
+`source_id`, `source_record_type`, `source_record_subtype`, and literal
+`field_path`. Its result is `codess.raw-search-result/1`, not an overloaded
+Event result. Every match carries an exact Source/record/field locator and a
+bounded excerpt; it does not synthesize an Event or imply that an unmapped
+field belongs to the user, model, or harness.
+
+Initial execution is index-free and storage-aware:
+
+1. resolve exact Project snapshots through the common Project-set resolver;
+2. read each verified raw manifest and apply source-system, availability,
+   revision, and storage-format predicates before content access;
+3. stream Claude and Codex JSONL record-by-record while retaining byte/line
+   locators and raw JSON field paths;
+4. query a captured Cursor SQLite revision by selected workspace/composer/
+   Session keys and bounded key ranges—never decode or copy the entire
+   machine-wide database merely to search one Project;
+5. treat external text sidecars as separately linked Sources; retain attachment
+   IDs, media type, size, and relationship without searching binary/base64 by
+   default;
+6. decode through the existing character-set/content-policy entry points,
+   record original type/length and decoder actions, then apply literal matching
+   to authorized scalar/text values; and
+7. stream bounded matches and completeness counters without retaining the
+   complete Source or all matches in memory.
+
+An optional content-derived index is distant work permitted only after repeated
+index-free queries fail measured requirements. It would be keyed by Source
+revision, field-authorization policy, decoder version, and index schema, with
+dry-run deletion propagation and size reporting. Alternative normalized
+retrieval under **P5** remains distinct from raw-source indexing and never
+authorizes it.
+
+Integration proceeds through reusable boundaries rather than a second parser
+stack: the Project/snapshot resolver, raw manifest and evidence resolver,
+vendor Source readers, content decoding/policy, progress/resource reporting,
+canonical hashing, and atomic result persistence. Adapter mapping remains the
+only path that creates CoSchema entities.
+
+Acceptance requires:
+
+- fixtures for Claude JSONL, Codex JSONL, Cursor SQLite, external text, unknown
+  records, invalid UTF-8, opaque/encrypted values, and unavailable references;
+- parity tests proving literal `%`, `_`, and backslash semantics match
+  normalized search;
+- exact match locators that re-resolve to the same Source revision and field;
+- no implicit access to raw Sources when ordinary `query search` misses;
+- record/read/match/excerpt/returned-byte boundaries tested at below, equal,
+  and above values with visible truncation reasons;
+- bounded-memory tests on one large JSONL Source and a large Cursor container;
+- privacy/secret suppression and deletion/retention tests; and
+- real-source validation on one approved recent Project per source system
+  before any persistent index or default enablement.
+
+The executable task registry is **CoPlan P13.1–P13.8**. The feature remains
+postponed until an operator explicitly reopens that sequence.
 
 A `codess.query-result/1` contains the normalized request, observation and
 data-as-of times, selected package/store/snapshot/policy identities, bounds,
-summary, typed rows with stable evidence IDs, and explicit truncation or
-missing-data limitations. The existing `codess.query-row/1` JSON Lines contract
-remains the legacy sessions/stats streaming form; a typed streaming projection
-is added only when scale evidence defines its contract. Tables, CSV, and
-Markdown are renderings rather than inputs scraped back into the system.
+summary, typed rows with stable evidence IDs, persisted derivation edges, and
+explicit truncation or missing-data limitations. Event/search summaries contain
+facets over returned bounded rows. Optional repetition groups use only nonempty
+complete retained content plus compatible semantic dimensions, retain all
+occurrence IDs and time spans, and never assert redundancy. The existing
+`codess.query-row/1` JSON Lines contract remains the legacy sessions/stats
+streaming form; a typed streaming projection is added only when scale evidence
+defines its contract. Tables, CSV, and Markdown are renderings rather than
+inputs scraped back into the system.
 
 Saved investigations are declarative JSON requests evaluated by one runner,
-not one wrapper script per question. Stable-ID result chaining, prior-membership
-comparison, and stable success/change codes are implemented. Threshold
-conditions and persisted derivation records remain A7 work. An LLM-produced
-summary must become a derived processing record and cite the bounded rows it
-received.
+not one wrapper script per question. Stable-ID result chaining persists its
+input result/request hashes and selected stable IDs as a derivation edge.
+Comparison reports added, removed, and content-changed stable rows plus
+summary/provenance changes. It rejects different logical requests,
+heterogeneous row kinds, invalid row shapes, and repeated logical identities
+from historical unions. Historical union is explicit and observation
+preserving; replay across changed named snapshots is tested. Repetition groups
+retain constituent Event IDs that can be cited directly. Request/result writes
+are atomic and failure-tested. These properties complete A7's current
+homogeneous typed-composition contract. Threshold conditions and named
+investigation graphs require a demonstrated consumer rather than silently
+expanding A7. An LLM-produced summary must become a derived processing record
+and cite the bounded rows it received.
 
 ### Guided investigation behavior
 
@@ -1513,9 +2664,57 @@ with a visible truncation reason. Optional natural-language formulation may
 propose a request only after this deterministic path is stable; it must show the
 request for validation and cannot bypass scope or evidence rules.
 
-The present implementation owns steps 1–5 for the first four actions and step
-7 for event evidence. Interaction windows, derivation records, and a guided UI
-remain incremental work under A3/A7/A8.
+The present implementation owns the deterministic CLI operations in steps 1–9,
+including exact Project-ID scope, global ordered merge, bounded facets,
+stable-ID derivation, complete exchange/window reconstruction, exact Event
+evidence, typed cited-summary records, and historical replay/diff. Native
+summary generation and an optional guided UI remain incremental work under A8.
+
+### Human-readable Session briefs
+
+An organized Session summary should read like a compact research note, not a
+JSON rendering or a table of transient counts. Use a six-line **Session brief**:
+
+```text
+SESSION <short ID> · <source system> · <Project>
+When   <conversation range>; source touched <mtime when materially different>
+Aim    <what the user was trying to accomplish>
+Work   <main investigation, tools, files, or exchanges>
+Result <decisions, edits, findings, failures, or unresolved work>
+State  runtime <active/idle/unknown>; source <stable/open-ended/truncated>; Project snapshot <caught-up/behind/unknown>
+Keep   <why this Session is useful, operational only, or safely de-emphasized>
+```
+
+`When` separates vendor Event time from Source mtime. `Work` describes kinds of
+activity rather than dumping tool counts. `State` keeps runtime observation,
+Source closure, and Project-snapshot currency separate. A recently modified
+Source with no following response is open-ended; it is not called active
+unless a runtime interface observed that state. `Keep` is an investigation-selection
+recommendation, never an ingest rejection. Stable Session/Source IDs remain
+attached in structured data or a citation line when the brief is published.
+
+### Search reports
+
+Introduce the postponed question progressively:
+
+1. A search finds matching Events within an explicit Project/Session/source
+   scope.
+2. Codess must display those matches in some deterministic order.
+3. Today it uses canonical Project, Session, and Event ordering so results are
+   stable, reproducible, and occurrence-preserving.
+4. A real investigation may benefit from seeing some matches earlier—for
+   example, exact errors before broad mentions, or complete exchanges before
+   isolated fragments.
+5. A **search report** starts with a small set of actual investigation
+   questions and reviewed useful matches. It can compare canonical
+   order with one specified alternative using measures such as first useful
+   match position, useful matches in the first N rows, and analyst corrections.
+6. The study changes presentation only. Every occurrence, stable ID, source
+   order, and saved-result identity remains available.
+
+Do not implement ranking from the abstract desire for a “better order.” Reopen
+this work only when a recorded investigation shows that canonical presentation
+made a useful result materially harder to find.
 
 ### SQLite authority and optional analytical consumers
 
@@ -1542,6 +2741,52 @@ catalog. Compared with alternatives:
 - DuckDB earns a recipe when columnar scans, Parquet interchange, or broad
   aggregates materially outperform typed pushdown plus streaming merge.
 
+### Applicable tooling and dependency boundaries
+
+Codess deliberately keeps ingestion and authoritative CoSchema snapshots on
+Python's standard library SQLite plus zstandard. Applicable tools should first
+be external consumers, development dependencies, or versioned derived-analysis
+components. Promote one into the runtime only when two implemented workflows
+need the same stable boundary.
+
+| Candidate | Best fit | Related use cases/work | Recommended role |
+|---|---|---|---|
+| [DuckDB](https://duckdb.org/docs/stable/) | Broad aggregation across immutable SQLite inputs and future Parquet partitions | **UC3, UC8, UC9, UC11; A19** | First analytical prototype. Use a separate workspace or scans over immutable inputs; never let its SQLite extension write accepted snapshots |
+| [Apache Arrow/PyArrow Dataset and Parquet](https://arrow.apache.org/docs/python/dataset.html) | Typed, partitioned, columnar interchange with projection and predicate pushdown | **UC9, UC11; A19** | Preferred Assembly export substrate and schema-validation boundary, not another authority |
+| [Polars lazy API](https://docs.pola.rs/user-guide/concepts/lazy-api/) | Streaming/lazy dataframe transforms over JSONL/Parquet without requiring pandas-sized materialization | **UC3, UC6, UC8, UC9, UC11** | Optional research and export consumer after the common projection exists |
+| JupyterLab or another notebook frontend | Iterative quantitative orientation, plots, sampled evidence review, and reproducible research narratives | **UC3, UC5, UC6, UC8, UC9, UC11** | Consumer of immutable snapshots or typed exports; notebooks must record input snapshot/result IDs and are not ingestion code |
+| [NetworkX](https://networkx.org/documentation/stable/reference/introduction.html) | Directed/multi-edge traversal of Event, caused-by, parent, tool, Session, artifact, and correlation relations | **UC5, UC7, UC8; A3/A8** | Prototype lineage/path algorithms on bounded selected subgraphs; keep SQLite IDs and evidence as authority |
+| [RapidFuzz](https://rapidfuzz.github.io/RapidFuzz/) | Edit/token similarity for copy-paste variants and near-duplicate prompts or responses | **UC6; A4/L-P2** | First derived near-duplicate experiment after exact grouping; record preprocessing, scorer, threshold, score, and constituent Event IDs |
+| [Sentence Transformers](https://www.sbert.net/examples/sentence_transformer/applications/semantic-search/README.html) | Semantic retrieval and topic/phase candidate generation | **UC6; A8/D7** | Later evaluated stage only, after lexical and near-duplicate baselines; store model/revision, chunking, score, and evidence IDs |
+| [Hypothesis](https://hypothesis.readthedocs.io/en/latest/) | Generated malformed, missing, reordered, oversized, and vendor-extension shapes | **A6/A16 and evidence-triggered mapping maintenance** | High-value development dependency for adapter, mapping, identity, ordering, limit, and fixed-point properties |
+| [coverage.py branch coverage](https://coverage.readthedocs.io/) | Reveal unexercised error, fallback, and vendor-shape branches that a passing test count cannot show | **T6 and all adapter/query work** | Development/CI evidence; establish a measured baseline before setting a gate |
+| [Memray](https://bloomberg.github.io/memray/) | Python and native allocation attribution and peak-memory reports | **A9/L-E3** | Profile the real 19,661-Event Cursor composer and forced replacements; keep captures outside snapshots and retention-managed |
+| JSON Schema validator implementation | Validate query, result, Assembly, policy, and mapping JSON at process/tool boundaries | **A7, A19** | Use the checked-in JSON Schema as authority; add a library only where current structural checks do not cover an external boundary |
+
+Several plausible packages should remain out of the core for now:
+
+- **SQLAlchemy and Alembic:** Codess owns explicit SQLite DDL, read SQL, and
+  immutable rebuilds rather than ORM identity or in-place migration.
+- **Pydantic/dataclass schema duplication:** generated runtime models may become
+  useful, but separately maintained models would compete with the existing
+  JSON Schema and CoSchema contracts.
+- **APSW:** Python `sqlite3` already supplies the online backup, read-only URI,
+  progress handler, and transactional behavior currently required. Reconsider
+  only for a measured missing SQLite primitive.
+- **pandas:** useful in small notebooks, but Polars/Arrow/DuckDB have clearer
+  bounded or lazy paths for Assembly-scale work.
+- **graph databases:** SQL plus bounded NetworkX projections are sufficient
+  until repeated graph traversals demonstrate a durable graph read model.
+- **Elasticsearch/OpenSearch, vector databases, and general search servers:**
+  they introduce another sensitive index and lifecycle. Alternative indexed
+  retrieval is distant, evidence-triggered work; raw-vendor indexing remains
+  postponed under **P13**.
+- **Spark, Dask, Ray, and dbt:** no present corpus size, distributed execution,
+  or transformation-deployment requirement justifies their operational model.
+- **ijson/orjson and alternate serializers:** existing JSONL paths are bounded
+  and streamed; benchmark a demonstrated parser/serialization bottleneck
+  before changing canonical JSON behavior.
+
 Therefore A9 is primarily a query-execution refactor—push predicates/limits to
 each SQLite store, stream and heap-merge ordered rows, and profile allocations.
 External recipes consume immutable inputs or typed exports. A vendor-neutral
@@ -1558,10 +2803,47 @@ historical snapshot, or only current accepted observations.
 
 Use a first-class **Assembly** instead. An Assembly is a reproducible selection
 of explicitly resolved Project snapshots plus filters and a projection. It can
-remain virtual for federated queries or have any number of physical
-materializations. `all-current` is a valid selector: at resolution time it
-means every curated Project with a verified current snapshot, never every path
-in the operational scan history and never every superseded snapshot.
+remain a saved/queryable selection or produce any number of **Assembly
+exports**. The compatibility broad-cohort selector can supply inputs at
+resolution time, but the Assembly records the exact Projects/snapshots and
+never claims every path, every superseded snapshot, or source freshness.
+
+#### Assembly investigation before implementation
+
+No bulk Assembly export format is authorized yet. First compare requirements
+in both directions.
+
+The top-down list starts with intended products:
+
+1. a dated, reproducible Project/Session inventory;
+2. a publication cohort with exact methods and limitations;
+3. cross-source-system artifact or Interaction research;
+4. utilization/time/volume analysis over a selected cohort;
+5. an ML/data-science table with declared labels or features; and
+6. a portable subset for another investigator or tool.
+
+The bottom-up list starts with available structures:
+
+- Project/snapshot/Source observations and availability;
+- Sessions, Interactions, Model Turns, and Events;
+- actors, model configurations, tools/results, artifacts, and diagnostics;
+- common normalized fields plus namespaced vendor/source-record evidence;
+- correlation assertions and content/evidence identities; and
+- typed query results, derivation edges, bounds, and completeness dimensions.
+
+For each top-down product, identify the smallest bottom-up entities and fields
+that satisfy it, required joins/keys, expected cardinality and content volume,
+vendor-specific columns, update semantics, renderer/consumer, and whether a
+virtual saved result is already sufficient. Conversely, every proposed common
+export column must name at least one product that needs it. This prevents an
+imagined “all records” table from becoming the de facto schema.
+
+The first prototype is a manifest plus virtual execution of one standard query
+package over two Projects and two source systems. It must compare its rows to
+the direct query results before any bulk format is selected. A second prototype
+exercises a vendor-specific projection so format design does not erase
+non-common evidence. Only then choose JSONL, Parquet, DuckDB, or merged SQLite
+for measured consumers.
 
 The assembly pipeline is vendor-independent:
 
@@ -1570,13 +2852,14 @@ The assembly pipeline is vendor-independent:
 3. record package/decoder/validator/policy and source-availability facts;
 4. apply common Project/session/vendor/model/time/event/content filters;
 5. project the normalized read model using stable global and observation IDs;
-6. optionally materialize one or more formats; and
+6. optionally write the analysis dataset in one or more export formats; and
 7. register the Assembly and its inputs only after counts, identities, hashes,
    and referential checks pass.
 
-Selections include `all-current`, explicit Project IDs, catalog attributes such
-as ownership/topic/curation state, named snapshots, or stable IDs from a saved
-query result. Inputs are canonicalized by `(project_id, snapshot_id)`. If the
+Selectors may begin from the compatibility broad cohort, explicit Project IDs,
+catalog attributes such as ownership/topic/curation state, named snapshots, or
+stable IDs from a saved query result. The manifest always records the resolved
+set, canonicalized by `(project_id, snapshot_id)`. If the
 same logical Session appears through more than one Project observation, the
 default is observation-preserving: retain each `observation_id` and Project
 lineage. Logical deduplication is a separate declared policy, never an
@@ -1586,11 +2869,11 @@ accidental unique constraint.
 selected snapshot, including diagnostics and lineage, subject to the
 snapshot's recorded content-processing policy. It does not silently copy raw
 vendor databases, truncated source bodies, or external attachments into every
-materialization. Source IDs, availability, content lengths, truncation state,
+export. Source IDs, availability, content lengths, truncation state,
 and exact-evidence resolvers remain available so an analytical row can be
 traced back without multiplying multi-gigabyte source objects.
 
-Every Assembly has one small JSON manifest, regardless of materialization:
+Every Assembly has one small JSON manifest, regardless of export:
 
 - `assembly_format`, `assembly_id`, creation time, creating software, and
   semantic/content digest;
@@ -1598,7 +2881,7 @@ Every Assembly has one small JSON manifest, regardless of materialization:
 - one input row per Project snapshot with `project_id`, `snapshot_id`, package
   digest, semantic digest, data-as-of time, source availability, and selected
   vendor/source-system stores;
-- materialization records with format, schema/profile identity, path, row/byte
+- export records with format, schema/profile identity, path, row/byte
   counts, content hash, partitions, and validation status; and
 - limitations, truncation, deduplication policy, and processing derivations.
 
@@ -1608,7 +2891,7 @@ The initial shape should be deliberately small and value-oriented:
 {
   "assembly_format": "codess.assembly/1",
   "assembly_id": "codess:assembly:<content-identity>",
-  "selector": {"kind": "all-current", "filters": {}},
+  "selector": {"kind": "resolved-project-set", "source": "catalog-cohort"},
   "request_hash": "<canonical-selector-and-projection-hash>",
   "inputs": [{
     "project_id": "codess:project:<uuid>",
@@ -1617,10 +2900,10 @@ The initial shape should be deliberately small and value-oriented:
     "semantic_digest": "<snapshot-semantic-digest>"
   }],
   "projection": {"name": "codess.normalized-observations", "version": 1},
-  "materializations": [{
+  "exports": [{
     "format": "parquet",
-    "path": "materializations/parquet/",
-    "content_hash": "<materialization-hash>",
+    "path": "exports/parquet/",
+    "content_hash": "<export-hash>",
     "rows": 0,
     "validation_state": "accepted"
   }]
@@ -1628,8 +2911,8 @@ The initial shape should be deliberately small and value-oriented:
 ```
 
 `assembly_id` identifies the resolved input set, selector, and projection, not
-the filesystem path or preferred output format. Re-materializing identical
-content in another format adds a materialization record; changing selected
+the filesystem path or preferred output format. Exporting identical content in
+another format adds an export record; changing selected
 snapshots or filters creates a different Assembly identity. The digest is an
 integrity/content identity under the existing local-writer threat model, not
 authentication.
@@ -1648,26 +2931,27 @@ Do not copy an ever-growing `assemblies` list into every Project record.
 `~/.codess/assemblies.json` is the Assembly catalog and its input relation is
 the authoritative reverse lookup. A `by_project` index may be regenerated
 inside that catalog for speed. Assembly files live under
-`~/.codess/assemblies/<assembly-id>/`; retention removes materializations only
+`~/.codess/assemblies/<assembly-id>/`; retention removes exports only
 through a dry-run plan and never removes their input Project snapshots.
 
-Materialization formats have different roles:
+Analysis dataset export formats have different roles:
 
 | Format | Role |
 |---|---|
 | JSON manifest | Mandatory identity, selection, provenance, and validation record; not bulk event storage |
 | JSONL | Streamable, inspectable normalized interchange and pipeline boundary |
-| Parquet | Preferred columnar analytical materialization, partitioned by entity kind and optionally Project/time; suitable for pandas, Polars, Arrow, Spark, and ML pipelines |
+| Parquet | Candidate columnar analysis dataset, partitioned by entity kind and optionally Project/time; suitable for pandas, Polars, Arrow, Spark, and ML pipelines |
 | DuckDB | Optional analytical workspace/catalog over Parquet or normalized projections; a `.duckdb` file may cache tables/views but is not authoritative |
 | SQLite | Optional portable merged read model for modest assemblies and existing SQL tools; it is not a naïve copy of CoSchema tables because local surrogate keys collide |
 
 The assembly read/export schema uses stable global/observation keys rather than
-the source SQLite row IDs. Large `all-current` Assemblies should default to a
-manifest plus partitioned Parquet and a DuckDB view layer; duplicating every
-content body into both SQLite and Parquet requires an explicit materialization
-request. Refresh creates a new Assembly revision or a new materialization bound
-to a newly resolved input set; it never edits the provenance of an existing
-one.
+the source SQLite row IDs. Partitioned Parquet with a DuckDB view layer is a
+hypothesis for large analytical consumers, not yet a default. The
+bottom-up/top-down prototypes must compare it with streaming JSONL and optional
+merged SQLite. Duplicating every content body into more than one format always
+requires an explicit export request. Refresh creates a new Assembly revision
+or a new export bound to a newly resolved input set; it never
+edits the provenance of an existing one.
 
 ### Broad historical semantics
 
@@ -1686,9 +2970,12 @@ Historical scope is explicit and has five distinct operations:
 There is no implicit “latest per row” merge and no default union of every
 historical snapshot. Broad discovery should first query the maintained Project
 registry and verified manifests, metadata-only, then allow an operator to save
-an explicit set. Current and named-snapshot reads exist; diff, union, and broad
-registry discovery remain postponed until reusable results and comparison
-semantics are mature enough to preserve observation identity.
+an explicit set. Current/named reads and explicit saved-set union now exist.
+Union rows retain snapshot-bound observation IDs and duplicate-logical-ID
+diagnostics. Two saved results from the same logical request compare stable
+IDs/content while reporting snapshot/provenance changes. Broad registry/
+manifest discovery and a single shortcut that executes both sides of a diff
+remain postponed.
 
 ### Research venues
 

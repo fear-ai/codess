@@ -11,6 +11,9 @@ import tempfile
 from pathlib import Path
 
 from codess.project import path_to_slug
+from codess.raw_store import RawStore
+from codess.snapshot import create_snapshot
+from codess.store import connect, init_db, replace_session_events
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -570,7 +573,7 @@ def test_idempotent_same_data():
         assert r1.returncode == 0
         r2 = _run(["query", "--dir", str(proj), "--tool", "0"], env=env)
         lines1 = r2.stdout.strip().split("\n")
-        r3 = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+        _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         r4 = _run(["query", "--dir", str(proj), "--tool", "0"], env=env)
         lines2 = r4.stdout.strip().split("\n")
         assert sorted(lines1) == sorted(lines2)
@@ -702,6 +705,79 @@ def test_ingest_cursor_global():
         r = _run(["ingest", "--dir", str(proj), "--source", "cursor", "--force"], env=env)
         assert r.returncode == 0
         assert "1 session" in r.stdout or "1 event" in r.stdout or "session" in r.stdout.lower()
+        preflight = _run([
+            "ingest", "--validate", "--no-progress", "--force", "--dir", str(proj),
+            "--source", "cursor",
+        ], env=env)
+        assert preflight.returncode == 0, preflight.stderr
+        report = json.loads(preflight.stdout)
+        assert report["session_kinds"] == {}
+        assert "retained_searchable_characters" in report["resource_summary"]
+
+
+def test_cursor_container_limit_is_distinct_from_transcript_limit():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        cursor_base = root / "cursor" / "User"
+        workspace = cursor_base / "workspaceStorage" / "workspace"
+        workspace.mkdir(parents=True)
+        (workspace / "workspace.json").write_text(
+            json.dumps({"folder": {"path": str(project)}}),
+            encoding="utf-8",
+        )
+        db = workspace / "state.vscdb"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO cursorDiskKV VALUES (?, ?)",
+            (
+                "bubbleId:c1:b1",
+                json.dumps({"type": 1, "text": "hi"}),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        env = {
+            **os.environ,
+            "CODESS_CURSOR_DATA": str(cursor_base),
+            "CODESS_REGISTRY": str(root / "registry"),
+        }
+
+        transcript_limit = _run([
+            "ingest", "--validate", "--dir", str(project),
+            "--source", "cursor", "--max-source-bytes", "1",
+        ], env=env)
+        assert transcript_limit.returncode == 0, transcript_limit.stderr
+
+        container_limit = _run([
+            "ingest", "--validate", "--dir", str(project),
+            "--source", "cursor", "--max-cursor-container-bytes", "1",
+        ], env=env)
+        assert container_limit.returncode == 1
+        report = json.loads(container_limit.stdout)
+        assert report["status"] == "rejected"
+        assert report["limits"]["max_cursor_container_bytes"] == 1
+
+
+def test_invalid_resource_policy_is_reported_without_traceback():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        policy = root / "policy.json"
+        policy.write_text(json.dumps({
+            "format": "codess.resource-policy/1",
+            "maximums": {"transcript_bytes": 0},
+        }), encoding="utf-8")
+        result = _run([
+            "ingest", "--validate", "--dir", str(root),
+            "--resource-policy", str(policy),
+        ])
+        assert result.returncode == 1
+        assert "invalid resource policy" in result.stderr
+        assert "Traceback" not in result.stderr
 
 
 def test_only_skipped_records():
@@ -892,12 +968,6 @@ def test_ingest_stop_environment_is_fail_fast():
         assert "Ingested" not in r.stdout
 
 
-# Need init_db for test_query_no_mode
-from codess.raw_store import RawStore
-from codess.snapshot import create_snapshot
-from codess.store import connect, init_db, replace_session_events
-
-
 def test_ingest_validate_uses_real_adapter_without_mutation():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -988,6 +1058,33 @@ def test_ingest_validate_enforces_event_limit_during_collection():
         assert not (project / ".codess").exists()
 
 
+def test_ingest_validate_enforces_session_event_limit_before_publish():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        cc = root / "cc"
+        source_dir = cc / path_to_slug(project.resolve())
+        source_dir.mkdir(parents=True)
+        shutil.copy(
+            Path(__file__).parent / "fixtures/sample.jsonl",
+            source_dir / "s1.jsonl",
+        )
+        env = {
+            **os.environ,
+            "CODESS_CC_PROJECTS": str(cc),
+            "CODESS_REGISTRY": str(root / "registry"),
+        }
+        result = _run([
+            "ingest", "--validate", "--stop", "--dir", str(project),
+            "--source", "cc", "--min-size", "0",
+            "--max-events-per-session", "1",
+        ], env=env)
+        assert result.returncode == 1
+        assert "maximum is 1" in result.stderr
+        assert not (project / ".codess").exists()
+
+
 def test_ingest_validate_content_policy_does_not_touch_live_store():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -1042,8 +1139,33 @@ def test_routine_ingest_writes_resource_and_evidence_report():
         assert report["progress_live"] is True
         assert report["resource_observations"][0]["source_bytes"] == source.stat().st_size
         assert report["resource_observations"][0]["events"] > 0
+        assert report["resource_summary"]["unique_source_containers"] == 1
+        assert (
+            report["resource_summary"]["unique_source_container_bytes"]
+            == source.stat().st_size
+        )
+        assert (
+            report["resource_summary"]["emitted_events"]
+            == report["resource_observations"][0]["events"]
+        )
+        assert report["resource_summary"]["retained_searchable_characters"] > 0
+        assert report["resource_summary"]["retained_searchable_utf8_bytes"] >= (
+            report["resource_summary"]["retained_searchable_characters"]
+        )
+        assert (
+            report["resource_summary"]["retained_searchable_characters"]
+            == report["resource_observations"][0][
+                "retained_searchable_characters"
+            ]
+        )
         assert report["evidence_summary"]["tool_invocations"] >= 0
         assert report["limits"]["max_source_bytes"] > 0
+        assert (
+            report["limits"]["max_transcript_bytes"]
+            < report["limits"]["max_cursor_container_bytes"]
+        )
+        assert report["resource_policy"]["format"] == "codess.resource-policy/1"
+        assert report["resource_policy"]["origins"]["transcript_bytes"] == "built-in"
         assert "codess: progress " in result.stderr
         assert [event["event"] for event in report["progress_events"]] == [
             "ingest.start", "project.start", "vendor.start", "source.start",
@@ -1091,6 +1213,54 @@ def test_unchanged_ingest_reuses_snapshot_evidence_summary():
         assert second_report["snapshot_id"] == first_report["snapshot_id"]
         assert second_report["evidence_summary_reused"] is True
         assert second_report["evidence_summary"] == first_report["evidence_summary"]
+
+
+def test_candidate_ingest_builds_snapshot_without_publishing_pointers():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        cc = root / "cc"
+        source_dir = cc / path_to_slug(project.resolve())
+        source_dir.mkdir(parents=True)
+        source = source_dir / "s1.jsonl"
+        shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source)
+        env = {
+            **os.environ,
+            "CODESS_CC_PROJECTS": str(cc),
+            "CODESS_REGISTRY": str(root / "registry"),
+        }
+        command = [
+            "ingest", "--dir", str(project), "--source", "cc",
+            "--min-size", "0",
+        ]
+        first = _run(command, env=env)
+        assert first.returncode == 0, first.stderr
+        local_pointer = project / ".codess/current.json"
+        pointer = json.loads(local_pointer.read_text(encoding="utf-8"))
+        central_pointer = Path(pointer["path"]).parent.parent / "current.json"
+        prior_local = local_pointer.read_bytes()
+        prior_central = central_pointer.read_bytes()
+        source.write_text(
+            source.read_text(encoding="utf-8") + "\n", encoding="utf-8"
+        )
+
+        candidate = _run(
+            [*command, "--force", "--candidate-snapshot"], env=env
+        )
+
+        assert candidate.returncode == 0, candidate.stderr
+        report = json.loads(
+            (project / ".codess/last-ingest-report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        candidate_path = Path(report["candidate_snapshot_path"])
+        assert report["snapshot_publication"] == "candidate"
+        assert candidate_path.is_dir()
+        assert candidate_path.name == report["snapshot_id"]
+        assert local_pointer.read_bytes() == prior_local
+        assert central_pointer.read_bytes() == prior_central
 
 
 def test_no_progress_suppresses_live_lines_but_retains_trace():
@@ -1246,6 +1416,105 @@ def test_query_ambiguous_vendor_session_id_requests_global_id():
         assert "ambiguous" in result.stderr
         assert "global session ID" in result.stderr
         assert "Traceback" not in result.stderr
+
+
+def test_typed_research_workflow_search_expand_and_resolve_evidence(tmp_path):
+    project = tmp_path / "project"
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"message":"source evidence"}\n', encoding="utf-8")
+    store = project / ".codess" / "sessions_codex.db"
+    init_db(store)
+    conn = connect(store)
+    replace_session_events(
+        conn,
+        {
+            "id": "workflow-session",
+            "source": "Codex",
+            "type": "Code",
+            "project_path": str(project),
+        },
+        [
+            {
+                "session_id": "workflow-session",
+                "event_id": "workflow-prompt",
+                "event_type": "user_message",
+                "subtype": "prompt",
+                "role": "user",
+                "content": "alpha request",
+                "timestamp": 1000,
+                "source_file": str(source),
+                "source_record_locator": "line:1",
+            },
+            {
+                "session_id": "workflow-session",
+                "event_id": "workflow-response",
+                "event_type": "assistant_message",
+                "subtype": "response",
+                "role": "assistant",
+                "content": "beta response",
+                "timestamp": 2000,
+                "source_file": str(source),
+                "source_record_locator": "line:1",
+            },
+        ],
+        session_id="workflow-session",
+    )
+    conn.commit()
+    conn.close()
+    selected_path = tmp_path / "selected.json"
+    context_path = tmp_path / "context.json"
+
+    search = _run([
+        "query", "search", "--dir", str(project), "--text", "beta",
+        "--save-result", str(selected_path),
+    ])
+    assert search.returncode == 0, search.stderr
+    selected = json.loads(selected_path.read_text(encoding="utf-8"))
+    anchor = selected["rows"][0]["global_event_id"]
+
+    context = _run([
+        "query", "events", "--dir", str(project),
+        "--result-input", str(selected_path), "--expand", "interaction",
+        "--before", "1", "--save-result", str(context_path),
+    ])
+    assert context.returncode == 0, context.stderr
+    expanded = json.loads(context_path.read_text(encoding="utf-8"))
+    assert [row["event_id"] for row in expanded["rows"]] == [
+        "workflow-prompt", "workflow-response"
+    ]
+    assert expanded["derivations"][0]["input_result_hash"] == (
+        selected["result_hash"]
+    )
+
+    evidence = _run([
+        "query", "evidence", "--dir", str(project), "--event-id", anchor,
+    ])
+    assert evidence.returncode == 0, evidence.stderr
+    resolution = json.loads(evidence.stdout)
+    assert resolution["selected"]["kind"] == "live"
+    assert resolution["selected"]["equality"] == "exact"
+
+    summary_path = tmp_path / "summary.md"
+    summary_path.write_text(
+        "The response addresses the selected request.\n",
+        encoding="utf-8",
+    )
+    investigation_path = tmp_path / "investigation.json"
+    citation = _run([
+        "query", "cite", "--dir", str(project),
+        "--result-input", str(context_path),
+        "--summary-file", str(summary_path),
+        "--processor-id", "pytest/manual-1",
+        "--event-id", anchor,
+        "--save-investigation", str(investigation_path),
+    ])
+    assert citation.returncode == 0, citation.stderr
+    investigation = json.loads(
+        investigation_path.read_text(encoding="utf-8")
+    )
+    assert investigation["format"] == "codess.investigation/1"
+    assert investigation["input_result_hash"] == expanded["result_hash"]
+    assert investigation["citations"][0]["global_event_id"] == anchor
 
 
 def test_query_pipeline_close_has_no_broken_pipe_traceback():

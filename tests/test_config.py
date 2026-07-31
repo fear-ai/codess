@@ -1,15 +1,9 @@
 """Tests for config paths and options."""
 
-import os
-from pathlib import Path
-
-import pytest
-
 from types import SimpleNamespace
 
 from codess.project import (
     build_ingest_run_options,
-    build_scan_run_options,
     resolve_registry_directory,
     validate_scan_source_for_cli,
 )

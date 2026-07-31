@@ -20,15 +20,26 @@ evidence are indexed from **Codess.md**.
 
 ## Install
 
-Codess currently runs from the repository:
+Install the repository into the active virtual environment or pyenv-selected
+interpreter:
 
 ```sh
-pyenv exec pip install -r requirements.txt
-pyenv exec python -m main --help
+python -m pip install -e .
+codess --help
 ```
 
-Use the repository's active pyenv environment, or omit `pyenv exec` when the
-required Python environment is already active.
+Add `[test]` when the environment also needs pytest:
+
+```sh
+python -m pip install -e '.[test]'
+pytest
+```
+
+`python -m main` remains an equivalent source-tree compatibility entry point.
+Pyenv selects the interpreter into which the `codess` console script is
+installed; it is not part of Codess command syntax. A non-editable wheel must
+eventually carry the executable Schema/catalog resources as package data; that
+distribution task does not limit the supported editable installation.
 
 ## Basic workflow
 
@@ -38,17 +49,17 @@ its descendants.
 
 ```sh
 # Discover known session-bearing Projects.
-pyenv exec python -m main scan --dir /path/to/work --out -
+codess scan --dir /path/to/work --out -
 
 # Normalize one Project. Reference mode records source identity without copying
 # the complete vendor source container.
-pyenv exec python -m main ingest --dir /path/to/project
+codess ingest --dir /path/to/project
 
 # Orient, list sessions, and open one by stable ID.
-pyenv exec python -m main query overview --dir /path/to/project
-pyenv exec python -m main query sessions --dir /path/to/project --limit 50
-pyenv exec python -m main query --dir /path/to/project --sessions --id
-pyenv exec python -m main query --dir /path/to/project \
+codess query overview --dir /path/to/project
+codess query sessions --dir /path/to/project --limit 50
+codess query --dir /path/to/project --sessions --id
+codess query --dir /path/to/project \
   --session-id 'codess:session:sha256:…' --show pr tool
 ```
 
@@ -70,8 +81,8 @@ Projects as failed. Routine reports name the immutable `snapshot_id`; an
 unchanged repeat may reuse the evidence summary only for that same snapshot.
 
 ```sh
-pyenv exec python -m main ingest --dirs selected-projects.csv --source cursor
-pyenv exec python -m main ingest --dirs selected-projects.csv --source cursor \
+codess ingest --dirs selected-projects.csv --source cursor
+codess ingest --dirs selected-projects.csv --source cursor \
   --no-progress
 ```
 
@@ -82,6 +93,20 @@ the Project registry live under `~/.codess/` by default. Normalized text may
 be bounded, sanitized, or redacted and should not be mistaken for an exact raw
 record.
 
+Ingest resource maximums have built-in defaults and may be overridden together
+with a partial, versioned JSON file:
+
+```sh
+cp schema/resource-policy.example.json local-resource-policy.json
+codess ingest --dir /path/to/project \
+  --resource-policy local-resource-policy.json
+```
+
+The file separates transcript bytes from Cursor SQLite container bytes. It also
+controls per-source and per-Session Event counts and context/compaction
+characters. See **[Operations.md](Operations.md#resource-bounds-and-processing)**
+for precedence, per-limit disabling, and validation.
+
 Do not discard or replace a session-bearing checkout as if it contained only
 Git data. Claude, Codex, and Cursor retain sources locally, and a moved or
 deleted workspace can break their association with the Project. Maintainers
@@ -90,14 +115,16 @@ baseline publication, or retention cleanup.
 
 ## Terms and catalogs
 
-Codess uses **Project** for a stable continuing body of work. A directory is one
-machine-local Project location; a Git repository is version-control evidence;
-a Claude/Codex/Cursor workspace is a source-system binding. These may often
-coincide, but none is a synonym for another. A **Session** is one namespaced
-source-system conversation. A **Project snapshot** is one dated immutable
-normalized extraction of a Project. An **Assembly** is a reproducible
+Codess uses **Project** for a stable continuing body of work. For Git-backed
+work, exactly one Project represents the repository. Directories, clones, and
+linked worktrees are machine-local Project locations; branches and commits are
+repository observations; Claude/Codex/Cursor workspaces are source-system
+bindings under that same Project. These remain distinct entity types even
+though the repository defines the Project boundary. A **Session** is one
+namespaced source-system conversation. A **Project snapshot** is one dated
+immutable normalized extraction of a Project. An **Assembly** is a reproducible
 cross-Project selection over named Project snapshots; SQLite, JSONL, Parquet,
-and DuckDB are possible materializations of that Assembly, not new source
+and DuckDB are possible Assembly export formats, not new source
 systems. The complete glossary is in **[Codess.md](Codess.md#5-glossary)**.
 
 The current CLI spelling `--dir` accepts a Project location and resolves it to
@@ -126,11 +153,149 @@ jq -r '.projects[] |
   @tsv' ~/.codess/projects.json
 ```
 
-Until the catalog selector is implemented, use those active paths to create a
-reviewed `--dirs` CSV. Do not feed all entries from
+Typed queries can select exact catalog identities directly. Repeat
+`--project-id`; do not combine it with `--dir` or `--dirs`:
+
+```sh
+codess query sessions \
+  --project-id 'codess:project:uuid:…' \
+  --project-id 'codess:project:uuid:…'
+```
+
+Each ID resolves to its durable central current snapshot, independent of an
+obsolete working-tree path. A versioned saved set can pin different named
+snapshots per Project. Before selecting a broad catalog cohort, inspect
+per-Project readiness and its `N/N` summary:
+
+```json
+{
+  "format": "codess.project-set/1",
+  "name": "reviewed-comparison",
+  "projects": [
+    {"project_id": "codess:project:…", "snapshot_id": null},
+    {"project_id": "codess:project:…", "snapshot_id": "20260729T…"}
+  ]
+}
+```
+
+```sh
+codess catalog status --registry ~/.codess
+codess catalog annotations --registry ~/.codess
+codess catalog annotations --label core --label large
+codess query overview --project-set reviewed-projects.json
+codess query sessions --all-current
+```
+
+`null` means resolve that Project's current snapshot when the set is used;
+the resulting request records the exact resolved snapshot. The
+`--all-current` spelling is retained as a compatibility selector for eligible
+catalog Projects with central current pointers; it is not a freshness or
+publication label. `catalog status` reports `query_ready`,
+`missing_current_snapshot`, `package_mismatch`, `snapshot_fail`, or
+`not_selected`
+for each Project and never infers source refresh. Explicit exclusion or defer
+curation states are omitted from the compatibility selector. Catalog-attribute
+predicates are not yet implemented. Use active paths to create a reviewed
+`--dirs` CSV for other selections. Do not feed all entries from
 `ingested_projects.json` into ingest, query, or an eventual `all-current`
 Assembly: that file may retain obsolete, missing, scan-only, and old temporary
 paths.
+
+`catalog annotations` is the refreshable human/machine catalog view. Its
+non-exclusive labels retain reasons and measured facts:
+
+- `included` means selection-eligible, not fresh;
+- `core` means a reviewed compatibility-baseline member, not business
+  priority;
+- `query_ready` and `incomplete` report current package compatibility;
+- `large` defaults to at least 25,000 Events or 128 MiB of normalized stores;
+- `limited` reports `none` or `reference` raw-evidence mode;
+- `suspect` requires direct review/inconsistency evidence; and
+- `not_selected` retains excluded, deferred, or worktree evidence.
+
+Repeated `--label` values are ANDed. `--format table|json|csv`, `--output`,
+`--large-events`, and `--large-bytes` support review and automation without
+copying transient counts into project documentation.
+
+Refresh one or more known Projects with the same staged operation:
+
+```sh
+# Read-only plan; --project may be repeated and accepts ID, unique name, or path.
+codess refresh --project Zero400 --project Misses
+
+# A maintained JSON/CSV/plain-text list; still read-only unless a stage is named.
+codess refresh --project-list projects.json --stage preflight
+
+# One distinctive computed catalog cohort.
+codess refresh --designator core --stage apply
+```
+
+The supported cohort designators are `included`, `core`, `query_ready`,
+`incomplete`, `large`, `limited`, `suspect`, and `multi_vendor`. They use the
+same definitions and thresholds as `catalog annotations`; `not_selected` is
+intentionally unavailable as a broad refresh target. An explicitly named
+Project remains selectable so an operator can investigate or repair it.
+
+`plan` is the default and parses no vendor source. `preflight` runs an isolated
+validated ingest for every selected Project. `apply` first requires every
+preflight to pass and verifies that the selected IDs, Project catalog, and
+CoSchema package did not change; it then refreshes each Project independently.
+There is no cross-Project transaction: a successful Project snapshot remains
+published if a later Project fails, and the dated JSON receipt reports every
+result and any partial failure. `--raw-mode auto` retains each current
+snapshot's raw mode, defaulting to `reference` for a Project with no usable
+current policy. Routine refresh does not freeze or approve a compatibility
+baseline.
+
+Stable selectors fail closed: if any selected current/named snapshot is
+missing, hash-invalid, a package mismatch, or unable to satisfy the current
+read layout, the complete query is rejected rather than silently omitting that
+Project. The diagnostic names its logical Project name when available, stable
+Project ID, snapshot ID, and incompatibility. Use an explicit reviewed Project
+set to narrow scope, or rebuild and validate outdated current snapshots under
+the current software before relying on `--all-current`.
+
+Human-readable Session names are mutable catalog metadata, not Session IDs.
+Each name maps to one stable `global_session_id`. Assign one by exact or
+unambiguous current ID prefix:
+
+```sh
+codess session name --project-id PROJECT_ID --session-id c9d1 --name slash_model
+codess session names --project-id PROJECT_ID
+```
+
+Names are unique within a Project and may change; stable Session IDs remain the
+selectors and provenance keys. Source-system titles are separate evidence:
+current Codex CLI/app state, Claude title records, and Cursor Composer names
+can expose them unevenly, so Codess does not silently promote one to a user
+alias.
+
+### Project status before extraction
+
+Query readiness is not source freshness. Before a potentially large Cursor
+operation, run the content-free status helper and a Project-limited scan:
+
+```sh
+tools/project_status.sh /path/to/project ~/.codess
+codess scan --dir /path/to/project --source cc,codex,cursor --out -
+```
+
+The helper delegates repository facts to Git and uses shell filesystem
+observations for the current pointer, last ingest report, exact Claude
+Project-store path, Project-local `.claude`/`.codess` markers, and the global
+Cursor container. Git is a strong primary change signal, not an exclusive one:
+vendor stores and Project tool-state may advance without a commit, while a Git
+change does not prove a new vendor Session. Cursor container mtime alone is
+also not Project attribution; the limited scan queries its indexes for the
+selected Project without normalizing every conversation or creating another
+database copy.
+
+Build results, logs, generated files, and run artifacts are reported as tool
+activity only when a retained source record links them to an invocation.
+Filesystem changes may justify further assessment, but do not establish which
+source system produced them. Proceed to full ingest when selected vendor
+observations changed, the current snapshot is absent/incompatible, or an
+explicit validation run is required.
 
 ## Selecting Project and source-system scope
 
@@ -139,6 +304,12 @@ CSV containing a `directory_path` column; file entries are applied first and
 repeated resolved paths are removed. Query and ingest default to the current
 Git root, or the current directory when it is not in a Git worktree. Scan
 defaults to the current directory.
+
+For query, repeatable `--project-id ID`, `--project-set FILE`, and
+`--all-current` are stable-identity alternatives to paths. A named
+`--snapshot-id` is allowed only with one exact Project; put per-Project
+historical snapshot IDs in a saved set. Stable selectors and path selectors are
+intentionally mutually exclusive.
 
 These paths are selection filters over vendor indexes and retained Project
 bindings, not requests to recursively traverse every descendant. A work tree
@@ -156,24 +327,26 @@ filters so every result has an explicit, reproducible scope.
 Investigation is the primary reason to retain and normalize sessions. Use the
 CLI first for stable Project/vendor/session scope and repeatable reports; use
 read-only SQLite for event-level questions that the current report surface does
-not yet express. The use-case IDs below cross-reference the known-gap and
-active-work and known-gap registers in **CoPlan.md §8**.
+not yet express. The matrix below owns user capability and commands.
+**CoPlan.md §8.2.1** is the corresponding separate implementation review:
+implemented versus partial status, the responsible work item, and the
+recommended development order.
 
 ### Capability matrix
 
 | Use case | Current support | Commands and export | Limits |
 |----------|-----------------|---------------------|--------|
-| **UC1 — list sessions for one or more Projects** | Direct typed result for current stores; one explicit historical snapshot is also supported | `query sessions --dir P`; repeat `--dir` or use `--dirs FILE`; legacy `--sessions --id` remains | Catalog-wide selection and historical union/diff remain: **L-S1**, **L-S3** |
-| **UC2 — select sessions by source system** | Direct; comma-separated union; typed events add time/model/kind/status/artifact filters | Add `--source`, `--since`, `--until`, `--model`, `--event-kind`, or `--status` to typed actions | Tool-name predicate and catalog selection remain: **L-S1–L-S2** |
-| **UC3 — orient by size, activity, and time** | Typed overview reports Session entities, Interactions, turns, events, text/tool/artifact/model volume, elapsed span, event days, and 5/30/120-minute active-time sensitivity | `query overview --dir P`; legacy `--stats`, `--tool`, `--artifacts`; `storage report` | Current Session totals include subagents and do not partition relation kind; time buckets, gap histogram, token/cost confidence, and scale goldens remain: **L-M1–L-M4** |
+| **UC1 — list sessions for one or more Projects** | Direct typed result by path, exact Project ID, saved Project/snapshot set, or the compatibility catalog-cohort selector; per-Project readiness reports `N/N` query-ready coverage | Start with `catalog status`; then `query sessions --project-set FILE`, repeat `--project-id ID`, or use `--all-current` only as a transient selector | Source refresh is not inferred; dynamic catalog predicates and broad snapshot discovery remain: **L-S1**, **L-S3** |
+| **UC2 — select sessions by source system** | Direct; comma-separated union; typed events add time/model/kind/status/artifact/tool/actor/role/origin and lineage filters | Add `--source`, `--since`, `--until`, `--model`, `--event-kind`, `--status`, `--tool-name`, `--actor-kind`, `--content-role`, `--origin-kind`, `--parent-session-id`, `--session-relation`, or `--initiation-kind` | Saved/dynamic catalog selection and caller-selected projections remain: **L-S1–L-S2** |
+| **UC3 — orient by size, activity, and time** | Typed overview reports Session relation and Interaction initiation; turns, Events, characters/tools/artifacts/models; elapsed span, UTC months, Event-gap buckets, event days, and 5/30/120-minute active-time sensitivity. Its bounded UTC daily series adds prompt/response counts and characters, individual actor engagement, separately classified subagent-Session activity, two labelled human/model response windows, and raw tool call/result/input/output measures; monthly tool totals are also returned | `query overview --dir P --facet-limit 50`; `evidence audit orientation`; legacy `--stats`, `--tool`, `--artifacts`; `storage report` | Counts, lengths, timestamps, and identities are primary observations; displays may derive ratios/percentages. These are not cost, quota, timeout, or active-work measures. Delegated-origin mappings are applied for current Claude/Cursor evidence, and independent SQL reconciliation covers current query-ready Projects. Measured distribution/performance extensions remain: **L-M1–L-M4**, **A2/A9** |
 | **UC4 — open a known session** | Direct by list ordinal, stable global ID, or an unambiguous vendor ID | `-sess N` or `--session-id ID`; `--show prompt pr agent tool perm` | Whole-session display only; terminal excerpts: **L-S2**, **L-O1**, **L-C2** |
-| **UC5 — find an exchange, Interaction, or event group** | Typed event rows select stable event/session/Interaction/Model-Turn IDs in canonical order | `query events --event-id ID`; `--interaction-id`, `--model-turn-id`, time/kind/status/model/artifact filters | Sequence-window convenience and richer projections remain: **L-S2**, **L-O2** |
-| **UC6 — find text, a path, error, symbol, or topic** | First-class bounded substring search over normalized content, tool input/output, and artifact paths | `query search --text TEXT --limit N --byte-limit N`; scope with Project/vendor/session/time/type | No ranking/topic/FTS; a miss cannot prove raw absence: **L-C1–L-C2**, **L-E2** |
-| **UC7 — investigate tools, failures, denials, or compaction** | Direct fixed reports | `--lineage`, `--audit`, `--permissions`, `--task-review`, `--tool N`; vendor scope applies | Most reports are table-only and cannot feed a next selection: **L-O1–L-O3** |
+| **UC5 — find and reconstruct an exchange or event group** | Typed event rows select stable Event/Session/Interaction/Model-Turn IDs in global canonical order; an Event can expand to its complete Interaction or Model Turn and a same-Session sequence window. Claude, Codex, and Cursor pass the scoped human → harness → model/tool → harness/model provenance path; Claude/Cursor delegated prompts and current Codex protocol subagent/collaboration shapes are mapped; current Codex server tool-search, MCP transport status, rollback, and direct-versus-injected user-role records are preserved | `query events --event-id ID --expand interaction`; `--expand model-turn`; `--before N --after N`; direct Interaction/turn and actor filters also compose | Current Codex collaboration mapping is protocol/fixture-backed because the reviewed local cohort has no occurrence. New shapes are evidence-triggered maintenance under **A27/T4**: **L-S2**, **L-O2** |
+| **UC6 — find text, a path, error, symbol, or topic** | First-class bounded literal-substring search over normalized content, tool input/output, and artifact paths; `%`, `_`, and backslash are ordinary characters. Returned rows include bounded facets, and exact complete-content repetitions can be grouped without removing occurrences | `query search --text TEXT --limit N --byte-limit N --group-repetitions`; use `--facet-limit N` and scope predicates | Search-report refinement, topic classification, near-duplicate grouping, and an explicit wildcard-pattern operator remain; searching raw vendor fields and messages is postponed under **P13**: **L-C1–L-C2**, **L-E2** |
+| **UC7 — investigate tool operations, outcomes, failures, or denials** | Direct fixed reports plus typed actor/status/tool Event filtering; denial/failure expansion and exact evidence are tested across Claude, Codex, and Cursor for the scoped human/harness/tool/model path | `--lineage`, `--audit`, `--permissions`, `--task-review`, `--tool N`; typed `query events` filters produce reusable results | Most fixed reports remain table-only; broader runtime-component and context analysis is evidence-triggered: **L-O1–L-O3** |
 | **UC8 — correlate work across vendors/artifacts** | Direct aggregate plus read-only SQL drill-down | `--artifacts --source ...`; SQL through `event_artifacts` to sessions/events | Aggregate output omits constituent event IDs: **L-O2**, **L-P1** |
-| **UC9 — export and compose** | Typed actions return `codess.query-result/1`; requests/results save atomically, prior result IDs can restrict the next request, and comparisons use exit 3 for changed row identities | `--save-request`, `--save-result`, `--result-input`, `--compare-result`; legacy sessions/stats JSONL/CSV remain | Derivation records and historical union/diff remain: **L-O1–L-O3** |
-| **UC10 — verify exact source evidence** | Exact event resolver follows event → source record → verified sealed/central-captured/live candidates without copying the object and reports changed/unavailable revisions | `query evidence --event-id GLOBAL_ID` | Three-vendor representative evidence smoke remains: **L-C2–L-C3** |
-| **UC11 — assemble cross-Project analytical data** | Repeated `--dir`/`--dirs` queries provide virtual cross-Project reads today; a cataloged materialized Assembly is designed but not implemented | Today: typed saved results or JSONL/CSV plus external DuckDB/pandas; target: `all-current` or filtered Assembly with JSON manifest and SQLite/JSONL/Parquet/DuckDB materializations | Project catalog selector, Assembly manifest/catalog, common export projection, reverse lookup, and retention remain: **A19/L-S1/L-E5** |
+| **UC9 — export and compose** | Typed actions return reusable homogeneous results; Project sets explicitly union named observations; changed-snapshot comparisons use stable IDs; repetition groups retain citeable constituents; cited investigations bind a supplied summary to exact Event rows; saves are atomic and failure-tested | `--save-request`, `--save-result`, `--result-input`, `--compare-result`; `query cite --summary-file FILE --processor-id ID`; legacy JSONL/CSV remain | Caller-selected fields/package presentation are later-phase **P17**; heterogeneous analytical products remain A19/P19: **L-O1–L-O3** |
+| **UC10 — verify exact source evidence** | Exact event resolver follows event → source record → verified sealed/central-captured/live candidates without copying the object and reports changed/unavailable revisions | `query evidence --event-id GLOBAL_ID` | Implemented and exercised on representative Claude, Codex, and Cursor evidence; repeat under **T1/T2/T6** when source shapes, mappings, or code change |
+| **UC11 — assemble cross-Project analytical data** | Exact/saved/transient broad-cohort selectors provide observation-preserving virtual cross-Project and historical reads; reusable analysis-dataset and Assembly-export requirements are under bottom-up/top-down investigation | Today: Project sets and typed results plus external DuckDB/pandas; candidate export formats wait for a manifest/virtual-query prototype | Dynamic predicates and virtual requirements remain A19; Assembly export formats, reverse lookup, and retention are later P19: **L-S1/L-E5** |
 
 Operationally, UC1–UC11 may be run interactively with live progress or under
 automation with `--no-progress`; both modes retain the same per-Project trace
@@ -183,9 +356,17 @@ and status evidence.
 selected Project snapshot. It does not mean every vendor file on the machine,
 every superseded snapshot, or a union of a Project's historical versions.
 
+The current CLI and version-1 typed request/result documents are the supported
+query-specification interfaces. Layered JSON, caller-selected fields, and query
+package infrastructure are postponed together under CoPlan P17. The
+compatibility `--all-current` spelling is only a transient selector: saved
+results record the exact dated Projects/snapshots and software/schema/policy
+identities that actually produced the outcome.
+
 ### Workflow A — Project or vendor session research
 
-1. Select one Project, repeated Projects, or a maintained `--dirs` file.
+1. Select exact catalog Project IDs, explicit Project paths, or a maintained
+   `--dirs` file.
 2. Optionally add `--source`; filtering happens inside each read-only store
    before cross-store ordering and aggregation.
 3. List sessions with stable IDs and bounds.
@@ -194,11 +375,13 @@ every superseded snapshot, or a union of a Project's historical versions.
    remains stable when the Project/vendor scope changes.
 
 ```sh
-python -m main query --dir ~/Work/ZK/Zero400 --source cursor \
+codess query --dir ~/Work/ZK/Zero400 --source cursor \
   --sessions --id --limit 50
-python -m main query --dirs selected-projects.csv --source cc,codex \
+codess query sessions --project-id 'codess:project:uuid:…' \
+  --source cursor --limit 50
+codess query --dirs selected-projects.csv --source cc,codex \
   --sessions --output-format csv > selected-sessions.csv
-python -m main query --dir ~/Work/ZK/Zero400 \
+codess query --dir ~/Work/ZK/Zero400 \
   --session-id 'codess:session:sha256:…' --show pr tool
 ```
 
@@ -211,46 +394,74 @@ and do not overwrite that all-source registry summary.
 
 ### Workflow B — orientation, narrowing, and phases
 
-1. Run scoped `query overview` and `query sessions` to establish corpus size,
-   bounds, vendor/model composition, and active-time sensitivity.
+1. Run scoped `query overview --facet-limit N` and `query sessions` to establish
+   corpus size, bounds, vendor/model composition, daily exchange/actor
+   engagement, and active-time sensitivity.
 2. Use `--tool N`, `--artifacts`, `--audit`, and `--lineage` to identify skew,
    repeated activity, failures, or cross-vendor evidence.
 3. Save the request/result when the selection will feed another step.
 4. For an activity period or task phase, run `query events` by session,
    event, Interaction, Model Turn, timestamp, kind, status, model, or artifact.
-5. Treat `ended_at-started_at` as elapsed span. Active duration requires a
-   declared inactivity-gap rule and remains a derived measure.
+5. Treat `ended_at-started_at`, daily actor spans, and first/last prompt
+   endpoints as observed spans. Active duration requires a declared
+   inactivity-gap rule and remains a derived measure; none is a billing or
+   capacity-utilization statistic.
 
 ### Workflow C — locate and reconstruct an exchange
 
 1. Bound the search by Project, vendor, and preferably session/time.
 2. Run `query search --text ...` with a row and byte limit; preserve its result.
-3. Record the stable event global ID, source locator, session, Interaction,
+3. Record the stable Event global ID, source locator, Session, Interaction,
    sequence, event kind, and content-completeness evidence.
-4. Feed the result into `query events --result-input ...`, or select its
-   Interaction/Model Turn directly. Use read-only SQL for a surrounding
-   sequence window until that convenience is first-class.
+4. Feed the result into `query events --result-input ...`; add
+   `--expand interaction` or `--expand model-turn` and `--before N --after N`
+   to recover complete exchange and same-Session sequence context.
 5. Run `query evidence --event-id ...` when the normalized value is excerpted or
    when an exhaustive search must distinguish “absent” from “not retained.”
 6. Preserve the SQL/request, snapshot identity, and evidence IDs with any
    external or LLM-produced summary.
 
 ```sh
-python -m main query overview --dir "$PROJECT" --source codex,cursor \
+codess query overview --dir "$PROJECT" --source codex,cursor \
   --save-result overview.json
-python -m main query search --dir "$PROJECT" --source codex,cursor \
+codess query search --dir "$PROJECT" --source codex,cursor \
   --text 'counter reset' --limit 100 --byte-limit 4194304 \
   --save-request search-request.json --save-result hits.json
-python -m main query events --dir "$PROJECT" --result-input hits.json \
+codess query events --dir "$PROJECT" --result-input hits.json \
+  --expand interaction --before 2 --after 2 \
   --save-result selected-events.json
-python -m main query evidence --dir "$PROJECT" --event-id 'codess:event:sha256:…'
+codess query evidence --dir "$PROJECT" --event-id 'codess:event:sha256:…'
+codess query cite --dir "$PROJECT" \
+  --result-input selected-events.json --summary-file summary.md \
+  --processor-id 'human:walter' --save-investigation investigation.json
 ```
 
 Typed actions reject unknown predicates and incompatible saved-request/action
 combinations. Their JSON result always names the canonical request and hash,
 store/package/snapshot/policy identities, source-availability counts, limits,
-limitations, and a result hash. `--compare-result PRIOR.json` returns 0 when
-stable row membership is unchanged and 3 when IDs were added or removed.
+limitations, derivation edges, and a result hash. `--compare-result PRIOR.json`
+returns 0 only when row content, membership, summary, and provenance are
+unchanged; it returns 3 for an added, removed, or changed stable row or a
+summary/provenance change.
+
+Event/search facets describe only the returned bounded rows. Exact repetition
+groups include only nonempty, complete retained content with compatible event,
+actor, role, tool, status, and artifact dimensions. They preserve every
+occurrence and report constituent stable Event IDs and time spans; they do not
+claim that repeated evidence is redundant.
+
+### Historical union and comparison
+
+A Project set with multiple named snapshots is an explicit historical union.
+Rows retain stable logical IDs plus a snapshot-bound `observation_id`;
+summaries report logical IDs observed more than once. No “latest row” is chosen
+and no observation is silently deduplicated.
+
+For a diff, run the same canonical typed request against each named snapshot,
+save both results, and compare the later run with `--compare-result`. Comparison
+rejects requests that differ beyond snapshot observation scope. It reports
+added, removed, and content-changed stable rows separately from summary,
+package, and provenance change.
 
 ### Structured JSONL and CSV
 
@@ -282,7 +493,8 @@ must be documented; consumers requiring a strict contract should prefer JSONL.
 Direct SQL remains the escape hatch for projections, windows, and joins not yet
 expressed by typed actions. Prefer retained snapshot databases: they are
 immutable, versioned, hash-checked inputs. Do not edit, vacuum, reindex, attach
-with write intent, or create FTS tables inside an accepted snapshot.
+with write intent, or create derived search/index tables inside an accepted
+snapshot.
 
 Resolve a Project's current retained snapshot and inspect its vendor stores:
 
@@ -371,7 +583,32 @@ Useful external exploration tools include:
   snapshots. Bind only to localhost, disable downloads if appropriate, and do
   not publish private session databases.
 
+Their best use against UC1–UC11 is:
+
+| Tool | Best-fit use cases | Why it is the best fit | Useful secondary cases | Do not use it as |
+|---|---|---|---|---|
+| **SQLite CLI** | **UC3** orientation and distributions; **UC5** exact Interaction/Event reconstruction; **UC7** tool, failure, denial, and permission joins; **UC8** artifact/correlation drill-down | Gives exact SQL control, window/aggregate/join support, `EXPLAIN QUERY PLAN`, deterministic scripts, and direct inspection of every physical column | **UC1/UC2** scoped listings, **UC4** known-Session inspection, **UC6** bounded `LIKE` searches, **UC9** one-shot CSV/JSON export | **UC10** exact raw-evidence resolver or **UC11** provenance-aware cross-Project Assembly |
+| **sqlite-utils query** | **UC1/UC2** parameterized Session/source selections; **UC6** repeatable bounded searches; **UC9** JSON/JSONL/CSV/TSV extraction into shell or data pipelines | Safer and less verbose than hand-built shell SQL for named parameters and machine-readable output; well suited to reusable extraction commands | **UC3** summaries and **UC5/UC7/UC8** queries whose SQL is already understood | An investigation UI, a semantic query planner, **UC10**, or a multi-Project authority |
+| **Datasette** | **UC1** interactive Session browsing; **UC3** visual orientation/facets; **UC4** opening and following a known Session; **UC5** exploratory drill-down; **UC7** browsing tool/status/audit records | Browser navigation, sortable/filterable tables, facets, saved SQL links, JSON API, and CSV export make unfamiliar data easier to explore | **UC2** source filtering, **UC6** simple substring/filter exploration, **UC8** same-database joins, and **UC9** ad hoc API/export | An unreviewed derived index, **UC10** exact evidence verification, or **UC11** cross-Project Assembly |
+
+For **UC6**, Codess bounded normalized search remains the default because it
+reports scope, byte/row limits, truncation, and missing-source limitations.
+SQLite CLI or sqlite-utils is preferable when the needed physical-field
+predicate is not yet exposed. Datasette is preferable when the investigator
+does not yet know which tables, values, or facets are relevant. None of these
+implements postponed raw-source search over authorized vendor fields/messages.
+
+For **UC10**, use `query evidence`; a SQL row can show lineage but cannot by
+itself verify that a sealed, captured, or live raw Source still matches the
+recorded revision. For **UC11**, use explicit Codess multi-directory results and
+exports today, and the future A19 Assembly/DuckDB layer for durable
+cross-Project provenance.
+
 Generic tools expose the physical schema and do not implement Codess's
 cross-store ordering, Project bindings, source compatibility, or snapshot
 contract. SQL that becomes a repeated workflow is a candidate for the typed
 query service rather than an indefinitely copied snippet.
+Broader evaluated candidates—including DuckDB, Arrow/Parquet, Polars,
+NetworkX, near-duplicate and semantic-search libraries, property-based testing,
+coverage, and memory profiling—are classified by use case and dependency
+boundary in **[Designs.md](Designs.md#applicable-tooling-and-dependency-boundaries)**.

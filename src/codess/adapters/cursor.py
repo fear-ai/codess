@@ -17,6 +17,7 @@ from codess.cursor_source import (
     parse_timestamp as _parse_timestamp,
 )
 from codess.mapping import annotate_mapping, structured_json
+from codess.tool_result_status import application_failure_evidence
 
 log = logging.getLogger(__name__)
 
@@ -278,6 +279,7 @@ def process_db(
     *,
     composer_ids: set[str] | None = None,
     source_file: str | None = None,
+    session_headers: dict[str, dict] | None = None,
 ) -> Iterator[tuple[str, dict]]:
     """Stream (session_id, event) from Cursor state.vscdb. Groups by composerId."""
     source_file = source_file or str(db_path.resolve())
@@ -322,6 +324,7 @@ def process_db(
                 source_file,
                 opts,
                 diagnostics,
+                (session_headers or {}).get(current_composer),
             )
             bubbles.clear()
         if composer_id != current_composer:
@@ -348,6 +351,7 @@ def process_db(
             source_file,
             opts,
             diagnostics,
+            (session_headers or {}).get(current_composer),
         )
 
     skipped = sum(
@@ -385,6 +389,7 @@ def _process_composer(
     source_file: str,
     opts: dict,
     diagnostics: dict[str, int] | None,
+    session_header: dict | None = None,
 ) -> Iterator[tuple[str, dict]]:
     """Order/deduplicate one composer so other composers can be released."""
     def sort_key(item: tuple[str, dict]) -> tuple[bool, float, str]:
@@ -413,7 +418,10 @@ def _process_composer(
     ordered.sort(key=sort_key)
     for bubble_id, data in ordered:
         events = list(
-            _bubble_to_events(composer_id, bubble_id, data, source_file, opts)
+            _bubble_to_events(
+                composer_id, bubble_id, data, source_file, opts,
+                session_header=session_header,
+            )
         )
         if not events and diagnostics is not None:
             empty_assistant_envelope = (
@@ -462,6 +470,8 @@ def _bubble_to_events(
     data: dict,
     source_file: str,
     opts: dict | bool,
+    *,
+    session_header: dict | None = None,
 ) -> Iterator[dict]:
     """Convert bubble to normalized event(s). Yields 0 or more events."""
     msg_type = data.get("type", 0)
@@ -521,7 +531,28 @@ def _bubble_to_events(
         )
         if truncated is None:
             return
-        event = base_ev("user_message", subtype, "user", truncated, content_len)
+        is_subagent = bool(
+            isinstance(session_header, dict)
+            and session_header.get("is_subagent")
+        )
+        event = base_ev(
+            "system_event" if is_subagent else "user_message",
+            "delegated_prompt" if is_subagent else subtype,
+            "harness" if is_subagent else "user",
+            truncated,
+            content_len,
+        )
+        if is_subagent:
+            event.update({
+                "event_kind": "message.context",
+                "actor_kind": "harness",
+                "content_role": "delegated_task",
+                "origin_kind": "harness_delegated",
+            })
+            _merge_metadata(event, {
+                "actor_evidence": "composerHeaders.isSubagent",
+                "source_is_subagent": True,
+            })
         model_info, model_info_state = field_state.get_state(data, "modelInfo")
         if isinstance(model_info, dict):
             selection, selection_state = field_state.get_state(
@@ -538,7 +569,7 @@ def _bubble_to_events(
                             "source_field": "modelInfo.modelName",
                         }
                     }
-                event["metadata"] = json.dumps(metadata, separators=(",", ":"))
+                _merge_metadata(event, metadata)
             else:
                 if selection_state == field_state.PRESENT:
                     selection_state = field_state.MALFORMED
@@ -675,6 +706,20 @@ def _bubble_to_events(
                 user_decision = str(tool_former.get("userDecision") or "").lower()
                 if user_decision == "rejected":
                     normalized = "denied"
+                result_failure = None
+                tool_name_text = str(tool_name or "")
+                if (
+                    normalized == "succeeded"
+                    and (
+                        tool_name_text.startswith("mcp-")
+                        or tool_name_text.startswith("mcp__")
+                    )
+                ):
+                    result_failure = application_failure_evidence(
+                        tool_former.get("result")
+                    )
+                    if result_failure:
+                        normalized = "failed"
                 metadata_values = {
                     "call_id": str(call_id),
                     "model_call_id": tool_former.get("modelCallId"),
@@ -685,6 +730,11 @@ def _bubble_to_events(
                     metadata_values.update({
                         "user_decision": user_decision,
                         "permission_provenance": "toolFormerData.userDecision",
+                    })
+                if result_failure:
+                    metadata_values.update({
+                        "application_status": "failed",
+                        "result_status_evidence": result_failure,
                     })
                 metadata = json.dumps(metadata_values, separators=(",", ":"))
                 call = base_ev("tool_call", "tool_call", "assistant", "", 0)

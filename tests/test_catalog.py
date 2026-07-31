@@ -1,7 +1,5 @@
 """Catalog candidates preserve observations and require human curation."""
 
-from pathlib import Path
-
 import pytest
 
 from codess.catalog import (

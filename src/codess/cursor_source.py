@@ -25,11 +25,8 @@ CURSOR_SELECTION_EDGE_BYTES = 512
 
 
 def _fingerprint_digest():
-    """Return a fast non-authenticating digest for change detection."""
-    try:
-        return hashlib.md5(usedforsecurity=False)
-    except TypeError:  # pragma: no cover - older Python/OpenSSL combinations
-        return hashlib.md5()
+    """Return the SHA-256 digest used by new selected-row change markers."""
+    return hashlib.sha256()
 
 
 def connect_readonly(db_path: Path) -> sqlite3.Connection:
@@ -432,12 +429,12 @@ def _selection_marker(
             _fingerprint_value(digest, trailing)
     return {
         "source_revision": (
-            f"cursor-selection-md5-fingerprint:{digest.hexdigest()}"
+            f"cursor-selection-sha256-fingerprint:{digest.hexdigest()}"
         ),
         "source_mtime": latest_timestamp,
         "source_size": selected_bytes,
         "fingerprint_method": (
-            "cursor-workspace-header-key-length-edge-md5-fingerprint"
+            "cursor-workspace-header-key-length-edge-sha256-fingerprint"
         ),
         "consistency": "sqlite-read-transaction",
         "workspace_count": len(workspace_ids),

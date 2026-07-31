@@ -4,12 +4,7 @@
   "required_validator_version": "0.2",
   "project": "/Users/walter/Work/Spank/spank-rs",
   "required_sources": ["Codex"],
-  "minimum_sessions": {"Codex": 4},
-  "minimum_events": {"Codex": 30000},
   "raw_mode": "capture",
-  "expected_raw_records": 4,
-  "allowed_diagnostics": {
-    "missing_tool_call_id": {"max": 323}
-  },
+  "allowed_diagnostics": {"missing_tool_call_id": 323},
   "require_fixed_point": true
 }

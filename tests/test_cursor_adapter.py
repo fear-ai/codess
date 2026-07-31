@@ -268,6 +268,12 @@ class TestSelectionMarker:
                 ],
             )
         first = get_selection_marker(db, {"ws1"})
+        assert first["source_revision"].startswith(
+            "cursor-selection-sha256-fingerprint:"
+        )
+        assert first["fingerprint_method"].endswith(
+            "edge-sha256-fingerprint"
+        )
         assert first["workspace_count"] == 1
         assert first["composer_count"] == 1
         assert first["bubble_count"] == 1
@@ -538,6 +544,53 @@ class TestBubbleToEvents:
         assert evs[1]["subtype"] == "tool_failure"
         assert evs[1]["normalized_status"] == "failed"
 
+    def test_mcp_application_error_overrides_completed_transport(self):
+        data = {
+            "type": 2, "text": "",
+            "toolFormerData": {
+                "name": "mcp-cursor-app-control-cursor_dialog",
+                "toolCallId": "call-mcp", "status": "completed",
+                "result": json.dumps({
+                    "result": json.dumps({
+                        "content": [{
+                            "type": "text",
+                            "text": "Error: Invalid input",
+                        }],
+                    }),
+                }),
+            },
+        }
+        call, result = list(
+            _bubble_to_events("c1", "b1", data, "/db", False)
+        )
+        assert call["source_status"] == "completed"
+        assert call["normalized_status"] == "failed"
+        assert result["subtype"] == "tool_failure"
+        assert result["normalized_status"] == "failed"
+        metadata = json.loads(result["metadata"])
+        assert metadata["application_status"] == "failed"
+        assert "Error: Invalid input" in metadata["result_status_evidence"]
+
+    def test_mcp_discovery_target_error_is_not_invocation_failure(self):
+        data = {
+            "type": 2, "text": "",
+            "toolFormerData": {
+                "name": "get_mcp_tools",
+                "toolCallId": "call-discovery", "status": "completed",
+                "result": json.dumps({
+                    "server": "user-brave-search",
+                    "serverStatus": "error",
+                    "tools": [{"name": "mcp_auth"}],
+                }),
+            },
+        }
+        call, result = list(
+            _bubble_to_events("c1", "b1", data, "/db", False)
+        )
+        assert call["normalized_status"] == "succeeded"
+        assert result["subtype"] == "tool_result"
+        assert result["normalized_status"] == "succeeded"
+
     def test_rejected_tool_decision_is_denied_even_when_status_completed(self):
         data = {
             "type": 2, "text": "",
@@ -569,6 +622,23 @@ class TestBubbleToEvents:
                 "source_field": "modelInfo.modelName",
             }},
         }
+
+    def test_subagent_user_bubble_is_harness_delegated(self):
+        event = list(_bubble_to_events(
+            "c1", "b1",
+            {"type": 1, "text": "Investigate this"},
+            "/db", False,
+            session_header={"is_subagent": True},
+        ))[0]
+        assert event["event_type"] == "system_event"
+        assert event["subtype"] == "delegated_prompt"
+        assert event["role"] == "harness"
+        assert event["actor_kind"] == "harness"
+        assert event["content_role"] == "delegated_task"
+        assert event["origin_kind"] == "harness_delegated"
+        assert json.loads(event["metadata"])["actor_evidence"] == (
+            "composerHeaders.isSubagent"
+        )
 
     def test_unknown_type_skipped(self):
         data = {"type": 99, "text": "x", "timingInfo": {}}

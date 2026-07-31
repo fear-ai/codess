@@ -8,6 +8,19 @@
     "format": {"const": "codess.query-request/1"},
     "action": {"enum": ["sessions", "overview", "events", "search"]},
     "project_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "project_snapshots": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["project_id", "snapshot_id"],
+        "properties": {
+          "project_id": {"type": "string", "minLength": 1},
+          "snapshot_id": {"type": ["string", "null"], "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
     "filters": {
       "type": "object",
       "properties": {
@@ -19,8 +32,22 @@
         "event_kinds": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
         "statuses": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
         "models": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
-        "artifact": {"type": "string"},
-        "text": {"type": "string", "minLength": 1},
+        "tool_names": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "actor_kinds": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "content_roles": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "origin_kinds": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "parent_session_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "session_relation_kinds": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "initiation_kinds": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "artifact": {
+          "type": "string",
+          "description": "Literal artifact-path substring; SQL and backend pattern metacharacters have no special meaning."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Literal normalized content/tool/artifact substring; SQL and backend pattern metacharacters have no special meaning."
+        },
         "since": {"type": "number"},
         "until": {"type": "number"}
       },
@@ -29,7 +56,12 @@
     "limit": {"type": ["integer", "null"], "minimum": 0},
     "byte_limit": {"type": ["integer", "null"], "minimum": 0},
     "snapshot_id": {"type": ["string", "null"]},
-    "active_gap_caps_minutes": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1}
+    "active_gap_caps_minutes": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1},
+    "expand": {"type": ["string", "null"], "enum": ["interaction", "model_turn", null]},
+    "sequence_before": {"type": "integer", "minimum": 0},
+    "sequence_after": {"type": "integer", "minimum": 0},
+    "group_repetitions": {"type": "boolean"},
+    "facet_limit": {"type": "integer", "minimum": 1, "maximum": 1000}
   },
   "allOf": [
     {

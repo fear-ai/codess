@@ -14,10 +14,12 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from codess.raw_store import RawCaptureError, RawStore, verify_captured_object
-from codess.fileio import hash_file, source_fingerprint
+from codess.fileio import hash_file, source_fingerprint, write_json_atomic
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import FORMAT_VERSION, require_store, verify_package
-from codess.snapshot import SnapshotError, current_store_paths
+from codess.snapshot import (
+    SnapshotError, current_store_paths, snapshot_store_paths_from_base,
+)
 
 
 REPORT_FORMAT = "codess.validation-report/1"
@@ -523,7 +525,14 @@ def _validate_raw(
                 try:
                     current_revision = source_fingerprint(Path(locator))[0]
                     matches = current_revision == record.get("source_revision_id")
-                    _add_check(report, f"{label}.current_reference", matches, locator)
+                    _add_check(
+                        report, f"{label}.current_reference", matches,
+                        {
+                            "locator": locator,
+                            "expected": record.get("source_revision_id"),
+                            "observed": current_revision,
+                        },
+                    )
                 except OSError as exc:
                     report["limitations"].append(f"{label}: source unavailable: {exc}")
             elif locator:
@@ -638,8 +647,9 @@ def validate_project(
     policy: dict[str, Any] | None = None,
     raw_store_root: Path | None = None,
     verify_reference_current: bool = True,
+    snapshot_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Validate the current immutable baseline without mutating project state."""
+    """Validate an exact candidate or the current baseline without mutation."""
     project_root = project_root.expanduser().resolve()
     policy = policy or {}
     report: dict[str, Any] = {
@@ -655,16 +665,24 @@ def validate_project(
         "diagnostics": {},
     }
     try:
-        paths = current_store_paths(project_root)
-        if not paths:
-            raise SnapshotError("no current snapshot")
-        current = json.loads((project_root / ".codess" / "current.json").read_text())
-        current_path = Path(current["path"])
-        snapshot = (
-            current_path
-            if current_path.is_absolute()
-            else project_root / ".codess" / current_path
-        )
+        if snapshot_path is not None:
+            snapshot = snapshot_path.expanduser().resolve()
+            paths = snapshot_store_paths_from_base(
+                snapshot.parent.parent, snapshot.name
+            )
+        else:
+            paths = current_store_paths(project_root)
+            if not paths:
+                raise SnapshotError("no current snapshot")
+            current = json.loads(
+                (project_root / ".codess" / "current.json").read_text()
+            )
+            current_path = Path(current["path"])
+            snapshot = (
+                current_path
+                if current_path.is_absolute()
+                else project_root / ".codess" / current_path
+            )
         manifest = json.loads((snapshot / "manifest.json").read_text())
     except (OSError, KeyError, json.JSONDecodeError, SnapshotError) as exc:
         report["errors"].append(f"snapshot: {exc}")
@@ -673,6 +691,8 @@ def validate_project(
     report.update(
         {
             "snapshot_id": manifest.get("snapshot_id"),
+            "project_id": manifest.get("project_id"),
+            "snapshot_path": str(snapshot),
             "parent_snapshot_id": manifest.get("parent_snapshot_id"),
             "package_digest": manifest.get("package_digest"),
             "software_version": manifest.get("software_version"),
@@ -759,8 +779,19 @@ def validate_project(
     return report
 
 
-def run_query_smoke(project_root: Path) -> dict[str, Any]:
+def run_query_smoke(
+    project_root: Path,
+    *,
+    snapshot_id: str | None = None,
+    snapshot_path: Path | None = None,
+) -> dict[str, Any]:
     """Exercise version-aware CLI read paths with an isolated temporary registry."""
+    if snapshot_path is not None:
+        snapshot_path = snapshot_path.expanduser().resolve()
+        if snapshot_id is None:
+            snapshot_id = snapshot_path.name
+        elif snapshot_path.name != snapshot_id:
+            raise ValueError("query-smoke snapshot path and ID disagree")
     repo_root = Path(__file__).resolve().parents[2]
     modes = (
         ("stats", ["--stats"]),
@@ -771,14 +802,28 @@ def run_query_smoke(project_root: Path) -> dict[str, Any]:
         ("artifacts", ["--artifacts", "--limit", "1"]),
     )
     results: dict[str, Any] = {}
-    with tempfile.TemporaryDirectory(prefix="codess-query-smoke-") as registry:
+    with tempfile.TemporaryDirectory(prefix="codess-query-smoke-") as temp:
+        temp_root = Path(temp)
+        registry = temp_root / "registry"
+        query_root = project_root
+        if snapshot_path is not None:
+            query_root = temp_root / "candidate-view"
+            pointer = query_root / ".codess" / "current.json"
+            write_json_atomic(pointer, {
+                "snapshot_id": snapshot_id,
+                "path": str(snapshot_path),
+                "manifest_sha256": hash_file(snapshot_path / "manifest.json"),
+            })
         env = os.environ.copy()
         env["PYTHONPATH"] = str(repo_root / "src")
         for name, flags in modes:
             command = [
                 sys.executable, "-m", "main", "query", "--dir",
-                str(project_root), "--registry", registry, *flags,
+                str(query_root), "--registry", str(registry),
             ]
+            if snapshot_id is not None:
+                command.extend(["--snapshot-id", snapshot_id])
+            command.extend(flags)
             result = subprocess.run(
                 command, cwd=repo_root, env=env, capture_output=True,
                 text=True, timeout=120,

@@ -4,10 +4,7 @@
   "required_validator_version": "0.2",
   "project": "/Users/walter/Work/ZK/Zero400",
   "required_sources": ["Claude", "Cursor"],
-  "minimum_sessions": {"Claude": 2, "Cursor": 15},
-  "minimum_events": {"Claude": 1000, "Cursor": 1000},
   "raw_mode": "reference",
-  "expected_raw_records": 6,
   "expected_cursor_workspace_ids": [
     "243102c47acab6a728df1a9c7dc7067b",
     "e13b0c51d2c8997c2c1cd8583a915c16"

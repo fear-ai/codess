@@ -18,7 +18,10 @@ from codess.baseline_validation import (
 )
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.schema_contract import FORMAT_VERSION, has_legacy_schema, verify_package
-from codess.snapshot import current_store_paths, snapshot_store_paths
+from codess.snapshot import (
+    current_store_paths, publish_snapshot, snapshot_store_paths,
+    snapshot_store_paths_from_base,
+)
 
 
 def preserve_legacy(project: Path, enabled: bool) -> Path | None:
@@ -171,6 +174,8 @@ def run_ingest(
     registry: Path,
     min_size: int,
     repo_root: Path,
+    resource_policy: Path | None = None,
+    candidate_snapshot: bool = False,
 ) -> dict[str, Any]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root / "src")
@@ -179,13 +184,25 @@ def run_ingest(
         "--source", source, "--force", "--min-size", str(min_size),
         "--raw-mode", raw_mode, "--registry", str(registry),
     ]
+    if candidate_snapshot:
+        command.append("--candidate-snapshot")
+    if resource_policy is not None:
+        command.extend(["--resource-policy", str(resource_policy)])
     result = subprocess.run(
         command, cwd=repo_root, env=env, capture_output=True,
         text=True, timeout=3600,
     )
+    runtime_report = {}
+    runtime_path = project / ".codess" / "last-ingest-report.json"
+    if result.returncode == 0 and runtime_path.exists():
+        runtime_report = read_json(runtime_path)
     return {
         "command": command, "returncode": result.returncode,
         "stdout": result.stdout, "stderr": result.stderr,
+        "snapshot_id": runtime_report.get("snapshot_id"),
+        "candidate_snapshot_path": runtime_report.get(
+            "candidate_snapshot_path"
+        ),
     }
 
 
@@ -203,6 +220,7 @@ def apply_project(
     query_smoke: bool,
     repo_root: Path,
     report_path: Path | None = None,
+    resource_policy: Path | None = None,
 ) -> dict[str, Any]:
     project = project.expanduser().resolve()
     registry = registry.expanduser().resolve()
@@ -215,9 +233,15 @@ def apply_project(
     first_ingest = run_ingest(
         project, source=source, raw_mode=raw_mode, registry=registry,
         min_size=min_size, repo_root=repo_root,
+        resource_policy=resource_policy,
+        candidate_snapshot=True,
     )
     if first_ingest["returncode"] != 0:
         raise RuntimeError("ingest failed: " + first_ingest["stderr"].strip())
+    first_candidate = first_ingest.get("candidate_snapshot_path")
+    if not isinstance(first_candidate, str) or not first_candidate:
+        raise RuntimeError("ingest did not report a candidate snapshot")
+    first_snapshot = Path(first_candidate).resolve()
     raw_root = registry / "raw"
     verify_reference_current = not bool(
         policy.get("allow_source_revision_drift")
@@ -227,6 +251,7 @@ def apply_project(
         policy=policy,
         raw_store_root=raw_root,
         verify_reference_current=verify_reference_current,
+        snapshot_path=first_snapshot,
     )
     if first["status"] == "rejected":
         raise RuntimeError("first validation rejected: " + "; ".join(first["errors"]))
@@ -238,25 +263,36 @@ def apply_project(
         second_ingest = run_ingest(
             project, source=source, raw_mode=raw_mode, registry=registry,
             min_size=min_size, repo_root=repo_root,
+            resource_policy=resource_policy,
+            candidate_snapshot=True,
         )
         if second_ingest["returncode"] != 0:
             raise RuntimeError("repeat ingest failed: " + second_ingest["stderr"].strip())
+        second_candidate = second_ingest.get("candidate_snapshot_path")
+        if not isinstance(second_candidate, str) or not second_candidate:
+            raise RuntimeError("repeat ingest did not report a candidate snapshot")
+        second_snapshot = Path(second_candidate).resolve()
         second = validate_project(
             project,
             policy=policy,
             raw_store_root=raw_root,
             verify_reference_current=verify_reference_current,
+            snapshot_path=second_snapshot,
         )
         fixed_point = {
             "source_revisions_match": first.get("source_revisions") == second.get("source_revisions"),
             "semantic_digest_match": first.get("semantic_digest") == second.get("semantic_digest"),
             "normalization_digest_match": first.get("normalization_digest") == second.get("normalization_digest"),
         }
-        prior_paths = snapshot_store_paths(
-            project, first["snapshot_id"], allow_package_mismatch=False
+        prior_paths = snapshot_store_paths_from_base(
+            first_snapshot.parent.parent,
+            first["snapshot_id"],
+            allow_package_mismatch=False,
         )
-        rebuilt_paths = snapshot_store_paths(
-            project, second["snapshot_id"], allow_package_mismatch=False
+        rebuilt_paths = snapshot_store_paths_from_base(
+            second_snapshot.parent.parent,
+            second["snapshot_id"],
+            allow_package_mismatch=False,
         )
         value_acceptance = compare_snapshots(
             prior_paths,
@@ -277,12 +313,23 @@ def apply_project(
         if not fixed_point["passed"]:
             raise RuntimeError("fixed-point validation failed")
     final = second or first
+    final_snapshot = second_snapshot if second is not None else first_snapshot
     if query_smoke:
-        smoke = run_query_smoke(project)
+        smoke = run_query_smoke(
+            project,
+            snapshot_id=final["snapshot_id"],
+            snapshot_path=final_snapshot,
+        )
         final["query_smoke"] = smoke
         failures = [name for name, item in smoke.items() if not item["passed"]]
         if failures:
             raise RuntimeError("query smoke failed: " + ", ".join(failures))
+    published = publish_snapshot(
+        project,
+        final_snapshot,
+        registry_root=registry,
+        project_id=final.get("project_id"),
+    )
     result = {
         "report_format": "codess.apply-report/1",
         "project": str(project), "status": final["status"],
@@ -295,6 +342,11 @@ def apply_project(
         "first_ingest": first_ingest, "first_validation": first,
         "repeat_ingest": second_ingest, "repeat_validation": second,
         "fixed_point": fixed_point, "final_validation": final,
+        "publication": {
+            "status": "published",
+            "snapshot_id": published["snapshot_id"],
+            "project_pointer": str(project / ".codess/current.json"),
+        },
     }
     if approve_catalog:
         update_approved_catalog(

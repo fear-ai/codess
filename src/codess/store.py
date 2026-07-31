@@ -30,6 +30,7 @@ from codess.schema_contract import (
     require_store,
     verify_package,
 )
+from codess.tool_identity import bounded_source_call_id
 from codess.mapping import canonical_json, structured_json
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 
@@ -1002,7 +1003,7 @@ def record_processing_run(
 def _lineage_id(event: dict[str, Any]) -> str | None:
     metadata = _json_dict(event.get("metadata"))
     value = metadata.get("call_id") or metadata.get("tool_use_id")
-    return str(value) if value is not None else None
+    return bounded_source_call_id(value) if value is not None else None
 
 
 def _record_diagnostic(

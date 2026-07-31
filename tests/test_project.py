@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from codess.cursor_source import (
     get_global_db as get_cursor_global_db,
     get_workspace_dbs as get_cursor_workspace_dbs,
@@ -13,7 +11,6 @@ from codess.cursor_source import (
 )
 from codess.project import (
     find_slug_for_project,
-    get_cc_session_dir,
     path_to_slug,
     resolve_cli_roots,
     slug_to_path,

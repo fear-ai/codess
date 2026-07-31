@@ -31,10 +31,24 @@ Codess searches past blank or malformed prefix lines for `session_meta`.
 Active and archived roots are both read by default. Setting
 `CODESS_CODEX_SESSIONS` isolates active input and disables the default archive
 root; set `CODESS_CODEX_ARCHIVED_SESSIONS` explicitly to add an archive root.
-Codess does not currently infer Codex subagent parentage from transcripts.
 If active and archived roots contain the same session id, the active transcript
 wins; within one root the newest file wins. Re-ingest transactionally replaces
 the selected session rather than leaving events removed from the transcript.
+
+### Names, Projects, and runtime state
+
+ChatGPT desktop Projects are application groupings of chats. They are not the
+same entity as a Codex CLI working directory or a Codess Project. Recent Codex
+CLI releases support `/rename`, and local Codex state databases can retain a
+thread title, but that title is not present in the session JSONL
+`session_meta`. Codess therefore keeps a user-assigned Session name separate
+from source title evidence and stable Session identity.
+
+The live Codex app protocol can report thread runtime states such as active,
+idle, not loaded, or system error. The JSONL transcript and persisted thread
+index do not reconstruct that live state. Codess may record a dated runtime
+observation when such an interface supplies it; source mtime, an unanswered
+prompt, or an active-tree pathname alone yields runtime `unknown`.
 
 ---
 
@@ -56,7 +70,7 @@ the selected session rather than leaving events removed from the transcript.
 | `payload.id` | string | Session id fallback |
 | `payload.cwd` | string | Project directory; resolved and compared to scan path |
 | `payload.cli_version` | string | Stored as normalized session release and metadata |
-| `payload.model_provider`, `originator`, `source` | string | Retained as bounded session metadata; provider can seed a session-level configuration |
+| `payload.model_provider`, `originator`, `source` | scalar or version-specific structured value | Retained as bounded session metadata; provider can seed a session-level configuration. Current protocol releases can encode structured Session source/subagent evidence, so mapping must be shape- and release-aware |
 | `timestamp` | number or string | Session time for `--days` filter |
 
 ---
@@ -69,15 +83,19 @@ Ingest adapter primarily uses:
 |--------|------|
 | `session_meta` | Supplies session identity/metadata; not emitted as an event |
 | `response_item.message` | Canonical user and assistant messages |
+| Paired `event_msg.user_message` plus `response_item.message role=user` | Exact pairing identifies a direct UI prompt in current rollouts. An unpaired user-role message is retained as harness context; the source role remains `user` in mapping evidence |
 | `response_item.reasoning.summary[].text` | Vendor-exposed reasoning summary retained as `message.reasoning_summary`; encrypted reasoning state is not decoded |
 | `response_item.function_call` / `custom_tool_call` | Tool calls with sanitized JSON input and call-id metadata; structured failed/error/incomplete status becomes `tool_failure` |
+| `response_item.tool_search_call` / `tool_search_output` | Server-side tool discovery request/result, retained as one linked tool exchange |
 | `response_item.web_search_call` | `web_search` tool call with sanitized action metadata |
-| Matching call-output records | Tool results; call id restores the tool name |
+| Matching call-output records | Tool results; call id restores the tool name. For an MCP call, an explicit error body is application failure even when the MCP transport completed successfully |
 | `compacted` | Replacement-history envelope; its dedicated `compaction` item becomes one bounded `context.compact` event |
 | `event_msg.turn_aborted` | Retained as a `turn_aborted` assistant audit event |
 | `event_msg.task_started` / `task_complete` | Retained as harness lifecycle events; completion text is not duplicated as another assistant response |
 | `event_msg.context_compacted` | Notification paired with `compacted`; recognized but not emitted again |
 | `event_msg.web_search_end` / `patch_apply_end` | Linked result/status evidence for the corresponding tool call when a call id is available |
+| `event_msg.mcp_tool_call_end` | Harness transport/status evidence for the corresponding MCP invocation: server/tool, connector/app/action/plugin identifiers, duration, and transport result status. The result body is not copied a second time; application status is linked from the matching call-output record |
+| `event_msg.thread_rolled_back` | Bounded `context.rollback` lifecycle evidence with the number of removed user turns |
 | `turn_context` | Not emitted as conversation text. Exact `payload.model` and `payload.effort`/`reasoning_effort`, plus the specifically identified collaboration mode, are attached to subsequent normalized events with source-record/field provenance; observed `payload.turn_id` becomes vendor `model_turns.source_turn_id` |
 | `event_msg.thread_settings_applied` | Newer bounded settings envelope. Exact model, provider, reasoning effort, service tier, approval policy, and collaboration mode update subsequent event/model-turn configuration |
 | `response_item.message` with `developer` or `system` role | Bounded harness/context injection, not a human prompt |
@@ -92,6 +110,21 @@ Every emitted event also retains `response_item`/`event_msg`, the payload type,
 line locator, declared mapping rule, and structured trace. Configured active or
 archive roots supply explicit session archive state and provenance; an archive
 location is not interpreted as successful completion.
+
+`update_plan` is retained as an ordinary named tool call. It is useful
+planning-activity evidence, but the name alone does not expose hidden model
+reasoning or prove a separate agent. Likewise, an MCP completion notification
+is transport evidence, not a second invocation. An `Ok` transport containing a
+GitHub/API error body remains transport-success/application-failure; the
+adapter preserves both facts rather than allowing transport success to mask
+the useful outcome.
+
+An installed Codex plugin or app connector can supply MCP-backed tools without
+a hand-written `[mcp_servers.*]` entry. Configuration inventory, tool
+discovery, tool invocation, transport completion, and application result are
+therefore separate observations. Codess does not infer that an MCP server was
+intentionally configured merely because one of those tools appears in a
+rollout.
 
 Malformed payload containers, tool inputs, timestamps, and configuration fields
 are diagnosed at field scope and dropped independently. A malformed optional
@@ -151,17 +184,44 @@ field does not discard an otherwise supported record.
 
 ### Parent-session evidence
 
-The repeatable metadata-only audit in `tools/audit_codex_parentage.py` inspected
-all 28 local active/archive transcripts spanning 16 CLI/Desktop releases. It
-found no parent-like field and no resolvable parent reference; message,
-reasoning, prompt, and tool bodies were not inspected. The evidence report is
-`catalog/codex-parent-audit.json`. Codess therefore does not infer parentage
-from timestamps, path proximity, archive location, or content. The authoritative
-restart trigger is **CoPlan T4**.
+The earlier repeatable metadata-only audit in
+`tools/audit_codex_parentage.py` found no parent-like field in its then-current
+local cohort; message, reasoning, prompt, and tool bodies were not inspected.
+That observation is release- and cohort-specific. Current Codex protocol
+source defines `parent_thread_id`, `forked_from_id`, structured `thread_source`
+and subagent source values, agent nickname/role/path, and collaboration events
+for spawn, interaction, wait, close, resume, and activity. Codess maps direct
+parent and fork fields into distinct Session relations and preserves the
+remaining participant/source fields as bounded lineage metadata. Collaboration
+records map to harness-origin system Events with their sender, receiver,
+spawned-thread, prompt, model/effort, status, role/path, and timing evidence.
+No current local rollout in the reviewed cohort contains these records, so
+their compatibility evidence is the current OSS protocol plus focused
+fixtures—not a claim of local occurrence. Codess still never infers parentage
+from timestamps, path proximity, archive location, or content.
+
+### Coverage boundary and complete-transport capture
+
+The rollout is a durable harness-side event history, not a byte-for-byte model
+request/response trace. It preserves user, harness, model-summary, tool,
+compaction, lifecycle, settings, MCP, and some collaboration records that the
+release elects to record. It does not expose server-hidden reasoning, and
+encrypted reasoning bodies are not decoded. The model's active context can be
+a compacted subset while the rollout retains the longer accumulated history.
+
+Codex supports opt-in OpenTelemetry for request, streaming, turn, tool, and MCP
+timing/usage observations, plus lifecycle hooks. A controlled proxy can also be
+selected through the user-level `openai_base_url`. Neither is required for
+ordinary Codess local-history ingest. Native telemetry is the preferred first
+instrument because it carries harness semantics without copying prompt bodies
+by default. A proxy is justified only for a study that requires exact outbound
+request assembly, transport retries/stream frames, or otherwise unavailable
+wire latency. Even then it does not reveal server-hidden reasoning and does not
+capture local tool execution unless harness telemetry is collected too.
 
 ### Configuration evidence
 
-`python -m main evidence audit codex-features` performs a bounded,
+`codess evidence audit codex-features` performs a bounded,
 structure-only audit. A local audit reviewed all 28 active/archive
 transcripts (about 449 MiB) with a 64 KiB per-record ceiling. It found 8,107
 `turn_context` records and 143 newer `thread_settings_applied` records. Exact

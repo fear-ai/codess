@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from codess.cursor_cohort import (
     cohort_needed,
+    combine_selection_markers,
     load_selection_marker_cache,
     prepare_cursor_cohort,
     save_selection_marker_cache,
@@ -46,6 +48,27 @@ def test_selection_marker_cache_requires_exact_container_and_scope(tmp_path):
         cache, source=source, container_marker=container,
         selections={"/other": {"workspace"}},
     ) is None
+
+    legacy_cache = json.loads(cache.read_text(encoding="utf-8"))
+    legacy_cache["cache_format"] = "codess.cursor-selection-cache/1"
+    cache.write_text(json.dumps(legacy_cache), encoding="utf-8")
+    assert load_selection_marker_cache(
+        cache, source=source, container_marker=container,
+        selections=selections,
+    ) is None
+
+
+def test_combined_selection_marker_uses_sha256():
+    marker = combine_selection_markers({
+        "/one": {"source_revision": "sha256-fingerprint:one"},
+        "/two": {"source_revision": "sha256-fingerprint:two"},
+    })
+    assert marker["source_revision"].startswith(
+        "cursor-cohort-selection-sha256-fingerprint:"
+    )
+    assert marker["fingerprint_method"].endswith(
+        "selection-sha256-fingerprint"
+    )
 
 
 def test_cursor_cohort_cache_restores_without_recapturing(tmp_path, monkeypatch):

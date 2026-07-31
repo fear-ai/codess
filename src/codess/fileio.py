@@ -14,14 +14,6 @@ SOURCE_SAMPLE_CHUNK = 1024 * 1024
 SOURCE_SAMPLE_WINDOWS = 8
 
 
-def _fingerprint_digest():
-    """Return a fast non-authenticating digest for change detection only."""
-    try:
-        return hashlib.md5(usedforsecurity=False)
-    except TypeError:  # pragma: no cover - older Python/OpenSSL combinations
-        return hashlib.md5()
-
-
 def hash_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -35,19 +27,19 @@ def source_fingerprint(
     *,
     _include_sidecars: bool = True,
 ) -> tuple[str, float | None, int | None, str, str]:
-    """Fingerprint a stable source with bounded I/O and explicit strength."""
+    """Fingerprint a stable source with bounded SHA-256 I/O."""
     try:
         before = path.stat()
     except OSError:
         return "unavailable", None, None, "unavailable", "unavailable"
-    digest = _fingerprint_digest()
+    digest = hashlib.sha256()
     try:
         with path.open("rb") as stream:
             if before.st_size <= SOURCE_FULL_HASH_MAX:
                 for chunk in iter(lambda: stream.read(SOURCE_SAMPLE_CHUNK), b""):
                     digest.update(chunk)
-                method = "full-md5-fingerprint"
-                revision = f"md5-fingerprint:{digest.hexdigest()}"
+                method = "full-sha256-fingerprint"
+                revision = f"sha256-fingerprint:{digest.hexdigest()}"
             else:
                 maximum_offset = max(0, before.st_size - SOURCE_SAMPLE_CHUNK)
                 offsets = sorted({
@@ -60,9 +52,9 @@ def source_fingerprint(
                     chunk = stream.read(SOURCE_SAMPLE_CHUNK)
                     digest.update(f"offset:{offset}:length:{len(chunk)}\0".encode("ascii"))
                     digest.update(chunk)
-                method = "bounded-sample-md5-fingerprint"
+                method = "bounded-sample-sha256-fingerprint"
                 revision = (
-                    f"sample-md5-fingerprint:{digest.hexdigest()}:"
+                    f"sample-sha256-fingerprint:{digest.hexdigest()}:"
                     f"mtime-ns:{before.st_mtime_ns}:size:{before.st_size}"
                 )
         after = path.stat()
@@ -90,11 +82,14 @@ def source_fingerprint(
         wal_revision, wal_mtime, wal_size, wal_method, wal_consistency = (
             source_fingerprint(wal_path, _include_sidecars=False)
         )
-        combined_digest = _fingerprint_digest()
+        combined_digest = hashlib.sha256()
         combined_digest.update(
             f"main:{revision}\0wal:{wal_revision}".encode("utf-8")
         )
-        revision = f"sqlite-main-wal-md5-fingerprint:{combined_digest.hexdigest()}"
+        revision = (
+            "sqlite-main-wal-sha256-fingerprint:"
+            f"{combined_digest.hexdigest()}"
+        )
         mtime = max(value for value in (mtime, wal_mtime) if value is not None)
         size += wal_size or 0
         method = f"{method}+wal:{wal_method}"

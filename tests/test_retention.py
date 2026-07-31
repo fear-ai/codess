@@ -1,6 +1,5 @@
 """Latest-only snapshot and raw-object retention."""
 
-import hashlib
 import json
 import sqlite3
 

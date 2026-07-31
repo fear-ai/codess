@@ -4,10 +4,7 @@
   "required_validator_version": "0.2",
   "project": "/Users/walter/Work/WP/harduw",
   "required_sources": ["Codex"],
-  "minimum_sessions": {"Codex": 1},
-  "minimum_events": {"Codex": 60},
   "raw_mode": "capture",
-  "expected_raw_records": 1,
   "allowed_diagnostics": {
     "missing_tool_call_id": {"max": 9}
   },

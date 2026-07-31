@@ -74,18 +74,20 @@ directions; retained format-3 snapshots remain valid historical evidence.
   input. Its boundary may be vendor-provided, mapped, inferred, or manual.
 - **Model turn** — one bounded model execution within an interaction. It is not
   assumed to equal a displayed message or a user/assistant pair.
-- **Actor** — the producer or operative principal represented by
-  `actor_kind` (for example human, model, harness, tool, agent, or system).
-  `content_role` separately records how content is presented, and `origin_kind`
-  records where it came from. This avoids forcing all harness input into
-  `user` and all model output into `assistant`.
+- **Actor** — the immediate evidence-backed producer or operative participant
+  represented by `actor_kind` (principally human, model, harness, or tool;
+  `agent` is used only when the source exposes a distinct runtime
+  participant). Exact vendor `source_role`, content function, origin,
+  Interaction initiation, and Session relation are independent evidence.
+  A vendor `user` envelope is therefore not automatically human, and a
+  subagent Session is not automatically the author of every record it carries.
 - **Artifact** — a file, URI, repository object, or other durable object an event
   reads, creates, modifies, deletes, executes, or mentions. Observed absolute
   paths are evidence; project-relative paths are the preferred portable key.
 - **Project snapshot** — one immutable dated normalized observation of one
   Project, bound to exact source revisions and processing/package identities.
 - **Assembly** — a reproducible selection over one or more Project snapshots,
-  with optional SQLite, JSONL, Parquet, or DuckDB materializations. Assemblies
+  with optional SQLite, JSONL, Parquet, or DuckDB exports. Assemblies
   are derived query/export products, not additional CoSchema source entities.
 
 ## Functional entities
@@ -108,6 +110,17 @@ directions; retained format-3 snapshots remain valid historical evidence.
 | `artifacts` / `event_artifacts` | Durable objects and evidence-backed operations on them |
 | `mapping_diagnostics` | Source-, record-, or field-level loss, rejection, or ambiguity |
 | `correlation_assertions` | Reviewable cross-session/project/vendor claims with method, evidence, and confidence |
+
+`tool_invocations.source_call_id` is a vendor free-text lineage value, scoped
+by source system and Session rather than globally unique. The relational copy
+is bounded to 100 UTF-8 bytes: short values remain exact, while longer values
+use a UTF-8-safe prefix plus the full SHA-256 digest. Event metadata/raw
+evidence retains the original vendor value.
+
+For Git-backed work, one repository has exactly one Codess Project identity.
+Clones, linked worktrees, workspace directories, branches, and vendor workspace
+IDs are Project locations, bindings, or dated observations; none creates a
+second Project. This rule does not require Git for a Project.
 
 ### Interaction-preservation rule
 
@@ -139,7 +152,7 @@ duplicate that list. SQLite compatibility projection columns in `sessions` and
 CoSchema governs each authoritative Project snapshot. A cross-Project Assembly
 uses a separate read/export contract above CoSchema and must retain
 `project_id`, `snapshot_id`, stable entity/observation IDs, and source lineage.
-Creating an Assembly or a new materialization format does not advance the
+Creating an Assembly or a new export format does not advance the
 CoSchema format unless the authoritative per-Project stored meaning changes.
 
 ## Important field decisions
@@ -308,24 +321,34 @@ catalog location operations define the current lifecycle surface.
 `tools/validate_snapshot.py` verifies the current package and immutable-file
 hashes, SQLite integrity and foreign keys, manifest counts, event ordering,
 artifact identity/index invariants, JSON fields, raw object recovery, mapping
-diagnostic allowances, source-specific minimums, and optional Cursor scoping
-and turn rules. `tools/apply_and_verify.py` applies this gate to one project at
-a time and can require two rebuilds with unchanged source revisions and equal
-canonical logical digests. It runs read-only query smoke tests before atomically
-updating `catalog/approved-baselines.json`. Policies are versioned data under
-`catalog/policies/`; their contract is
+diagnostic allowances, required source-system coverage, and optional Cursor
+scoping and turn rules. A policy `required_sources: ["Codex"]` means the
+reviewed baseline is a Codex adapter/format specimen; it does not mean that
+Codess or the Project requires Codex for ordinary operation. Living
+real-Project policies do not freeze Session, Event, or raw-record counts.
+Actual counts remain dated manifest/report observations; exact/minimum count
+assertions are reserved for deterministic fixtures or an explicitly frozen
+research cohort. `tools/apply_and_verify.py` applies this gate to one project
+at a time and can require two rebuilds with unchanged source revisions and
+equal canonical logical digests. It runs read-only query smoke tests before
+atomically updating `catalog/approved-baselines.json`. Policies are versioned
+data under `catalog/policies/`; their contract is
 `schema/validation-policy-contract.json`. The repeated-build path additionally
 streams canonical rows from both immutable stores through the D17 value gate.
 Identity, ordering, and lineage differences are fatal; other value differences
 are advisory and remain visible in the acceptance report. This comparison does
 not materialize either database in memory.
 
-Sources at or below 64 MiB receive a full-file MD5 change fingerprint. Larger
-sources use an explicitly labeled eight-window MD5 sample plus size and mtime.
-MD5 is deliberately used here as a fast, non-authenticating change detector;
-neither form proves byte identity or protects against an adversary. Exact raw
-capture still hashes the complete stable file or transactional SQLite backup
-with SHA-256 because that digest is its content address and integrity identity.
+Sources at or below 64 MiB receive a full-file SHA-256 change fingerprint.
+Larger sources use an explicitly labelled eight-window SHA-256 sample plus size
+and mtime. Neither form is an authenticity claim, and the sampled form does not
+prove complete byte identity. Exact raw capture also hashes the complete stable
+file or transactional SQLite backup with SHA-256 because that digest is its
+content address and integrity identity. New ingestion and runtime verification
+use SHA-256 exclusively. Unsupported historical digest labels cannot prove
+equality to a current live Source. Derived data is rebuilt rather than
+rewriting the immutable historical snapshot. Complete raw-object, snapshot,
+store, manifest, package, and SHA-256 reference mismatches remain errors.
 Incremental ingest
 state records the revision, method, size, mtime, and consistency, so same-size
 and same-mtime changes are detected for fully hashed sources. When a SQLite WAL

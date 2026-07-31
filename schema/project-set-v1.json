@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codess.local/schema/project-set-v1.json",
+  "title": "Codess saved Project set v1",
+  "type": "object",
+  "required": ["format", "projects"],
+  "properties": {
+    "format": {"const": "codess.project-set/1"},
+    "name": {"type": "string"},
+    "projects": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["project_id"],
+        "properties": {
+          "project_id": {"type": "string", "minLength": 1},
+          "snapshot_id": {"type": ["string", "null"], "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -11,20 +11,28 @@ from pathlib import Path
 from codess.config import get_project_stores, validate_config
 from codess.identity import global_session_id
 from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
+from codess.project_catalog import resolve_project_query_scopes
 from codess.registry_store import merge_query_stats, update_project_entry
 from codess.sanitize import (
     protect_csv_row, sanitize_for_display, sanitize_tabular, sanitize_text,
 )
 from codess.schema_contract import SchemaContractError
-from codess.snapshot import SnapshotError, snapshot_store_paths
+from codess.session_names import alias_index
+from codess.snapshot import (
+    SnapshotError,
+    current_store_paths_from_base,
+    snapshot_store_paths,
+    snapshot_store_paths_from_base,
+)
 from codess.store import connect as connect_store
 from codess.configuration_audit import audit as audit_configurations
 from codess.evidence_resolver import resolve_event
+from codess.investigation import build_investigation
 from codess.query_api import (
     REQUEST_FORMAT, RESULT_FORMAT, QueryContractError,
-    compare_results, execute as execute_typed_query, load_document,
+    compare_results, content_hash, execute as execute_typed_query, load_document,
     make_request, merge_selection, save_document, selection_from_result,
-    selected_project_ids, validate_request,
+    selected_project_ids, selected_project_snapshots, validate_request,
 )
 log = logging.getLogger(__name__)
 
@@ -48,6 +56,7 @@ class QueryScope:
     def __init__(self, source_tokens: set[str] | None = None) -> None:
         self.stores: list[dict] = []
         self.source_tokens = source_tokens
+        self.session_names: dict[tuple[str, str], str] = {}
 
     def close(self) -> None:
         for store in self.stores:
@@ -97,6 +106,74 @@ def _open_query_scope(
         raise
 
 
+def _open_project_id_query_scope(
+    project_scopes: list[dict],
+    *,
+    snapshot_id: str | None = None,
+    allow_package_mismatch: bool = False,
+    source_tokens: set[str] | None = None,
+) -> tuple[QueryScope, list[Path]]:
+    """Open central snapshots selected by exact Project identity."""
+    scope = QueryScope(source_tokens)
+    missing: list[Path] = []
+    try:
+        for selection in project_scopes:
+            base = Path(selection["snapshot_base"])
+            selected_snapshot_id = snapshot_id or selection.get("snapshot_id")
+            try:
+                stores = (
+                    snapshot_store_paths_from_base(
+                        base,
+                        selected_snapshot_id,
+                        allow_package_mismatch=allow_package_mismatch,
+                    )
+                    if selected_snapshot_id
+                    else current_store_paths_from_base(base)
+                )
+            except SnapshotError as exc:
+                label = selection.get("logical_name")
+                project_label = (
+                    f"{label} ({selection['project_id']})"
+                    if label
+                    else selection["project_id"]
+                )
+                raise SnapshotError(
+                    "Project "
+                    f"{project_label} snapshot "
+                    f"{selected_snapshot_id or '<current>'} cannot be opened "
+                    "under the selected snapshot policy: "
+                    f"{exc}"
+                ) from exc
+            if not stores:
+                missing.append(base)
+                continue
+            for path in stores:
+                conn = connect_store(path, read_only=True)
+                try:
+                    conn.execute("SELECT 1 FROM sessions LIMIT 1")
+                    conn.execute("SELECT 1 FROM events LIMIT 1")
+                except Exception:
+                    conn.close()
+                    raise
+                scope.stores.append({
+                    "conn": conn,
+                    "path": path,
+                    "project_root": Path(selection["project_root"]),
+                    "project_id": selection["project_id"],
+                    "snapshot_id": selected_snapshot_id,
+                    "snapshot_base": base,
+                    "selection_kind": selection.get("selection_kind"),
+                    "selection_sha256": selection.get("selection_sha256"),
+                    "resolved_selection_sha256": selection.get(
+                        "resolved_selection_sha256"
+                    ),
+                })
+        return scope, missing
+    except Exception:
+        scope.close()
+        raise
+
+
 def _source_predicate(scope: QueryScope, alias: str = "s") -> tuple[str, tuple[str, ...]]:
     """Return a compatibility-aware session-source predicate and parameters."""
     if not scope.source_tokens:
@@ -136,10 +213,14 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
             row[1] for row in store["conn"].execute("PRAGMA table_info(sessions)")
         }
         global_projection = "global_id," if "global_id" in session_columns else "NULL AS global_id,"
+        project_projection = (
+            "project_id," if "project_id" in session_columns
+            else "NULL AS project_id,"
+        )
         predicate, params = _source_predicate(scope)
         rows = store["conn"].execute(
             f"""
-            SELECT id, {global_projection} source_system_id, vendor_session_id, source, release, started_at, ended_at,
+            SELECT id, {global_projection} {project_projection} source_system_id, vendor_session_id, source, release, started_at, ended_at,
                    project_path, metadata
             FROM sessions s
             WHERE {predicate}
@@ -153,16 +234,21 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
                 # their IDs globally distinct by deriving a compatibility
                 # namespace from the recorded vendor label.
                 source_system_id = f"legacy.vendor:{str(row['source']).casefold()}"
+            stable_id = (
+                row["global_id"]
+                if row["global_id"] and not row["global_id"].startswith("codess:legacy:")
+                else global_session_id(
+                    source_system_id, row["vendor_session_id"] or row["id"]
+                )
+            )
+            project_id = row["project_id"] or store.get("project_id")
             sessions.append(
                 {
                     "id": row["id"],
-                    "global_id": (
-                        row["global_id"]
-                        if row["global_id"] and not row["global_id"].startswith("codess:legacy:")
-                        else global_session_id(
-                            source_system_id, row["vendor_session_id"] or row["id"]
-                        )
-                    ),
+                    "global_id": stable_id,
+                    "name": scope.session_names.get(
+                        (str(project_id), stable_id)
+                    ) if project_id else None,
                     "query_id": (store_index, row["id"]),
                     "source": row["source"],
                     "release": row["release"],
@@ -209,14 +295,22 @@ def _session_by_number(scope: QueryScope, n: int) -> dict | None:
 
 
 def _session_by_identifier(scope: QueryScope, identifier: str) -> dict | None:
+    folded = identifier.casefold()
     matches = [
         row for row in _get_sessions_ordered(scope)
-        if row["global_id"] == identifier or row["id"] == identifier
+        if (
+            row["global_id"] == identifier
+            or row["id"] == identifier
+            or (
+                row.get("name") is not None
+                and str(row["name"]).casefold() == folded
+            )
+        )
     ]
     if len(matches) > 1:
         raise ValueError(
-            f"session ID {identifier!r} is ambiguous across selected stores; "
-            "use the global session ID"
+            f"Session identifier {identifier!r} is ambiguous across selected "
+            "stores; use the global session ID"
         )
     return matches[0] if matches else None
 
@@ -279,29 +373,84 @@ def run(args) -> int:
         print("codess: --id requires --sessions", file=sys.stderr)
         return 1
 
-    roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.PROJECT_ROOT)
-    if err:
-        print(err, file=sys.stderr)
+    registry = resolve_registry_directory(args)
+    requested_project_ids = list(getattr(args, "project_ids", None) or [])
+    project_set = getattr(args, "project_set", None)
+    all_current = bool(getattr(args, "all_current", False))
+    explicit_paths = bool(getattr(args, "dirs", None)) or bool(
+        getattr(args, "dir_list", None)
+    )
+    selector_count = (
+        int(bool(requested_project_ids))
+        + int(project_set is not None)
+        + int(all_current)
+        + int(explicit_paths)
+    )
+    if selector_count > 1:
+        print(
+            "codess: select exactly one of --project-id, --project-set, "
+            "--all-current, or --dir/--dirs",
+            file=sys.stderr,
+        )
         return 1
-    resolved_roots = [root.resolve() for root in roots]
+    catalog_selection = bool(requested_project_ids) or project_set is not None or all_current
+    if catalog_selection:
+        try:
+            project_scopes = resolve_project_query_scopes(
+                registry,
+                requested_project_ids or None,
+                project_set=project_set,
+                all_current=all_current,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"codess: cannot resolve Project scope: {exc}", file=sys.stderr)
+            return 1
+        resolved_roots = [
+            Path(selection["project_root"]) for selection in project_scopes
+        ]
+    else:
+        roots, err = resolve_cli_roots(
+            args, when_empty=RootsWhenEmpty.PROJECT_ROOT
+        )
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+        resolved_roots = [root.resolve() for root in roots]
+        project_scopes = []
     snapshot_id = getattr(args, "snapshot_id", None)
     package_policy = getattr(args, "snapshot_package_policy", "exact")
+    if snapshot_id and (project_set is not None or all_current):
+        print(
+            "codess: --snapshot-id cannot be combined with --project-set or "
+            "--all-current; put expected snapshots in the Project set",
+            file=sys.stderr,
+        )
+        return 1
     if snapshot_id and len(resolved_roots) != 1:
         print("codess: --snapshot-id requires exactly one project root", file=sys.stderr)
         return 1
     try:
-        scope, missing_roots = _open_query_scope(
-            resolved_roots,
-            snapshot_id=snapshot_id,
-            allow_package_mismatch=package_policy == "read-compatible",
-            source_tokens=source_tokens,
-        )
+        if catalog_selection:
+            scope, missing_roots = _open_project_id_query_scope(
+                project_scopes,
+                snapshot_id=snapshot_id,
+                allow_package_mismatch=package_policy == "read-compatible",
+                source_tokens=source_tokens,
+            )
+        else:
+            scope, missing_roots = _open_query_scope(
+                resolved_roots,
+                snapshot_id=snapshot_id,
+                allow_package_mismatch=package_policy == "read-compatible",
+                source_tokens=source_tokens,
+            )
     except (sqlite3.Error, SchemaContractError, SnapshotError) as exc:
         print(f"codess: cannot open query stores: {exc}", file=sys.stderr)
         return 1
     if not scope.stores:
         print("No store found. Run session-ingest first.", file=sys.stderr)
         return 1
+    scope.session_names = alias_index(registry)
     for root in missing_roots:
         print(
             f"codess: warning: no store found for {sanitize_tabular(root)}",
@@ -378,6 +527,15 @@ def _typed_filters(args, source_tokens: set[str] | None) -> dict:
         "event_kinds": getattr(args, "event_kinds", None),
         "statuses": getattr(args, "query_statuses", None),
         "models": getattr(args, "query_models", None),
+        "tool_names": getattr(args, "query_tool_names", None),
+        "actor_kinds": getattr(args, "query_actor_kinds", None),
+        "content_roles": getattr(args, "query_content_roles", None),
+        "origin_kinds": getattr(args, "query_origin_kinds", None),
+        "parent_session_ids": getattr(args, "parent_session_ids", None),
+        "session_relation_kinds": getattr(
+            args, "session_relation_kinds", None
+        ),
+        "initiation_kinds": getattr(args, "initiation_kinds", None),
         "artifact": getattr(args, "query_artifact", None),
         "text": getattr(args, "query_text", None),
         "since": getattr(args, "since", None),
@@ -396,6 +554,49 @@ def _typed_filters(args, source_tokens: set[str] | None) -> dict:
 def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
     """Execute the typed interface and retain exact replay/provenance contracts."""
     action = args.query_action
+    if action == "cite":
+        if not getattr(args, "result_input", None):
+            print(
+                "codess: query cite requires --result-input",
+                file=sys.stderr,
+            )
+            return 1
+        if not getattr(args, "summary_file", None):
+            print(
+                "codess: query cite requires --summary-file",
+                file=sys.stderr,
+            )
+            return 1
+        if not getattr(args, "processor_id", None):
+            print(
+                "codess: query cite requires --processor-id",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            prior = load_document(Path(args.result_input), RESULT_FORMAT)
+            selected_snapshots = selected_project_snapshots(scope.stores)
+            expected_snapshots = (
+                prior.get("request") or {}
+            ).get("project_snapshots", [])
+            if expected_snapshots and expected_snapshots != selected_snapshots:
+                raise QueryContractError(
+                    "cited result Project snapshots do not match the selected scope"
+                )
+            summary = Path(args.summary_file).read_text(encoding="utf-8")
+            record = build_investigation(
+                prior,
+                summary=summary,
+                processor_id=args.processor_id,
+                event_ids=getattr(args, "event_ids", None) or (),
+            )
+            if getattr(args, "save_investigation", None):
+                save_document(Path(args.save_investigation), record)
+        except (OSError, UnicodeError, QueryContractError) as exc:
+            print(f"codess: cited investigation rejected: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(record, indent=2, sort_keys=True))
+        return 0
     if action == "evidence":
         event_ids = getattr(args, "event_ids", None) or []
         if len(event_ids) != 1:
@@ -435,6 +636,22 @@ def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
         print(error, file=sys.stderr)
         return 1
     try:
+        derivations = []
+        selected = None
+        if getattr(args, "result_input", None):
+            prior_selection = load_document(
+                Path(args.result_input), RESULT_FORMAT
+            )
+            selected = selection_from_result(prior_selection)
+            derivation = {
+                "kind": "stable_id_selection",
+                "input_result_hash": prior_selection.get("result_hash"),
+                "input_request_hash": prior_selection.get("request_hash"),
+                "selected_session_ids": selected.get("session_ids", []),
+                "selected_event_ids": selected.get("event_ids", []),
+            }
+            derivation["derivation_id"] = content_hash(derivation)
+            derivations.append(derivation)
         if getattr(args, "query_request", None):
             request = load_document(Path(args.query_request), REQUEST_FORMAT)
             validate_request(request)
@@ -447,6 +664,11 @@ def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
                 cli_filters or getattr(args, "limit", None) is not None
                 or getattr(args, "byte_limit", None) is not None
                 or getattr(args, "active_gap_caps", None)
+                or getattr(args, "expand", None)
+                or getattr(args, "before", 0)
+                or getattr(args, "after", 0)
+                or getattr(args, "group_repetitions", False)
+                or getattr(args, "facet_limit", 50) != 50
             ):
                 raise QueryContractError(
                     "a saved request cannot be combined with CLI predicates or limits"
@@ -459,16 +681,35 @@ def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
                 raise QueryContractError(
                     "saved request project_ids do not match the selected Project scope"
                 )
+            if request.get("project_snapshots") and (
+                request["project_snapshots"]
+                != selected_project_snapshots(scope.stores)
+            ):
+                raise QueryContractError(
+                    "saved request project_snapshots do not match the selected "
+                    "Project observations"
+                )
+            if selected:
+                request = merge_selection(request, selected)
         else:
             if action == "overview" and (
                 getattr(args, "limit", None) is not None
                 or getattr(args, "byte_limit", None) is not None
             ):
                 raise QueryContractError("overview does not accept --limit or --byte-limit")
+            filters = _typed_filters(args, source_tokens)
+            if selected:
+                for key, values in selected.items():
+                    current = set(filters.get(key) or [])
+                    filters[key] = (
+                        sorted(current & set(values))
+                        if current else sorted(set(values))
+                    )
             request = make_request(
                 action,
                 project_ids=selected_project_ids(scope.stores),
-                filters=_typed_filters(args, source_tokens),
+                project_snapshots=selected_project_snapshots(scope.stores),
+                filters=filters,
                 limit=getattr(args, "limit", None),
                 byte_limit=(
                     (getattr(args, "byte_limit", None) if getattr(args, "byte_limit", None) is not None else 16 * 1024 * 1024)
@@ -476,18 +717,39 @@ def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
                 ),
                 snapshot_id=snapshot_id,
                 active_gap_caps_minutes=getattr(args, "active_gap_caps", None) or (5, 30, 120),
+                expand=(
+                    str(args.expand).replace("-", "_")
+                    if getattr(args, "expand", None)
+                    else None
+                ),
+                sequence_before=getattr(args, "before", 0),
+                sequence_after=getattr(args, "after", 0),
+                group_repetitions=bool(
+                    getattr(args, "group_repetitions", False)
+                ),
+                facet_limit=getattr(args, "facet_limit", 50),
             )
-        if getattr(args, "result_input", None):
-            prior_selection = load_document(Path(args.result_input), RESULT_FORMAT)
-            request = merge_selection(request, selection_from_result(prior_selection))
         if getattr(args, "save_request", None):
             save_document(Path(args.save_request), request)
-        result = execute_typed_query(scope.stores, request)
+        result = execute_typed_query(
+            scope.stores, request, derivations=derivations
+        )
         changed = False
         if getattr(args, "compare_result", None):
             prior = load_document(Path(args.compare_result), RESULT_FORMAT)
             result["comparison"] = compare_results(prior, result)
-            changed = bool(result["comparison"]["added_ids"] or result["comparison"]["removed_ids"])
+            if not result["comparison"]["comparable"]:
+                raise QueryContractError(
+                    "comparison inputs are not semantically comparable: "
+                    + "; ".join(result["comparison"]["comparison_issues"])
+                )
+            changed = bool(
+                result["comparison"]["added_ids"]
+                or result["comparison"]["removed_ids"]
+                or result["comparison"]["changed_ids"]
+                or result["comparison"]["summary_changed"]
+                or result["comparison"]["provenance_changed"]
+            )
         if getattr(args, "save_result", None):
             save_document(Path(args.save_result), result)
     except (QueryContractError, OSError) as exc:
@@ -922,7 +1184,7 @@ def _show_session(
         (session["id"],),
     )
     for row in cur:
-        etype, subtype, role, content, tool_name, tool_input = (
+        etype, subtype, _role, content, tool_name, tool_input = (
             row["event_type"], row["subtype"], row["role"],
             row["content"], row["tool_name"], row["tool_input"],
         )
@@ -979,24 +1241,27 @@ def _sessions(scope: QueryScope, with_id: bool, limit: int | None = None) -> int
     if not rows:
         return 0
     if with_id:
-        print("id\tglobal_id\tnum\tsource\trelease\tdetails\tstarted_at\tended_at\tproject_path")
+        print("id\tglobal_id\tnum\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for i, row in enumerate(rows, 1):
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
             print(
                 f"{sanitize_tabular(row['id'])}\t{row['global_id']}\t{i}\t"
                 f"{sanitize_tabular(row['source'])}\t"
+                f"{sanitize_tabular(row['name'])}\t"
                 f"{sanitize_tabular(row['release'])}\t{details}\t"
                 f"{row['started_at']}\t"
                 f"{row['ended_at']}\t{sanitize_tabular(project)}"
             )
     else:
-        print("id\tglobal_id\tsource\trelease\tdetails\tstarted_at\tended_at\tproject_path")
+        print("id\tglobal_id\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for row in rows:
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
             print(
-                f"{sanitize_tabular(row['id'])}\t{row['global_id']}\t{sanitize_tabular(row['source'])}\t"
+                f"{sanitize_tabular(row['id'])}\t{row['global_id']}\t"
+                f"{sanitize_tabular(row['source'])}\t"
+                f"{sanitize_tabular(row['name'])}\t"
                 f"{sanitize_tabular(row['release'])}\t{details}\t"
                 f"{row['started_at']}\t{row['ended_at']}\t{sanitize_tabular(project)}"
             )

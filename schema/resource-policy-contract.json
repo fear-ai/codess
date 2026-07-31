@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codess.local/schema/resource-policy-contract.json",
+  "title": "Codess ingest resource policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "maximums"
+  ],
+  "properties": {
+    "format": {
+      "const": "codess.resource-policy/1"
+    },
+    "maximums": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "transcript_bytes": {
+          "$ref": "#/$defs/maximum"
+        },
+        "cursor_container_bytes": {
+          "$ref": "#/$defs/maximum"
+        },
+        "events_per_source": {
+          "$ref": "#/$defs/maximum"
+        },
+        "events_per_session": {
+          "$ref": "#/$defs/maximum"
+        },
+        "context_content_chars": {
+          "$ref": "#/$defs/maximum"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "maximum": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

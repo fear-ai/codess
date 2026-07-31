@@ -7,17 +7,9 @@
     "Claude",
     "Cursor"
   ],
-  "minimum_sessions": {
-    "Claude": 1,
-    "Cursor": 2
-  },
-  "minimum_events": {
-    "Claude": 646,
-    "Cursor": 114
-  },
   "raw_mode": "capture",
-  "expected_raw_records": 5,
   "expected_cursor_workspace_ids": [
+    "1778e58e2ddef9e2990021ca285f7a01",
     "336fccba4cdadb9ae80878ebf603c809",
     "b32376b591e1f6bba28d421a8ea68003",
     "b4ce84bb8a916dc6b4eb6b4e03bafb56",

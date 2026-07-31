@@ -66,6 +66,15 @@ classification columns default to null/false; additional columns are ignored.
 The table is not a complete historical catalog: Cursor can retain full
 `composerData:*` and `bubbleId:*` rows after removing a composer header.
 
+`isSubagent` is Session-relation and record-origin evidence. Codess stores the
+Session as `session_relation_kind=subagent`; a `type=1` bubble in that composer
+maps to a harness-carried `delegated_prompt` with
+`origin_kind=harness_delegated`, not a human prompt. The exact header flag and
+source role remain metadata. In the reviewed local layouts the corresponding
+parent composer/session is not consistently available, so
+`parent_session_id` remains NULL instead of being inferred from time, content,
+or workspace proximity.
+
 ### `ItemTable`
 
 Most rows are editor/workbench state and are ignored. One workspace-local row,
@@ -99,6 +108,19 @@ failed, running, and cancelled. Cursor therefore contributes evidence-backed
 tool-failure audit rows. The current dated audit contains 2,973 accepted and 20
 rejected `userDecision` values. Rejection maps to normalized `denied`
 independently of the status value; acceptance does not erase an observed error.
+For MCP-qualified tools, `completed` describes the harness call envelope, not
+necessarily the operation. An explicit nested `Error:`/`Failed to` result or
+structured error field now maps to application failure while retaining
+`source_status=completed`.
+
+`get_mcp_tools` and `list_mcp_resources` are discovery operations. Discovery
+can itself succeed while reporting `serverStatus=error`, an empty tool list, or
+an authentication-only tool for the target server. Those outcomes are not
+evidence that the target tool ran. Cursor's product-provided
+`cursor-app-control` tools are also distinct from user-configured servers:
+workspace-root moves, dialogs, chat renames, and resource display are real
+harness operations, but do not prove that an external MCP integration was
+configured or useful.
 
 **Compaction and request context.** A durable assistant bubble
 `conversationSummary` is verified in the local store. It is a JSON string with
@@ -149,11 +171,55 @@ explicitly supported context subset is `conversationSummary`,
 `contextWindowStatusAtCreation`, and top-level `messageRequestContext`; other
 large attachment/context-selection envelopes remain in captured raw evidence.
 
+### Repetition and deduplication
+
+Cursor evidence has three distinct repetition cases:
+
+1. **Physical duplicate storage.** The same logical bubble can be stored under
+   several local `bubbleId` keys. Within one composer, an available
+   `serverBubbleId` proves the duplicate identity described above, so Codess
+   retains the earliest observed copy. This is source-level deduplication.
+2. **Repeated real events.** Separate file reads, searches, edits, terminal
+   commands, tool results, permission decisions, TODO updates, mode changes,
+   directory checks, failures, and similar harness actions remain separate
+   observations even when their values match. Their source/event identifiers,
+   order, time, status, and relationships must be preserved.
+3. **Repeated content affecting search presentation.** Distinct events can
+   contain equal file bodies, directory responses, status objects, errors,
+   prompts, model responses, or result text. This includes a user copy-pasting
+   the same prompt and a model emitting the same response more than once.
+   Equality of the retained normalized payload is useful for grouping search
+   output but is not evidence that the events are duplicates. A truncated
+   prefix is not proof that the complete source bodies were equal.
+
+Cases 2 and 3 must never be deleted or coalesced during ingest. Query code may
+filter or facet by event kind, actor/role, tool, status, artifact, or source
+classification. It may optionally group presentation by content identity plus
+semantic dimensions, but a group must retain its occurrence count, time span,
+and every constituent stable ID and must expand losslessly to the ordered
+events. Dated corpus counts and the corresponding query work are maintained in
+**CoPlan L-P2/A4**, rather than embedded as permanent vendor-format facts here.
+
+“Repeated content” currently means exact equality of the complete retained
+normalized content under the same content policy, with compatible event kind,
+actor/role, truncation state, tool, and artifact dimensions. Whitespace- or
+template-normalized near duplicates, repetitive model phrasing, restatements,
+and semantically similar answers are a separate future analysis. Such a method
+must be versioned and confidence-bearing, cite its constituent events, and
+produce a derived grouping or assertion only; it can never authorize source or
+Event removal.
+
 ## 4. Composer data
 
 `composerData:<composerId>` may include identity, title, model/mode, context,
 conversation-header, file-state, and opaque conversation-state fields. It can
 also be null.
+
+The Composer title/name is source-system metadata and remains separate from a
+mutable Codess Session name. Cursor state fields are version-specific product
+evidence; no field is normalized to runtime `active` until a representative
+release check establishes its meaning and observation time. Database/change
+mtime alone reports Source activity, not a live Session.
 
 `get_composer_data()` currently reports the composer id, top-level keys,
 decode/null status, a legacy `conversation` presence check, and selected possible
@@ -221,7 +287,9 @@ SQLite read transactions and calculates a
 non-authenticating change marker from exact header fields, every key and value
 length, and the first/last 512 bytes of each value. A changed selected marker
 triggers one exact transactional backup for the cohort; unrelated table changes
-do not. Exact captured evidence remains fully SHA-256 addressed and verified.
+do not. Software 0.2.1 writes SHA-256 selected-row and combined-cohort markers;
+the bounded edge method remains a change detector rather than complete content
+identity. Exact captured evidence remains fully SHA-256 addressed and verified.
 
 An immediate repeat may reuse those selected markers only when a metadata-only
 cache matches the exact Project-to-workspace selection and two observations of

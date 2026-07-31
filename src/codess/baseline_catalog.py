@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from codess.baseline_validation import load_policy, validate_project
 from codess.fileio import read_json, write_json_atomic
+from codess.project_catalog import durable_project_root
 from codess.schema_contract import FORMAT_VERSION, verify_package
 
 
@@ -159,9 +160,16 @@ def verify_reviewed_catalog(path: Path, *, repo_root: Path) -> dict[str, Any]:
     results = []
     for item in catalog.get("projects", []):
         project = Path(item["path"]).expanduser().resolve()
-        pointer = read_json(project / ".codess/current.json")
-        if pointer.get("snapshot_id") != item.get("snapshot_id"):
-            raise ValueError(f"reviewed snapshot is no longer current: {project}")
+        project_id = item.get("project_id")
+        snapshot_id = item.get("snapshot_id")
+        if not isinstance(project_id, str) or not project_id:
+            raise ValueError(f"reviewed Project lacks project_id: {project}")
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise ValueError(f"reviewed Project lacks snapshot_id: {project}")
+        snapshot = (
+            durable_project_root(registry, project_id)
+            / "snapshots" / snapshot_id
+        )
         policy_path = Path(item["policy"])
         if not policy_path.is_absolute():
             policy_path = repo_root / policy_path
@@ -170,6 +178,7 @@ def verify_reviewed_catalog(path: Path, *, repo_root: Path) -> dict[str, Any]:
             policy=load_policy(policy_path),
             raw_store_root=registry / "raw",
             verify_reference_current=False,
+            snapshot_path=snapshot,
         )
         for field in ("snapshot_id", "semantic_digest"):
             if report.get(field) != item.get(field):
@@ -177,8 +186,8 @@ def verify_reviewed_catalog(path: Path, *, repo_root: Path) -> dict[str, Any]:
         if report.get("status") != item.get("validation_state"):
             raise ValueError(f"reviewed validation state changed: {project}")
         results.append({
-            "project": str(project), "snapshot_id": report["snapshot_id"],
-            "status": report["status"],
+            "project": str(project), "project_id": project_id,
+            "snapshot_id": report["snapshot_id"], "status": report["status"],
         })
     return {"status": "verified", "projects": results}
 

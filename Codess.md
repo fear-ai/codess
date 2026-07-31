@@ -42,8 +42,10 @@ investigation remain separate operations.
 | Per-source filters (`--source`) | P1 |
 | Redaction | P1 |
 
-**Out of scope:** an FTS5 derivative and Markdown export. Bounded normalized
-substring search is implemented. The remaining
+**Out of scope:** raw-source search over authorized vendor fields and messages,
+alternative indexed retrieval without measured need, and Markdown export.
+Bounded normalized substring search is implemented. Raw retention does not make
+raw vendor evidence searchable. The remaining
 dispositions are centralized in **CoPlan §8**.
 
 ### 2.3 People and scenarios
@@ -113,22 +115,27 @@ records, not documentation.
 | Term | Definition |
 |------|------------|
 | adapter | Parser/mapper for one source-system storage family |
-| assembly | Reproducible cross-Project selection over explicitly named Project snapshots and filters; it may be virtual or have several materializations |
+| Assembly | Reproducible cross-Project selection over explicitly named Project snapshots, filters, and selected fields; it may be queried directly or exported |
+| analysis dataset | Reusable rows selected for an investigation, with their Project/snapshot/source provenance and limitations |
+| Assembly export | An analysis dataset encoded for a consumer as JSONL, Parquet, DuckDB, merged SQLite, or another declared format; it is a derived workproduct, not source authority |
 | directory / path | Machine-local location string; never a durable work identity |
 | event | One ordered normalized observation within a Session |
-| extraction | Informal name for normalized output; use **Project snapshot** for the durable dated object and **assembly materialization** for a derived cross-Project file |
+| extraction | Informal operation/result name; use **Project snapshot** for the durable dated normalized Project object, **analysis dataset** for selected reusable rows, and **Assembly export** for an encoded cross-Project output |
+| raw-source search | A future bounded search over policy-authorized fields in exact vendor Source revisions, including evidence not projected into normalized content; raw capture alone is not such a search feature. Earlier documents called this full-source search, but encrypted, binary, unavailable, or unauthorized values prevent a truthful completeness claim |
 | harness / surface | Runtime or interface producing evidence, such as CLI, desktop, IDE extension, or agent runner |
 | ingest | Read selected Source revisions, normalize them, and atomically publish a new Project snapshot |
-| materialization | One physical representation of an Assembly, such as SQLite, JSONL, Parquet, or DuckDB |
 | model | Model configuration used by a Model Turn; it is not a vendor, actor role, Session, or harness |
-| Project | Minted stable identity for one continuing body of work, independent of paths, worktrees, or repository layout |
+| Project | Minted stable identity for one continuing body of work. For Git-backed work, exactly one Codess Project represents the repository; its clones, linked worktrees, workspace directories, and branches are locations, bindings, or observations under that Project |
 | Project location | Observed directory/worktree/subdirectory bound to a Project on one machine |
 | Project snapshot | Immutable dated normalized observation of one Project under recorded source revisions, package, decoder, validator, and policy |
-| repository | Version-control identity and correlation evidence; it may contain several Projects, and a Project may span or lack repositories |
+| repository | Version-control identity and the Project boundary for Git-backed work; one repository maps to one Codess Project, while non-Git work still has a Project without a repository |
 | scan | Discover candidate Project locations from source-system indexes without normalizing content |
 | Session | One source-system conversation/thread identity and lifecycle; globally namespaced by `source_system_id` |
+| Session name | Mutable human-readable key such as `slash_model` that maps to one `global_session_id`; unique within one Project and never itself an identity or provenance key. A source-system title remains separate upstream metadata |
 | Source / Source revision | Vendor/harness evidence container, and one observed byte/database revision of it; one Source can yield one or many Sessions |
 | source system | Namespace and storage family that makes upstream Session/record IDs meaningful, such as `anthropic.claude-code`, `openai.codex`, or `cursor.composer` |
+| provenance check | Bounded test with exact source records and expected Codess rows; it checks identity, order, relationships, values, source-specific evidence, diagnostics, query behavior, and evidence lookup for a claimed use case |
+| search report | Bounded, deterministic display of search matches and their result/provenance information. A future evaluation may compare report ordering without deleting matches or changing stored meaning |
 | vendor | Organization or ecosystem, such as Anthropic, OpenAI, or Cursor |
 | workspace | Source-system grouping attributed to a Project through an evidence-backed Workspace binding; not a synonym for Project or directory |
 
@@ -141,6 +148,30 @@ In code and new interfaces, use `source_system` for adapter/store selection,
 `vendor` for the organization/ecosystem, and `model` only for model
 configuration. Existing `--source` and legacy `vendor_filter` spellings remain
 compatibility surfaces until changed with aliases and migration tests.
+
+### 5.1 Vocabulary governance
+
+This glossary is the controlled terminology for documentation, public
+interfaces, and work-item names. The executable CoSchema contract separately
+owns closed stored-value vocabularies such as `normalized_status` and
+`location_state`; vendor Schema documents own exact upstream designations and
+their mappings. Open source-system values remain namespaced rather than being
+forced into a misleading common enum.
+
+Four loose phrases are retired:
+
+- **materialization** becomes **analysis dataset** for the selected rows and
+  **Assembly export** for a JSONL/Parquet/SQLite/DuckDB encoding; the
+  logical-versus-physical distinction adds nothing useful here;
+- **semantic golden** becomes the expected rows inside a **provenance
+  check**; it does not assert that different source systems express identical
+  meaning;
+- **source-system evidence-preservation case** becomes **provenance check**;
+  preservation remains an acceptance property rather than part of the name;
+  and
+- **investigation result-order evaluation** becomes **search report**: first
+  establish the investigation scope, then present its bounded matches and
+  provenance in the requested order. It carries no evaluation claim.
 
 ---
 

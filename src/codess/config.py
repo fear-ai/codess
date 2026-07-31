@@ -5,6 +5,8 @@ import platform
 import re
 from pathlib import Path
 
+from codess.resource_policy import BUILTIN_MAXIMUMS
+
 
 _CONFIG_ERRORS: list[str] = []
 
@@ -113,11 +115,24 @@ INGEST_REDACT = env_bool("CODESS_REDACT")
 RAW_MODE = os.environ.get("CODESS_RAW_MODE", "reference").strip().lower()
 STRICT_MAPPING = env_bool("CODESS_STRICT_MAPPING")
 CONTENT_POLICY = os.environ.get("CODESS_CONTENT_POLICY")
-MAX_SOURCE_BYTES = env_int("CODESS_MAX_SOURCE_BYTES", 8 * 1024**3)
-MAX_EVENTS_PER_SOURCE = env_int("CODESS_MAX_EVENTS_PER_SOURCE", 500_000)
-MAX_EVENTS_PER_SESSION = env_int("CODESS_MAX_EVENTS_PER_SESSION", 250_000)
+RESOURCE_POLICY = os.environ.get("CODESS_RESOURCE_POLICY")
+MAX_TRANSCRIPT_BYTES = env_int(
+    "CODESS_MAX_TRANSCRIPT_BYTES", BUILTIN_MAXIMUMS["transcript_bytes"]
+)
+# Compatibility alias. New configuration should use MAX_TRANSCRIPT_BYTES.
+MAX_SOURCE_BYTES = env_int("CODESS_MAX_SOURCE_BYTES", MAX_TRANSCRIPT_BYTES)
+MAX_CURSOR_CONTAINER_BYTES = env_int(
+    "CODESS_MAX_CURSOR_CONTAINER_BYTES",
+    BUILTIN_MAXIMUMS["cursor_container_bytes"],
+)
+MAX_EVENTS_PER_SOURCE = env_int(
+    "CODESS_MAX_EVENTS_PER_SOURCE", BUILTIN_MAXIMUMS["events_per_source"]
+)
+MAX_EVENTS_PER_SESSION = env_int(
+    "CODESS_MAX_EVENTS_PER_SESSION", BUILTIN_MAXIMUMS["events_per_session"]
+)
 MAX_CONTEXT_CONTENT_CHARS = env_int(
-    "CODESS_MAX_CONTEXT_CONTENT_CHARS", 128 * 1024
+    "CODESS_MAX_CONTEXT_CONTENT_CHARS", BUILTIN_MAXIMUMS["context_content_chars"]
 )
 MAX_CODESS_DB_BYTES = env_int("CODESS_MAX_CODESS_DB_BYTES", 2 * 1024**3)
 MAX_CURSOR_DB_BYTES = env_int("CODESS_MAX_CURSOR_DB_BYTES", 10 * 1024**3)
@@ -175,7 +190,8 @@ def validate_config() -> list[str]:
     if MIN_SIZE < 0:
         errs.append(f"CODESS_MIN_SIZE={MIN_SIZE} must be >= 0")
     for name, value in (
-        ("CODESS_MAX_SOURCE_BYTES", MAX_SOURCE_BYTES),
+        ("CODESS_MAX_TRANSCRIPT_BYTES", MAX_TRANSCRIPT_BYTES),
+        ("CODESS_MAX_CURSOR_CONTAINER_BYTES", MAX_CURSOR_CONTAINER_BYTES),
         ("CODESS_MAX_EVENTS_PER_SOURCE", MAX_EVENTS_PER_SOURCE),
         ("CODESS_MAX_EVENTS_PER_SESSION", MAX_EVENTS_PER_SESSION),
         ("CODESS_MAX_CONTEXT_CONTENT_CHARS", MAX_CONTEXT_CONTENT_CHARS),
@@ -184,6 +200,10 @@ def validate_config() -> list[str]:
     ):
         if value <= 0:
             errs.append(f"{name}={value} must be > 0")
+    if "CODESS_MAX_SOURCE_BYTES" in os.environ and MAX_SOURCE_BYTES <= 0:
+        errs.append(
+            f"CODESS_MAX_SOURCE_BYTES={MAX_SOURCE_BYTES} must be > 0"
+        )
     if RAW_MODE not in {"none", "reference", "capture", "seal"}:
         errs.append(
             f"CODESS_RAW_MODE={RAW_MODE!r} must be none, reference, capture, or seal"

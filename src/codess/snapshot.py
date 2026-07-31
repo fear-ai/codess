@@ -196,6 +196,108 @@ def _store_package_identity(
     return versions.pop(), package_digests.pop(), paths
 
 
+def _pointer_document(
+    snapshot: Path,
+    *,
+    local_base: Path,
+    project_id: str | None,
+) -> dict[str, Any]:
+    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+    return {
+        "snapshot_id": manifest["snapshot_id"],
+        "path": str(
+            snapshot
+            if snapshot.parent.parent.resolve() != local_base.resolve()
+            else snapshot.relative_to(local_base)
+        ),
+        "project_id": project_id,
+        "format_id": manifest["format_id"],
+        "format_version": manifest["format_version"],
+        "decoder_version": manifest["decoder_version"],
+        "validator_version": manifest["validator_version"],
+        "manifest_sha256": _sha256(snapshot / "manifest.json"),
+    }
+
+
+def _replace_pointer(source: Path, target: Path) -> None:
+    """Small publication seam used by failure-injection tests."""
+    os.replace(source, target)
+
+
+def publish_snapshot(
+    project_root: Path,
+    snapshot: Path,
+    *,
+    registry_root: Path | None = None,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """Promote one verified candidate while preserving pointer-pair consistency.
+
+    Candidate construction is intentionally separate from publication.  If
+    replacing either the central or Project-local pointer fails, every pointer
+    is restored byte-for-byte to its prior state.
+    """
+    project_root = project_root.expanduser().resolve()
+    snapshot = snapshot.expanduser().resolve()
+    local_base = project_root / ".codess"
+    expected_base = (
+        durable_project_root(registry_root, project_id).resolve()
+        if registry_root is not None and project_id is not None
+        else local_base.resolve()
+    )
+    if snapshot.parent.parent.resolve() != expected_base:
+        raise SnapshotError(
+            f"candidate snapshot is outside the expected snapshot base: {snapshot}"
+        )
+    # This checks the manifest, every retained database hash, and the supported
+    # read contract before publication can change a pointer. Current-format
+    # package equality was already enforced during construction.
+    snapshot_store_paths_from_base(
+        expected_base, snapshot.name, allow_package_mismatch=True
+    )
+    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("project_id") != project_id:
+        raise SnapshotError("candidate snapshot Project identity mismatch")
+    current = _pointer_document(
+        snapshot, local_base=local_base, project_id=project_id
+    )
+    targets = [expected_base / "current.json"]
+    local_target = local_base / "current.json"
+    if local_target.resolve() != targets[0].resolve():
+        targets.append(local_target)
+
+    payload = (json.dumps(current, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    previous: dict[Path, bytes | None] = {}
+    temporary: dict[Path, Path] = {}
+    replaced: list[Path] = []
+    try:
+        for target in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            previous[target] = target.read_bytes() if target.exists() else None
+            temp = target.parent / (
+                f".{target.name}.candidate-{os.getpid()}-{snapshot.name}"
+            )
+            temp.write_bytes(payload)
+            temporary[target] = temp
+        for target in targets:
+            _replace_pointer(temporary[target], target)
+            replaced.append(target)
+    except Exception as exc:
+        for target in reversed(replaced):
+            prior = previous[target]
+            if prior is None:
+                target.unlink(missing_ok=True)
+                continue
+            rollback = target.parent / f".{target.name}.rollback-{os.getpid()}"
+            rollback.write_bytes(prior)
+            os.replace(rollback, target)
+        raise SnapshotError(f"snapshot publication failed; prior pointers restored: {exc}") from exc
+    finally:
+        for temp in temporary.values():
+            temp.unlink(missing_ok=True)
+    return current
+
+
 def create_snapshot(
     project_root: Path,
     store_paths: Iterable[Path],
@@ -206,8 +308,9 @@ def create_snapshot(
     build_policy: dict[str, Any] | None = None,
     registry_root: Path | None = None,
     project_id: str | None = None,
+    publish: bool = True,
 ) -> Path:
-    """Build, validate, and promote a durable snapshot plus local pointer."""
+    """Build an immutable snapshot and optionally publish it as current."""
     local_base = project_root / ".codess"
     base = (
         durable_project_root(registry_root, project_id)
@@ -319,41 +422,30 @@ def create_snapshot(
         final = snapshots / snapshot_id
         os.replace(tmp, final)
 
-    current = {
-        "snapshot_id": snapshot_id,
-        "path": str(final if base != local_base else final.relative_to(local_base)),
-        "project_id": project_id,
-        "format_id": FORMAT_ID,
-        "format_version": store_format_version,
-        "decoder_version": DECODER_VERSION,
-        "validator_version": VALIDATOR_VERSION,
-        "manifest_sha256": _sha256(final / "manifest.json"),
-    }
-    local_base.mkdir(parents=True, exist_ok=True)
-    pointer_tmp = local_base / f".current.json.tmp-{os.getpid()}"
-    pointer_tmp.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(pointer_tmp, local_base / "current.json")
-    if base != local_base:
-        central_tmp = base / f".current.json.tmp-{os.getpid()}"
-        central_tmp.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(central_tmp, base / "current.json")
+    if publish:
+        publish_snapshot(
+            project_root,
+            final,
+            registry_root=registry_root,
+            project_id=project_id,
+        )
     return final
 
 
-def snapshot_store_paths(
-    project_root: Path,
+def snapshot_store_paths_from_base(
+    base: Path,
     snapshot_id: str,
     *,
     allow_package_mismatch: bool = False,
 ) -> list[Path]:
-    """Resolve and validate one retained snapshot by immutable identity.
+    """Resolve and validate one retained snapshot under a snapshot base.
 
     Package mismatch is rejected unless a caller explicitly requests the
     format-compatible reader path. That path verifies every retained hash and
     the current reader's database contract, but cannot promise identical
     mapping semantics.
     """
-    base = project_root / ".codess"
+    base = base.expanduser().resolve()
     if not snapshot_id or snapshot_id in {".", ".."} or "/" in snapshot_id:
         raise SnapshotError(f"invalid snapshot identity: {snapshot_id!r}")
     pointer = base / "current.json"
@@ -380,7 +472,7 @@ def snapshot_store_paths(
             raise SnapshotError("retained snapshot format is unsupported")
         package_matches = manifest.get("package_digest") == verify_package()
         if not package_matches and not allow_package_mismatch:
-            raise SnapshotError("retained snapshot CoSchema package digest mismatch")
+            raise SnapshotError("retained snapshot exact CoSchema package digest mismatch")
         raw_manifest = snapshot / "raw-manifest.jsonl"
         if _sha256(raw_manifest) != manifest.get("raw_manifest_sha256"):
             raise SnapshotError("retained snapshot raw manifest hash mismatch")
@@ -414,9 +506,23 @@ def snapshot_store_paths(
         raise SnapshotError(f"invalid retained snapshot: {exc}") from exc
 
 
-def current_store_paths(project_root: Path) -> list[Path]:
-    """Resolve validated current-snapshot DB paths, or return an empty list."""
-    base = project_root / ".codess"
+def snapshot_store_paths(
+    project_root: Path,
+    snapshot_id: str,
+    *,
+    allow_package_mismatch: bool = False,
+) -> list[Path]:
+    """Resolve one retained snapshot from a Project's local snapshot base."""
+    return snapshot_store_paths_from_base(
+        project_root / ".codess",
+        snapshot_id,
+        allow_package_mismatch=allow_package_mismatch,
+    )
+
+
+def current_store_paths_from_base(base: Path) -> list[Path]:
+    """Resolve validated current-snapshot DB paths under one snapshot base."""
+    base = base.expanduser().resolve()
     pointer = base / "current.json"
     if not pointer.exists():
         return []
@@ -429,8 +535,13 @@ def current_store_paths(project_root: Path) -> list[Path]:
             raise SnapshotError("current snapshot manifest hash mismatch")
         if snapshot.name != current["snapshot_id"]:
             raise SnapshotError("current snapshot path and identity disagree")
-        return snapshot_store_paths(project_root, current["snapshot_id"])
+        return snapshot_store_paths_from_base(base, current["snapshot_id"])
     except SnapshotError:
         raise
     except (OSError, KeyError, json.JSONDecodeError) as exc:
         raise SnapshotError(f"invalid current snapshot pointer: {exc}") from exc
+
+
+def current_store_paths(project_root: Path) -> list[Path]:
+    """Resolve validated current-snapshot DB paths, or return an empty list."""
+    return current_store_paths_from_base(project_root / ".codess")

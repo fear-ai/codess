@@ -1,9 +1,8 @@
 """Store and state edge cases."""
 
+import json
 import os
 from pathlib import Path
-
-import pytest
 
 from codess.store import (
     init_db,
@@ -76,8 +75,8 @@ class TestShouldIngest:
         original = source.stat()
         state_path = tmp_path / "state.json"
         marker = ingest_state_marker(source)
-        assert marker["source_revision"].startswith("md5-fingerprint:")
-        assert marker["fingerprint_method"] == "full-md5-fingerprint"
+        assert marker["source_revision"].startswith("sha256-fingerprint:")
+        assert marker["fingerprint_method"] == "full-sha256-fingerprint"
         save_ingest_state(state_path, {"source": marker})
         assert not should_ingest(
             state_path, "source", original.st_mtime, False, path=source
@@ -94,10 +93,31 @@ class TestShouldIngest:
         wal = Path(str(source) + "-wal")
         wal.write_bytes(b"wal-one")
         state_path = tmp_path / "state.json"
-        save_ingest_state(state_path, {"cursor": ingest_state_marker(source)})
+        marker = ingest_state_marker(source)
+        assert marker["source_revision"].startswith(
+            "sqlite-main-wal-sha256-fingerprint:"
+        )
+        assert marker["fingerprint_method"] == (
+            "full-sha256-fingerprint+wal:full-sha256-fingerprint"
+        )
+        save_ingest_state(state_path, {"cursor": marker})
         wal.write_bytes(b"wal-two")
         assert should_ingest(
             state_path, "cursor", source.stat().st_mtime, False, path=source
+        )
+
+    def test_large_source_uses_labelled_sampled_sha256(
+        self, tmp_path, monkeypatch
+    ):
+        source = tmp_path / "large.jsonl"
+        source.write_bytes(b"0123456789")
+        monkeypatch.setattr("codess.fileio.SOURCE_FULL_HASH_MAX", 4)
+        marker = ingest_state_marker(source)
+        assert marker["source_revision"].startswith(
+            "sample-sha256-fingerprint:"
+        )
+        assert marker["fingerprint_method"] == (
+            "bounded-sample-sha256-fingerprint"
         )
 
 
@@ -112,6 +132,44 @@ class TestInitDb:
         cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = {r[0] for r in cur.fetchall()}
         assert "sessions" in tables and "events" in tables
+        conn.close()
+
+    def test_long_source_call_id_uses_bounded_relational_key(self, tmp_path):
+        db = tmp_path / "calls.db"
+        init_db(db)
+        conn = connect(db)
+        exact = "call-" + ("🙂" * 40) + "-vendor-tail"
+        metadata = json.dumps({"call_id": exact})
+        replace_session_events(
+            conn,
+            {"id": "s1", "source": "Codex", "type": "Code"},
+            [
+                {
+                    "session_id": "s1", "event_id": "call",
+                    "event_type": "tool_call", "subtype": "tool_call",
+                    "tool_name": "example", "metadata": metadata,
+                },
+                {
+                    "session_id": "s1", "event_id": "result",
+                    "event_type": "user_message", "subtype": "tool_result",
+                    "tool_name": "example", "tool_output": "ok",
+                    "metadata": metadata,
+                },
+            ],
+            session_id="s1",
+        )
+        row = conn.execute(
+            "SELECT source_call_id FROM tool_invocations"
+        ).fetchone()
+        assert len(row["source_call_id"].encode("utf-8")) <= 100
+        assert "~sha256:" in row["source_call_id"]
+        assert conn.execute(
+            "SELECT COUNT(*) FROM tool_results"
+        ).fetchone()[0] == 1
+        stored = conn.execute(
+            "SELECT metadata FROM events WHERE event_id='call'"
+        ).fetchone()
+        assert json.loads(stored["metadata"])["call_id"] == exact
         conn.close()
 
     def test_explicit_source_observation_uses_captured_revision(self, tmp_path):

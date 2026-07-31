@@ -66,6 +66,91 @@ def check_events(
     return total, largest
 
 
+def searchable_event_payload(event: dict[str, Any]) -> tuple[int, int]:
+    """Measure retained searchable text without double-counting aliases.
+
+    Tool-result adapters commonly place the same value in both ``content`` and
+    ``tool_output`` so ordinary text search and structured tool queries can
+    share one Event.  That physical projection is one logical payload value.
+    Other equal-valued fields remain distinct because they have distinct
+    semantics.
+    """
+    values: list[str] = []
+    content = event.get("content")
+    if isinstance(content, str):
+        values.append(content)
+    tool_input = event.get("tool_input")
+    if isinstance(tool_input, str):
+        values.append(tool_input)
+    tool_output = event.get("tool_output")
+    if isinstance(tool_output, str) and tool_output != content:
+        values.append(tool_output)
+    artifact_path = event.get("artifact_path")
+    if isinstance(artifact_path, str):
+        values.append(artifact_path)
+    return (
+        sum(len(value) for value in values),
+        sum(len(value.encode("utf-8")) for value in values),
+    )
+
+
+def summarize_event_payload(
+    sessions_events: dict[str, list[dict[str, Any]]],
+) -> tuple[int, int]:
+    """Return retained searchable characters and UTF-8 bytes."""
+    characters = utf8_bytes = 0
+    for events in sessions_events.values():
+        for event in events:
+            event_characters, event_bytes = searchable_event_payload(event)
+            characters += event_characters
+            utf8_bytes += event_bytes
+    return characters, utf8_bytes
+
+
+def summarize_resource_observations(
+    observations: Iterable[dict[str, Any]],
+) -> dict[str, int | None]:
+    """Reconcile additive and non-additive ingest resource observations."""
+    items = list(observations)
+    unique_containers: dict[str, int] = {}
+    emitted_events = 0
+    retained_characters = 0
+    retained_utf8_bytes = 0
+    largest_session = 0
+    peak_rss: int | None = None
+    for item in items:
+        size = int(item.get("source_bytes") or 0)
+        container = str(item.get("container") or item.get("source") or "")
+        if container:
+            unique_containers[container] = max(
+                unique_containers.get(container, 0), size
+            )
+        emitted_events += int(item.get("events") or 0)
+        retained_characters += int(
+            item.get("retained_searchable_characters") or 0
+        )
+        retained_utf8_bytes += int(
+            item.get("retained_searchable_utf8_bytes") or 0
+        )
+        largest_session = max(
+            largest_session, int(item.get("largest_session_events") or 0)
+        )
+        observed_rss = item.get("peak_rss_bytes")
+        if observed_rss is not None:
+            peak_rss = max(peak_rss or 0, int(observed_rss))
+    return {
+        "observations": len(items),
+        "unique_source_containers": len(unique_containers),
+        "unique_source_container_bytes": sum(unique_containers.values()),
+        "emitted_events": emitted_events,
+        "retained_searchable_characters": retained_characters,
+        "retained_searchable_utf8_bytes": retained_utf8_bytes,
+        "largest_session_events": largest_session,
+        # Process RSS is a high-water mark and is never additive.
+        "peak_rss_bytes": peak_rss,
+    }
+
+
 USAGE_KEYS = (
     "files", "logical_bytes", "allocated_bytes", "unique_allocated_bytes",
 )

@@ -35,6 +35,16 @@ _BROAD_TRAVERSAL_ROOTS = frozenset(
     )
 )
 
+_EPHEMERAL_LOCATION_PREFIXES = tuple(
+    Path(value).resolve()
+    for value in (
+        "/private/var/folders",
+        "/private/tmp",
+        "/tmp",
+        "/var/folders",
+    )
+)
+
 
 def should_prune_directory(name: str) -> bool:
     """Return whether a descendant directory is routine traversal noise."""
@@ -56,6 +66,15 @@ def unsafe_traversal_root_reason(path: Path) -> str | None:
     resolved = path.expanduser().resolve()
     if resolved.parent == resolved or resolved in _BROAD_TRAVERSAL_ROOTS:
         return f"broad system traversal root is not allowed: {resolved}"
+    return None
+
+
+def ephemeral_project_location_reason(path: Path) -> str | None:
+    """Explain why a path is unsuitable as a durable Project location."""
+    resolved = path.expanduser().resolve()
+    for prefix in _EPHEMERAL_LOCATION_PREFIXES:
+        if resolved == prefix or resolved.is_relative_to(prefix):
+            return f"ephemeral system location is not a durable Project: {resolved}"
     return None
 
 

@@ -14,7 +14,7 @@ from codess.store import ingest_state_marker, load_ingest_state
 
 
 CACHE_FORMAT = "codess.cursor-cohort-cache/1"
-SELECTION_CACHE_FORMAT = "codess.cursor-selection-cache/1"
+SELECTION_CACHE_FORMAT = "codess.cursor-selection-cache/2"
 
 
 def _canonical_selections(
@@ -79,21 +79,18 @@ def combine_selection_markers(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    try:
-        digest = hashlib.md5(canonical, usedforsecurity=False).hexdigest()
-    except TypeError:  # pragma: no cover - older Python/OpenSSL combinations
-        digest = hashlib.md5(canonical).hexdigest()
+    digest = hashlib.sha256(canonical).hexdigest()
     mtimes = [
         marker.get("source_mtime") for marker in markers.values()
         if isinstance(marker.get("source_mtime"), (int, float))
     ]
     return {
-        "source_revision": f"cursor-cohort-selection-md5-fingerprint:{digest}",
+        "source_revision": f"cursor-cohort-selection-sha256-fingerprint:{digest}",
         "source_mtime": max(mtimes) if mtimes else None,
         "source_size": sum(
             int(marker.get("source_size") or 0) for marker in markers.values()
         ),
-        "fingerprint_method": "cursor-combined-project-selection-md5-fingerprint",
+        "fingerprint_method": "cursor-combined-project-selection-sha256-fingerprint",
         "consistency": "composed-sqlite-read-transactions",
         "project_count": len(markers),
     }

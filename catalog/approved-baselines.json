@@ -28,19 +28,19 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-28T20:27:20.891121+00:00"
+        "validated_at": "2026-07-30T09:23:56.181054+00:00"
       },
       "mapping_diagnostics": {
         "missing_tool_call_id": 19
       },
-      "parent_snapshot_id": "20260728T202016.633319Z-coschema4-5b224a61461d",
+      "parent_snapshot_id": "20260729T205220.871539Z-coschema4-e905042c7e95",
       "path": "/Users/walter/Work/Code/SWEmore",
       "project_id": "codess:project:d0294926-1b64-42a0-9d1b-2ff2d0332401",
       "raw_mode": "capture",
       "raw_records": 1,
       "selection_state": "approved",
-      "semantic_digest": "33bbf80e16b2b06ec3fcef224cf44f31542ee5ba58a77c6bed9b28e8d0ff3998",
-      "snapshot_id": "20260728T202017.158169Z-coschema4-38f97c9ae014",
+      "semantic_digest": "2b5b487cb523c0691ced84fed2de131e9793c3e86434653f27995b60c3e05609",
+      "snapshot_id": "20260729T205221.289607Z-coschema4-f911608b3875",
       "sources": {
         "Codex": {
           "events": 416,
@@ -75,17 +75,17 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-28T20:27:20.982866+00:00"
+        "validated_at": "2026-07-30T09:23:56.230185+00:00"
       },
       "mapping_diagnostics": {},
-      "parent_snapshot_id": "20260728T202026.601773Z-coschema4-96706277ce53",
+      "parent_snapshot_id": "20260729T205229.887177Z-coschema4-71b783eebf59",
       "path": "/Users/walter/Work/Spank/spank-py",
       "project_id": "codess:project:5be64477-9245-47a7-9c5b-254e583826b0",
       "raw_mode": "capture",
       "raw_records": 6,
       "selection_state": "approved",
-      "semantic_digest": "10fef3209b10840baf02d81a337276dd0e22e2fde707be8424beea20383c6789",
-      "snapshot_id": "20260728T202028.296121Z-coschema4-ed910a7dceca",
+      "semantic_digest": "fefc84659e2cc8e76f68bca2b7745ca169f4e9a952b2e960201292ccdd574dee",
+      "snapshot_id": "20260729T205231.308938Z-coschema4-08df5cea77a2",
       "sources": {
         "Claude": {
           "events": 4188,
@@ -100,8 +100,8 @@
         "fixed_point": {
           "normalization_digest_match": true,
           "passed": true,
-          "semantic_digest_match": false,
-          "source_revisions_match": false,
+          "semantic_digest_match": true,
+          "source_revisions_match": true,
           "value_acceptance": {
             "accepted": true,
             "advisory": [],
@@ -109,7 +109,7 @@
             "examples_truncated": false,
             "fatal": [],
             "fatal_count": 0,
-            "match_count": 5399503
+            "match_count": 5399481
           }
         },
         "query_smoke": {
@@ -120,24 +120,24 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-28T20:27:21.285531+00:00"
+        "validated_at": "2026-07-30T09:23:56.494569+00:00"
       },
       "mapping_diagnostics": {},
-      "parent_snapshot_id": "20260728T202259.313389Z-coschema4-86a875b95e50",
+      "parent_snapshot_id": "20260729T204813.256878Z-coschema4-5e0d37f9b773",
       "path": "/Users/walter/Work/ZK/Zero400",
       "project_id": "codess:project:095abbb4-ac88-4e61-a1cb-efce7dd5745a",
       "raw_mode": "reference",
       "raw_records": 6,
       "selection_state": "approved",
-      "semantic_digest": "980b3f026b1b3e4cdc1e11b48cbff97daf27bf82fd258d5671bbf6a60dec1ae3",
-      "snapshot_id": "20260728T202533.906161Z-coschema4-d32eb4be15fa",
+      "semantic_digest": "9c00394430ab8641597ac2a8d70f0991fb845d12bd95401e51a87d9e66a2772e",
+      "snapshot_id": "20260730T090752.218976Z-coschema4-d53e482a1226",
       "sources": {
         "Claude": {
-          "events": 1932,
+          "events": 1934,
           "sessions": 3
         },
         "Cursor": {
-          "events": 76054,
+          "events": 76055,
           "sessions": 28
         }
       },
@@ -158,7 +158,7 @@
             "examples_truncated": false,
             "fatal": [],
             "fatal_count": 0,
-            "match_count": 2058136
+            "match_count": 2133980
           }
         },
         "query_smoke": {
@@ -169,21 +169,21 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-28T20:27:28.754138+00:00"
+        "validated_at": "2026-07-30T09:24:02.812168+00:00"
       },
       "mapping_diagnostics": {},
-      "parent_snapshot_id": "20260728T202616.022656Z-coschema4-8ff0f10ddd6d",
+      "parent_snapshot_id": "20260730T031831.235561Z-coschema4-af92a29bc3ea",
       "path": "/Users/walter/Work/Code/Misses",
       "project_id": "codess:project:1966d4d8-b793-4769-8ae5-863ece164fc1",
       "raw_mode": "capture",
-      "raw_records": 122,
+      "raw_records": 154,
       "selection_state": "approved",
-      "semantic_digest": "38b029a094de8911fdf3f72e9e13dd287ca5994c508b3867a44dea11184ee08d",
-      "snapshot_id": "20260728T202632.149387Z-coschema4-83b98e810734",
+      "semantic_digest": "bf4f14106fce1b544cd6c0b792e9c267b2199a3eb01ed6585cf68ae4e6865069",
+      "snapshot_id": "20260730T090409.175190Z-coschema4-8db3a3a177ad",
       "sources": {
         "Claude": {
-          "events": 28044,
-          "sessions": 122
+          "events": 29161,
+          "sessions": 154
         }
       },
       "validation_policy": "/Users/walter/Work/Code/CodeSess/catalog/policies/misses.json",
@@ -214,17 +214,17 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-28T20:27:30.664918+00:00"
+        "validated_at": "2026-07-30T09:24:04.563884+00:00"
       },
       "mapping_diagnostics": {},
-      "parent_snapshot_id": "20260728T202646.280405Z-coschema4-5be57d6f8b44",
+      "parent_snapshot_id": "20260729T205407.701175Z-coschema4-bc2a85e016ab",
       "path": "/Users/walter/Work/ZK/insight",
       "project_id": "codess:project:5928e03c-3d9e-4539-b86b-56909e5f2884",
       "raw_mode": "capture",
       "raw_records": 18,
       "selection_state": "approved",
-      "semantic_digest": "bcb40c999d16e866bf9f784d357c525cbe03d160bd30bf8f6597fb2ae071e45a",
-      "snapshot_id": "20260728T202649.134508Z-coschema4-87f753b80a06",
+      "semantic_digest": "7a433272a2d088b66d079ea536976d5b7ebf2700d9c5c83d5b63063bb56da6ac",
+      "snapshot_id": "20260729T205410.231171Z-coschema4-043d5758ac4d",
       "sources": {
         "Claude": {
           "events": 8650,
@@ -259,19 +259,19 @@
           "sessions": true,
           "stats": true
         },
-        "validated_at": "2026-07-28T20:27:31.184281+00:00"
+        "validated_at": "2026-07-30T09:24:05.020342+00:00"
       },
       "mapping_diagnostics": {
         "missing_tool_call_id": 36
       },
-      "parent_snapshot_id": "20260728T202701.396128Z-coschema4-0687337bcd43",
+      "parent_snapshot_id": "20260729T205417.825331Z-coschema4-210aa452a9d6",
       "path": "/Users/walter/Work/WP/wpages",
       "project_id": "codess:project:c6717985-db6f-4fd9-bd6a-716ded4526c0",
       "raw_mode": "capture",
       "raw_records": 3,
       "selection_state": "approved",
-      "semantic_digest": "a3ac8a00b96ee9ed37519af5bc32da5b56a57c9d310c394c6f699a47df4313ca",
-      "snapshot_id": "20260728T202704.704709Z-coschema4-8b408d74bb23",
+      "semantic_digest": "ff5a51d6e1620ef75c17d874858d7f7342de726db7164ffb377d435aa44e60a7",
+      "snapshot_id": "20260729T205420.716670Z-coschema4-2579f157a366",
       "sources": {
         "Codex": {
           "events": 8209,

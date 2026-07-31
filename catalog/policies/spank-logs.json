@@ -6,14 +6,7 @@
   "required_sources": [
     "Cursor"
   ],
-  "minimum_sessions": {
-    "Cursor": 2
-  },
-  "minimum_events": {
-    "Cursor": 256
-  },
   "raw_mode": "capture",
-  "expected_raw_records": 1,
   "expected_cursor_workspace_ids": [
     "e15dfe2f29fec656024c76d3166d3b28"
   ],

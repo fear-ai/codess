@@ -1,6 +1,13 @@
 """Shared Claude/Codex source admission advances state only after commit."""
 
-from codess.ingest_pipeline import inspect_sources, mark_source_complete
+import pytest
+
+from codess.ingest_pipeline import (
+    commit_source_replacement,
+    inspect_sources,
+    mark_source_complete,
+)
+from codess.store import connect, init_db
 
 
 def test_source_admission_distinguishes_small_changed_and_unchanged(tmp_path):
@@ -34,3 +41,31 @@ def test_source_admission_returns_typed_limit_error(tmp_path):
     ))
     assert result.error is not None
     assert result.skip_reason is None
+
+
+def test_shared_source_replacement_rolls_back_related_failure(tmp_path):
+    store = tmp_path / "sessions.db"
+    init_db(store)
+
+    def fail_after_replace(_conn):
+        raise RuntimeError("related observation failed")
+
+    with pytest.raises(RuntimeError, match="related observation"):
+        commit_source_replacement(
+            store,
+            session={
+                "id": "s1", "source": "Codex", "type": "Code",
+                "project_path": str(tmp_path),
+            },
+            events=[{
+                "session_id": "s1", "event_id": "e1",
+                "event_type": "user_message", "subtype": "prompt",
+                "role": "user", "content": "must roll back",
+            }],
+            session_id="s1",
+            after_replace=fail_after_replace,
+        )
+
+    with connect(store, read_only=True) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0

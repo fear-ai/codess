@@ -14,7 +14,8 @@ from typing import Any
 from codess.baseline_validation import validate_project
 from codess.fileio import read_json, write_json_atomic
 from codess.project_catalog import (
-    add_project_location, durable_project_root, retire_project_location,
+    add_project_location, durable_project_root, get_project_entry,
+    retire_project_location,
 )
 from codess.schema_contract import verify_package
 from codess.snapshot import current_store_paths
@@ -64,6 +65,7 @@ def _run_ingest_stage(
     raw_mode: str,
     registry: Path,
     repo_root: Path,
+    resource_policy: Path | None = None,
 ) -> dict[str, Any]:
     command = [sys.executable, "-m", "main", "ingest"]
     for project in plan["projects"]:
@@ -72,6 +74,8 @@ def _run_ingest_stage(
         "--source", source, "--raw-mode", raw_mode,
         "--registry", str(registry), "--min-size", "0",
     ])
+    if resource_policy is not None:
+        command.extend(["--resource-policy", str(resource_policy)])
     if validate:
         command.append("--validate")
     env = os.environ.copy()
@@ -105,6 +109,7 @@ def onboard_catalog(
     apply: bool = False,
     stop_after: str | None = None,
     receipt_path: Path | None = None,
+    resource_policy: Path | None = None,
 ) -> dict[str, Any]:
     plan = resolve_reviewed_selection(
         catalog_path, decision=decision, source=source
@@ -119,6 +124,7 @@ def onboard_catalog(
         preflight = _run_ingest_stage(
             plan, validate=True, source=source, raw_mode=raw_mode,
             registry=registry, repo_root=repo_root,
+            resource_policy=resource_policy,
         )
         receipt["preflight"] = preflight
         if preflight["returncode"] != 0:
@@ -136,6 +142,7 @@ def onboard_catalog(
             applied = _run_ingest_stage(
                 plan, validate=False, source=source, raw_mode=raw_mode,
                 registry=registry, repo_root=repo_root,
+                resource_policy=resource_policy,
             )
             receipt["apply"] = applied
             receipt["status"] = "applied" if applied["returncode"] == 0 else "apply_failed"
@@ -163,9 +170,11 @@ def _captured_current(registry: Path, project_id: str) -> bool:
 
 
 def retire_location(registry: Path, project_id: str, path: Path) -> dict[str, Any]:
+    entry = get_project_entry(registry, project_id)
+    excluded = entry.get("selection_state") == "excluded"
     return retire_project_location(
         registry, project_id, path,
-        allow_last_active=_captured_current(registry, project_id),
+        allow_last_active=excluded or _captured_current(registry, project_id),
     )
 
 

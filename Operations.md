@@ -9,6 +9,57 @@ access, evidence refresh, curation, and compatibility baselines.
 
 ## Ingest preflight
 
+### Cheap assessment before extraction
+
+Use a content-free status pass before `ingest --validate` or full ingest,
+especially for Cursor:
+
+```sh
+tools/project_status.sh "$PROJECT" ~/.codess
+codess scan --dir "$PROJECT" --source cc,codex,cursor --out -
+```
+
+The shell helper invokes Git directly for repository/worktree facts and uses
+bounded filesystem metadata for current pointers, ingest reports, exact-path
+Claude stores, and Project-local `.claude`/`.codess` markers. The scan queries
+source-system indexes for the selected Project. It does not transactionally
+back up the Cursor database, normalize every selected Event, or create a new
+snapshot. Scan does update scan telemetry in the selected registry.
+
+Interpret the signals together. Git commit/worktree state is a strong primary
+signal, but vendor source files may change without Git activity. `.claude` or
+`~/.claude` changes can indicate harness activity but do not by themselves
+establish a conversation mapping. Cursor's global database mtime establishes
+only global activity; Project-specific header/workspace/selected-record
+observations provide attribution. Build outputs and generated artifacts are
+only hints unless a retained invocation links them to the source system.
+
+The helper shows mtimes for a bounded list of dirty/untracked work files,
+current HEAD author/committer information, upstream divergence, and the latest
+local reflog action. File mtime can reveal an edit after a Session but does not
+identify its author. Git stores commit author/committer dates, not file mtimes
+or a definitive push timestamp. A push is known only through a dated remote
+observation or hosting-provider event; ordinary upstream-ref inspection says
+what commit was observed when, not when it arrived there. Treat work not linked
+to a retained tool invocation as Project activity without guessing its author.
+
+Proceed to full validation/extraction when a selected source observation
+changed, the Project lacks a current snapshot accepted by the selected package
+policy, or a deliberate
+acceptance run requires fresh evidence. This sequence avoids making the large
+operation the discovery mechanism.
+
+### Session names
+
+`codess session name`, `session unname`, and `session names` maintain
+`~/.codess/session-names.json`. Each mutable operator name maps to a
+`global_session_id` within one stable Project; the name is not the Session ID
+and is not copied into immutable Project snapshots. Back up or move this small
+registry with the Project catalog. Source titles from Codex, Claude, or Cursor
+remain separate source-system evidence.
+
+### Full normalization preflight
+
 `codess ingest --validate` runs real source discovery, vendor adapters, content
 policy, CoSchema writes, mapping diagnostics, and SQLite integrity/foreign-key
 checks against temporary databases. It forces parsing even when incremental
@@ -22,8 +73,10 @@ current package and records the independent `decoder_version` and
 `validator_version`. A policy may require exact processing-profile versions;
 an older snapshot is never silently validated under newer interpretation. It does not
 prove raw durability, snapshot promotion, or a two-run fixed point;
-`python -m main baseline apply` is the acceptance gate for those properties;
-`tools/apply_and_verify.py` is its compatibility wrapper.
+`codess baseline apply` is the acceptance gate for those properties;
+`tools/apply_and_verify.py` is its compatibility wrapper. It owns no validation
+or apply logic and remains only for existing automation; new procedures use
+the grouped command.
 
 With `--repeat`, baseline apply resolves both immutable rebuilt stores and
 streams their canonical rows through the value gate. Identity, sequence, and
@@ -31,17 +84,119 @@ lineage vacancies or mismatches are fatal; non-critical differences are
 advisory and reported. The comparison is row-streamed and bounds examples, so
 its memory use does not scale with database size.
 
+Baseline apply asks ingest to build an immutable `--candidate-snapshot`.
+Candidate construction records its path in
+`.codess/last-ingest-report.json` but changes neither the Project-local nor
+central `current.json`. Validation, repeat-build/value comparison, and query
+smoke target that exact candidate. Only after every enabled gate passes does
+one publication operation replace the central and local pointer pair. If
+either replacement fails, previously existing pointers are restored
+byte-for-byte. Rejected candidates remain immutable and retention-visible for
+review or later pruning; they never become current.
+
 ## Resource bounds and processing
 
-Defaults are 8 GiB per source, 500,000 normalized events per source, 250,000
-per session, and 128 Ki characters for each normalized context or compaction
-body. Override with `--max-source-bytes`, `--max-events-per-source`,
-`--max-events-per-session`, and `--max-context-content-chars`, or deliberately
-use `--no-resource-limits`. Equivalent environment variables use `CODESS_`
-names, including `CODESS_MAX_CONTEXT_CONTENT_CHARS`. The event records retain
-the full source character count and an explicit truncation flag. Exact
-over-limit content remains resolvable from captured, sealed, or referenced raw
-evidence; Codess does not create a second unbounded normalized copy.
+Software 0.2.3 resolves ingest maximums from
+`codess.resource-policy/1`. The built-ins are:
+
+| Maximum | Built-in | Current boundary |
+|---|---:|---|
+| `transcript_bytes` | 256 MiB | One Claude or Codex transcript Source |
+| `cursor_container_bytes` | 10 GiB | One Cursor workspace or global SQLite container |
+| `events_per_source` | 200,000 | Normalized Events emitted from one Source |
+| `events_per_session` | 100,000 | Normalized Events retained for one Session |
+| `context_content_chars` | 250,000 characters | One normalized context or compaction body |
+
+These maximums prevent accidental unbounded work; they are not desired payload
+sizes. Cursor's larger container ceiling permits bounded SQL selection from its
+machine-wide database and does not authorize copying that database into a
+Project store.
+
+Use `--resource-policy FILE` or `CODESS_RESOURCE_POLICY` to load a partial JSON
+override. The contract and complete example are
+`schema/resource-policy-contract.json` and
+`schema/resource-policy.example.json`:
+
+```json
+{
+  "format": "codess.resource-policy/1",
+  "maximums": {
+    "transcript_bytes": 268435456,
+    "events_per_session": null
+  }
+}
+```
+
+An omitted maximum keeps its built-in. `null` disables only that maximum.
+Unknown fields, non-integers, booleans, zero, and negative maximums are rejected
+before ingest. Resolution precedence is:
+
+1. built-in defaults;
+2. the resource-policy file;
+3. individual `CODESS_MAX_*` environment values;
+4. individual `--max-*` command-line values;
+5. `--no-resource-limits`, which disables every maximum for that invocation.
+
+The same file can be passed explicitly to composed maintainer operations. It is
+forwarded unchanged to every ingest they invoke, including both repeated
+baseline rebuilds and catalog preflight/apply:
+
+```sh
+codess baseline apply --project "$PROJECT" --registry "$REGISTRY" \
+  --repeat --resource-policy local-resource-policy.json
+codess catalog onboard --catalog reviewed.json --apply \
+  --resource-policy local-resource-policy.json
+```
+
+The new environment names are `CODESS_MAX_TRANSCRIPT_BYTES`,
+`CODESS_MAX_CURSOR_CONTAINER_BYTES`, `CODESS_MAX_EVENTS_PER_SOURCE`,
+`CODESS_MAX_EVENTS_PER_SESSION`, and
+`CODESS_MAX_CONTEXT_CONTENT_CHARS`. `CODESS_MAX_SOURCE_BYTES` and
+`--max-source-bytes` remain compatibility spellings for the transcript limit.
+Every runtime and preflight report records the policy format, resolved file and
+SHA-256, effective values, and the origin of each value. It retains
+`limits.max_source_bytes` as a compatibility alias for
+`limits.max_transcript_bytes`.
+
+Each report also contains `resource_summary`. `unique_source_container_bytes`
+uses the largest observed size once per container path during the run;
+`emitted_events` is additive; `largest_session_events` is a maximum; and
+`peak_rss_bytes` is the process high-water mark, never a sum.
+`retained_searchable_characters` and `retained_searchable_utf8_bytes` are
+additive logical Event-payload measures. They count `content`, `tool_input`,
+`tool_output`, and `artifact_path`; when a tool result is projected identically
+into both `content` and `tool_output`, it is counted once. They do not claim
+selected raw-record or pre-truncation source-semantic bytes.
+
+`--min-size` remains separate. Its legacy 20 KiB default is a source-selection
+noise heuristic, not a validity or safety maximum, and it may hide valid tiny
+Sessions. The zero-default and semantic admission work remains postponed under
+CoPlan P15. Useful one- and two-byte messages such as `1`, `y`, `go`, and `no`
+remain valid when their Source is selected.
+
+`--content-policy` is also separate: it transforms, suppresses, masks, or
+truncates selected normalized content. A resource policy bounds work before or
+during ingestion. It does not silently transform an oversized Source into
+accepted content. Exact over-limit content remains resolvable only when
+captured, sealed, or referenced evidence is available.
+
+Current supported-format Source revisions, change markers, raw objects,
+manifests, stores, and result identities use SHA-256. Older digest labels are
+unsupported for live equality verification; rebuild the derived snapshot with
+a supported decoder/validator and never rewrite its immutable manifest.
+
+Further telemetry and limits under CoPlan P14–P16 must distinguish:
+
+1. vendor container bytes;
+2. bytes in selected source records;
+3. source and retained semantic payload bytes per Event;
+4. selected totals per Session and Project run;
+5. physical raw-capture and normalized-store allocation.
+
+Cursor's global database size is a container health/storage observation.
+Selection queries, not the complete database size, determine Project payload.
+Repeated observations of the same container are never summed as Project
+content or physical allocation.
 
 Ingest emits `codess: progress` lines to stderr without waiting for Python
 DEBUG logging. Stdout remains the final human/structured result. Each line has
@@ -109,9 +264,18 @@ running it after every composer caused repeated full-store scans. If one real
 composer approaches the event maximum, use a staging table and incremental
 group construction rather than silently raising the defaults.
 
+Claude and Codex use the shared `codess.ingest_pipeline` transaction shell.
+Normalized Session/Event replacement and SQLite Source-availability metadata
+commit together; any callback or SQLite write failure rolls the normalized
+replacement back. Raw-object capture is separate content-addressed work and
+snapshot promotion occurs after source processing. The incremental state marker
+advances only after the normalized commit. Cursor retains a separate
+transaction because one selected SQLite source may replace many composers, but
+it follows the same rollback-before-state rule.
+
 ## Storage observations and retention
 
-`python -m main storage report` records a dated
+`codess storage report` records a dated
 `codess.storage-observation/1` document under
 `~/.codess/observations/storage/` and returns the same JSON. Each run compares
 current totals with the preceding observation. `--no-record` is the read-only
@@ -134,7 +298,7 @@ is validated against the CodexBar lineage algorithm. Cursor remains explicitly
 unavailable because no verified local token field is mapped. These are usage
 observations, not billed cost, and are never inferred from text length.
 
-`python -m main storage token-validate` is the Codex validation prototype. It
+`codess storage token-validate` is the Codex validation prototype. It
 selects only Codex source files referenced by current stores and reports
 cumulative counter drops, repeated points, timestamp regressions, model changes,
 and counter points shared across files. Each file is classified as a monotonic
@@ -171,10 +335,10 @@ not preserve dated cleanup chronology.
 Pruning is mark-and-sweep and dry-run by default:
 
 ```sh
-python -m main storage prune --registry ~/.codess --output /tmp/codess-prune.json
-python -m main storage prune --registry ~/.codess --apply
-python -m main storage prune --registry ~/.codess --working-archives --output /tmp/codess-archives.json
-python -m main storage prune --registry ~/.codess --working-archives --apply
+codess storage prune --registry ~/.codess --output /tmp/codess-prune.json
+codess storage prune --registry ~/.codess --apply
+codess storage prune --registry ~/.codess --working-archives --output /tmp/codess-archives.json
+codess storage prune --registry ~/.codess --working-archives --apply
 ```
 
 The default plan also rejects multiple current, distinct revisions of the same
@@ -259,7 +423,10 @@ a valid, preserved review state when policy intentionally permits a
 reference-only source. It is never rewritten as `accepted`; subsequent
 `baseline verify` must reproduce the same qualified state with
 `verify_reference_current=False`, because the recorded revision—not the
-mutable live locator—is the reviewed cohort.
+mutable live locator—is the reviewed cohort. Verification opens the catalog's
+exact retained `Project ID + snapshot_id` under the recorded registry;
+advancing a Project's current pointer neither changes nor invalidates that
+reviewed baseline.
 
 ### Full-scan boundaries
 
@@ -287,11 +454,11 @@ all vendor history:
   the first/last 512 value bytes. This deliberately ignores unrelated Cursor
   workbench/global state. A retained/reused cohort remains a
   fully SHA-256-addressed raw backup and cache restoration verifies both its
-  compressed and decompressed identities; the selection MD5 is never an
-  authenticity or retained-object integrity claim. A same-length change wholly
-  inside a large bubble could evade the edge sample only if Cursor also failed
-  to update its selected composer header; use `--force` when investigating that
-  vendor-behavior boundary.
+  compressed and decompressed identities. New selected-row and combined-cohort
+  change markers also use SHA-256, but remain non-authenticating bounded
+  fingerprints. A same-length change wholly inside a large bubble could evade
+  the edge sample only if Cursor also failed to update its selected composer
+  header; use `--force` when investigating that vendor-behavior boundary.
   Selected bubble rows are ordered by indexed key range, normalized one
   composer at a time, and written within one rollback-capable transaction. This
   bounds multi-composer accumulation, but the largest composer is still the
@@ -344,7 +511,7 @@ all vendor history:
 
 ## Evidence inventory
 
-`python -m main evidence gather` searches current catalog Projects and local vendor
+`codess evidence gather` searches current catalog Projects and local vendor
 metadata without retaining conversation bodies. It checks cross-vendor artifact
 identity, effort/speed/service settings, direct Codex parents,
 lifecycle/missing-time evidence, and Cursor tool/model shapes. Relevance-ranked
@@ -361,14 +528,51 @@ governed by **CoPlan A12/T4–T5**, not by this procedure.
 Useful bounded component audits are:
 
 ```text
-python -m main evidence audit claude-features --max-record-bytes 65536
-python -m main evidence audit codex-features --max-record-bytes 65536
-python -m main evidence audit cursor-features
+codess evidence audit claude-features --max-record-bytes 65536
+codess evidence audit codex-features --max-record-bytes 65536
+codess evidence audit cursor-features
+codess evidence audit mcp-interactions
+codess evidence audit orientation
 ```
 
 The JSONL audits never retain message, reasoning, instruction, argument, or
 result bodies. Records above the configured ceiling are drained and counted as
 oversize rather than allocated or parsed.
+
+`mcp-interactions` audits every MCP-qualified observed invocation in current
+query-ready Project snapshots. It separates discovery, target-server errors,
+operation failures/cancellations, administrative actions, visualizations, and
+empty diagnostics. It reports repeated source call IDs as duplicate
+candidates, not proven copied operations: those free-text IDs are not assumed
+globally unique across Sessions or vendors. Add one or more current raw Codex
+rollouts when validating
+activity that has not yet reached a Project snapshot:
+
+```text
+codess evidence audit mcp-interactions \
+  --codex-rollout ~/.codex/sessions/YYYY/MM/DD/rollout-....jsonl \
+  --output /tmp/codess-mcp-audit.json
+```
+
+Conversation/input/result excerpts are absent by default. `--include-excerpts`
+adds bounded 240-character evidence excerpts for a local debugging run; do not
+publish that output without the same privacy review as normalized content.
+This audit reads current snapshots and named rollouts only. It does not scan
+all vendor history or inspect configuration secret values.
+
+`orientation` runs the typed UC3 overview for every current query-ready
+Project and independently recomputes its core observations from read-only
+SQLite. It compares overall and UTC-month totals; daily prompt/response
+characters and response anchors; actor, combined-automation, and subagent
+partitions; tool call/result/input/output observations and names; and distinct
+Session/Interaction counts. A nonzero exit status means at least one Project
+does not reconcile. Use repeated `--project-id` to limit the audit, and
+`--output` to retain the dated report:
+
+```text
+codess evidence audit orientation \
+  --registry ~/.codess --output /tmp/codess-orientation-audit.json
+```
 
 ## Curated workflows
 
@@ -381,10 +585,77 @@ does not crawl repositories unless requested, and never checks remotes without
 an explicit network option. Recommendations explain `consider`, `defer`, or
 `exclude`; only an explicit review decision can authorize curated onboarding.
 
+Use `catalog annotations` for the current cross-catalog review list:
+
+```text
+codess catalog annotations
+codess catalog annotations --label included --label incomplete
+codess catalog annotations --format json \
+  --output ~/.codess/reports/project-annotations.json
+codess catalog annotations --format csv \
+  --output ~/.codess/reports/project-annotations.csv
+```
+
+Annotations are computed from the authoritative Project catalog, current
+snapshot facts, and reviewed compatibility selection. They do not authorize
+ingest, claim source freshness, or rewrite curation. `suspect` is deliberately
+reserved for direct evidence such as `needs_review`, a missing active
+location, or snapshot inspection failure; a known limitation alone does not
+make a Project suspect.
+
+### Routine multi-Project refresh
+
+`codess refresh` composes the existing ingest operation for a deliberate
+selection. Supply repeated `--project` values, one `--project-list`, or one
+computed `--designator`. Project references resolve by stable ID, unique
+logical name, or exact catalog path. A project-list file may contain a JSON
+`projects` array (strings or objects with `project_id`, `name`, or `path`), a
+CSV column named `project_id`, `name`, `path`, or `directory_path`, or one
+reference per non-comment text line. Resolution rejects unknown or ambiguous
+references, missing active locations, and a Project with multiple live
+locations unless the caller supplies an exact catalog path.
+
+```text
+codess refresh --project SWEmore
+codess refresh --project Zero400 --project zerowalletmac --stage preflight
+codess refresh --project-list reviewed-projects.json --stage apply
+codess refresh --designator incomplete --stage plan
+```
+
+The operation has three explicit stages:
+
+1. `plan` resolves and deduplicates stable Project IDs, paths, source choice,
+   and raw mode without parsing vendor content.
+2. `preflight` invokes validated ingest separately for every Project and
+   records bounded output, timing, and failures.
+3. `apply` is allowed only after all preflights pass and the selection,
+   catalog, and package fingerprints remain unchanged. Each Project apply then
+   proceeds independently; failures do not erase successful earlier snapshots
+   or prevent attempts on later Projects.
+
+Preflight and apply default to a dated receipt under
+`~/.codess/reports/refresh-*.json`; `--receipt PATH` chooses another location.
+The receipt is checkpointed after each Project. A timeout or launch failure is
+a Project failure, not an unstructured orchestration exception.
+
+This is routine source refresh. It neither changes curation nor performs
+reviewed-baseline fixed-point rebuild, semantic sampling, approval, or freeze.
+Use `baseline apply|freeze|verify` for that release-maintainer workflow.
+Designators are computed labels rather than durable research identities, so
+the receipt retains the exact resolved Project IDs and input fingerprints.
+
 The normal curator workflow is intentionally two human actions:
 
 1. refresh candidate observations and record decisions; and
 2. onboard the `approved` selection.
+
+The decision makes a Project eligible for curated onboarding; it does not
+write data. `catalog onboard --apply` is the separate mutation authorization
+after successful preflight and unchanged selection/package verification.
+Direct `ingest` without `--validate` is also an explicit, path-scoped operator
+authorization, but it does not confer curated or compatibility-baseline
+approval. Baseline acceptance and publication have their own apply/freeze
+gates.
 
 Onboarding itself exposes plan, preflight, and apply in one structured receipt,
 with stop points after plan or preflight. Operators and CI retain direct access
@@ -402,7 +673,11 @@ Location management distinguishes adding a second location, retiring a location
 without replacement, and relocating from old to new. The historical
 `retire_project.py` requires a new location and is therefore a relocation
 wrapper; the explicit operations are under `catalog location` and
-`catalog relocate`.
+`catalog relocate`. It owns no location logic and remains because existing
+automation and a relocation regression test exercise the historical entry
+point. Do not add features to either wrapper. Removing either requires an
+explicit deprecation/release decision; immediate deletion would provide no
+code consolidation benefit.
 
 ## Baseline inventories
 
@@ -416,9 +691,10 @@ Three different records must not be conflated:
   snapshot, including snapshots that are not members of either catalog.
 
 The JSON catalogs and current pointers are authoritative; this runbook does not
-copy their Project lists or snapshot IDs. Run `python -m main baseline verify`
-to check the published set against package identity, policy, hashes, SQLite
-integrity, global IDs, ordering, raw evidence, and query-smoke requirements.
+copy their Project lists or snapshot IDs. Run `codess baseline verify` to check
+the frozen reviewed compatibility set—not each Project's mutable current
+snapshot—against package identity, policy, hashes, SQLite integrity, global
+IDs, ordering, raw evidence, and query-smoke requirements.
 
 Routine reconciliation may pass
 `~/Work/Code/SWEmore/active_work_projects_since_2026-05.csv` to `--dirs`.
@@ -451,12 +727,12 @@ Stopping one layer does not prove that the others changed. Files under
 
 ### Bound commands that may hang
 
-Use the project's pyenv environment. Add GNU `gtimeout` when a command needs a
-hard deadline:
+Use the project's selected Python environment. Add GNU `gtimeout` when a
+command needs a hard deadline:
 
 ```bash
-pyenv exec pytest tests/
-gtimeout --kill-after=5s 180s pyenv exec pytest tests/
+python -m pytest tests/
+gtimeout --kill-after=5s 180s python -m pytest tests/
 ```
 
 After 180 seconds `gtimeout` sends `TERM`; five seconds later it sends `KILL` if

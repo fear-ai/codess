@@ -66,14 +66,35 @@ from codess.project_catalog import load_catalog, register_workspace_bindings
 from codess.artifact_correlation import correlate_external_artifacts
 from codess.snapshot import create_snapshot, current_raw_records
 from codess.store import record_processing_run, sync_project_catalog
-from codess.resources import ResourceLimitError, check_events, check_source, peak_rss_bytes
+from codess.resources import (
+    ResourceLimitError, check_events, check_source, peak_rss_bytes,
+    searchable_event_payload, summarize_event_payload,
+    summarize_resource_observations,
+)
+from codess.resource_policy import ResourcePolicyError
 from codess.evidence import summarize_store_evidence
 from codess.ingest_review import record_ingest_review
 from codess.progress import ProgressTrace
-from codess.ingest_pipeline import inspect_sources, mark_source_complete
+from codess.ingest_pipeline import (
+    commit_source_replacement,
+    inspect_sources,
+    mark_source_complete,
+)
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 
 log = logging.getLogger(__name__)
+
+
+def _resource_limits_report(iopt) -> dict:
+    """Return effective limits with one compatibility spelling retained."""
+    return {
+        "max_transcript_bytes": iopt.max_source_bytes,
+        "max_source_bytes": iopt.max_source_bytes,
+        "max_cursor_container_bytes": iopt.max_cursor_container_bytes,
+        "max_events_per_source": iopt.max_events_per_source,
+        "max_events_per_session": iopt.max_events_per_session,
+        "max_context_content_chars": iopt.max_context_content_chars,
+    }
 
 
 def _progress(opts: dict, event: str, **fields) -> None:
@@ -159,9 +180,15 @@ def _observe_resource(opts: dict, path: Path, sessions_events: dict[str, list[di
         sessions_events, max_source=opts.get("max_events_per_source"),
         max_session=opts.get("max_events_per_session"),
     )
+    retained_characters, retained_utf8_bytes = summarize_event_payload(
+        sessions_events
+    )
     opts["resource_observations"].append({
-        "source": str(path), "source_bytes": path.stat().st_size,
+        "source": str(path), "container": str(path.resolve()),
+        "source_bytes": path.stat().st_size,
         "events": total, "largest_session_events": largest,
+        "retained_searchable_characters": retained_characters,
+        "retained_searchable_utf8_bytes": retained_utf8_bytes,
         "peak_rss_bytes": peak_rss_bytes(),
     })
 
@@ -304,7 +331,6 @@ def _ingest_cc(
         direct_lineage = get_cc_session_lineage(path)
         if direct_lineage.get("parent_session_id"):
             parent_session_id = direct_lineage["parent_session_id"]
-        conn = connect(store_path)
         try:
             external_sources = opts.setdefault("external_sources", [])
             external_start = len(external_sources)
@@ -365,21 +391,25 @@ def _ingest_cc(
                     diagnostics["empty_sources"] = (
                         diagnostics.get("empty_sources", 0) + 1
                     )
-            replace_session_events(
-                conn, session, events_list, session_id=session_id, prune=False
+            def record_source(conn) -> None:
+                _record_raw(opts, path, "Claude", conn)
+                for external in external_sources[external_start:]:
+                    _record_related_raw(
+                        opts, Path(external["path"]), "Claude",
+                        parent_source_locator=external["parent_source"],
+                        relation_kind=external["relation_kind"],
+                    )
+
+            commit_source_replacement(
+                store_path,
+                session=session,
+                events=events_list,
+                session_id=session_id,
+                after_replace=record_source,
             )
-            _record_raw(opts, path, "Claude", conn)
-            for external in external_sources[external_start:]:
-                _record_related_raw(
-                    opts, Path(external["path"]), "Claude",
-                    parent_source_locator=external["parent_source"],
-                    relation_kind=external["relation_kind"],
-                )
-            conn.commit()
             changed = True
             total_events += len(events_list)
         except Exception as e:
-            conn.rollback()
             _progress(
                 opts, "source.failed", project=str(project_root.resolve()),
                 vendor="Claude", source=str(path.resolve()),
@@ -393,8 +423,6 @@ def _ingest_cc(
             if stop_on_error:
                 raise
             continue
-        finally:
-            conn.close()
         mark_source_complete(state_path, path)
         if events_list:
             kind = "subagent" if parent_session_id else "main"
@@ -460,6 +488,12 @@ def _ingest_codex(
         )
         session_id, proj_path = get_session_meta(path)
         session_metadata = get_session_metadata(path)
+        parent_session_id = session_metadata.pop(
+            "parent_session_id", None
+        )
+        session_relation_kind = session_metadata.pop(
+            "session_relation_kind", None
+        )
         archive_state, archive_source = get_codex_archive_evidence(path)
         conn = connect(store_path)
         try:
@@ -488,6 +522,8 @@ def _ingest_codex(
                     "source_cwd": proj_path if proj_path != "." else str(project_root),
                     "archive_state": archive_state,
                     "archive_source": archive_source,
+                    "parent_session_id": parent_session_id,
+                    "session_relation_kind": session_relation_kind,
                     "metadata": (
                         json.dumps(session_metadata, separators=(",", ":"))
                         if session_metadata
@@ -500,15 +536,18 @@ def _ingest_codex(
                     diagnostics["empty_sources"] = (
                         diagnostics.get("empty_sources", 0) + 1
                     )
-            replace_session_events(
-                conn, session, events_list, session_id=session_id, prune=False
+            commit_source_replacement(
+                store_path,
+                session=session,
+                events=events_list,
+                session_id=session_id,
+                after_replace=lambda conn: _record_raw(
+                    opts, path, "Codex", conn
+                ),
             )
-            _record_raw(opts, path, "Codex", conn)
-            conn.commit()
             changed = True
             total_events += len(events_list)
         except Exception as e:
-            conn.rollback()
             _progress(
                 opts, "source.failed", project=str(project_root.resolve()),
                 vendor="Codex", source=str(path.resolve()),
@@ -522,8 +561,6 @@ def _ingest_codex(
             if stop_on_error:
                 raise
             continue
-        finally:
-            conn.close()
         mark_source_complete(state_path, path)
         ingested += int(bool(events_list))
         _progress(
@@ -587,6 +624,7 @@ def _ingest_cursor(
         current_id: str | None = None
         current_events: list[dict] = []
         source_total = largest = 0
+        retained_characters = retained_utf8_bytes = 0
         source_started = time.monotonic()
         current_started: float | None = None
         _progress(
@@ -621,6 +659,8 @@ def _ingest_cursor(
                 "metadata": metadata,
                 "source_observation": source_observation,
             }
+            if headers is not None and headers[current_id].get("is_subagent"):
+                session["session_relation_kind"] = "subagent"
             replace_session_events(
                 conn, session, current_events, session_id=current_id,
                 prune=False,
@@ -642,8 +682,11 @@ def _ingest_cursor(
 
         for session_id, event in process_cursor_db(
             db_path, proj_str, opts, composer_ids=composer_ids,
-            source_file=source_file,
+            source_file=source_file, session_headers=headers,
         ):
+            event_characters, event_bytes = searchable_event_payload(event)
+            retained_characters += event_characters
+            retained_utf8_bytes += event_bytes
             if session_id != current_id:
                 if current_id is not None:
                     flush()
@@ -688,8 +731,11 @@ def _ingest_cursor(
                 conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
         prune_unreferenced_records(conn)
         opts["resource_observations"].append({
-            "source": source_file, "source_bytes": db_path.stat().st_size,
+            "source": source_file, "container": str(db_path.resolve()),
+            "source_bytes": db_path.stat().st_size,
             "events": source_total, "largest_session_events": largest,
+            "retained_searchable_characters": retained_characters,
+            "retained_searchable_utf8_bytes": retained_utf8_bytes,
             "peak_rss_bytes": peak_rss_bytes(),
         })
         _progress(
@@ -704,7 +750,7 @@ def _ingest_cursor(
     for db_path in dbs:
         try:
             mtime = db_path.stat().st_mtime
-            check_source(db_path, opts.get("max_source_bytes"))
+            check_source(db_path, opts.get("max_cursor_container_bytes"))
         except (OSError, ResourceLimitError) as e:
             log.warning("Source validation failed for %s: %s", db_path, e)
             record_ingest_review(
@@ -821,7 +867,7 @@ def _ingest_cursor(
                 if isinstance(marker_mtime, (int, float))
                 else global_db.stat().st_mtime
             )
-            check_source(global_db, opts.get("max_source_bytes"))
+            check_source(global_db, opts.get("max_cursor_container_bytes"))
         except (OSError, ResourceLimitError) as e:
             log.warning("Source validation failed for %s: %s", global_db, e)
             record_ingest_review(
@@ -987,9 +1033,14 @@ def run(args) -> int:
     else:
         sources = ["cc", "codex", "cursor"]
 
-    iopt = build_ingest_run_options(args)
+    try:
+        iopt = build_ingest_run_options(args)
+    except ResourcePolicyError as exc:
+        print(f"codess: invalid resource policy: {exc}", file=sys.stderr)
+        return 1
     for name, value in (
         ("--max-source-bytes", iopt.max_source_bytes),
+        ("--max-cursor-container-bytes", iopt.max_cursor_container_bytes),
         ("--max-events-per-source", iopt.max_events_per_source),
         ("--max-events-per-session", iopt.max_events_per_session),
         ("--max-context-content-chars", iopt.max_context_content_chars),
@@ -1006,6 +1057,7 @@ def run(args) -> int:
         "strict_mapping": iopt.strict_mapping,
         "validate_only": iopt.validate_only,
         "max_source_bytes": iopt.max_source_bytes,
+        "max_cursor_container_bytes": iopt.max_cursor_container_bytes,
         "max_events_per_source": iopt.max_events_per_source,
         "max_events_per_session": iopt.max_events_per_session,
         "max_context_content_chars": iopt.max_context_content_chars,
@@ -1620,6 +1672,7 @@ def run(args) -> int:
                     or seal_upgrade
                 )
                 snapshot_id = _current_snapshot_id(project_root)
+                candidate_snapshot_path = None
                 if (
                     project_raw_records
                     and not iopt.validate_only
@@ -1650,11 +1703,17 @@ def run(args) -> int:
                         },
                         registry_root=registry_root,
                         project_id=binding["project_id"],
+                        publish=not iopt.candidate_snapshot,
                     )
                     snapshot_id = snapshot_path.name
+                    if iopt.candidate_snapshot:
+                        candidate_snapshot_path = str(snapshot_path)
                     progress_trace(
                         "snapshot.done", project=str(project_root),
                         snapshot_id=snapshot_path.name,
+                        publication=(
+                            "candidate" if iopt.candidate_snapshot else "current"
+                        ),
                         phase_seconds=round(time.monotonic() - snapshot_started, 3),
                     )
                 elif project_raw_records and not iopt.validate_only:
@@ -1716,6 +1775,12 @@ def run(args) -> int:
                         ),
                         "project": str(project_root), "sources": proj_stats,
                         "snapshot_id": snapshot_id,
+                        "snapshot_publication": (
+                            "candidate"
+                            if candidate_snapshot_path is not None
+                            else "current_or_unchanged"
+                        ),
+                        "candidate_snapshot_path": candidate_snapshot_path,
                         "decoder_version": DECODER_VERSION,
                         "validator_version": VALIDATOR_VERSION,
                         "evidence_summary_reused": evidence_summary_reused,
@@ -1726,17 +1791,16 @@ def run(args) -> int:
                         },
                         "content_failure_reviews": opts["content_failure_reviews"][review_start:],
                         "resource_observations": opts["resource_observations"][resource_start:],
+                        "resource_summary": summarize_resource_observations(
+                            opts["resource_observations"][resource_start:]
+                        ),
                         "cursor_cohort": opts.get("cursor_cohort"),
                         "progress_events": progress_trace.records_for(
                             str(project_root)
                         ),
                         "evidence_summary": evidence_summary,
-                        "limits": {
-                            "max_source_bytes": iopt.max_source_bytes,
-                            "max_events_per_source": iopt.max_events_per_source,
-                            "max_events_per_session": iopt.max_events_per_session,
-                            "max_context_content_chars": iopt.max_context_content_chars,
-                        },
+                        "resource_policy": iopt.resource_policy,
+                        "limits": _resource_limits_report(iopt),
                     })
                 for k, v in proj_stats.items():
                     if k not in source_stats:
@@ -1796,16 +1860,18 @@ def run(args) -> int:
             "diagnostics": diagnostics,
             "content_failure_reviews": opts["content_failure_reviews"],
             "resource_observations": opts["resource_observations"],
+            "resource_summary": summarize_resource_observations(
+                opts["resource_observations"]
+            ),
             "progress_events": progress_trace.records_for(),
-            "session_kinds": {"Claude": opts["claude_session_kinds"]},
+            "session_kinds": (
+                {"Claude": opts["claude_session_kinds"]}
+                if "Claude" in source_stats else {}
+            ),
             "store_checks": store_checks,
             "evidence_summary": _evidence_summary(sorted(staging_root.rglob("*.db"))),
-            "limits": {
-                "max_source_bytes": iopt.max_source_bytes,
-                "max_events_per_source": iopt.max_events_per_source,
-                "max_events_per_session": iopt.max_events_per_session,
-                "max_context_content_chars": iopt.max_context_content_chars,
-            },
+            "resource_policy": iopt.resource_policy,
+            "limits": _resource_limits_report(iopt),
             "mutation_boundary": "temporary stores only; project, registry, raw store, snapshots, and ingest state unchanged",
         }
         print(json.dumps(report, sort_keys=True))

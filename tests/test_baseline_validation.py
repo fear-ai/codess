@@ -6,14 +6,26 @@ from pathlib import Path
 import pytest
 
 from codess.baseline_validation import (
+    _validate_raw,
     load_policy,
     run_query_smoke,
     semantic_digest,
     validate_project,
 )
+from codess.fileio import source_fingerprint
 from codess.raw_store import RawStore
 from codess.snapshot import create_snapshot, current_store_paths
 from codess.store import connect, init_db, replace_session_events
+
+
+def test_living_project_policies_do_not_freeze_transient_corpus_counts():
+    policy_dir = Path(__file__).resolve().parents[1] / "catalog" / "policies"
+    forbidden = {"minimum_sessions", "minimum_events", "expected_raw_records"}
+    for path in policy_dir.glob("*.json"):
+        if path.name == "ci-fixture.json":
+            continue
+        policy = json.loads(path.read_text(encoding="utf-8"))
+        assert forbidden.isdisjoint(policy), path
 
 
 def _snapshot(tmp_path: Path, *, orphan_tool_result: bool = False) -> tuple[Path, Path]:
@@ -164,9 +176,10 @@ def test_repository_acceptance_policies_are_valid():
     policies = sorted((root / "catalog/policies").glob("*.json"))
     assert {path.name for path in policies} == {
         "ci-fixture.json", "harduw.json", "insight.json", "misses.json", "setpack.json", "spank-logs.json",
-        "spank-py.json", "spank-rs.json", "swemore.json", "wp.json",
-        "wpages.json", "zero400.json", "zeroperf.json", "zerowalletmac.json",
-    }
+            "spank-py.json", "spank-rs.json", "swemore.json", "wp.json",
+            "wpages.json", "wisw.json", "zero400.json", "zeroperf.json",
+            "zerowalletmac.json",
+        }
     assert all(load_policy(path)["require_fixed_point"] for path in policies)
 
 
@@ -240,6 +253,34 @@ def test_query_smoke_exercises_all_read_modes(tmp_path):
     assert all(result["passed"] for result in results.values()), results
 
 
+def test_query_smoke_targets_unpublished_candidate_snapshot(tmp_path):
+    project, raw_root = _snapshot(tmp_path)
+    pointer_path = project / ".codess/current.json"
+    prior_pointer = pointer_path.read_bytes()
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    current_snapshot = project / ".codess" / pointer["path"]
+    raw_record = json.loads(
+        (current_snapshot / "raw-manifest.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()[1]
+    )
+    candidate = create_snapshot(
+        project,
+        current_store_paths(project),
+        [raw_record],
+        raw_store=RawStore(raw_root),
+        build_policy={"raw_mode": "capture"},
+        publish=False,
+    )
+
+    results = run_query_smoke(
+        project, snapshot_id=candidate.name, snapshot_path=candidate
+    )
+
+    assert all(result["passed"] for result in results.values()), results
+    assert pointer_path.read_bytes() == prior_pointer
+
+
 def test_frozen_reference_validation_does_not_require_live_locator(tmp_path):
     project, _ = _snapshot(tmp_path)
     pointer = json.loads((project / ".codess/current.json").read_text())
@@ -280,3 +321,61 @@ def test_frozen_reference_validation_does_not_require_live_locator(tmp_path):
     frozen = validate_project(project, verify_reference_current=False)
     assert frozen["status"] == "accepted_with_limitations"
     assert not frozen["errors"]
+
+
+def test_reference_validation_rejects_legacy_md5_revision(tmp_path):
+    source = tmp_path / "legacy.jsonl"
+    source.write_text('{"legacy":true}\n', encoding="utf-8")
+    legacy_revision = "unsupported-fingerprint:" + ("0" * 32)
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / "raw-manifest.jsonl").write_text(
+        json.dumps({"raw_format": "codess.raw/1"}) + "\n"
+        + json.dumps({
+            "availability": "reference",
+            "source_system_id": "openai.codex",
+            "source_locator": str(source),
+            "source_revision_id": legacy_revision,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    report = {"checks": [], "errors": [], "limitations": []}
+    records, revisions = _validate_raw(
+        snapshot, {}, None, report, verify_reference_current=True
+    )
+
+    assert len(records) == 1
+    assert legacy_revision in revisions[0]
+    check = next(
+        check for check in report["checks"]
+        if check["name"] == "raw.record[0].current_reference"
+    )
+    assert not check["passed"]
+    assert check["detail"]["expected"] == legacy_revision
+    assert check["detail"]["observed"].startswith("sha256-fingerprint:")
+    assert any("current_reference" in error for error in report["errors"])
+
+
+def test_reference_validation_keeps_sha256_mismatch_fatal(tmp_path):
+    source = tmp_path / "current.jsonl"
+    source.write_text('{"current":true}\n', encoding="utf-8")
+    current_revision = source_fingerprint(source)[0]
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / "raw-manifest.jsonl").write_text(
+        json.dumps({"raw_format": "codess.raw/1"}) + "\n"
+        + json.dumps({
+            "availability": "reference",
+            "source_system_id": "openai.codex",
+            "source_locator": str(source),
+            "source_revision_id": current_revision,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    source.write_text('{"current":"changed"}\n', encoding="utf-8")
+    report = {"checks": [], "errors": [], "limitations": []}
+    _validate_raw(
+        snapshot, {}, None, report, verify_reference_current=True
+    )
+
+    assert any("current_reference" in error for error in report["errors"])

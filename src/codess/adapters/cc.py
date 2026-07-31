@@ -20,6 +20,7 @@ from codess.sanitize import apply_sanitization, sanitize_value
 from codess.bounded_jsonl import iter_bounded_jsonl
 from codess.context_content import bound_context_content
 from codess.mapping import annotate_mapping
+from codess.tool_result_status import application_failure_evidence
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +37,119 @@ PERMISSION_DENIAL_MARKERS = (
     "tool use was rejected",
     "doesn't want to proceed with this tool use",
 )
+
+
+def _local_command_semantics(text: str) -> dict | None:
+    """Classify Claude's tagged local-command records across envelope variants."""
+    stripped = text.strip()
+    if stripped.startswith("<local-command-caveat>"):
+        return {
+            "event_type": "system_event",
+            "subtype": "local_command_notice",
+            "role": "harness",
+            "event_kind": "message.context",
+            "actor_kind": "harness",
+            "content_role": "context",
+            "origin_kind": "harness_injected",
+            "command_name": None,
+        }
+    if stripped.startswith("<command-name>"):
+        end = stripped.find("</command-name>")
+        command_name = None
+        if end >= 0:
+            command_name = stripped[len("<command-name>"):end].strip() or None
+        return {
+            "event_type": "user_message",
+            "subtype": "slash_command",
+            "role": "user",
+            "event_kind": "command.invoke",
+            "actor_kind": "human",
+            "content_role": "command",
+            "origin_kind": "direct_user_input",
+            "command_name": command_name,
+        }
+    if stripped.startswith("<local-command-stdout>"):
+        return {
+            "event_type": "system_event",
+            "subtype": "local_command_output",
+            "role": "harness",
+            "event_kind": "command.result",
+            "actor_kind": "harness",
+            "content_role": "result",
+            "origin_kind": "harness_generated",
+            "command_name": None,
+        }
+    return None
+
+
+def _user_origin_semantics(record: dict, source_file: str) -> dict:
+    """Classify Claude user envelopes from explicit runtime evidence."""
+    origin = record.get("origin") or {}
+    source_origin_kind = (
+        origin.get("kind") if isinstance(origin, dict) else str(origin)
+    )
+    prompt_source = record.get("promptSource")
+    delegated_evidence = []
+    if record.get("isSidechain") is True:
+        delegated_evidence.append("record.isSidechain")
+    if record.get("agentId") is not None:
+        delegated_evidence.append("record.agentId")
+    if "subagents" in Path(source_file).parts:
+        delegated_evidence.append("source_path.subagents")
+    if delegated_evidence:
+        return {
+            "event_type": "system_event",
+            "subtype": "delegated_prompt",
+            "role": "harness",
+            "event_kind": "message.context",
+            "actor_kind": "harness",
+            "content_role": "delegated_task",
+            "origin_kind": "harness_delegated",
+            "actor_evidence": delegated_evidence,
+            "source_origin_kind": source_origin_kind,
+            "prompt_source": prompt_source,
+        }
+    harness_evidence = []
+    if prompt_source == "system":
+        harness_evidence.append("record.promptSource=system")
+    if source_origin_kind not in {None, "human"}:
+        harness_evidence.append(f"record.origin.kind={source_origin_kind}")
+    if harness_evidence:
+        return {
+            "event_type": "system_event",
+            "subtype": (
+                "task_notification"
+                if source_origin_kind == "task-notification"
+                else "system_prompt"
+            ),
+            "role": "harness",
+            "event_kind": "message.context",
+            "actor_kind": "harness",
+            "content_role": (
+                "notification"
+                if source_origin_kind == "task-notification" else "context"
+            ),
+            "origin_kind": "harness_injected",
+            "actor_evidence": harness_evidence,
+            "source_origin_kind": source_origin_kind,
+            "prompt_source": prompt_source,
+        }
+    return {
+        "event_type": "user_message",
+        "subtype": "prompt",
+        "role": "user",
+        "event_kind": "message.prompt",
+        "actor_kind": "human",
+        "content_role": "prompt",
+        "origin_kind": "direct_user_input",
+        "actor_evidence": (
+            ["record.origin.kind=human"]
+            if source_origin_kind == "human"
+            else ["no delegated_or_harness_marker"]
+        ),
+        "source_origin_kind": source_origin_kind,
+        "prompt_source": prompt_source,
+    }
 
 
 def iter_cc_records(
@@ -552,14 +666,60 @@ def normalize_product_state(
         metadata = {"duration_ms": record.get("durationMs"), "message_count": record.get("messageCount")}
     elif rtype == "system" and subtype == "scheduled_task_fire":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="scheduled_task_fire", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+    elif rtype == "system" and subtype == "local_command":
+        text = str(record.get("content") or "")
+        text = _process_text(
+            text, opts, phase="pre", record_type="system.local_command"
+        )
+        if text is None:
+            return None
+        text = _process_text(
+            text, opts, phase="post", record_type="system.local_command"
+        )
+        if text is None:
+            return None
+        semantics = _local_command_semantics(text)
+        if semantics is None:
+            semantics = {
+                "event_type": "system_event",
+                "subtype": "local_command",
+                "role": "harness",
+                "event_kind": "command.state",
+                "actor_kind": "harness",
+                "content_role": "state",
+                "origin_kind": "harness_generated",
+                "command_name": None,
+            }
+        event = _base_event(
+            session_id=session_id,
+            event_id=str(line_num),
+            event_type=semantics["event_type"],
+            subtype=semantics["subtype"],
+            role=semantics["role"],
+            timestamp=_get_timestamp(record),
+            source_file=source_file,
+        )
+        event["content"] = text
+        event["content_len"] = len(text)
+        metadata["command_name"] = semantics["command_name"]
+        event.update({
+            key: semantics[key]
+            for key in ("event_kind", "actor_kind", "content_role", "origin_kind")
+        })
     if event is None:
         return None
-    event.update({
-        "event_kind": "state.product" if event["event_type"] == "product_state" else "lifecycle.vendor",
-        "actor_kind": "harness", "content_role": "state",
-        "origin_kind": "harness_generated",
-        "metadata": _event_metadata(record, extra=metadata),
-    })
+    if not event.get("event_kind"):
+        event.update({
+            "event_kind": (
+                "state.product"
+                if event["event_type"] == "product_state"
+                else "lifecycle.vendor"
+            ),
+            "actor_kind": "harness",
+            "content_role": "state",
+            "origin_kind": "harness_generated",
+        })
+    event["metadata"] = _event_metadata(record, extra=metadata)
     return event
 
 
@@ -761,38 +921,69 @@ def normalize_user(
         text = _process_text(text, opts, phase="post", record_type="user.prompt")
         if text is None:
             return []
-        origin = record.get("origin") or {}
-        origin_kind = origin.get("kind") if isinstance(origin, dict) else str(origin)
-        prompt_source = record.get("promptSource")
-        harness_generated = prompt_source == "system" or origin_kind not in {None, "human"}
-        subtype = (
-            "task_notification" if origin_kind == "task-notification"
-            else "system_prompt" if harness_generated
-            else "slash_command" if text.strip().startswith("/")
-            else "prompt"
-        )
-        event_type = "system_event" if harness_generated else "user_message"
-        actor_kind = "harness" if harness_generated else "human"
+        local_command = _local_command_semantics(text)
+        semantics = _user_origin_semantics(record, source_file)
+        if local_command is not None:
+            event_type = local_command["event_type"]
+            subtype = local_command["subtype"]
+            event_role = local_command["role"]
+            event_kind = local_command["event_kind"]
+            actor_kind = local_command["actor_kind"]
+            content_role = local_command["content_role"]
+            normalized_origin_kind = local_command["origin_kind"]
+            if (
+                semantics["actor_kind"] == "harness"
+                and local_command["actor_kind"] == "human"
+            ):
+                event_type = semantics["event_type"]
+                subtype = semantics["subtype"]
+                event_role = semantics["role"]
+                event_kind = semantics["event_kind"]
+                actor_kind = semantics["actor_kind"]
+                content_role = semantics["content_role"]
+                normalized_origin_kind = semantics["origin_kind"]
+        else:
+            subtype = (
+                "slash_command"
+                if (
+                    semantics["actor_kind"] == "human"
+                    and text.strip().startswith("/")
+                )
+                else semantics["subtype"]
+            )
+            event_type = semantics["event_type"]
+            event_role = semantics["role"]
+            event_kind = semantics["event_kind"]
+            actor_kind = semantics["actor_kind"]
+            content_role = semantics["content_role"]
+            normalized_origin_kind = semantics["origin_kind"]
         event = _base_event(
             session_id=session_id, event_id=str(line_num), event_type=event_type,
-            subtype=subtype, role="harness" if harness_generated else role,
+            subtype=subtype, role=event_role,
             timestamp=ts, source_file=source_file,
         )
         event.update({
             "content": text, "content_len": len(text),
-            "event_kind": "message.context" if harness_generated else "message.prompt",
+            "event_kind": event_kind,
             "actor_kind": actor_kind,
-            "content_role": "notification" if harness_generated else "prompt",
-            "origin_kind": "harness_injected" if harness_generated else "direct_user_input",
+            "content_role": content_role,
+            "origin_kind": normalized_origin_kind,
             "metadata": _event_metadata(record, extra={
-                "prompt_source": prompt_source,
-                "origin_kind": origin_kind,
+                "prompt_source": semantics["prompt_source"],
+                "origin_kind": semantics["source_origin_kind"],
                 "permission_mode": record.get("permissionMode"),
                 "user_type": record.get("userType"),
+                "is_sidechain": record.get("isSidechain"),
+                "agent_id": record.get("agentId"),
+                "actor_evidence": semantics["actor_evidence"],
+                "command_name": (
+                    local_command["command_name"] if local_command else None
+                ),
             }),
         })
         _attach_timestamp_state(event, record, ts)
-        _attach_prompt_origin_state(event, record)
+        if local_command is None or actor_kind == "human":
+            _attach_prompt_origin_state(event, record)
         return [event]
     if content is None:
         content = []
@@ -817,13 +1008,49 @@ def normalize_user(
             text = _process_text(text, opts, phase="post", record_type="user.text")
             if text is None:
                 continue
-            subtype = "slash_command" if text.strip().startswith("/") else "prompt"
+            local_command = _local_command_semantics(text)
+            semantics = _user_origin_semantics(record, source_file)
+            subtype = (
+                local_command["subtype"]
+                if local_command is not None
+                else "slash_command" if (
+                    semantics["actor_kind"] == "human"
+                    and text.strip().startswith("/")
+                )
+                else semantics["subtype"]
+            )
+            if (
+                local_command is not None
+                and local_command["actor_kind"] == "human"
+                and semantics["actor_kind"] == "harness"
+            ):
+                subtype = semantics["subtype"]
             events.append({
                 "session_id": session_id,
                 "event_id": _block_event_id(line_num, emitted_index),
-                "event_type": "user_message",
+                "event_type": (
+                    local_command["event_type"]
+                    if (
+                        local_command is not None
+                        and not (
+                            local_command["actor_kind"] == "human"
+                            and semantics["actor_kind"] == "harness"
+                        )
+                    )
+                    else semantics["event_type"]
+                ),
                 "subtype": subtype,
-                "role": role,
+                "role": (
+                    local_command["role"]
+                    if (
+                        local_command is not None
+                        and not (
+                            local_command["actor_kind"] == "human"
+                            and semantics["actor_kind"] == "harness"
+                        )
+                    )
+                    else semantics["role"]
+                ),
                 "content": text,
                 "content_len": len(text),
                 "content_ref": None,
@@ -833,11 +1060,42 @@ def normalize_user(
                 "timestamp": ts,
                 "file_path": None,
                 "source_file": source_file,
-                "metadata": _event_metadata(record),
+                "metadata": _event_metadata(record, extra={
+                    "prompt_source": semantics["prompt_source"],
+                    "origin_kind": semantics["source_origin_kind"],
+                    "user_type": record.get("userType"),
+                    "is_sidechain": record.get("isSidechain"),
+                    "agent_id": record.get("agentId"),
+                    "actor_evidence": semantics["actor_evidence"],
+                    "command_name": (
+                        local_command["command_name"] if local_command else None
+                    ),
+                }),
                 "source_raw": None,
             })
+            if (
+                local_command is not None
+                and not (
+                    local_command["actor_kind"] == "human"
+                    and semantics["actor_kind"] == "harness"
+                )
+            ):
+                events[-1].update({
+                    key: local_command[key]
+                    for key in (
+                        "event_kind", "actor_kind", "content_role", "origin_kind"
+                    )
+                })
+            else:
+                events[-1].update({
+                    key: semantics[key]
+                    for key in (
+                        "event_kind", "actor_kind", "content_role", "origin_kind"
+                    )
+                })
             _attach_timestamp_state(events[-1], record, ts)
-            _attach_prompt_origin_state(events[-1], record)
+            if local_command is None or local_command["actor_kind"] == "human":
+                _attach_prompt_origin_state(events[-1], record)
             emitted_index += 1
 
         elif btype == "tool_result":
@@ -853,6 +1111,15 @@ def normalize_user(
                         parts.append(c.get("text", ""))
                 content_val = "\n".join(parts)
             text = str(content_val) if content_val else ""
+            result_failure = None
+            if (
+                not is_error
+                and isinstance(tool_name, str)
+                and tool_name.startswith("mcp__")
+            ):
+                result_failure = application_failure_evidence(text)
+                if result_failure:
+                    is_error = True
             text = _process_text(text, opts, phase="pre", record_type="tool_result")
             if text is None:
                 continue
@@ -883,11 +1150,26 @@ def normalize_user(
                 "tool_name": tool_name,
                 "tool_input": None,
                 "tool_output": truncated,
-                "normalized_status": "succeeded" if subtype == "tool_result" else None,
+                "source_status": (
+                    "application_error" if result_failure else None
+                ),
+                "normalized_status": (
+                    "succeeded" if subtype == "tool_result"
+                    else "failed" if subtype == "tool_failure"
+                    else None
+                ),
                 "timestamp": ts,
                 "file_path": None,
                 "source_file": source_file,
-                "metadata": _event_metadata(record, tool_use_id),
+                "metadata": _event_metadata(
+                    record,
+                    tool_use_id,
+                    extra=({
+                        "source_is_error": False,
+                        "application_status": "failed",
+                        "result_status_evidence": result_failure,
+                    } if result_failure else None),
+                ),
                 "source_raw": None,
             })
             _attach_timestamp_state(events[-1], record, ts)
