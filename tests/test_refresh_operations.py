@@ -13,6 +13,7 @@ from codess.project_catalog import (
 )
 from codess.raw_store import RawStore
 from codess.refresh_operations import (
+    _result_summary,
     _run_project_ingest,
     refresh_projects,
     resolve_refresh_selection,
@@ -241,3 +242,30 @@ def test_refresh_records_timeout_as_project_failure(
     assert result["status"] == "failed"
     assert result["error_type"] == "timeout"
     assert result["returncode"] is None
+
+
+def test_refresh_retains_bounded_preflight_measurements(tmp_path):
+    summary = _result_summary(
+        {"path": str(tmp_path)},
+        stdout=json.dumps({
+            "report_format": "codess.ingest-preflight/1",
+            "status": "accepted",
+            "sessions": 2,
+            "events": 3,
+            "resource_summary": {
+                "measurement_format": "codess.ingest-resource-summary/1",
+                "selected_input_bytes": 10,
+            },
+            "progress_events": [{"content": "not copied into receipt"}],
+        }),
+    )
+    assert summary == {
+        "report_format": "codess.ingest-preflight/1",
+        "status": "accepted",
+        "sessions": 2,
+        "events": 3,
+        "resource_summary": {
+            "measurement_format": "codess.ingest-resource-summary/1",
+            "selected_input_bytes": 10,
+        },
+    }

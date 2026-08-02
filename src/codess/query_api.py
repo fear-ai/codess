@@ -19,6 +19,8 @@ SUPPORTED_ACTIONS = frozenset({"sessions", "overview", "events", "search"})
 SUPPORTED_FILTERS = frozenset({
     "session_ids", "event_ids", "interaction_ids", "model_turn_ids",
     "source_system_ids", "event_kinds", "statuses", "models",
+    "model_providers", "model_families", "model_revisions",
+    "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
     "tool_names", "actor_kinds", "content_roles", "origin_kinds",
     "parent_session_ids", "session_relation_kinds", "initiation_kinds",
     "artifact", "text", "since", "until",
@@ -26,7 +28,9 @@ SUPPORTED_FILTERS = frozenset({
 ACTION_FILTERS = {
     "sessions": frozenset({
         "session_ids", "source_system_ids", "parent_session_ids",
-        "session_relation_kinds", "since", "until",
+        "session_relation_kinds", "since", "until", "models",
+        "model_providers", "model_families", "model_revisions",
+        "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
     }),
     "overview": SUPPORTED_FILTERS,
     "events": SUPPORTED_FILTERS,
@@ -75,6 +79,8 @@ def make_request(
     for key in (
         "session_ids", "event_ids", "interaction_ids", "model_turn_ids",
         "source_system_ids", "event_kinds", "statuses", "models",
+        "model_providers", "model_families", "model_revisions",
+        "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
         "tool_names", "actor_kinds", "content_roles", "origin_kinds",
         "parent_session_ids", "session_relation_kinds", "initiation_kinds",
     ):
@@ -185,6 +191,8 @@ def validate_request(request: dict[str, Any]) -> None:
     for key in (
         "session_ids", "event_ids", "interaction_ids", "model_turn_ids",
         "source_system_ids", "event_kinds", "statuses", "models",
+        "model_providers", "model_families", "model_revisions",
+        "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
         "tool_names", "actor_kinds", "content_roles", "origin_kinds",
         "parent_session_ids", "session_relation_kinds", "initiation_kinds",
     ):
@@ -350,6 +358,34 @@ def _like_literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+CONFIGURATION_FILTER_COLUMNS = {
+    "models": "model_name_exact",
+    "model_providers": "provider",
+    "model_families": "model_family",
+    "model_revisions": "model_revision",
+    "reasoning_efforts": "reasoning_effort",
+    "speed_tiers": "speed_tier",
+    "service_tiers": "service_tier",
+    "model_modes": "mode",
+}
+
+
+def _configuration_predicates(
+    filters: dict[str, Any],
+    where: list[str],
+    params: list[Any],
+    *,
+    alias: str = "mc",
+) -> None:
+    for filter_name, column in CONFIGURATION_FILTER_COLUMNS.items():
+        _in_clause(
+            f"{alias}.{column}",
+            filters.get(filter_name) or [],
+            where,
+            params,
+        )
+
+
 def _event_predicate(filters: dict[str, Any]) -> tuple[str, list[Any]]:
     where: list[str] = []
     params: list[Any] = []
@@ -384,9 +420,7 @@ def _event_predicate(filters: dict[str, Any]) -> tuple[str, list[Any]]:
     statuses = filters.get("statuses") or []
     if statuses:
         _in_clause("COALESCE(e.normalized_status,e.source_status)", statuses, where, params)
-    models = filters.get("models") or []
-    if models:
-        _in_clause("mc.model_name_exact", models, where, params)
+    _configuration_predicates(filters, where, params)
     if filters.get("since") is not None:
         where.append("COALESCE(e.event_at,e.timestamp)>=?")
         params.append(filters["since"])
@@ -612,7 +646,10 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
                e.source_record_locator,e.source_record_type,e.source_record_subtype,
                e.content,e.content_len,e.tool_name,e.tool_input,e.tool_output,
                COALESCE(e.normalized_status,e.source_status) AS status,
-               e.artifact_path,e.source_file,mc.model_name_exact
+               e.artifact_path,e.source_file,
+               mc.provider,mc.model_family,mc.model_name_exact,
+               mc.model_revision,mc.reasoning_effort,mc.speed_tier,
+               mc.service_tier,mc.mode,e.metadata
         FROM events e JOIN sessions s ON s.id=e.session_id
         LEFT JOIN interactions i ON i.id=e.interaction_id
         LEFT JOIN model_turns mt ON mt.id=e.model_turn_id
@@ -677,6 +714,22 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
             byte_truncated = True
             break
         used_bytes += row_bytes
+        try:
+            event_metadata = json.loads(record["metadata"] or "{}")
+        except json.JSONDecodeError:
+            event_metadata = {}
+        configuration_provenance = (
+            event_metadata.get("configuration_provenance")
+            if isinstance(event_metadata, dict) else None
+        )
+        if not isinstance(configuration_provenance, dict):
+            configuration_provenance = None
+        configuration_provenance_scope = (
+            event_metadata.get("configuration_provenance_scope")
+            if isinstance(event_metadata, dict) else None
+        )
+        if not isinstance(configuration_provenance_scope, dict):
+            configuration_provenance_scope = None
         rows.append({
             "observation_id": _observation_id(
                 store, "event", record["global_id"]
@@ -713,6 +766,17 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
             "artifact_path": record["artifact_path"],
             "source_file": record["source_file"],
             "model": record["model_name_exact"],
+            "model_provider": record["provider"],
+            "model_family": record["model_family"],
+            "model_revision": record["model_revision"],
+            "reasoning_effort": record["reasoning_effort"],
+            "speed_tier": record["speed_tier"],
+            "service_tier": record["service_tier"],
+            "model_mode": record["mode"],
+            "configuration_provenance": configuration_provenance,
+            "configuration_provenance_scope": (
+                configuration_provenance_scope
+            ),
         })
         if row_limit is not None and len(rows) >= row_limit:
             row_limit_reached = True
@@ -733,7 +797,9 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
     facets: dict[str, list[dict[str, Any]]] = {}
     for field in (
         "source_system_id", "event_kind", "actor_kind", "content_role",
-        "origin_kind", "tool_name", "status", "model",
+        "origin_kind", "tool_name", "status", "model", "model_provider",
+        "model_family", "model_revision", "reasoning_effort", "speed_tier",
+        "service_tier", "model_mode",
     ):
         counts: dict[str, int] = {}
         for row in rows:
@@ -849,6 +915,21 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
         where,
         params,
     )
+    configuration_where: list[str] = []
+    configuration_params: list[Any] = []
+    _configuration_predicates(
+        filters, configuration_where, configuration_params
+    )
+    if configuration_where:
+        where.append(
+            "EXISTS (SELECT 1 FROM model_configurations mc WHERE "
+            "(mc.id=s.default_model_config_id OR EXISTS ("
+            "SELECT 1 FROM model_turns mt WHERE mt.session_id=s.id "
+            "AND mt.model_config_id=mc.id)) AND "
+            + " AND ".join(configuration_where)
+            + ")"
+        )
+        params.extend(configuration_params)
     if filters.get("since") is not None:
         where.append("COALESCE(s.ended_at,s.started_at,s.source_mtime)>=?")
         params.append(filters["since"])
@@ -931,6 +1012,12 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
     vendors: dict[str, int] = {}
     kinds: dict[str, int] = {}
     models: dict[str, int] = {}
+    providers: dict[str, int] = {}
+    families: dict[str, int] = {}
+    efforts: dict[str, int] = {}
+    speeds: dict[str, int] = {}
+    service_tiers: dict[str, int] = {}
+    modes: dict[str, int] = {}
     configurations: set[tuple] = set()
     session_relations: dict[str, int] = {}
     initiation_kinds: dict[str, int] = {}
@@ -1156,6 +1243,13 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
             if row[8]:
                 models[row[8]] = models.get(row[8], 0) + 1
                 configurations.add(tuple(row[6:14]))
+            for value, bucket in (
+                (row[6], providers), (row[7], families),
+                (row[10], efforts), (row[11], speeds),
+                (row[12], service_tiers), (row[13], modes),
+            ):
+                if value:
+                    bucket[value] = bucket.get(value, 0) + 1
     times.sort()
     span = (times[-1] - times[0]) if len(times) > 1 else 0
     gaps = [max(0.0, right - left) for left, right in zip(times, times[1:])]
@@ -1358,6 +1452,24 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
         "vendors_by_event": dict(sorted(vendors.items())),
         "event_kinds": dict(sorted(kinds.items(), key=lambda item: (-item[1], item[0]))),
         "models_by_event": dict(sorted(models.items(), key=lambda item: (-item[1], item[0]))),
+        "model_providers_by_event": dict(sorted(
+            providers.items(), key=lambda item: (-item[1], item[0])
+        )),
+        "model_families_by_event": dict(sorted(
+            families.items(), key=lambda item: (-item[1], item[0])
+        )),
+        "reasoning_efforts_by_event": dict(sorted(
+            efforts.items(), key=lambda item: (-item[1], item[0])
+        )),
+        "speed_tiers_by_event": dict(sorted(
+            speeds.items(), key=lambda item: (-item[1], item[0])
+        )),
+        "service_tiers_by_event": dict(sorted(
+            service_tiers.items(), key=lambda item: (-item[1], item[0])
+        )),
+        "model_modes_by_event": dict(sorted(
+            modes.items(), key=lambda item: (-item[1], item[0])
+        )),
         "sessions_by_relation": dict(sorted(session_relations.items())),
         "interactions_by_initiation": dict(sorted(initiation_kinds.items())),
         "active_time_semantics": "sum of adjacent event gaps capped independently; sensitivity estimate, not observed or billable time",

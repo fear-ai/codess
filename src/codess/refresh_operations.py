@@ -16,10 +16,10 @@ from typing import Any
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.project_annotations import build_project_annotations
 from codess.project_catalog import durable_project_root, load_catalog
+from codess.refresh_receipts import REFRESH_RECEIPT_FORMAT
 from codess.schema_contract import verify_package
 
 
-REFRESH_RECEIPT_FORMAT = "codess.refresh-receipt/1"
 REFRESH_DESIGNATORS = frozenset({
     "included",
     "core",
@@ -305,22 +305,38 @@ def resolve_refresh_selection(
     }
 
 
-def _result_summary(project: dict[str, Any]) -> dict[str, Any]:
-    path = Path(project["path"]) / ".codess" / "last-ingest-report.json"
-    try:
-        report = read_json(path)
-    except (OSError, json.JSONDecodeError):
+def _bounded_ingest_summary(report: object) -> dict[str, Any]:
+    if not isinstance(report, dict):
         return {}
     return {
         key: report.get(key)
         for key in (
-            "status", "snapshot_id", "candidate_snapshot_path",
-            "processed_sessions", "processed_events",
-            "stored_sessions", "stored_events", "diagnostics",
+            "report_format", "status", "snapshot_id",
+            "candidate_snapshot_path", "sessions", "events", "sources",
+            "diagnostics",
             "cursor_cohort", "resource_summary",
         )
         if report.get(key) is not None
     }
+
+
+def _result_summary(
+    project: dict[str, Any],
+    *,
+    stdout: str | None = None,
+) -> dict[str, Any]:
+    if stdout:
+        try:
+            summary = _bounded_ingest_summary(json.loads(stdout))
+        except json.JSONDecodeError:
+            summary = {}
+        if summary:
+            return summary
+    path = Path(project["path"]) / ".codess" / "last-ingest-report.json"
+    try:
+        return _bounded_ingest_summary(read_json(path))
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def _run_project_ingest(
@@ -351,6 +367,7 @@ def _run_project_ingest(
         command.extend(["--resource-policy", str(resource_policy)])
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root / "src")
+    started_at = _now()
     started = time.monotonic()
     try:
         result = subprocess.run(
@@ -386,6 +403,8 @@ def _run_project_ingest(
         "status": "passed" if returncode == 0 else "failed",
         "returncode": returncode,
         "error_type": error_type,
+        "started_at": started_at,
+        "completed_at": _now(),
         "elapsed_seconds": round(time.monotonic() - started, 3),
         "command": command,
         "stdout_bytes": len(stdout.encode("utf-8")),
@@ -394,7 +413,7 @@ def _run_project_ingest(
         ).hexdigest(),
         "stdout_tail": stdout[-4_000:] if stdout else "",
         "stderr_tail": stderr[-4_000:] if stderr else "",
-        "ingest_summary": _result_summary(project) if not validate else {},
+        "ingest_summary": _result_summary(project, stdout=stdout),
     }
 
 
@@ -471,6 +490,7 @@ def refresh_projects(
     }
 
     def checkpoint() -> None:
+        receipt["updated_at"] = _now()
         if receipt_path is not None:
             write_json_atomic(receipt_path.expanduser().resolve(), receipt)
 

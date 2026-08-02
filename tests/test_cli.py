@@ -859,6 +859,57 @@ def test_ingest_partial_source_failure_continues_and_exits_1():
         assert report["diagnostics"]["failed_sources"] == 1
 
 
+def test_force_ingest_rebuilds_existing_store_from_fresh_database():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "project"
+        project.mkdir()
+        store = project / ".codess" / "sessions_cc.db"
+        init_db(store)
+        conn = sqlite3.connect(store)
+        conn.execute("CREATE TABLE stale_rebuild_sentinel(value TEXT)")
+        conn.execute(
+            "INSERT INTO stale_rebuild_sentinel(value) VALUES ('old')"
+        )
+        conn.commit()
+        conn.close()
+        cc_projects = root / "cc"
+        source_dir = cc_projects / path_to_slug(project.resolve())
+        source_dir.mkdir(parents=True)
+        shutil.copy(
+            Path(__file__).parent / "fixtures" / "sample.jsonl",
+            source_dir / "session.jsonl",
+        )
+
+        result = _run(
+            [
+                "ingest", "--dir", str(project), "--source", "cc",
+                "--force", "--min-size", "0",
+            ],
+            env={
+                **os.environ,
+                "CODESS_CC_PROJECTS": str(cc_projects),
+                "CODESS_REGISTRY": str(root / "registry"),
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        conn = sqlite3.connect(store)
+        try:
+            assert conn.execute(
+                """
+                SELECT COUNT(*) FROM sqlite_master
+                WHERE type='table' AND name='stale_rebuild_sentinel'
+                """
+            ).fetchone()[0] == 0
+            assert conn.execute(
+                "SELECT COUNT(*) FROM sessions"
+            ).fetchone()[0] == 1
+        finally:
+            conn.close()
+        assert not list((project / ".codess").glob(".rebuild-*"))
+
+
 def test_multi_project_reports_isolate_status_and_diagnostics():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -1148,6 +1199,19 @@ def test_routine_ingest_writes_resource_and_evidence_report():
             report["resource_summary"]["emitted_events"]
             == report["resource_observations"][0]["events"]
         )
+        assert report["resource_summary"]["measurement_format"] == (
+            "codess.ingest-resource-summary/1"
+        )
+        assert report["resource_summary"]["selected_input_complete"] is True
+        assert (
+            report["resource_summary"]["selected_input_bytes"]
+            == source.stat().st_size
+        )
+        assert (
+            report["resource_summary"]["normalized_store_usage"]["files"]
+            >= 1
+        )
+        assert report["resource_summary"]["raw_object_usage"]["files"] == 0
         assert report["resource_summary"]["retained_searchable_characters"] > 0
         assert report["resource_summary"]["retained_searchable_utf8_bytes"] >= (
             report["resource_summary"]["retained_searchable_characters"]
@@ -1375,6 +1439,68 @@ def test_query_vendor_filter_stable_session_id_sequence_and_csv():
         assert detail.stdout.index("FIRST") < detail.stdout.index("SECOND")
 
 
+def test_query_configurations_honors_session_id():
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        store = project / ".codess/sessions_codex.db"
+        init_db(store)
+        conn = connect(store)
+        for session_id, model in (("selected", "gpt-selected"), ("other", "gpt-other")):
+            configuration = {"model_provider": "openai", "model": model}
+            replace_session_events(
+                conn,
+                {
+                    "id": session_id,
+                    "source": "Codex",
+                    "type": "Code",
+                    "project_path": str(project),
+                    "metadata": configuration,
+                },
+                [
+                    {
+                        "session_id": session_id,
+                        "event_id": f"{session_id}-prompt",
+                        "event_type": "user_message",
+                        "subtype": "prompt",
+                        "role": "user",
+                        "content": "request",
+                        "timestamp": 1_000.0,
+                    },
+                    {
+                        "session_id": session_id,
+                        "event_id": f"{session_id}-response",
+                        "event_type": "assistant_message",
+                        "subtype": "response",
+                        "role": "assistant",
+                        "content": "response",
+                        "timestamp": 2_000.0,
+                        "metadata": configuration,
+                    },
+                ],
+                session_id=session_id,
+            )
+        conn.commit()
+        conn.close()
+
+        result = _run([
+            "query", "configurations", "--dir", str(project),
+            "--session-id", "selected",
+        ])
+        assert result.returncode == 0, result.stderr
+        report = json.loads(result.stdout)
+        assert report["totals"]["model_turns"] == 1
+        assert [
+            row["model_name_exact"] for row in report["configurations"]
+        ] == ["gpt-selected"]
+
+        missing = _run([
+            "query", "configurations", "--dir", str(project),
+            "--session-id", "missing",
+        ])
+        assert missing.returncode == 1
+        assert "no Session matches" in missing.stderr
+
+
 def test_query_rejects_invalid_source_and_ambiguous_modes():
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp)
@@ -1455,6 +1581,18 @@ def test_typed_research_workflow_search_expand_and_resolve_evidence(tmp_path):
                 "timestamp": 2000,
                 "source_file": str(source),
                 "source_record_locator": "line:1",
+                "metadata": {
+                    "model_provider": "openai",
+                    "model": "gpt-workflow",
+                    "reasoning_effort": "high",
+                    "service_tier": "priority",
+                    "configuration_provenance": {
+                        "model": {
+                            "source_field": "payload.model",
+                            "source_record_locator": "line:1",
+                        },
+                    },
+                },
             },
         ],
         session_id="workflow-session",
@@ -1493,6 +1631,22 @@ def test_typed_research_workflow_search_expand_and_resolve_evidence(tmp_path):
     resolution = json.loads(evidence.stdout)
     assert resolution["selected"]["kind"] == "live"
     assert resolution["selected"]["equality"] == "exact"
+
+    configured = _run([
+        "query", "events", "--dir", str(project),
+        "--model", "gpt-workflow",
+        "--model-provider", "openai",
+        "--reasoning-effort", "high",
+        "--service-tier", "priority",
+    ])
+    assert configured.returncode == 0, configured.stderr
+    configured_result = json.loads(configured.stdout)
+    assert [row["event_id"] for row in configured_result["rows"]] == [
+        "workflow-response"
+    ]
+    assert configured_result["rows"][0]["configuration_provenance"][
+        "model"
+    ]["source_field"] == "payload.model"
 
     summary_path = tmp_path / "summary.md"
     summary_path.write_text(

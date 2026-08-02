@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sqlite3
 import sys
 import gc
@@ -69,7 +70,7 @@ from codess.store import record_processing_run, sync_project_catalog
 from codess.resources import (
     ResourceLimitError, check_events, check_source, peak_rss_bytes,
     searchable_event_payload, summarize_event_payload,
-    summarize_resource_observations,
+    summarize_project_resources,
 )
 from codess.resource_policy import ResourcePolicyError
 from codess.evidence import summarize_store_evidence
@@ -186,6 +187,8 @@ def _observe_resource(opts: dict, path: Path, sessions_events: dict[str, list[di
     opts["resource_observations"].append({
         "source": str(path), "container": str(path.resolve()),
         "source_bytes": path.stat().st_size,
+        "selected_input_bytes": path.stat().st_size,
+        "selected_input_kind": "selected_transcript_file",
         "events": total, "largest_session_events": largest,
         "retained_searchable_characters": retained_characters,
         "retained_searchable_utf8_bytes": retained_utf8_bytes,
@@ -730,9 +733,22 @@ def _ingest_cursor(
             ).fetchone() is None:
                 conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
         prune_unreferenced_records(conn)
+        project_marker = (
+            opts.get("cursor_project_markers", {}).get(proj_str)
+            if composer_ids is not None else None
+        )
+        selected_input_bytes = (
+            project_marker.get("source_size")
+            if isinstance(project_marker, dict) else None
+        )
         opts["resource_observations"].append({
             "source": source_file, "container": str(db_path.resolve()),
             "source_bytes": db_path.stat().st_size,
+            "selected_input_bytes": selected_input_bytes,
+            "selected_input_kind": (
+                "cursor_selected_values"
+                if selected_input_bytes is not None else "unmeasured"
+            ),
             "events": source_total, "largest_session_events": largest,
             "retained_searchable_characters": retained_characters,
             "retained_searchable_utf8_bytes": retained_utf8_bytes,
@@ -1092,10 +1108,14 @@ def run(args) -> int:
     source_stats = {}
     had_error = False
 
+    staged_store_roots: dict[Path, Path] = {}
+
     def _store_path(proj: Path, src: str) -> Path:
         if iopt.validate_only:
             key = hashlib.sha256(str(proj).encode()).hexdigest()[:16]
             proj = staging_root / key
+        else:
+            proj = staged_store_roots.get(proj.resolve(), proj)
         return get_store_path(proj, {"cc": "Claude", "codex": "Codex", "cursor": "Cursor"}[src])
 
     temporary = tempfile.TemporaryDirectory(prefix="codess-preflight-") if iopt.validate_only else None
@@ -1141,7 +1161,9 @@ def run(args) -> int:
     cursor_roots = list(cursor_workspace_ids)
     live_cursor_global = get_cursor_global_db() if cursor_roots else None
     cursor_project_headers = {
-        str(root): get_cursor_project_composer_headers(live_cursor_global, root)
+        str(root): get_cursor_project_composer_headers(
+            live_cursor_global, root, diagnostics=diagnostics
+        )
         for root in cursor_roots
         if live_cursor_global is not None
     }
@@ -1358,11 +1380,37 @@ def run(args) -> int:
                 return 1
 
     for project_index, project_root in enumerate(roots):
+        rebuild_temporary = None
+        rebuild_had_existing_store = False
         try:
             resource_start = len(opts["resource_observations"])
             review_start = len(opts["content_failure_reviews"])
             diagnostic_start = dict(diagnostics)
             project_root = project_root.resolve()
+            if force and not iopt.validate_only:
+                rebuild_parent = project_root / ".codess"
+                rebuild_parent.mkdir(parents=True, exist_ok=True)
+                rebuild_temporary = tempfile.TemporaryDirectory(
+                    prefix=".rebuild-", dir=rebuild_parent
+                )
+                staged_store_roots[project_root] = (
+                    Path(rebuild_temporary.name) / "project"
+                )
+                selected_targets = [
+                    get_store_path(project_root, vendor)
+                    for source_key, vendor in (
+                        ("cc", "Claude"),
+                        ("codex", "Codex"),
+                        ("cursor", "Cursor"),
+                    )
+                    if source_key in sources
+                ]
+                rebuild_had_existing_store = any(
+                    path.exists() for path in selected_targets
+                )
+                for path in selected_targets:
+                    if not path.exists():
+                        init_db(path)
             project_started = time.monotonic()
             progress_trace(
                 "project.start", project=str(project_root),
@@ -1383,7 +1431,11 @@ def run(args) -> int:
             opts["location_id"] = binding["location_id"]
             opts["registry_root"] = str(registry_root)
             opts["content_actions"] = []
-            work_root = (staging_root / str(project_index)) if staging_root else project_root
+            work_root = (
+                staging_root / str(project_index)
+                if staging_root
+                else staged_store_roots.get(project_root, project_root)
+            )
             state_path = get_state_path(work_root)
             proj_stats = {}
             project_raw_records: list[dict] = (
@@ -1664,6 +1716,50 @@ def run(args) -> int:
                             derived_changed = True
                         finally:
                             conn.close()
+                if force and not iopt.validate_only:
+                    staged_project = staged_store_roots.pop(project_root)
+                    promoted = []
+                    if not project_had_error or not rebuild_had_existing_store:
+                        for source_key, vendor in (
+                            ("cc", "Claude"),
+                            ("codex", "Codex"),
+                            ("cursor", "Cursor"),
+                        ):
+                            if source_key not in sources:
+                                continue
+                            staged_path = get_store_path(
+                                staged_project, vendor
+                            )
+                            if not staged_path.exists():
+                                continue
+                            target = get_store_path(project_root, vendor)
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            os.replace(staged_path, target)
+                            for suffix in ("-journal", "-wal", "-shm"):
+                                Path(str(target) + suffix).unlink(
+                                    missing_ok=True
+                                )
+                            promoted.append(target.name)
+                        staged_state = get_state_path(staged_project)
+                        if staged_state.exists():
+                            target_state = get_state_path(project_root)
+                            target_state.parent.mkdir(
+                                parents=True, exist_ok=True
+                            )
+                            os.replace(staged_state, target_state)
+                    else:
+                        changed_vendors.clear()
+                        catalog_changed_vendors.clear()
+                        derived_changed = False
+                    progress_trace(
+                        "fresh_rebuild.promoted",
+                        project=str(project_root),
+                        stores=promoted,
+                        retained_prior=(
+                            project_had_error
+                            and rebuild_had_existing_store
+                        ),
+                    )
                 snapshot_required = (
                     bool(changed_vendors)
                     or bool(catalog_changed_vendors)
@@ -1756,6 +1852,19 @@ def run(args) -> int:
                                 time.monotonic() - evidence_started, 3
                             ),
                         )
+                    raw_object_paths = {
+                        path
+                        for record in project_raw_records
+                        if (path := raw_store.resolve(record)) is not None
+                        and path.is_file()
+                    }
+                    project_resource_summary = summarize_project_resources(
+                        opts["resource_observations"][resource_start:],
+                        normalized_store_paths=[
+                            path for path in evidence_paths if path.exists()
+                        ],
+                        raw_object_paths=raw_object_paths,
+                    )
                 progress_trace(
                     "project.done", project=str(project_root),
                     status=("completed_with_errors" if project_had_error else "accepted"),
@@ -1791,9 +1900,7 @@ def run(args) -> int:
                         },
                         "content_failure_reviews": opts["content_failure_reviews"][review_start:],
                         "resource_observations": opts["resource_observations"][resource_start:],
-                        "resource_summary": summarize_resource_observations(
-                            opts["resource_observations"][resource_start:]
-                        ),
+                        "resource_summary": project_resource_summary,
                         "cursor_cohort": opts.get("cursor_cohort"),
                         "progress_events": progress_trace.records_for(
                             str(project_root)
@@ -1824,6 +1931,10 @@ def run(args) -> int:
                     ),
                 )
                 return 1
+        finally:
+            staged_store_roots.pop(project_root.resolve(), None)
+            if rebuild_temporary is not None:
+                rebuild_temporary.cleanup()
 
     overall_sessions = sum(s["sessions"] for s in source_stats.values())
     overall_events = sum(s["events"] for s in source_stats.values())
@@ -1860,8 +1971,9 @@ def run(args) -> int:
             "diagnostics": diagnostics,
             "content_failure_reviews": opts["content_failure_reviews"],
             "resource_observations": opts["resource_observations"],
-            "resource_summary": summarize_resource_observations(
-                opts["resource_observations"]
+            "resource_summary": summarize_project_resources(
+                opts["resource_observations"],
+                normalized_store_paths=sorted(staging_root.rglob("*.db")),
             ),
             "progress_events": progress_trace.records_for(),
             "session_kinds": (
@@ -1903,7 +2015,9 @@ def run(args) -> int:
             f"filtered={diagnostics.get('filtered_records', 0)} "
             f"external_content={diagnostics.get('external_content_records', 0)} "
             f"external_errors={diagnostics.get('external_content_errors', 0)} "
-            f"reviewable_content_failures={diagnostics.get('reviewable_content_failures', 0)}",
+            f"reviewable_content_failures={diagnostics.get('reviewable_content_failures', 0)} "
+            f"cursor_ambiguous_fallback="
+            f"{diagnostics.get('cursor_ambiguous_fallback_composers', 0)}",
             file=sys.stderr,
         )
     return 1 if had_error else 0

@@ -1,8 +1,10 @@
 # CursorSchema — Cursor IDE session storage
 
-Vendor-specific structure for Cursor chat persistence. Codess reads it through
-`src/codess/adapters/cursor.py`, `src/codess/project.py`, and
-`src/codess/scan.py`.
+Vendor-specific structure for Cursor chat persistence. `codess.cursor_source`
+owns installation discovery, workspace mapping, read-only SQLite access,
+selective SQL, and selected-evidence fingerprints. The Cursor adapter decodes
+only selected values and maps them to CoSchema; ingest and scan call those
+shared components rather than implementing independent database readers.
 
 Cursor's SQLite format is private and can change without notice. Use read-only
 access and tolerate missing tables, null values, and new fields.
@@ -63,6 +65,12 @@ Session-level index:
 Codess uses this as the primary global-session index. Composers whose
 `workspaceId` maps to the selected Project are imported. Missing timestamp or
 classification columns default to null/false; additional columns are ignored.
+Session metadata records `selection_source=composerHeaders`; the selected
+evidence fingerprint includes that designation. Adding this provenance changed
+the fingerprint method to
+`cursor-workspace-header-source-key-length-edge-sha256-fingerprint-v2`;
+existing v1 markers therefore cause one ordinary assessed refresh rather than
+silently comparing different algorithms.
 The table is not a complete historical catalog: Cursor can retain full
 `composerData:*` and `bubbleId:*` rows after removing a composer header.
 
@@ -83,7 +91,10 @@ entries preserve composer identity, timestamps, archive/subagent flags, and
 other header-like metadata for some sessions missing from the live global
 `composerHeaders` table. Codess uses this row only for workspaces already
 matched to the Project (including approved source links). A composer occurring
-in more than one selected workspace fallback is ambiguous and excluded.
+in more than one selected workspace fallback is ambiguous and excluded. A
+fallback-selected Session records
+`selection_source=workspace.composerData`; current global headers override an
+overlapping fallback.
 
 ## 3. Bubble JSON
 
@@ -153,6 +164,14 @@ extension.
 The audited `modelInfo` objects contain only `modelName`; Codess therefore does
 not infer effort, speed, or service tier from names such as `*-fast` or
 `*-thinking`. Those labels remain exact model selections.
+
+Cursor records that selection on a governing user bubble, not necessarily on
+each later model bubble. New normalized writes carry its exact field/locator
+provenance to governed model Events and mark the scope `inherited`; the
+governing Event remains identifiable. A current forced staged Zero400 rebuild
+validated that every configured Model Turn has this occurrence evidence;
+turns before any observed governing selection remain unconfigured rather than
+receiving a guessed model.
 
 The adapter uses parsed `createdAt` for sorting and event timestamps. Numeric
 fallback values are accepted only when they plausibly represent Unix seconds or
@@ -342,13 +361,28 @@ normalizes events.
 - Direct workspace traces can exist without either index, and newer composer
   headers can exist without a surviving workspaceStorage mapping. Candidate
   review should use structured composer identity; ambiguous workspace identity
-  remains unattributed.
+  remains unattributed. When one fallback composer appears under two or more
+  selected workspace indexes, ingest emits the structured diagnostic
+  `cursor_ambiguous_fallback_composers` once for that composer and excludes it.
 - Scan time ranges remain incomplete when matching headers omit usable
   timestamps. Codess reports header/timestamp coverage in debug output and does
   not decode every bubble merely to improve scan dates.
 - Missing required tables or required header identity columns are surfaced as
   source failures or warnings. Optional/more recent header columns are
   tolerated.
+
+Known candidate dispositions:
+
+| Candidate | Current disposition | Evidence needed to reopen |
+|---|---|---|
+| Current versus fallback selection provenance | **Implemented.** Session metadata and the v2 selected-evidence fingerprint name `composerHeaders` or `workspace.composerData` |
+| Ambiguous fallback composer | **Implemented.** Exclude without guessing, log the composer ID, and report one structured diagnostic count even if it occurs in three or more indexes |
+| Derive scan dates by reading bubbles when headers lack timestamps | **Set aside.** Header/timestamp coverage already reports incompleteness | A workflow that requires those dates plus a selective-read cost measurement; never decode the global store merely to improve a scan summary |
+| Infer a parent composer for subagent Sessions | **Set aside.** `parent_session_id` remains NULL | A direct parent field or independently verifiable vendor relation; time, text, and workspace proximity are insufficient |
+| Import `~/.cursor/projects/.../agent-transcripts` | **Research required.** It is a separate storage family, not part of the SQLite contract | Representative current files, identity/overlap analysis against SQLite, retention/privacy review, and explicit scope approval |
+| Normalize `codeBlocks`, `fileActions`, and additional context/product state | **Evidence-triggered** | A concrete UC/query plus stable field meaning and representative current records; otherwise preserve only already mapped evidence |
+| Populate effort, speed, provider, or service tier | **Unavailable in reviewed Cursor evidence** | A distinct direct source field; never derive it from `modelInfo.modelName` |
+| Incrementalize complete-composer ordering/deduplication/Interaction construction | **Performance work postponed under P22** | A reproduced current latency/RSS problem and benchmark preserving canonical order, rollback, identities, and fixed-point output |
 
 Cross-vendor normalized columns are defined in `CoSchema.md`. Implementation
 tasks, gaps, and ordering are owned by `CoPlan.md` §8.

@@ -31,16 +31,16 @@ investigation remain separate operations.
 
 | Capability | Priority |
 |------------|----------|
-| Find projects with session data (scan) | P0 |
-| Ingest CC, Codex, Cursor | P0 |
-| Query sessions, orientation, events, and bounded normalized content | P0 |
-| Catalog-wide and filtered cross-Project analytical Assemblies | P1 |
-| Save/replay typed requests, chain stable result IDs, and verify exact evidence | P1 |
-| Batch / multi-root (`--dirs`, `--dir`) | P0 |
-| Review candidates using session, local Git, activity, ownership, and topic evidence | P1 |
-| Execute an explicit reviewed selection without a hidden “worthy” heuristic | P1 |
-| Per-source filters (`--source`) | P1 |
-| Redaction | P1 |
+| Find projects with session data (scan) | Critical |
+| Ingest CC, Codex, Cursor | Critical |
+| Query sessions, orientation, events, and bounded normalized content | Critical |
+| Catalog-wide and filtered cross-Project analytical Assemblies | High |
+| Save/replay typed requests, chain stable result IDs, and verify exact evidence | High |
+| Batch / multi-root (`--dirs`, `--dir`) | Critical |
+| Review candidates using session, local Git, activity, ownership, and topic evidence | High |
+| Execute an explicit reviewed selection without a hidden “worthy” heuristic | High |
+| Per-source filters (`--source`) | High |
+| Redaction | High |
 
 **Out of scope:** raw-source search over authorized vendor fields and messages,
 alternative indexed retrieval without measured need, and Markdown export.
@@ -95,7 +95,7 @@ than restating it.
 | **Schemas.md** | Schema compatibility, evolution, and vendor-translation policy |
 | **CoSchema.md** | Logical normalized data, store semantics, and the format contract |
 | **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md** | Vendor-owned storage, observed fields, mapping evidence, and access |
-| **CoPlan.md** | Code boundaries, runtime/CLI contract, configuration, tests, active work, decisions, and gaps |
+| **CoPlan.md** | Modules/components, entity composition, data/configuration flows, code boundaries, runtime/CLI contract, tests, active work, decisions, and gaps |
 | **Operations.md** | Maintainer procedures, safety gates, evidence, storage, retained baselines |
 | **CompatibilityReview.md** | Evidence of the reviewed compatibility corpus |
 | **experiments/** | Self-contained evaluations that graduate into decisions |
@@ -109,6 +109,22 @@ executable DDL belongs in `schema/coschema/sqlite/schema.sql`. Do not add dated
 chronology, copied command catalogs, or duplicate backlogs to the durable set.
 Project-local manifests, receipts, and validation reports are operational
 records, not documentation.
+
+Maintained documents describe the present system, the reasons for its design,
+and unresolved work. Git history and generated reports retain change history;
+the documentation does not narrate incremental fixes after their consequences
+have been incorporated.
+
+Introduce a subject in prose before using a list or table. Use tables only for
+short, repeated fields that readers genuinely compare. A qualification that
+needs several sentences belongs in a prose subsection, with a terse registry
+entry pointing to it. Lists group parallel items; they do not replace an
+explanation of relationships or tradeoffs.
+
+Define a specialized term or abbreviation at first use and retain its agreed
+spelling in the glossary. Status, task, and cross-reference entries use familiar
+or glossary-defined terms, state one disposition, and name the authoritative
+location without repeating its argument.
 
 ## 5. Glossary
 

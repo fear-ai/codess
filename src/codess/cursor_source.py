@@ -200,6 +200,7 @@ def _composer_headers(
             "last_updated_at": last_updated_at,
             "is_archived": bool(is_archived),
             "is_subagent": bool(is_subagent),
+            "selection_source": "composerHeaders",
         }
         for composer_id, workspace_id, created_at, last_updated_at,
             is_archived, is_subagent in conn.execute(sql, params)
@@ -223,6 +224,8 @@ def get_composer_headers(
 
 def get_workspace_composer_headers(
     project_root: Path, cursor_data: Path | None = None,
+    *,
+    diagnostics: dict[str, int] | None = None,
 ) -> dict[str, dict]:
     """Recover workspace-bound composers absent from global composerHeaders.
 
@@ -268,13 +271,21 @@ def get_workspace_composer_headers(
                         "selection_source": "workspace.composerData",
                     }
                     previous = recovered.get(composer_id)
-                    if previous is not None and previous["workspace_id"] != workspace_id:
+                    if previous is not None and previous.get("ambiguous"):
+                        continue
+                    if (
+                        previous is not None
+                        and previous.get("workspace_id") != workspace_id
+                    ):
                         log.warning(
                             "Cursor composer %s occurs in multiple selected workspace indexes; "
                             "excluding ambiguous fallback mapping",
                             composer_id,
                         )
                         recovered[composer_id] = {"ambiguous": True}
+                        if diagnostics is not None:
+                            key = "cursor_ambiguous_fallback_composers"
+                            diagnostics[key] = diagnostics.get(key, 0) + 1
                     elif previous is None:
                         recovered[composer_id] = header
         except (OSError, sqlite3.Error, json.JSONDecodeError, TypeError) as exc:
@@ -292,10 +303,14 @@ def get_workspace_composer_headers(
 
 def get_project_composer_headers(
     global_db: Path, project_root: Path, cursor_data: Path | None = None,
+    *,
+    diagnostics: dict[str, int] | None = None,
 ) -> dict[str, dict]:
     """Combine current global headers with workspace-index fallbacks."""
     workspace_ids = set(get_workspace_ids(project_root, cursor_data))
-    fallback = get_workspace_composer_headers(project_root, cursor_data)
+    fallback = get_workspace_composer_headers(
+        project_root, cursor_data, diagnostics=diagnostics
+    )
     current = get_composer_headers(global_db, workspace_ids)
     fallback.update(current)
     return fallback
@@ -434,7 +449,7 @@ def _selection_marker(
         "source_mtime": latest_timestamp,
         "source_size": selected_bytes,
         "fingerprint_method": (
-            "cursor-workspace-header-key-length-edge-sha256-fingerprint"
+            "cursor-workspace-header-source-key-length-edge-sha256-fingerprint-v2"
         ),
         "consistency": "sqlite-read-transaction",
         "workspace_count": len(workspace_ids),

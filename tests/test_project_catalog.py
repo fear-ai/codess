@@ -386,16 +386,84 @@ def test_catalog_readiness_reports_per_project_and_coverage(tmp_path):
         "query_ready_coverage": "1/1",
         "all_eligible_query_ready": True,
         "source_refresh_assessed_projects": 0,
+        "source_refresh_coverage": "0/1",
     }
     row = report["projects"][0]
     assert row["project_id"] == project_id
     assert row["query_status"] == "query_ready"
     assert row["source_refresh_status"] == "not_assessed"
+    assert row["refresh_observation"] is None
 
     (durable_project_root(registry, project_id) / "current.json").unlink()
     report = catalog_readiness(registry)
     assert report["summary"]["query_ready_coverage"] == "0/1"
     assert report["projects"][0]["query_status"] == "missing_current_snapshot"
+
+
+def test_catalog_readiness_uses_latest_completed_refresh_observation(tmp_path):
+    _project, registry, project_id = _captured_project(tmp_path)
+    reports = registry / "reports"
+    reports.mkdir()
+    common_plan = {
+        "projects": [{
+            "project_id": project_id,
+            "source": "all",
+            "raw_mode": "capture",
+        }],
+    }
+    (reports / "refresh-older.json").write_text(json.dumps({
+        "receipt_format": "codess.refresh-receipt/1",
+        "created_at": "2026-07-30T10:00:00+00:00",
+        "updated_at": "2026-07-30T10:01:00+00:00",
+        "requested_stage": "apply",
+        "status": "applied",
+        "plan": common_plan,
+        "preflight": [],
+        "apply": [{
+            "project_id": project_id,
+            "stage": "apply",
+            "status": "passed",
+            "completed_at": "2026-07-30T10:01:00+00:00",
+            "returncode": 0,
+            "ingest_summary": {"snapshot_id": "snapshot-1"},
+        }],
+    }), encoding="utf-8")
+    (reports / "refresh-newer.json").write_text(json.dumps({
+        "receipt_format": "codess.refresh-receipt/1",
+        "created_at": "2026-07-30T11:00:00+00:00",
+        "requested_stage": "preflight",
+        "status": "preflight_rejected",
+        "plan": common_plan,
+        "preflight": [{
+            "project_id": project_id,
+            "stage": "preflight",
+            "status": "failed",
+            "completed_at": "2026-07-30T11:01:00+00:00",
+            "returncode": 1,
+        }],
+        "apply": [],
+    }), encoding="utf-8")
+    (reports / "refresh-plan-only.json").write_text(json.dumps({
+        "receipt_format": "codess.refresh-receipt/1",
+        "created_at": "2026-07-30T12:00:00+00:00",
+        "requested_stage": "plan",
+        "status": "planned",
+        "plan": common_plan,
+        "preflight": [],
+        "apply": [],
+    }), encoding="utf-8")
+
+    report = catalog_readiness(registry)
+    row = report["projects"][0]
+    assert row["source_refresh_status"] == "preflight_failed"
+    assert row["refresh_observation"]["observed_at"] == (
+        "2026-07-30T11:01:00+00:00"
+    )
+    assert row["refresh_observation"]["source"] == "all"
+    assert row["refresh_observation"]["raw_mode"] == "capture"
+    assert row["refresh_observation"]["snapshot_id"] is None
+    assert report["summary"]["source_refresh_assessed_projects"] == 1
+    assert report["summary"]["source_refresh_coverage"] == "1/1"
 
 
 def test_worktree_disposition_preserves_entry_but_excludes_broad_query(tmp_path):
@@ -450,7 +518,32 @@ def test_catalog_query_names_project_and_snapshot_on_incompatibility(tmp_path):
     assert result.returncode == 1
     assert project_id in result.stderr
     assert scope["snapshot_id"] in result.stderr
+
+    with pytest.raises(ValueError, match="no eligible Projects"):
+        resolve_project_query_scopes(registry, all_current=True)
     assert "package digest mismatch" in result.stderr
+
+
+def test_all_current_honors_exact_and_read_compatible_package_policy(
+    tmp_path, monkeypatch,
+):
+    _project, registry, project_id = _captured_project(tmp_path)
+    scope = resolve_project_query_scopes(registry, [project_id])[0]
+    monkeypatch.setattr(
+        "codess.snapshot.verify_package",
+        lambda: "different-current-package-digest",
+    )
+
+    with pytest.raises(ValueError, match="no eligible Projects"):
+        resolve_project_query_scopes(registry, all_current=True)
+    compatible = resolve_project_query_scopes(
+        registry,
+        all_current=True,
+        allow_package_mismatch=True,
+    )
+    assert [(item["project_id"], item["snapshot_id"]) for item in compatible] == [
+        (project_id, scope["snapshot_id"]),
+    ]
 
 
 def test_catalog_status_distinguishes_package_mismatch(tmp_path):

@@ -484,7 +484,13 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
     """Upsert a common session while retaining the legacy query projection."""
     source = str(session.get("source") or "Unknown")
     profile = _profile(source)
-    metadata = _json_dict(session.get("metadata"))
+    raw_metadata = session.get("metadata")
+    metadata = _json_dict(raw_metadata)
+    stored_metadata = (
+        canonical_json(raw_metadata)
+        if isinstance(raw_metadata, dict)
+        else raw_metadata
+    )
     project_id = _ensure_project(conn, session)
     model_config_id = _ensure_model_configuration(conn, metadata)
     parent = session.get("parent_session_id") or metadata.get("parent_session_id")
@@ -547,7 +553,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         archive_state or "unknown",
         archive_source,
         model_config_id,
-        session.get("metadata"),
+        stored_metadata,
         source,
         session.get("type", "Code"),
         session.get("release"),
@@ -655,7 +661,13 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
         (event.get("session_id"),),
     ).fetchone()
     semantics = _resolved_event_semantics(event)
-    metadata = _json_dict(event.get("metadata"))
+    raw_metadata = event.get("metadata")
+    metadata = _json_dict(raw_metadata)
+    stored_metadata = (
+        canonical_json(raw_metadata)
+        if isinstance(raw_metadata, dict)
+        else raw_metadata
+    )
     source_status, normalized_status = _normalized_status(event, metadata)
     mapping_rule = event.get("mapping_rule")
     mapping_trace = event.get("mapping_trace")
@@ -698,7 +710,7 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
         source_status, normalized_status, event.get("source_file"),
         event.get("artifact_path") or event.get("file_path"), mapping_rule,
         mapping_trace,
-        event.get("metadata"), event.get("event_type"), event.get("subtype"),
+        stored_metadata, event.get("event_type"), event.get("subtype"),
         event.get("role"), event.get("timestamp"), event.get("file_path"),
     )
     conn.execute(
@@ -1210,13 +1222,18 @@ def _prepare_event_groups(
 ) -> list[dict[str, Any]]:
     prepared: list[dict[str, Any]] = []
     session_row = conn.execute(
-        "SELECT source FROM sessions WHERE id=?", (session_id,)
+        "SELECT source,default_model_config_id FROM sessions WHERE id=?",
+        (session_id,),
     ).fetchone()
     session_source = session_row[0] if session_row else "Unknown"
     interaction_counter = 0
     model_turn_counter = 0
     current_interaction: str | None = None
-    current_model_config_id: int | None = None
+    current_model_config_id: int | None = (
+        session_row["default_model_config_id"] if session_row else None
+    )
+    current_configuration_provenance: dict[str, Any] | None = None
+    current_configuration_anchor: dict[str, Any] | None = None
     turn_by_record: dict[str, str] = {}
     for sequence, original in enumerate(events, 1):
         event = dict(original)
@@ -1238,15 +1255,64 @@ def _prepare_event_groups(
                 """,
                 (current_interaction, session_id, interaction_counter, event.get("event_id")),
             )
-            current_model_config_id = _ensure_model_configuration(
-                conn, _json_dict(event.get("metadata"))
+            prompt_metadata = _json_dict(event.get("metadata"))
+            prompt_model_config_id = _ensure_model_configuration(
+                conn, prompt_metadata
             )
+            if prompt_model_config_id is not None:
+                current_model_config_id = prompt_model_config_id
+                prompt_provenance = prompt_metadata.get(
+                    "configuration_provenance"
+                )
+                current_configuration_provenance = (
+                    json.loads(canonical_json(prompt_provenance))
+                    if isinstance(prompt_provenance, dict)
+                    else None
+                )
+                current_configuration_anchor = {
+                    "governing_event_id": event.get("event_id"),
+                    "governing_source_record_locator": event.get(
+                        "source_record_locator"
+                    ),
+                }
         if semantics["actor_kind"] == "model":
+            event_metadata = _json_dict(event.get("metadata"))
             observed_model_config_id = _ensure_model_configuration(
-                conn, _json_dict(event.get("metadata"))
+                conn, event_metadata
             )
             if observed_model_config_id is not None:
+                observed_provenance = event_metadata.get(
+                    "configuration_provenance"
+                )
+                if isinstance(observed_provenance, dict):
+                    current_configuration_provenance = json.loads(
+                        canonical_json(observed_provenance)
+                    )
+                    current_configuration_anchor = {
+                        "governing_event_id": event.get("event_id"),
+                        "governing_source_record_locator": event.get(
+                            "source_record_locator"
+                        ),
+                    }
+                elif observed_model_config_id != current_model_config_id:
+                    current_configuration_provenance = None
+                    current_configuration_anchor = None
                 current_model_config_id = observed_model_config_id
+            if (
+                current_model_config_id is not None
+                and current_configuration_provenance is not None
+                and not isinstance(
+                    event_metadata.get("configuration_provenance"), dict
+                )
+            ):
+                event_metadata["configuration_provenance"] = json.loads(
+                    canonical_json(current_configuration_provenance)
+                )
+                event_metadata["configuration_provenance_scope"] = {
+                    "state": "inherited",
+                    **(current_configuration_anchor or {}),
+                }
+                event["metadata"] = canonical_json(event_metadata)
             if current_interaction is None:
                 # Model activity with no preceding human prompt (e.g. /loop or a
                 # scheduled/timer fire). Open an inferred autonomous interaction so

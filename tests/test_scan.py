@@ -62,6 +62,64 @@ def test_scan_rejects_remote_cursor_uri_that_looks_like_project_child(tmp_path):
     assert result.stdout.strip().splitlines()[1].split(",")[:2] == ["project", "Codex"]
 
 
+def test_scan_exact_root_honors_approved_remote_cursor_source_link(tmp_path):
+    project = tmp_path / "project"
+    sidecar = project / ".codess"
+    sidecar.mkdir(parents=True)
+    workspace_id = "remote-workspace"
+    (sidecar / "source-links.json").write_text(json.dumps({
+        "format": "codess.source-links/1",
+        "links": [{
+            "source_system_id": "cursor.composer",
+            "source_project_path": "vscode-remote://ssh-remote+host/repo",
+            "target_project_path": str(project),
+            "source_identity": {"workspace_id": workspace_id},
+            "relation_kind": "remote_workspace_local_binding",
+            "selection_state": "approved",
+        }],
+    }))
+    cursor = tmp_path / "cursor" / "User"
+    (cursor / "workspaceStorage").mkdir(parents=True)
+    global_dir = cursor / "globalStorage"
+    global_dir.mkdir()
+    conn = sqlite3.connect(global_dir / "state.vscdb")
+    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute(
+        "CREATE TABLE composerHeaders ("
+        "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+        "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+        ("composer", workspace_id, 1_000, 2_000, 0, 0),
+    )
+    conn.execute(
+        "INSERT INTO cursorDiskKV VALUES (?, ?)",
+        ("bubbleId:composer:bubble", json.dumps({"type": 1, "text": "prompt"})),
+    )
+    conn.commit()
+    conn.close()
+    env = _scan_env(
+        tmp_path,
+        CODESS_CC_PROJECTS=str(tmp_path / "cc"),
+        CODESS_CODEX_SESSIONS=str(tmp_path / "codex"),
+        CODESS_CURSOR_DATA=str(cursor),
+    )
+
+    result = _run(
+        ["scan", "--dir", str(project), "--source", "cursor", "--out", "-"],
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    project_rows = [
+        line for line in result.stdout.splitlines()
+        if line and not line.startswith("path,") and not line.startswith("(global),")
+    ]
+    assert len(project_rows) == 1
+    assert project_rows[0].split(",")[:3] == [".", "Cursor", "1"]
+
+
 def test_scan_coalesces_nested_workspace_into_observed_git_project(tmp_path):
     import sqlite3
 

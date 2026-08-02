@@ -697,21 +697,106 @@ settings” JSON object:
 
 | Field | Meaning and maintenance | Current vendor evidence | Impact |
 |---|---|---|---|
-| `provider` | Exact service/provider namespace when supplied; store with reusable configuration plus occurrence provenance | Codex supplies provider in session/turn/settings records; Claude supplies service evidence in reviewed assistant usage; Cursor lacks a separate mapped provider | High for cross-provider scope; P1 |
-| `model_name_exact` | Exact selected/reported string, never normalized away | All three vendors provide it in at least some mapped records | High for filtering/comparison; P0/P1 |
-| `model_family` | Rebuildable grouping derived from exact name under a versioned alias table | Potentially all vendors; not a source fact unless explicitly supplied | Useful, not urgent; P2 |
+| `provider` | Exact service/provider namespace when supplied; store with reusable configuration plus occurrence provenance | Codex supplies provider in session/turn/settings records; Claude supplies service evidence in reviewed assistant usage; Cursor lacks a separate mapped provider | High for cross-provider scope |
+| `model_name_exact` | Exact selected/reported string, never normalized away | All three vendors provide it in at least some mapped records | Critical for filtering/comparison |
+| `model_family` | Rebuildable grouping derived from exact name under a versioned alias table | Potentially all vendors; not a source fact unless explicitly supplied | Useful, not urgent |
 | `model_revision` | Exact immutable revision/deployment identifier only when the source distinguishes it | No general reviewed evidence; a model-name suffix is not automatically a revision | Leave NULL; evidence-triggered |
-| `reasoning_effort` | Exact user/harness-selectable effort | Codex turn/settings records; not separately observed in current Claude/Cursor mappings | High where available; A12 P1 |
+| `reasoning_effort` | Exact user/harness-selectable effort | Codex turn/settings records; not separately observed in current Claude/Cursor mappings | High where available; A12 |
 | `speed_tier` | Exact selectable speed/latency value, separate from model name | No distinct reviewed three-vendor evidence | Leave NULL; T4 |
-| `service_tier` | Exact service/priority tier supplied separately | Newer Codex settings and Claude usage evidence; not Cursor | P1; retain source field/release |
-| `mode` | Exact collaboration/agent/interaction mode from an identified field; never reuse sandbox or truncation “mode” | Codex collaboration mode; Cursor product mode and Claude agent/permission concepts require separate mappings | P1 only for demonstrated queries |
-| sampling/capability/context declarations | Exact configuration or declaration, never inferred from text or model marketing | Uneven and mostly outside current local mappings | P3/evidence-triggered |
+| `service_tier` | Exact service/priority tier supplied separately | Newer Codex settings and Claude usage evidence; not Cursor | High; retain source field/release |
+| `mode` | Exact collaboration/agent/interaction mode from an identified field; never reuse sandbox or truncation “mode” | Codex collaboration mode; Cursor product mode and Claude agent/permission concepts require separate mappings | High only for demonstrated queries |
+| sampling/capability/context declarations | Exact configuration or declaration, never inferred from text or model marketing | Uneven and mostly outside current local mappings | Later/evidence-triggered |
 
 The common columns normalize formats but never erase the exact source value or
-field path. `source_config` is occurrence provenance and vendor extension, not
-a dumping ground for unrelated product state. Promote a new common field only
-after A12 shows exact evidence, repeatable meaning, and a concrete query or
-validation need.
+field path. `source_config` is one bounded representative configuration
+observation and vendor extension, not occurrence history and not a dumping
+ground for unrelated product state. Event `configuration_provenance` plus its
+Source revision and record locator is the occurrence evidence. Promote a new
+common field only after A12 shows exact evidence, repeatable meaning, and a
+concrete query or validation need.
+
+#### A12 configuration-provenance programme
+
+A12 supports features rather than collecting settings for their own sake:
+
+- **UC1/UC2:** locate Sessions and Events by source system, exact model, effort,
+  or service configuration;
+- **UC3:** partition engagement and volume by observed model/configuration
+  without confusing a setting with utilization, cost, or capability;
+- **UC5/UC7:** reconstruct which configuration governed a particular model
+  response, tool decision, retry, or harness transition;
+- **UC8:** compare work on the same Project across vendors while retaining
+  vendor-only distinctions; and
+- **UC9/UC10:** cite the exact configuration occurrence and resolve it back to
+  the vendor Source record.
+
+The implementation unit is a source-backed **configuration occurrence**, not
+one Session-wide JSON blob and not an inferred “current model.” Each occurrence
+records: nullable normalized fields; exact vendor values; source system,
+release/profile, Source revision, record locator and field path; applicable
+Session/Event/turn identity and sequence/time range; mapping profile/version;
+and a field state of `observed`, `derived`, `ambiguous`, `absent`, or
+`unsupported`. `derived` is initially allowed only for a rebuildable
+`model_family` alias mapping. It is never used for effort, speed, service tier,
+revision, or mode.
+
+The completed current-evidence contract and maintenance triggers are:
+
+| State | Vendor slice | Evidence and outcome |
+|---|---|---|
+| **complete** | Exact model occurrence on Claude, Codex, Cursor | Real Source records pass adapter, store, typed filter, and exact-evidence resolution with exact field/value and observed overrides |
+| **complete** | Codex effort and service tier | Session defaults, turn overrides, and harness/runtime settings remain distinct; absent values remain NULL |
+| **complete** | Claude service/model evidence | Assistant usage/model evidence is distinct from harness configuration and `assistant` role |
+| **complete** | Release/harness version | Vendor tool release remains independent from model configuration and decoder support |
+| **observed scope complete** | Mode | Exact observed values remain queryable without claiming cross-vendor equivalence |
+| **evidence-triggered** | Family, revision, speed, sampling, context/capability declarations | Add only from direct evidence and a demonstrated query/validation requirement |
+
+Development proceeds vertically, one field/source case at a time:
+
+1. inventory exact local occurrences and adjacent records, including release
+   boundaries and overrides;
+2. state whether the value is Session default, turn/Event occurrence, harness
+   setting, provider response field, or derived alias;
+3. preserve the raw value/path in mapping provenance and map a normalized
+   nullable value only when meaning is established;
+4. add a focused adapter fixture plus one real-source assertion;
+5. verify storage, query filtering, result identity, and exact-evidence
+   resolution;
+6. compare prior/current snapshots for `match`, `mismatch`, or `vacant`
+   without making an absent optional value fatal; and
+7. update the vendor schema document and supported release/profile evidence.
+
+The first delivery order is exact model for all three vendors, Codex effort,
+Codex/Claude service tier, then release provenance. Mode/family work follows
+only if those core filters reveal a user need. This order maximizes UC2/UC5/
+UC10 value and prevents a broad schema migration before occurrence semantics
+are proven.
+
+The implemented first vertical slice exposes all eight nullable configuration
+dimensions as typed Session/Event predicates and Event result/facet fields;
+overview reports their observed Event distributions. `query configurations`
+uses set-based SQL to report configuration/default/turn counts plus at most
+three Source-backed occurrence examples per tuple. A Model Turn inherits a
+recorded Session default until an occurrence overrides it. When a vendor such
+as Cursor records a model selection on the governing human bubble rather than
+on later model bubbles, the writer carries that exact provenance to governed
+model Events with `configuration_provenance_scope.state=inherited` and the
+governing Event/locator. Direct Claude/Codex evidence has no inherited marker.
+
+Current real-store validation found direct occurrence provenance for reviewed
+Claude and Codex snapshots. A forced staged Zero400 rebuild verified inherited
+Cursor selection provenance for every configured Model Turn; turns with no
+governing selection remain unconfigured. No separate Claude/Cursor effort or
+speed value is synthesized from model names.
+
+Forced ingestion rebuilds selected vendor stores in a Project-local temporary
+directory, runs mapping and derived correlation there, then atomically replaces
+the selected working database and state before immutable snapshot publication.
+This avoids delete/upsert amplification against an old indexed database. A
+failed staged rebuild retains an existing working store; first-ingest partial
+success and `--stop` compatibility remain tested. On Zero400 this changed the
+forced apply from a 600-second timeout to an 83.7-second successful apply; the
+separate mandatory preflight remained about 90 seconds.
 
 ## 10. Events, roles, commands, tools, context, and memory
 
@@ -804,17 +889,17 @@ implementation classes:
 
 | Concept | Source or derivation | Current representation | Next treatment | Priority |
 |---|---|---|---|---:|
-| Exact source role and actor evidence | Vendor record/envelope and paired-record evidence | Mapping trace or Event metadata | Audit each supported release; correct actor/origin mapping before changing layout | P0 |
-| `actor_kind`, `content_role`, `origin_kind` | Normalized from exact source evidence | Common Event columns | Keep separately queryable; never derive human solely from `role=user` | P0 |
-| Interaction initiation | Direct prompt, harness start, or delegation evidence | Common Interaction value, sometimes `unknown` | Refine only where the source proves delegation/autonomy | P1 |
-| Session relation and parent | Vendor parent/fork/subagent fields | Session columns plus metadata | Map direct Codex protocol evidence and validate Claude/Cursor differences | P1 |
-| Runtime participant ID/name/role/path | Vendor collaboration/subagent records | Vendor metadata where observed | Promote relationally only after repeated lineage queries require it | P1 |
-| Exact tool name and namespace | Source call/invocation | Free-text tool name plus metadata | Preserve exact value; add a versioned alias/classification registry, not an enum replacement | P1 |
-| MCP server/tool, connector, app, action, plugin, duration, result status | Codex transport event; vendor-qualified tool records elsewhere | Tool/Event metadata and transport status Event | Validate occurrence linkage; promote only frequently filtered fields | P1 |
-| Planning, delegation, and automation class | Derived from exact tool/lifecycle shapes | Not a source fact; exact tool names remain queryable | Add a versioned derived classifier after a reviewed cross-vendor rule set | P2 |
-| Provider, model family/exact name/revision, effort, speed, service tier, mode | Exact vendor configuration fields; family may be normalized from exact name | Nullable independent configuration fields plus source provenance | Continue A12 vendor/release fixtures; absence stays NULL and ambiguity stays diagnostic | P1 |
-| Event/content/input/output lengths and truncation | Store-time observation | Common lengths plus policy/metadata, uneven for older mappings | Make truncation disposition explicit before using lengths for completeness claims | P1 |
-| Daily/monthly counts, characters, distinct Sessions/Interactions, spans, latencies, tool totals | SQL/query derivation over selected snapshots | Typed overview result | Return the observed numbers; displays may derive ratios and percentages | P1 |
+| Exact source role and actor evidence | Vendor record/envelope and paired-record evidence | Mapping trace or Event metadata | Audit each supported release; correct actor/origin mapping before changing layout | Critical |
+| `actor_kind`, `content_role`, `origin_kind` | Normalized from exact source evidence | Common Event columns | Keep separately queryable; never derive human solely from `role=user` | Critical |
+| Interaction initiation | Direct prompt, harness start, or delegation evidence | Common Interaction value, sometimes `unknown` | Refine only where the source proves delegation/autonomy | High |
+| Session relation and parent | Vendor parent/fork/subagent fields | Session columns plus metadata | Map direct Codex protocol evidence and validate Claude/Cursor differences | High |
+| Runtime participant ID/name/role/path | Vendor collaboration/subagent records | Vendor metadata where observed | Promote relationally only after repeated lineage queries require it | High |
+| Exact tool name and namespace | Source call/invocation | Free-text tool name plus metadata | Preserve exact value; add a versioned alias/classification registry, not an enum replacement | High |
+| MCP server/tool, connector, app, action, plugin, duration, result status | Codex transport event; vendor-qualified tool records elsewhere | Tool/Event metadata and transport status Event | Validate occurrence linkage; promote only frequently filtered fields | High |
+| Planning, delegation, and automation class | Derived from exact tool/lifecycle shapes | Not a source fact; exact tool names remain queryable | Add a versioned derived classifier after a reviewed cross-vendor rule set | Later |
+| Provider, model family/exact name/revision, effort, speed, service tier, mode | Exact vendor configuration fields; family may be normalized from exact name | Nullable independent configuration fields plus source provenance | Maintain A12 vendor/release fixtures; absence stays NULL and ambiguity stays diagnostic | High |
+| Event/content/input/output lengths and truncation | Store-time observation | Common lengths plus policy/metadata, uneven for older mappings | Make truncation disposition explicit before using lengths for completeness claims | High |
+| Daily/monthly counts, characters, distinct Sessions/Interactions, spans, latencies, tool totals | SQL/query derivation over selected snapshots | Typed overview result | Return the observed numbers; displays may derive ratios and percentages | High |
 
 The test for a common stored field is repeated source availability plus a
 demonstrated filter, join, ordering, or completeness need. Otherwise retain the
@@ -1074,25 +1159,32 @@ partial file may override or disable individual limits. Environment and CLI
 overrides remain compatible. Runtime and preflight reports retain effective
 values and per-value provenance.
 
-This completes the configuration and transcript/container separation part of
-CoPlan P14. Runtime and preflight reports now also provide a reconciled
+This completes the approved configuration and transcript/container separation.
+Runtime and preflight reports also provide a reconciled
 `resource_summary`: repeated observations of one container are counted once
 for container bytes, emitted Events are additive, the largest Session is a
 maximum, and process RSS is a non-additive high-water mark. The remaining
-approved P14/P16 sequence is:
+implemented boundary is:
 
-1. report selected source-record and source-semantic payload bytes separately
-   from the now-reconciled container/Event/RSS summary; retained searchable
-   Event characters and UTF-8 bytes are now measured;
-2. add record, Event-payload, Project-run, and raw-capture ceilings only when
-   their measured unit and failure mode justify them;
-3. classify an over-limit observation before deciding its disposition; a
+1. report selected decoder-input bytes and measurement coverage separately
+   from full container bytes; a whole selected JSONL transcript contributes
+   its file bytes, while a selective Cursor observation contributes the
+   serialized values selected for that Project. A missing measure is explicit
+   and makes the sum incomplete rather than becoming zero;
+2. report normalized SQLite-file usage and unique referenced raw-object usage
+   as logical, allocated, and unique-allocated bytes. These are physical
+   retained allocations, not semantic text;
+3. do not estimate source-semantic pre-truncation or query-result serialization
+   from retained text; neither is a current required measure;
+4. add no record, Event-payload, Project-run, or raw-capture ceiling without a
+   newly reviewed measured unit and failure mode;
+5. classify an over-limit observation before deciding its disposition; a
    source/container admission guard stops ingest and creates a review item,
    while a legitimate oversized textual field may retain a bounded searchable
    projection plus original length/truncation/link evidence, and an external
    object may retain only an excerpt and reference;
-4. validate the approved ceilings across representative real Projects and
-   repeated builds.
+6. keep approved boundary, override, streaming-abort, and pre-commit tests
+   green.
 
 Do not sum repeated source-observation container sizes as retained or selected
 Project data. Report physical retained allocation, distinct source revisions,
@@ -1108,18 +1200,18 @@ review, with full source length, truncation state, and recoverable source or
 sidecar reference. Query byte limits truncate only returned inline content,
 not stored Events. The remaining gap is to make ordinary prompt/response/tool
 field truncation metadata as explicit and uniform as current context bounding;
-**CoPlan A27/P16** owns that completeness audit.
+Any demonstrated completeness defect belongs to **CoPlan A6/A9**.
 
 #### Measurement and assessment method
 
-P14–P16 use a common measurement vocabulary so an investigation cannot compare
+Resource work uses a common measurement vocabulary so an investigation cannot compare
 container allocation with semantic text or count one Cursor database once per
 Project:
 
 | Unit | Measurement method | Attribution and reconciliation |
 |---|---|---|
 | Source container bytes | Filesystem `st_size`; for SQLite also main/WAL/SHM and backup output separately | One physical revision/object observation; never multiply by selected Projects |
-| Selected raw-record bytes | JSONL byte span consumed per record; Cursor `length(key)+length(value)` only for selected keys/rows; external Source size when selected | Source revision → record locator → mapped Session/Project candidates |
+| Selected decoder-input bytes | Whole-file bytes for a selected JSONL transcript; selected serialized value bytes for a Cursor Project selection; unknown for a source shape without a streaming counter | Source observation → mapped Session/Project candidates. Report measured/total observation coverage and never equate an incomplete sum with zero |
 | Source semantic payload | UTF-8 bytes and characters of authorized source values before truncation, with raw type and field path | Record/field; do not add container overhead |
 | Retained Event payload | UTF-8 bytes and characters per distinct searchable field: content, tool input, tool output, artifact/attachment excerpt, and specialized context | Event → Session → Project run; a value copied into two physical columns is counted once by a declared logical-field rule |
 | Result payload | Canonical serialized row/result bytes plus separately reported retained inline-content bytes | Query request/result; distinguishes network/file output from searchable content |
@@ -1146,7 +1238,7 @@ Python/native/SQLite memory, measure selected/pre-truncation source payload,
 or measure result-serialization amplification. Runtime/preflight reports now
 measure retained searchable Event characters and UTF-8 bytes while treating an
 identical `content`/`tool_output` tool-result projection as one logical value.
-The next profiling design is:
+If performance work is resumed, the profiling sequence is:
 
 1. add content-free per-phase counters and RSS sampling to existing progress
    boundaries;
@@ -1188,9 +1280,9 @@ The resulting classification is `expected`, `large_but_valid`,
 `resource_amplification`, or `needs_review`, with evidence identity and notes.
 A percentile alone never promotes a ceiling.
 
-#### P14–P16 staged architecture
+#### Resource measurement, admission, and limit architecture
 
-**P14 measures before it limits.** Add versioned observations and counters at
+**Measurement precedes limits.** Versioned observations and counters belong at
 Source admission, vendor-record selection, normalized Event emission,
 transaction commit, raw capture, snapshot creation, query serialization, and
 process-phase completion. Counters flow forward in small aggregates; content
@@ -1207,18 +1299,18 @@ Missing preferred fields, irregular numbering, or alternate record shapes are
 informational mapping/compliance facts, not automatic rejection. Rejected
 message emission still retains Source-record identity and a reason.
 
-**P16 promotes only evidence-backed ceilings.** Candidate policies begin as
-report-only warnings, then enter opt-in preflight rejection, and only then may
-become built-in defaults. Each stage records distributions and classifications,
-tests exact boundaries, verifies error/override behavior, runs recent
-three-vendor preflight, and completes two clean fixed-point rebuilds. Promotion
-requires no unexplained outlier, no silent loss, stable counts/identities below
-the boundary, bounded allocation before rejection, and documented recovery.
-
-The executable task and acceptance breakdown is centralized in
-**CoPlan P14.1–P16.6**.
+**Only evidence-backed ceilings are eligible.** The approved Source/Event/
+Session/context defaults and their overrides are implemented and tested. No
+additional warning, opt-in, or built-in limit programme is pending. A new
+candidate begins with an observed failure mode, exact unit, recovery path, and
+boundary tests in a newly scoped A item.
 
 #### Cursor architecture and performance programme
+
+Implementation and benchmarking under this programme are currently postponed
+as **CoPlan P22**. The design remains the restart point after a measured
+user-facing latency/RSS defect or the next changed large capture; routine work
+must not optimize from the historical high-water observation alone.
 
 Current understanding separates five components that must not be timed as one
 opaque “Cursor ingest”:
@@ -1325,7 +1417,7 @@ those must not be counted as empty prompts.
 #### Resource-bound status
 
 The transcript and context rows are implemented through the resource policy.
-The other rows remain reviewable P14/P16 candidates rather than defaults:
+The other rows are design examples, not approved defaults or pending tasks:
 
 | Unit | Candidate | Status and handling |
 |---|---:|---|
@@ -1879,8 +1971,9 @@ non-active by default unless a concrete compatibility or correlation need
 changes their classification.
 
 Current candidate review and onboarding needs enter the central registry under
-**CoPlan T5**; broad discovery or corpus expansion remains governed by
-**CoPlan P4**. Machine catalogs and receipts retain the actual Project set.
+**CoPlan T5**. Broad discovery is not a standing programme; a concrete missing
+cohort or vendor receives a focused A item. Machine catalogs and receipts
+retain the actual Project set.
 
 ### Candidate review, selection, and batch onboarding
 
@@ -2047,8 +2140,29 @@ operation. Routine `refresh` is a separate native composition: resolve an
 explicit list or one annotation designator, preflight every Project, verify
 unchanged selection/catalog/package fingerprints, and apply each Project
 independently. It deliberately has no cross-Project rollback; its checkpointed
-receipt preserves every per-Project result. The stricter composed baseline
-publication discussed in **CoPlan P8** remains postponed.
+receipt preserves every per-Project result. Reviewed baseline publication
+remains an explicit operator composition, not a pending native cross-Project
+rollback feature.
+
+`catalog status` consumes those receipts as bounded operational observations.
+It scans only versioned `refresh-*.json` receipts in the registry reports
+directory, ignores plan-only/malformed records, and chooses the newest
+completed per-Project preflight or apply result by recorded UTC completion
+time. The Project row exposes the result stage/status, receipt identity,
+requested Source selection, raw mode, and resulting snapshot when reported.
+The normalized status is deliberately narrow:
+
+- `not_assessed` — no usable completed result;
+- `preflight_passed` or `preflight_failed` — temporary-store validation only;
+- `refresh_applied` — that Project's apply subprocess succeeded; and
+- `refresh_failed` — that Project's apply subprocess failed.
+
+These labels answer “when did Codess last attempt this Project, and what
+happened?” They do not answer whether every upstream vendor store is currently
+unchanged, whether Git/file activity is attributable to a harness, or whether
+the Project is research-current. Those broader inferences are intentionally
+not claimed. A failed newer observation supersedes an older success in status
+reporting without invalidating the older immutable snapshot.
 
 Evidence audits are capability-specific rather than symmetrical wrappers for
 their own sake. Cursor feature, Codex parentage, and Claude feature evidence use
@@ -2342,7 +2456,7 @@ needed to interpret it.
 Projection is also separate from developer execution reporting. Requested
 result fields describe the investigation product. SQL plans, phase timings,
 rows examined, allocation counters, cache behavior, and RSS describe one
-execution and belong in bounded maintainer observations under A9/P14. They may
+execution and belong in bounded maintainer observations under A9. They may
 refer to the request/result identity, but are neither projected domain fields
 nor part of stable result meaning.
 
@@ -2369,29 +2483,20 @@ exposing conversation content. Static optimization can use available indexes,
 declared cardinality, and measured selectivity. It must not change the request
 or make correctness depend on one backend.
 
-SQL equivalence is proved per operation, not assumed globally. A small
-backend-neutral reference executor should evaluate fixture-sized typed rows;
-the optimized SQLite planner is compared against it for pushable predicates,
-NULL handling, literal `%`/`_`/backslash, ordering, and bounds. Operations that
-cannot share the same semantics remain core stages and are tested through their
-public result contract. This differential approach determines where SQL
-pushdown is viable while preserving one standard application path.
+SQL equivalence is proved at the public operation boundary, not assumed
+globally. Current A9 coverage uses contract/unit tests, fixture-sized functional
+tests, composed CLI workflow tests, source→adapter→store→query integration
+tests, independent SQL reconciliation for selected orientation/count results,
+and the immutable-candidate system validation ladder. The exact levels and
+test owners are cataloged in `CoPlan.md §8.2.6`.
 
-A9 validates SQL in four increasing-cost layers:
-
-1. fixture-level reference-versus-SQL equality for each pushable predicate,
-   including NULL, multivalue, timestamp boundary, and literal metacharacter
-   cases;
-2. aggregate reconciliation against short, independently written read-only SQL
-   for UC1/UC3 counts and constituent IDs;
-3. `EXPLAIN QUERY PLAN` checks only for required access properties, such as an
-   indexed identity lookup or bounded range, never brittle full plan text; and
-4. read-only smoke/reconciliation on diverse immutable snapshots: SWEmore,
-   spank-py, Misses, insight, and wpages as well as large Cursor-heavy Zero400.
-
-The first mismatch stops promotion and is reduced to a fixture. Real snapshots
-test diversity and scale; they do not replace deterministic unit/differential
-tests.
+A separate backend-neutral executor and `EXPLAIN QUERY PLAN` assertions are
+candidate debugging mechanisms, not current acceptance requirements. Build the
+smallest one only after a reproduced qualification, NULL/literal, ordering,
+bounds, completeness, or required-access-path defect. Reduce the mismatch to a
+deterministic fixture first. Diverse immutable Projects—including small
+single-vendor stores before Cursor-heavy Zero400—then provide system
+reconciliation and scale evidence; they do not replace deterministic tests.
 
 #### JSON carrier evaluation (postponed P17)
 
@@ -2838,12 +2943,14 @@ virtual saved result is already sufficient. Conversely, every proposed common
 export column must name at least one product that needs it. This prevents an
 imagined “all records” table from becoming the de facto schema.
 
-The first prototype is a manifest plus virtual execution of one standard query
-package over two Projects and two source systems. It must compare its rows to
-the direct query results before any bulk format is selected. A second prototype
-exercises a vendor-specific projection so format design does not erase
-non-common evidence. Only then choose JSONL, Parquet, DuckDB, or merged SQLite
-for measured consumers.
+The first prototype is a manifest plus virtual execution of one current
+version-1 saved typed request over two Projects and two source systems, using a
+fixed named Assembly projection. It must compare its rows to the direct query
+results before any bulk format is selected. This does not require or authorize
+P17 query-package infrastructure or general caller-selected projection. A
+second prototype exercises a fixed vendor-specific projection so format design
+does not erase non-common evidence. Only then choose JSONL, Parquet, DuckDB, or
+merged SQLite for measured consumers.
 
 The assembly pipeline is vendor-independent:
 

@@ -2,11 +2,13 @@ from pathlib import Path
 
 import pytest
 
+from cli.ingest_cmd import _append_bounded_event
 from codess.context_content import bound_context_content
 from codess.resources import (
     ResourceLimitError, check_events, check_source, file_usage,
     peak_rss_bytes, searchable_event_payload, storage_usage,
-    summarize_event_payload, summarize_resource_observations, tree_usage,
+    summarize_event_payload, summarize_project_resources,
+    summarize_resource_observations, tree_usage,
 )
 
 
@@ -35,6 +37,35 @@ def test_source_and_event_limits_are_enforced(tmp_path: Path):
         check_events({"s": [{}, {}]}, max_source=3, max_session=1)
     peak = peak_rss_bytes()
     assert peak is None or peak > 0
+
+
+def test_streaming_event_limit_rejects_before_buffer_growth():
+    sessions: dict[str, list[dict]] = {}
+    opts = {
+        "max_events_per_source": 2,
+        "max_events_per_session": 2,
+    }
+    total = _append_bounded_event(opts, sessions, "s", {"n": 1}, 0)
+    total = _append_bounded_event(opts, sessions, "s", {"n": 2}, total)
+    assert total == 2
+    assert len(sessions["s"]) == 2
+
+    with pytest.raises(ResourceLimitError) as error:
+        _append_bounded_event(opts, sessions, "s", {"n": 3}, total)
+    assert error.value.observed == 3
+    assert len(sessions["s"]) == 2
+
+    unlimited: dict[str, list[dict]] = {}
+    assert _append_bounded_event(
+        {
+            "max_events_per_source": None,
+            "max_events_per_session": None,
+        },
+        unlimited,
+        "s",
+        {},
+        0,
+    ) == 1
 
 
 def test_context_character_boundary_and_override_are_exact():
@@ -75,6 +106,7 @@ def test_resource_summary_deduplicates_containers_and_never_sums_rss():
         {
             "source": "cursor:a", "container": "/state.vscdb",
             "source_bytes": 100, "events": 3,
+            "selected_input_bytes": 10,
             "retained_searchable_characters": 7,
             "retained_searchable_utf8_bytes": 8,
             "largest_session_events": 2, "peak_rss_bytes": 40,
@@ -82,6 +114,7 @@ def test_resource_summary_deduplicates_containers_and_never_sums_rss():
         {
             "source": "cursor:b", "container": "/state.vscdb",
             "source_bytes": 110, "events": 5,
+            "selected_input_bytes": 20,
             "retained_searchable_characters": 11,
             "retained_searchable_utf8_bytes": 12,
             "largest_session_events": 4, "peak_rss_bytes": 60,
@@ -95,15 +128,42 @@ def test_resource_summary_deduplicates_containers_and_never_sums_rss():
         },
     ])
     assert summary == {
+        "measurement_format": "codess.ingest-resource-summary/1",
         "observations": 3,
         "unique_source_containers": 2,
         "unique_source_container_bytes": 130,
+        "selected_input_observations": 2,
+        "unmeasured_selected_input_observations": 1,
+        "selected_input_bytes": 30,
+        "selected_input_complete": False,
         "emitted_events": 9,
         "retained_searchable_characters": 31,
         "retained_searchable_utf8_bytes": 34,
         "largest_session_events": 4,
         "peak_rss_bytes": 60,
     }
+
+
+def test_project_resource_summary_separates_and_deduplicates_allocations(
+    tmp_path: Path,
+):
+    store = tmp_path / "store.db"
+    raw = tmp_path / "raw.zst"
+    store.write_bytes(b"store")
+    raw.write_bytes(b"raw")
+
+    summary = summarize_project_resources(
+        [{"selected_input_bytes": 0}],
+        normalized_store_paths=[store],
+        raw_object_paths=[raw, raw],
+    )
+
+    assert summary["selected_input_complete"] is True
+    assert summary["selected_input_bytes"] == 0
+    assert summary["normalized_store_usage"]["files"] == 1
+    assert summary["normalized_store_usage"]["logical_bytes"] == 5
+    assert summary["raw_object_usage"]["files"] == 1
+    assert summary["raw_object_usage"]["logical_bytes"] == 3
 
 
 def test_searchable_payload_distinguishes_characters_bytes_and_aliases():

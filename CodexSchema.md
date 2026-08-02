@@ -104,6 +104,11 @@ Ingest adapter primarily uses:
 | `response_item.ghost_snapshot` / `world_state` | Counted as known intermediate state, not conversation text |
 | Unsupported record shapes | Counted as unknown ignored diagnostics and require review |
 
+The typed configuration query has been exercised against a current SWEmore
+snapshot. Exact provider/model/effort/service/mode filters reconstruct the
+governing Model Turns and expose their direct `turn_context` or
+`thread_settings_applied` field paths, record locators, and Source revisions.
+
 Record timestamps accept Unix seconds, Unix milliseconds, and ISO 8601. Tool
 call/result lineage is stored in event metadata through `call_id`.
 Every emitted event also retains `response_item`/`event_msg`, the payload type,

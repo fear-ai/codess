@@ -109,7 +109,7 @@ def summarize_event_payload(
 
 def summarize_resource_observations(
     observations: Iterable[dict[str, Any]],
-) -> dict[str, int | None]:
+) -> dict[str, Any]:
     """Reconcile additive and non-additive ingest resource observations."""
     items = list(observations)
     unique_containers: dict[str, int] = {}
@@ -118,6 +118,8 @@ def summarize_resource_observations(
     retained_utf8_bytes = 0
     largest_session = 0
     peak_rss: int | None = None
+    selected_input_bytes = 0
+    selected_input_observations = 0
     for item in items:
         size = int(item.get("source_bytes") or 0)
         container = str(item.get("container") or item.get("source") or "")
@@ -138,10 +140,20 @@ def summarize_resource_observations(
         observed_rss = item.get("peak_rss_bytes")
         if observed_rss is not None:
             peak_rss = max(peak_rss or 0, int(observed_rss))
+        selected = item.get("selected_input_bytes")
+        if isinstance(selected, int) and not isinstance(selected, bool) and selected >= 0:
+            selected_input_bytes += selected
+            selected_input_observations += 1
+    unmeasured_selected = len(items) - selected_input_observations
     return {
+        "measurement_format": "codess.ingest-resource-summary/1",
         "observations": len(items),
         "unique_source_containers": len(unique_containers),
         "unique_source_container_bytes": sum(unique_containers.values()),
+        "selected_input_observations": selected_input_observations,
+        "unmeasured_selected_input_observations": unmeasured_selected,
+        "selected_input_bytes": selected_input_bytes,
+        "selected_input_complete": unmeasured_selected == 0,
         "emitted_events": emitted_events,
         "retained_searchable_characters": retained_characters,
         "retained_searchable_utf8_bytes": retained_utf8_bytes,
@@ -203,3 +215,18 @@ def tree_usage(root: Path) -> dict[str, int]:
 
 def file_usage(paths: Iterable[Path]) -> dict[str, int]:
     return storage_usage(paths, recurse_directories=False)
+
+
+def summarize_project_resources(
+    observations: Iterable[dict[str, Any]],
+    *,
+    normalized_store_paths: Iterable[Path] = (),
+    raw_object_paths: Iterable[Path] = (),
+) -> dict[str, Any]:
+    """Add physical retained allocations to the logical ingest observations."""
+    summary = summarize_resource_observations(observations)
+    summary["normalized_store_usage"] = file_usage(normalized_store_paths)
+    summary["raw_object_usage"] = file_usage(sorted(
+        {path.expanduser().resolve() for path in raw_object_paths}
+    ))
+    return summary

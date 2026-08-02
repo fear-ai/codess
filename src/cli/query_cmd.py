@@ -377,6 +377,7 @@ def run(args) -> int:
     requested_project_ids = list(getattr(args, "project_ids", None) or [])
     project_set = getattr(args, "project_set", None)
     all_current = bool(getattr(args, "all_current", False))
+    package_policy = getattr(args, "snapshot_package_policy", "exact")
     explicit_paths = bool(getattr(args, "dirs", None)) or bool(
         getattr(args, "dir_list", None)
     )
@@ -401,6 +402,7 @@ def run(args) -> int:
                 requested_project_ids or None,
                 project_set=project_set,
                 all_current=all_current,
+                allow_package_mismatch=package_policy == "read-compatible",
             )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"codess: cannot resolve Project scope: {exc}", file=sys.stderr)
@@ -418,7 +420,6 @@ def run(args) -> int:
         resolved_roots = [root.resolve() for root in roots]
         project_scopes = []
     snapshot_id = getattr(args, "snapshot_id", None)
-    package_policy = getattr(args, "snapshot_package_policy", "exact")
     if snapshot_id and (project_set is not None or all_current):
         print(
             "codess: --snapshot-id cannot be combined with --project-set or "
@@ -527,6 +528,13 @@ def _typed_filters(args, source_tokens: set[str] | None) -> dict:
         "event_kinds": getattr(args, "event_kinds", None),
         "statuses": getattr(args, "query_statuses", None),
         "models": getattr(args, "query_models", None),
+        "model_providers": getattr(args, "query_model_providers", None),
+        "model_families": getattr(args, "query_model_families", None),
+        "model_revisions": getattr(args, "query_model_revisions", None),
+        "reasoning_efforts": getattr(args, "query_reasoning_efforts", None),
+        "speed_tiers": getattr(args, "query_speed_tiers", None),
+        "service_tiers": getattr(args, "query_service_tiers", None),
+        "model_modes": getattr(args, "query_model_modes", None),
         "tool_names": getattr(args, "query_tool_names", None),
         "actor_kinds": getattr(args, "query_actor_kinds", None),
         "content_roles": getattr(args, "query_content_roles", None),
@@ -627,8 +635,32 @@ def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
             {QUERY_SOURCE_FILTERS[token][0] for token in scope.source_tokens}
             if scope.source_tokens else None
         )
+        audit_stores = scope.stores
+        session_ids = None
+        if getattr(args, "session_identifier", None):
+            try:
+                selected_session = _session_by_identifier(
+                    scope, args.session_identifier
+                )
+            except ValueError as exc:
+                print(f"codess: {exc}", file=sys.stderr)
+                return 1
+            if selected_session is None:
+                print(
+                    f"codess: no Session matches {args.session_identifier!r}",
+                    file=sys.stderr,
+                )
+                return 1
+            audit_stores = [
+                store
+                for store in scope.stores
+                if store["conn"] is selected_session["conn"]
+            ]
+            session_ids = {selected_session["id"]}
         print(json.dumps(audit_configurations(
-            scope.stores, source_system_ids=allowed,
+            audit_stores,
+            source_system_ids=allowed,
+            session_ids=session_ids,
         ), indent=2, sort_keys=True))
         return 0
     source_tokens, error = _parse_source_tokens(getattr(args, "source", None))

@@ -325,6 +325,19 @@ def run_scan(
                     if debug:
                         print(f"[dir] Codex file: {item.get('path')} -> {r}", file=sys.stderr)
     if "cursor" in vendors and CURSOR_WS.exists():
+        # Exact-root scans must honor the same reviewed source links as
+        # ingestion.  A remote or historical Cursor workspace can remain a
+        # valid source selection even though its workspace.json URI cannot be
+        # interpreted as a current local child of the Project directory.
+        linked_workspace_ids = get_cursor_workspace_ids(work_root)
+        if linked_workspace_ids:
+            cursor_paths.add(work_root)
+            if debug:
+                print(
+                    "[dir] Cursor source link: "
+                    f"{','.join(linked_workspace_ids)} -> {work_root}",
+                    file=sys.stderr,
+                )
         for ws in CURSOR_WS.iterdir():
             wj = ws / "workspace.json"
             if wj.exists():

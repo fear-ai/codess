@@ -196,6 +196,11 @@ provenance. A bounded audit found model values on 35,724 reviewed assistant
 records and `service_tier=standard` on 35,565; no Claude effort or speed tier
 was inferred.
 
+The typed configuration query has also been exercised against a current Misses
+snapshot: exact model/service filters resolve Model Turns to direct assistant
+record provenance, Source revision, and record locator. These observed counts
+are operational output, not a fixed schema claim.
+
 Timestamp, model, service-tier, prompt-origin, and tool-input reads use the
 common field-state decoder. Malformed optional fields produce field-scoped
 diagnostics and are omitted without rejecting an otherwise usable record.

@@ -263,6 +263,11 @@ Configuration values remain nullable and independent. A model name containing
 words such as `fast`, `high-thinking`, or `priority` does not populate speed,
 effort, or service tier. Per-event `configuration_provenance` records the source
 record type, locator, and exact field path for each normalized occurrence.
+When the setting was observed on a prior governing Event,
+`configuration_provenance_scope` explicitly says `inherited` and identifies
+that Event and source locator; absence of that marker means the provenance was
+recorded directly on the Event. This is an evidence scope, not an inference
+from a model label.
 The current writer stores `model_configurations.source_config` as a
 bounded representative JSON observation, not an exhaustive history; event
 provenance is authoritative. **CoPlan R3a** decides whether that representative

@@ -113,7 +113,7 @@ def test_workspace_composer_index_recovers_missing_global_headers(tmp_path):
     combined = get_project_composer_headers(global_db, project, cursor_data)
     assert set(combined) == {"legacy", "current"}
     assert combined["current"]["created_at"] == 1700000002000
-    assert "selection_source" not in combined["current"]
+    assert combined["current"]["selection_source"] == "composerHeaders"
 
     markers = get_selection_markers(
         global_db,
@@ -123,6 +123,54 @@ def test_workspace_composer_index_recovers_missing_global_headers(tmp_path):
     assert markers["project"]["composer_count"] == 2
     assert markers["project"]["bubble_count"] == 2
     assert markers["project"]["source_mtime"] == 1700000003000
+    assert markers["project"]["fingerprint_method"].endswith(
+        "sha256-fingerprint-v2"
+    )
+
+
+def test_workspace_composer_index_reports_ambiguous_fallback_once(
+    tmp_path, caplog
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    cursor_data = tmp_path / "Cursor" / "User"
+    for index in range(3):
+        workspace = (
+            cursor_data / "workspaceStorage" / f"workspace-{index}"
+        )
+        workspace.mkdir(parents=True)
+        (workspace / "workspace.json").write_text(
+            json.dumps({"folder": project.resolve().as_uri()})
+        )
+        with sqlite3.connect(workspace / "state.vscdb") as conn:
+            conn.execute(
+                "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO ItemTable VALUES (?, ?)",
+                (
+                    "composer.composerData",
+                    json.dumps({
+                        "allComposers": [{"composerId": "ambiguous"}]
+                    }),
+                ),
+            )
+
+    global_dir = cursor_data / "globalStorage"
+    global_dir.mkdir()
+    global_db = global_dir / "state.vscdb"
+    with sqlite3.connect(global_db) as conn:
+        conn.execute(
+            "CREATE TABLE composerHeaders ("
+            "composerId TEXT PRIMARY KEY, workspaceId TEXT)"
+        )
+
+    diagnostics = {}
+    assert get_project_composer_headers(
+        global_db, project, cursor_data, diagnostics=diagnostics
+    ) == {}
+    assert diagnostics == {"cursor_ambiguous_fallback_composers": 1}
+    assert caplog.text.count("excluding ambiguous fallback mapping") == 1
 
 
 def _cursor_fixture() -> list[tuple[str, str, dict]]:
@@ -237,6 +285,7 @@ class TestGetComposerHeaders:
                 "last_updated_at": None,
                 "is_archived": False,
                 "is_subagent": False,
+                "selection_source": "composerHeaders",
             }
         }
 
@@ -271,8 +320,9 @@ class TestSelectionMarker:
         assert first["source_revision"].startswith(
             "cursor-selection-sha256-fingerprint:"
         )
-        assert first["fingerprint_method"].endswith(
-            "edge-sha256-fingerprint"
+        assert first["fingerprint_method"] == (
+            "cursor-workspace-header-source-key-length-edge-"
+            "sha256-fingerprint-v2"
         )
         assert first["workspace_count"] == 1
         assert first["composer_count"] == 1

@@ -1,13 +1,18 @@
-# CoPlan — engineering guide and work plan
+# CoPlan — implementation guide and work registry
 
 **Audience:** contributors and maintainers changing Codess or deciding what to
 do next.
 
-This document owns repository architecture, configuration, CLI/runtime
-contracts, implementation mapping, coding and test guidance, delivery order,
-the actionable work queue, and engineering decisions. Product requirements
+This document owns software components/modules, entity composition, data and
+configuration flows, repository architecture, CLI/runtime contracts,
+implementation mapping, coding/test guidance, delivery order, the actionable
+work queue, and engineering decisions. Product requirements
 belong in **Codess.md**; user workflows in **README.md**; design rationale in
 **Designs.md** and **Schemas.md**; operating procedures in **Operations.md**.
+
+A subject has one narrative owner. Another document may contain a tight link
+or a fact needed for its own audience, but must not repeat the owning problem
+statement, analysis, options, recommendation, or status.
 
 ## Contents
 
@@ -21,6 +26,16 @@ belong in **Codess.md**; user workflows in **README.md**; design rationale in
 8. [Central work registry](#8-central-work-registry)
 9. [Change routing](#9-change-routing)
 
+Implementation readers normally follow:
+
+1. [architecture at a glance](#20-architecture-at-a-glance);
+2. [components and modules](#21-components-and-module-catalog);
+3. [entity expressions](#23-entity-expressions);
+4. [data flows](#24-data-flows);
+5. [persistence topology](#25-persistence-topology);
+6. [configuration resolution](#31-what-is-configurable-why-and-how); and
+7. [feature-to-code map](#5-feature--implementation-map).
+
 ## 1. Repository Layout
 
 **Scan** means index-led discovery of Projects that have vendor session data.
@@ -32,7 +47,7 @@ CodeSess/
 ├── main.py                  # repository entry point
 ├── README.md                # user/customer landing page
 ├── Codess.md                # product specification and document map
-├── CoPlan.md                # engineering guide and work plan
+├── CoPlan.md                # implementation guide and work registry
 ├── Operations.md            # maintainer runbook
 ├── Designs.md / Schemas.md  # rationale and schema-evolution design
 ├── *Schema.md               # common and vendor data contracts
@@ -45,76 +60,112 @@ CodeSess/
 └── tools/                   # compatibility and developer entry points
 ```
 
+| Artifact family | Form | Authoritative for | Principal consumers |
+|---|---|---|---|
+| Product and user documentation | `Codess.md`, `README.md` | Requirements, vocabulary, supported workflows | Users, feature design |
+| Implementation and work registry | `CoPlan.md` | Components, data/configuration flow, code boundaries, tests, work state | Contributors, maintainers |
+| Design rationale | `Designs.md`, `Schemas.md` | Alternatives, decisions, schema-evolution and translation method | Implementers reviewing change |
+| Data contracts | `CoSchema.md`, `*Schema.md`, `schema/coschema/` | Common meaning, vendor evidence, executable DDL/JSON contracts | Adapters, store, validation, query |
+| Interface contracts | `schema/query-*.json`, `schema/project-set-v1.json`, `schema/investigation-v1.json` | Versioned request/result/composition shapes | CLI, external clients, tests |
+| Policy schemas and examples | `schema/*policy*.json`, examples | Content/resource/candidate/validation policy syntax | Option resolution, preflight, CI |
+| Reviewed operational facts | `catalog/` | Approved baselines, policies, evidence inventories, candidate dispositions | Catalog/baseline operations |
+| Runtime observations | Project `.codess/`, registry reports/receipts | Dated ingest, refresh, snapshot, resource, and validation outcomes | Operations and diagnosis |
+| Automated evidence | `tests/`, `schema/coschema/fixtures/` | Regression, contract, workflow, compatibility, failure, and scale cases | CI and change validation |
+
 ## 2. System Architecture
 
-### 2.0 Discovery contract
+### 2.0 Architecture at a glance
 
-Discovery is index-led. Claude, Codex, and Cursor keep session data outside the
-project tree and record project paths in their own indexes or session metadata.
-`--dir` and `--dirs` therefore define validated path filters; they do not request
-a filesystem crawl. There is no recursion flag or general walk subsystem.
+Codess separates vendor evidence, normalization, immutable Project snapshots,
+and investigation. Discovery is index-led: Claude, Codex, and Cursor keep
+session data outside the Project tree and retain Project paths in their own
+indexes or records. `--dir` and `--dirs` are validated Project filters, not a
+request to crawl the filesystem.
 
-### 2.1 Call Graph and Module Roles
+```mermaid
+flowchart LR
+    User["CLI / external caller"]
+    Dispatch["project.py<br/>parse, resolve, dispatch"]
+    Commands["cli/*_cmd.py<br/>command adapters"]
+    Sources["Vendor source access<br/>scan, codex_source, cursor_source"]
+    Adapters["Vendor adapters<br/>cc, codex, cursor"]
+    Normalize["Common processing<br/>mapping, content, field state, limits"]
+    Store["CoSchema SQLite stores<br/>store.py"]
+    Snapshot["Immutable Project snapshot<br/>snapshot + raw manifest"]
+    Catalog["Catalog / baseline / receipts"]
+    Query["Typed query and investigation<br/>query_api + investigation"]
+    Evidence["Exact evidence resolver"]
 
-- **`main.py`:** Prepends `src/` → `codess.project.console_main()` → `parse_and_run()` → **`cli.scan_cmd.run`** \| **`cli.ingest_cmd.run`** \| **`cli.query_cmd.run`**. The installed `codess` entry point starts at the same `console_main()`.
-- **`codess.config`:** ENV and constants; used by **`project`**, **`scan`**, **`helpers`**, **`adapters/*`**, **`sanitize`**, CLI.
-- **`codess.resource_policy`:** built-in ingest maximums, strict
-  `codess.resource-policy/1` loading, override validation, and effective-policy
-  provenance; it has no vendor parser or CLI dependency.
-- **`codess.helpers`:** Roots/CSV/excludes/slug helpers; imports **`config`**. Used by scan and root resolution.
-- **`codess.sanitize`:** Shared ingest, terminal-display, tabular-output, redaction, and CSV-cell policy.
-- **`codess.store`:** SQLite, DDL, upsert primitives, transactional source
-  replacement, and ingest state. **`ingest_cmd`** writes it; query opens the
-  resulting databases read-only.
-- **`codess.ingest_pipeline`:** Shared Claude/Codex incremental admission and
-  rollback-capable normalized replacement transaction; related Source writes
-  commit in the same transaction and ingest state advances afterward.
-- **`codess.project`:** CLI parsing/root resolution and Git/Claude-slug helpers; no Codex/Cursor storage layout or SQL.
-- **`codess.project_catalog`:** Stable Project identity/location/workspace
-  bindings plus exact Project-ID query-scope resolution.
-- **`codess.codex_source`:** active/archive roots, session metadata, fingerprinted inventory, Project selection, and active-over-archive deduplication.
-- **`codess.cursor_source`:** Cursor installation/workspace discovery, read-only connections, composer headers, indexed bubble ranges, and metrics.
-- **`codess.progress`:** bounded rolling operational trace plus the live stderr renderer; no transcript content or logging-level ownership.
-- **`codess.query_api`:** Typed request/result contracts, semantic predicates,
-  global cross-store ordering, bounded facets/repetition summaries, saved
-  selection derivation, and comparison.
-- **`codess.scan`:** **`run_scan()`**; shares one `codex_source` inventory and uses selective `cursor_source` metrics.
-- **`codess.storage_report`:** dated read-only CoSchema/Cursor utilization, skew, retention inventory, thresholds, and deltas.
-- **`cli/*_cmd`:** Thin **`run(args) -> int`**: roots/options, then **`run_scan`** / **`_ingest_*`** / **`store.connect`**.
-
-**Query vs ingest vs adapters:** Ingest parses sources and transactionally
-replaces their normalized rows in **`.codess/*.db`**. Query runs read-only SQL
-on those DBs only—no vendor files or adapters.
-
-**§3 vs §4:** §3 documents **ENV** and **`config.py`**. §4 documents **CLI flags** and **`build_*_run_options`**, which merge **`Namespace`** with those defaults per run.
-
-```
-                         main.py
-                    codess.project.parse_and_run
-                                    │
-        ┌───────────────────────────┼───────────────────────────┐
-        ▼                           ▼                           ▼
- cli.scan_cmd.run          cli.ingest_cmd.run           cli.query_cmd.run
-        │                           │                           │
-        ▼                           ▼                           ▼
- codess.scan.run_scan      _ingest_cc / _ingest_codex /   store.connect + SQL
-        │                  _ingest_cursor                    init_db if needed
-        │
-        ├──► codess.codex_source
-        ├──► codess.cursor_source
-        ▼
- codess.config   codess.helpers   codess.project  (path helpers for scan)
-
- ingest_cmd ──► codess.adapters.* ──► store.replace_* … , ingest_state JSON
+    User --> Dispatch --> Commands
+    Commands --> Sources
+    Commands --> Adapters --> Normalize --> Store --> Snapshot
+    Catalog --> Commands
+    Snapshot --> Catalog
+    Commands --> Query --> Store
+    Query --> Evidence --> Snapshot
+    Evidence -. verified live fallback .-> Sources
 ```
 
-**Dependency sketch:** Codex filesystem callers use **`codex_source`** and
-Cursor layout/SQL callers use **`cursor_source`**;
-**`adapters.cursor`** consumes selected raw rows and normalizes them. **`scan.py`**
-uses vendor source modules, not adapters. **`project.py`** owns common CLI,
-Git-root, and Claude-slug helpers. **`store.py`** remains independent of vendor access.
+The principal boundaries are:
 
-### 2.2 Discouraged Imports
+- source access knows vendor storage but not CoSchema query behavior;
+- adapters map selected vendor records but do not own discovery or publication;
+- store and snapshot code own persistence but not vendor interpretation;
+- query reads normalized snapshots and never invokes adapters; and
+- catalog/baseline code selects and publishes snapshots but does not redefine
+  their entities.
+
+### 2.1 Components and module catalog
+
+`main.py` and the installed `codess` entry point both call
+`codess.project.console_main()`. `parse_and_run()` routes `scan`, `ingest`, and
+`query` through the shared parser and routes administrative command families
+through `cli.admin_cmd`.
+
+```mermaid
+flowchart TB
+    Entry["Entry and dispatch"]
+    CLI["CLI adaptation"]
+    Source["Source access"]
+    Domain["Normalization and domain policy"]
+    Persistence["Persistence and evidence"]
+    Admin["Catalog, publication, retention"]
+    Research["Query and investigation"]
+    Contracts["schema/ contracts and fixtures"]
+
+    Entry --> CLI
+    CLI --> Source
+    CLI --> Domain
+    Domain --> Persistence
+    Admin --> Persistence
+    Research --> Persistence
+    Persistence --> Contracts
+    Domain --> Contracts
+```
+
+| Component | Modules | Responsibility and boundary |
+|---|---|---|
+| Entry and command dispatch | `main.py`, `codess.project`, `cli.scan_cmd`, `cli.ingest_cmd`, `cli.query_cmd`, `cli.admin_cmd` | Parse once, resolve roots/registry/options, adapt domain results to exit codes and output. Command modules do not define vendor formats or duplicate DDL |
+| Discovery and vendor source access | `codess.scan`, `codess.codex_source`, `codess.cursor_source`, Claude path helpers in `codess.project` | Discover/index Sources, bind them to Projects, fingerprint selected evidence, and issue bounded read-only vendor queries. Source modules do not normalize Events |
+| Vendor decoding | `codess.adapters.cc`, `codess.adapters.codex`, `codess.adapters.cursor` | Decode selected records and emit mapped Session/Event candidates with exact source fields and mapping evidence |
+| Mapping and admission | `codess.mapping`, `codess.field_state`, `codess.ingest_pipeline`, `codess.ingest_review`, `codess.processing_contract` | Apply common mapping rules, classify absent/malformed fields, enforce transactional replacement, and retain reviewable failures |
+| Content and tool policy | `codess.content_processing`, `codess.context_content`, `codess.sanitize`, `codess.tool_identity`, `codess.tool_result_status`, `codess.resource_policy`, `codess.resources` | Decode/sanitize/bound content, resolve scoped policy, preserve tool identity/status, and report resource observations without owning vendor selection |
+| Normalized persistence | `codess.store`, `codess.schema_contract`, `codess.schema_evolution`, `codess.acceptance` | Initialize canonical DDL, enforce CoSchema contracts, replace normalized data transactionally, and classify compatibility |
+| Raw evidence and snapshots | `codess.raw_store`, `codess.cursor_cohort`, `codess.snapshot`, `codess.evidence`, `codess.evidence_resolver` | Capture/reuse transactionally consistent selected evidence, retain or reference exact Source revisions, build immutable snapshots, and resolve normalized rows back to verified sealed/captured/live evidence |
+| Project catalog and curation | `codess.catalog`, `codess.candidate_review`, `codess.project_catalog`, `codess.project_annotations`, `codess.registry_store`, `codess.catalog_operations` | Maintain stable Project/location/workspace identity, observations, annotations, and explicit review decisions |
+| Baselines, refresh, and retention | `codess.baseline_catalog`, `codess.baseline_operations`, `codess.baseline_validation`, `codess.refresh_operations`, `codess.refresh_receipts`, `codess.retention`, `codess.storage_report` | Validate/publish reviewed snapshots, compose routine refresh, record outcomes, and inventory/prune derived storage |
+| Typed query and results | `codess.query_api`, `codess.investigation`, `codess.configuration_audit`, `codess.orientation_audit` | Bind typed requests, execute bounded cross-store operations, derive stable results/comparisons, and create cited investigation records |
+| Analysis helpers | `codess.artifact_correlation`, `codess.token_usage`, `codess.session_names` | Add evidence-backed correlations, non-billing token observations, and user-assigned names without changing stable identities |
+| Evidence audits | `codess.mcp_audit`, `codess.codex_parent_audit`, `codess.cursor_feature_audit`, `codess.vendor_audits.*` | Inspect bounded vendor/store evidence for one capability; audits inform mappings but are not alternate ingesters |
+| Shared infrastructure | `codess.config`, `codess.helpers`, `codess.fileio`, `codess.bounded_jsonl`, `codess.progress`, `codess.identity` | Configuration constants, safe path/file helpers, bounded structured I/O, progress, and globally stable identity construction |
+| Executable artifacts | `schema/coschema/`, `schema/*.json`, `schema/mappings/`, `catalog/` | Machine-readable entity/DDL/mapping/query/policy contracts and reviewed operational selections; prose links to these rather than restating every field |
+
+The module catalog is architectural, not a claim that every module is equally
+public. Stable interfaces are the CLI, versioned JSON artifacts, CoSchema
+package, and documented Python operation boundaries. Helpers prefixed `_` and
+command-rendering functions remain internal.
+
+### 2.2 Dependency rules
 
 This subsection is **normative policy**, not a full import graph. It answers: *where must we not put parsing or store logic so layers stay thin?* A short checklist here is **not** “every allowed edge” — see **§2.1** for who calls whom.
 
@@ -125,8 +176,136 @@ This subsection is **normative policy**, not a full import graph. It answers: *w
   or key-range knowledge; use **`cursor_source`**.
 - **Codex callers:** do not duplicate active/archive traversal, metadata reads,
   or active-over-archive selection; use **`codex_source`**.
+- **Store and schema code:** do not import vendor adapters or source modules.
+- **Catalog/baseline code:** may select and validate snapshots but must not
+  reinterpret vendor records.
 
-### 2.3 Data Movement — Three Pipelines
+Allowed dependencies point downward through the component diagram. A cross-cut
+such as progress, identity, or resource reporting must remain content-free and
+must not become a backdoor from persistence into a vendor adapter.
+
+### 2.3 Entity expressions
+
+This section shows composition and cardinality for implementers. `CoSchema.md`
+and `schema/coschema/contract.json` remain authoritative for meaning,
+nullability, and fields.
+
+```mermaid
+erDiagram
+    PROJECT ||--o{ PROJECT_LOCATION : observed_at
+    PROJECT ||--o{ WORKSPACE_BINDING : selected_through
+    PROJECT o|--o{ SESSION : contains
+    SOURCE ||--o{ SOURCE_RECORD : contains
+    SOURCE o|--o{ SESSION : supplies
+    SESSION ||--o{ INTERACTION : partitions
+    SESSION ||--o{ MODEL_TURN : executes
+    SESSION ||--o{ EVENT : orders
+    INTERACTION o|--o{ MODEL_TURN : groups
+    INTERACTION o|--o{ EVENT : groups
+    MODEL_TURN o|--o{ EVENT : groups
+    EVENT o|--o{ TOOL_INVOCATION : requests
+    TOOL_INVOCATION ||--o{ TOOL_RESULT : returns
+    EVENT }o--o{ ARTIFACT : operates_on
+    EVENT }o--o{ CONTENT_OBJECT : projects
+    SOURCE_RECORD }o--o{ CONTENT_OBJECT : retains
+```
+
+Project snapshots and Assemblies are higher-level artifacts rather than
+CoSchema tables:
+
+```text
+Project
+  := stable logical identity
+     + ProjectLocation*
+     + WorkspaceBinding*
+
+Source
+  := (source_system_id, source_uri, source_revision)
+
+Session
+  := vendor/harness container
+     + ordered Event*
+     + optional Interaction* and ModelTurn* partitions
+
+ActorObservation(Event)
+  := actor_kind
+     + exact source_role
+     + content_role
+     + origin_kind
+     + supporting mapping provenance
+
+ModelConfiguration
+  := nullable(provider, family, exact_name, revision,
+              effort, speed, service_tier, mode)
+     + exact source configuration provenance
+
+ArtifactIdentity
+  := Project
+     + kind
+     + one or more of relative_path, URI,
+       repository_object_id, content_sha256
+
+ProjectSnapshot(P, observed_at)
+  := exact CoSchema package
+     + decoder/validator/software identities
+     + selected Source revisions
+     + per-vendor normalized stores
+     + raw-evidence manifest
+     + validation/publication evidence
+
+Assembly
+  := explicit selection(ProjectSnapshot+)
+     + query/export specification
+     + derived result identity and provenance
+```
+
+| Expression or relation | Implementation invariant | Main owner |
+|---|---|---|
+| `Project 1 → N Location/WorkspaceBinding` | One Git repository is one Project; paths and vendor workspace IDs are observations, not replacement identities | `project_catalog`, D21 |
+| `Source 1 → N SourceRecord` | Source revision is immutable; record locators are stable only within that revision | adapters, `store`, `evidence_resolver` |
+| `Session 1 → ordered Event*` | `(session_id, sequence_no)` is canonical where sequence exists; vendor timestamps do not replace ordering | adapters, `store` |
+| `Interaction/ModelTurn ↔ Event*` | These are additive partitions over Events; absent boundaries remain NULL/unknown rather than inferred globally | mapping, `query_api` |
+| `ActorObservation(Event)` | Actor is an evidence-backed multivariate classification, not a table or a synonym for vendor `role` | adapters, mapping, A27 |
+| `ModelTurn → ModelConfiguration?` | Configuration dimensions remain independently nullable; exact source values and occurrence provenance survive normalization | adapters, `configuration_audit`, A12 |
+| `ToolInvocation 1 → N ToolResult` | Source call IDs are vendor/Session-scoped lineage, not global identity | tool mapping and CoSchema |
+| `Event N ↔ N Artifact` | Operation, evidence source, and confidence belong to the relation | `artifact_correlation`, `event_artifacts` |
+| `Event/SourceRecord N ↔ N ContentObject` | Content identity and storage class are distinct from Event fields and raw-object location | content tables, `raw_store` |
+| `Project → Snapshot*` | Snapshots are immutable dated observations; current pointers select but do not mutate them | `snapshot`, baseline operations |
+| `Snapshot+ → Assembly*` | An Assembly is derived and must retain every Project/snapshot/source identity | `query_api`, A19/P19 |
+
+### 2.4 Data flows
+
+The three daily pipelines share Project selection and configuration resolution,
+but only ingest crosses from vendor evidence into CoSchema.
+
+```mermaid
+flowchart LR
+    subgraph Discovery
+      D1["Vendor indexes / metadata"] --> D2["source access"]
+      D2 --> D3["Project candidates + metrics"]
+      D3 --> D4["registry observation / CSV"]
+    end
+
+    subgraph Ingest
+      I1["Selected Source revisions"] --> I2["adapter decode"]
+      I2 --> I3["mapping + content/resource policy"]
+      I3 --> I4["transactional CoSchema replacement"]
+      I4 --> I5["candidate snapshot + raw manifest"]
+      I1 --> IR["raw none / reference / capture / seal"]
+      IR --> I5
+      I5 --> I6["validate / publish pointers"]
+    end
+
+    subgraph Investigation
+      Q1["Project/snapshot selector"] --> Q2["read-only CoSchema stores"]
+      Q2 --> Q3["typed filter / expand / order / bound"]
+      Q3 --> Q4["saved result / comparison / citation"]
+      Q4 --> Q5["exact evidence resolution"]
+    end
+
+    D3 -. explicit selection .-> I1
+    I6 -. catalog scope .-> Q1
+```
 
 #### Discovery — Scan
 
@@ -157,9 +336,10 @@ This subsection is **normative policy**, not a full import graph. It answers: *w
 #### Query
 
 - **Purpose:** Read-only reporting on the local store.
-- **Mechanism:** Open **`.codess/*.db`** — see **§2.4**. **`query_cmd`** does not write vendor trees.
+- **Mechanism:** Resolve retained snapshot stores — see **§2.5**.
+  **`query_cmd`** opens them read-only and does not write vendor trees.
 
-### 2.4 Persistence Layout
+### 2.5 Persistence topology
 
 The Project-local `.codess/` directory holds the local current-snapshot pointer,
 incremental `ingest_state.json`, the last ingest report, and compatibility
@@ -174,12 +354,42 @@ per-vendor databases such as `sessions_cc.db`, `sessions_codex.db`, and
 promoted atomically. **CoSchema.md** owns store semantics and **Operations.md**
 owns retention and recovery procedures.
 
+```mermaid
+flowchart TB
+    Vendor["Vendor-owned local stores<br/>~/.claude, ~/.codex, Cursor/User"]
+    Local["Project/.codess<br/>current.json, ingest state, report,<br/>compatibility working stores"]
+    Registry["~/.codess<br/>Project catalog, cache, reports, raw objects"]
+    Snapshots["~/.codess/projects/PROJECT_ID/snapshots/SNAPSHOT_ID"]
+    Stores["Per-vendor CoSchema SQLite stores"]
+    Manifest["snapshot/raw manifests + package/policy identities"]
+    PointerA["Project-local current.json"]
+    PointerB["Central current.json"]
+
+    Vendor --> Local
+    Local --> Snapshots
+    Registry --> Snapshots
+    Snapshots --> Stores
+    Snapshots --> Manifest
+    Snapshots --> PointerA
+    Snapshots --> PointerB
+```
+
+| Persistence class | Authority | Mutation model |
+|---|---|---|
+| Vendor source | Vendor harness/application | Read-only to Codess |
+| Working store and ingest state | Current local normalization process | Transactional source replacement; state advances after commit |
+| Raw object store | Content-addressed retained evidence | Append/reuse, then receipt-based retention |
+| Immutable snapshot | Exact dated normalized observation | Build new; never edit in place |
+| Current pointers | Selected snapshot reference | Atomic replacement after validation |
+| Catalog, policies, receipts | Project identity, reviewed selection, and operational observations | Versioned/atomic records; not conversation authority |
+| Saved query/investigation result | Derived research artifact | Immutable identity over exact request/input/result provenance |
+
 Changed or forced Claude and Codex transcripts replace one normalized session
 transactionally. Cursor refresh replaces records owned by the selected source
 database. Empty valid transcripts remove stale normalized sessions and add the
 nonfatal `empty_sources` diagnostic before ingest state advances.
 
-### 2.5 Implementation vs Validation
+### 2.6 Implementation versus validation
 
 Verification baseline is the full **`pytest tests/`** suite. **Validated** here means representative automated coverage, not every edge case.
 
@@ -190,7 +400,7 @@ Verification baseline is the full **`pytest tests/`** suite. **Validated** here 
 | Query | Yes | CLI, store, scale tests | Read-only aggregation, global numbering, session origin details, lineage, evidence-backed audit rows, and globally bounded reports across project/vendor stores |
 | **`validate_config()`** | Yes | Unit and subprocess CLI tests | Applied consistently to scan, ingest, and query |
 | Store / DDL | Yes | `test_store` | — |
-| Sanitize | Yes | Sanitizer, adapter, helper, and CLI tests | **P1** |
+| Sanitize | Yes | Sanitizer, adapter, helper, and CLI tests | Content-processing policy; external enterprise scanners are optional |
 
 **Completeness:** Main workflows, configuration validation, source replacement,
 cross-store query aggregation, lineage, audit normalization/reporting, and
@@ -198,12 +408,17 @@ bounded row reports are covered. Preflight and versioned session/stat output
 are implemented. All incomplete coverage and deferred scope is classified in
 §8 (known gaps and postponed topics).
 
-### 2.6 Verified wiring
+### 2.7 Verified wiring
 
 Cross-checked against **`src/`** and **`tests/`** so this plan does not drift from the repo. Re-audit after large refactors.
 
-- **`main.py`:** prepends **`src/`**, calls **`codess.project.main()`** → **`parse_and_run()`**.
-- **Dispatch:** **`parse_and_run`** lazy-imports **`cli.scan_cmd` / `cli.ingest_cmd` / `cli.query_cmd`** then branches on **`args.command`**.
+- **`main.py`:** prepends **`src/`**, calls
+  **`codess.project.console_main()`** → **`main()`** →
+  **`parse_and_run()`**.
+- **Dispatch:** **`parse_and_run`** recognizes administrative families first
+  and delegates them to **`cli.admin_cmd`**. Otherwise it parses the shared
+  daily-command arguments, lazy-imports **`cli.scan_cmd` /
+  `cli.ingest_cmd` / `cli.query_cmd`**, and branches on **`args.command`**.
 - **`run_scan(work_root, …)`:** parameters are **`vendor_filter`**, **`recent_days`**, **`debug`**, and **`subagent`**. Scan is index-led and exposes no recursion option.
 - **`validate_config()`:** invoked before work by scan, ingest, and query; errors are printed to stderr and return exit 1.
 - **`query_cmd`:** opens every selected project store read-only and aggregates report rows in Python, avoiding SQLite's attached-database limit and preserving duplicate vendor session IDs internally. It imports **`get_project_stores`**, **no** **`adapters/*`**.
@@ -220,11 +435,50 @@ Cross-checked against **`src/`** and **`tests/`** so this plan does not drift fr
 
 ### 3.1 What Is Configurable, Why, and How
 
-**What:** (1) **Locations** of vendor data on this machine (`CODESS_CC_PROJECTS`, …). (2) **Behavior defaults**: scan window (`CODESS_DAYS`), min ingest size (`CODESS_MIN_SIZE`), CC sidechain counts (`CODESS_SUBAGENT`), and debug/redact/force/stop/verbose flags (`CODESS_*` — see §3.3). (3) **Output/registry**: `CODESS_REGISTRY` for central **`ingested_projects.json`**. (4) Ingest resource maximums are resolved by **`resource_policy.py`** from built-ins, a versioned partial file, individual environment overrides, and CLI overrides. Adapter excerpt lengths remain code constants in **`config.py`**.
+The configuration system separates machine locations, invocation behavior,
+policy files, catalog decisions, and schema/package identity. They are
+not one undifferentiated settings object.
 
-**Why:** Same codebase runs on **different OS paths**, **CI sandboxes**, and **user preferences** without editing Python.
+```mermaid
+flowchart LR
+    Builtin["Code/platform defaults"]
+    Env["CODESS_* environment"]
+    Policy["Versioned JSON policy"]
+    CLI["CLI arguments"]
+    Disable["Explicit disable/validation flags"]
+    Options["Resolved immutable run options"]
+    Report["Effective values + origins<br/>progress / preflight / receipts"]
 
-**How:** **`config.py`** reads **environment variables at import time** into module-level `Path` / `int` / `bool`. **CLI** arguments are defined in **`codess.project.build_parser()`** and parsed by **`parse_and_run()`**; they may **override** scan/ingest behavior per invocation. Ordinary settings use CLI over ENV. Resource maximums use built-in → `codess.resource-policy/1` file → individual ENV → individual CLI; `--no-resource-limits` disables all maximums last.
+    Builtin --> Env --> CLI --> Options --> Report
+    Builtin --> Policy --> Env
+    Policy --> Options
+    CLI --> Disable --> Options
+```
+
+The precise precedence depends on the configuration class:
+
+| Configuration class | Examples | Resolution order | Implementation |
+|---|---|---|---|
+| Machine/vendor locations | Claude, Codex, Cursor roots; registry root | platform/code default → ENV → selected CLI path where supported | `config.py`, `resolve_registry_directory` |
+| Ordinary run defaults | days, minimum source size, force, debug, redact, stop, raw mode | code default → ENV at import → CLI value/flag | `config.py`, `build_scan_run_options`, `build_ingest_run_options` |
+| Resource maximums | transcript/container/Event/context limits | built-ins → partial resource-policy file → individual ENV → individual CLI → `--no-resource-limits` | `resource_policy.py`, `IngestRunOptions.resource_policy` |
+| Content transformation | charset, suppression, masking, vocabulary, topics, min/max characters | no policy → ENV/CLI-selected file; inside file: global rules → every matching scope in declaration order → built-in adapter bound | `content_processing.py`, `schema/content-policy.example.json` |
+| Project selection and validation | catalog decisions, annotations, project sets, baseline policy | explicit versioned artifact + command selector; no implicit ENV merge | catalog/project-set/policy contracts |
+| Schema and processing identity | CoSchema package, decoder, validator, software release | selected installed package/profile; recorded, compared, never overridden as a casual flag | `schema_contract`, `processing_contract`, snapshots |
+| Display/query bounds | result row/byte/facet/window limits | typed request/CLI defaults → explicit request values | `query_api`, `query_cmd` |
+
+`config.py` reads ordinary environment variables at import time into
+module-level `Path`, `int`, and `bool` values. `codess.project.build_parser()`
+parses the CLI once. `build_scan_run_options()` and
+`build_ingest_run_options()` then produce small frozen dataclasses so source
+and Event loops consume resolved values rather than reading ENV repeatedly.
+Query binds its typed request in `query_cmd`/`query_api`; it does not yet need
+an ENV-backed options dataclass.
+
+Effective resource values retain per-field origin and the exact policy-file
+SHA-256 in reports. Content processing retains applied actions and policy
+identity with mapping/processing evidence. Catalog decisions and source
+evidence are inputs, not configuration precedence layers.
 
 **`CODESS_MIN_SIZE` / `--min-size`:** Ingest skips a source file when **`st_size < min_size`**. **`min_size == 0`** means **no size floor** (including empty files). That is **not** the same as omitting **`--min-size`**: omission currently uses the legacy **`config.MIN_SIZE`** default of 20 KiB unless overridden by **`CODESS_MIN_SIZE`** at import. This is an optional noise heuristic, not a resource guard, and can hide valid tiny Sessions. Curated onboarding already passes zero. The ordinary zero-default and structural classification of empty/tiny Sources are postponed under **P15**, not ingest-code consolidation **A11**. **`validate_config`** rejects **`MIN_SIZE < 0`**.
 
@@ -284,6 +538,8 @@ Defaults in the table are when the variable is **unset**.
 | `CODESS_VERBOSE` | Python logging **DEBUG** for the process (`-v` equivalent) | `0` → false |
 | `CODESS_REDACT` | Ingest: enable redaction default (same patterns as **`--redact`**) | `0` → false |
 | `CODESS_RAW_MODE` | Ingest raw evidence policy: `none`, `reference`, `capture`, or `seal` | `reference` |
+| `CODESS_STRICT_MAPPING` | Ingest: fail a Source on unsupported/lossy mapping rather than retain a diagnostic and continue | `0` → false |
+| `CODESS_CONTENT_POLICY` | Content-processing policy JSON path | no file |
 | `CODESS_RESOURCE_POLICY` | Partial `codess.resource-policy/1` JSON file | no file; built-ins apply |
 | `CODESS_MAX_TRANSCRIPT_BYTES` | One Claude/Codex transcript maximum | `268435456` |
 | `CODESS_MAX_SOURCE_BYTES` | Compatibility alias for transcript maximum | transcript built-in |
@@ -294,7 +550,13 @@ Defaults in the table are when the variable is **unset**.
 | `CODESS_MAX_CODESS_DB_BYTES` | Storage-report warning threshold for one CoSchema DB | `2147483648` (2 GiB) |
 | `CODESS_MAX_CURSOR_DB_BYTES` | Storage-report warning threshold for Cursor's global DB | `10737418240` (10 GiB) |
 
-**Boolean ENV (`CODESS_DEBUG`, `CODESS_FORCE`, `CODESS_SUBAGENT`, `CODESS_STOP`, `CODESS_VERBOSE`, `CODESS_REDACT`):** Implemented in **`config.py`** via **`env_bool()`**: **true** only if, after **`.lower()`**, the value is exactly **`1`**, **`true`**, or **`yes`**. **Unset** uses default **`0`** → false. Values like **`y`**, **`Y`**, **`on`**, **`2`** are **false** (not generic shell truthiness). Export e.g. `CODESS_DEBUG=1` or `CODESS_DEBUG=yes`.
+**Boolean ENV (`CODESS_DEBUG`, `CODESS_FORCE`, `CODESS_SUBAGENT`,
+`CODESS_STOP`, `CODESS_VERBOSE`, `CODESS_REDACT`,
+`CODESS_STRICT_MAPPING`):** Implemented in **`config.py`** via
+**`env_bool()`**: **true** only if, after **`.lower()`**, the value is exactly
+**`1`**, **`true`**, or **`yes`**. **Unset** uses default **`0`** → false.
+Values like **`y`**, **`Y`**, **`on`**, **`2`** are **false** (not generic
+shell truthiness). Export e.g. `CODESS_DEBUG=1` or `CODESS_DEBUG=yes`.
 
 **Why `CODESS_*` vs `DEBUG` / `FORCE` / `SUBAGENT`:** Shell and CI need **prefixed** names (`CODESS_DEBUG`, …) to avoid collisions with unrelated tools. **`config.py`** exposes short **Python** names (`DEBUG`, `FORCE`, `SUBAGENT`) as **bools read once at import** from those variables. Docs refer to **ENV** with the `CODESS_` name; code samples may show **`config.DEBUG`** meaning “the bool parsed from **`CODESS_DEBUG`**.”
 
@@ -359,10 +621,15 @@ command exits 1 before doing work.
 | `--max-events-per-session N` | `CODESS_MAX_EVENTS_PER_SESSION` | 100,000 | Override the normalized Event maximum for one Session. |
 | `--max-context-content-chars N` | `CODESS_MAX_CONTEXT_CONTENT_CHARS` | 250,000 characters | Override the normalized context/compaction body maximum. |
 | `--no-resource-limits` | — | off | Disable all maximums after file, ENV, and CLI resolution; reports retain this origin. |
+| `--raw-mode none\|reference\|capture\|seal` | `CODESS_RAW_MODE` | `reference` | Select raw-evidence retention independently of normalized content policy. |
+| `--strict-mapping` | `CODESS_STRICT_MAPPING` | off | Fail the affected Source on unsupported/lossy mapping. |
+| `--content-policy JSON` | `CODESS_CONTENT_POLICY` | no file | Load scoped pre/post content-processing rules. |
+| `--validate` | — | off | Parse and validate using temporary stores without mutating Project, registry, raw store, snapshots, or ingest state. |
 | `--force` | `CODESS_FORCE` | **`FORCE`** from ENV if flag omitted | **`args.force or FORCE`**; argparse **`default=False`**. Ignores **`ingest_state.json`** mtime skips when true. |
 | `--redact` | `CODESS_REDACT` | off | **`args.redact or INGEST_REDACT`**; patterns in **`config.REDACT_PATTERNS`**. |
 | `--debug` | `CODESS_DEBUG` | **`DEBUG`** from ENV | **`args.debug or DEBUG`** — see **§3.3**. |
 | `--no-progress` | — | live progress on | Suppress timestamped ingest progress on stderr while retaining `codess.progress/1` events in runtime/preflight reports. |
+| `--stop` | `CODESS_STOP` | continue independent Sources/Projects and return failure if any failed | Fail immediately on the first source/project error. |
 | `--registry PATH` | `CODESS_REGISTRY` | **`~/.codess`** | Central registry dir (`ingested_projects.json`). **`PATH`** overrides default. |
 
 ### 4.3 `codess query`
@@ -388,7 +655,7 @@ command exits 1 before doing work.
 | `--save-request`, `--save-result`, `--result-input`, `--compare-result` | — | — | Atomic persistence, derivation-bearing stable-ID chaining, and prior comparison. Comparison exits 3 for added/removed/changed rows or summary/provenance change. |
 | `query evidence --event-id ID` | — | — | Resolve a normalized event to source-record and verified sealed/captured/live evidence. Exit 2 means no exact candidate is available. |
 | `query cite --result-input RESULT --summary-file FILE --processor-id ID` | — | — | Build `codess.investigation/1` from a supplied summary and exact bounded Event citations; Codess records but does not generate the interpretation. |
-| `query configurations` | — | — | Audit normalized model/settings coverage and exact `source_config` provenance without inferring missing settings. |
+| `query configurations` | — | — | Audit normalized model/settings coverage and exact `source_config` provenance without inferring missing settings. `--session-id` restricts configurations, occurrence totals, examples, and vendor coverage to the resolved Session; an unknown or ambiguous identifier fails rather than widening scope. |
 
 **Modes:** **`--stats`**, **`--sessions`**, **`--tool`**, **`-sess`**,
 **`--session-id`**,
@@ -444,8 +711,10 @@ source-tree compatibility entry point. Focused commands and orchestrators call
 the same domain operations:
 
 ```text
+codess refresh …
 codess catalog candidates …
 codess catalog status …
+codess catalog annotations …
 codess catalog state …
 codess catalog decide …
 codess catalog onboard …
@@ -459,6 +728,7 @@ codess baseline verify …
 codess evidence gather …
 codess evidence audit …
 codess schema compare …
+codess session name|unname|names …
 codess storage report …
 codess storage prune …
 codess storage token-validate …
@@ -499,9 +769,17 @@ and code boundaries are in **Designs.md §12**.
 | Vendor filter | `scan`, `ingest_cmd`, argparse | `frozenset` of names |
 | Recent window | `scan`, `config.CODESS_DAYS` | ms cutoff |
 | CC sidechain counts | `scan._session_metrics_cc` | **CCSchema** |
-| Cursor workspace + global | `scan`, `project`, `adapters/cursor` | **CursorSchema** |
-| Incremental ingest | `store.should_ingest`, state JSON | mtime keys updated after commit |
+| Codex active/archive selection | `codex_source`, `scan`, `ingest_cmd` | One shared inventory; active wins over archive |
+| Cursor workspace + global | `cursor_source`, `scan`, `ingest_cmd`, `adapters.cursor` | Shared selection/SQL, then selected-value decoding; **CursorSchema** |
+| Stable Project/location/workspace identity | `project_catalog`, `project_annotations`, `catalog_operations` | Project UUID is independent of paths and vendor workspace IDs |
+| Incremental ingest | `store.should_ingest`, selected source markers, state JSON | State advances only after committed replacement |
 | Source replacement | `store.replace_session_events`, `replace_source_sessions` | removes stale transcript/DB-owned events transactionally |
+| Content and resource policy | `content_processing`, `resource_policy`, `resources`, adapters | Scoped actions and effective limit origins are retained |
+| Raw evidence and exact resolution | `raw_store`, `snapshot`, `evidence_resolver` | Sealed/captured/live precedence with revision verification |
+| Immutable snapshot publication | `snapshot`, `baseline_operations`, `baseline_validation` | Build candidate, validate, then atomically replace pointers |
+| Routine refresh | `refresh_operations`, `refresh_receipts` | Resolve explicit Project selection, preflight all, apply independently |
+| Typed query kernel | `query_api`, `query_cmd` | Read-only predicates, expansion, global ordering, bounds, saved results |
+| Cited investigation | `investigation`, `query_api`, query/investigation schemas | Supplied analysis bound to exact constituent evidence |
 | Tool lineage report | `query_cmd._lineage` | joins Claude/Codex ids; shows missing/orphan results |
 | Audit report | `query_cmd._audit` | direct denial/failure/abort/compaction evidence per CoSchema support matrix |
 | Redaction | `sanitize`, adapter opts | regex list in **config** |
@@ -548,7 +826,7 @@ policy rules.
 
 **Audience:** People changing **`adapters/*`**, **`store.py`**, or **`cli/*_cmd.py`**.
 
-Start from the **call graph in §2.1**: ingest normalizes and replaces one source
+Start from the **component map in §2.1**: ingest normalizes and replaces one source
 transactionally; query reads **`store`** only.
 
 - **Transaction boundary:** adapters yield normalized records; ingest buffers one
@@ -571,8 +849,8 @@ transactionally; query reads **`store`** only.
   cross-platform normalization, timeout/error semantics, or reuse inside core
   selection. Never infer source-system authorship from generic host activity.
 
-The remaining ingest/wrapper consolidation is registered as **A11** rather than
-maintained as an informal refactor list here.
+The **A11** ingest/wrapper consolidation is complete and retained in §8.6;
+reopen it only for a reproduced layering defect.
 
 ---
 
@@ -622,6 +900,50 @@ are:
   the ordinary pytest fixtures. Zero400 additionally supplies the large Cursor
   performance and changing-live-source evidence.
 
+Use a validation ladder; do not make Zero400 the default functional smoke test:
+
+1. run the focused unit/contract and CLI tests for the changed behavior;
+2. exercise the current smallest accepted, query-ready, single-vendor Project
+   whose source system covers the behavior;
+3. add the smallest matching Project for each adapter actually changed; and
+4. use Zero400 only when the claim involves cross-vendor behavior, a large
+   Cursor selection, skew/scale, or changing-live-source handling.
+
+**SWEmore is the current default real-data smoke Project.** It is an accepted
+single-vendor Codex baseline with a direct per-session JSONL Source and is much
+smaller than Zero400. Confirm that it remains `query_ready`, single-vendor, and
+small with `codess catalog annotations` rather than copying transient counts
+into this plan. Use its read-only query smoke for normalized/query changes and
+`codess refresh --project SWEmore --source codex --stage preflight` when
+decoder, ingest, resource, or temporary-store behavior changes. For a
+Claude- or Cursor-specific change, select the smallest current single-vendor
+Project for that source system instead; today the catalog identifies spank-py
+and Logs respectively, but the catalog—not these examples—is authoritative.
+Snapshot construction/publication changes should first use this small
+single-vendor tier, then add a large/skew case only after correctness passes.
+
+Escalate work according to the claim being made, not simply because more data
+is available:
+
+| Situation | Required expansion or action |
+|---|---|
+| Small single-vendor smoke fails | Fix or explain the failure before adding Projects; a larger cohort usually obscures the defect |
+| Vendor adapter, mapping, or supported-release behavior changes | After focused fixtures and the small smoke pass, test the smallest current Project containing each changed source shape or release boundary; inspect exact Source evidence for every changed outcome |
+| Common schema, taxonomy, provenance, query, or result behavior changes | Test at least one small Project per affected source system, then the smallest multi-vendor or cross-Project case that proves the common behavior |
+| Ordering, lineage, compaction, tools, permissions, attachments, or irregular admission changes | Select Sessions because they contain the relevant shape: ordinary plus one complex/tool-heavy and one tiny, partial, historical, or previously misclassified case where applicable. Session count alone is not coverage |
+| Atomic publication, rollback, retention, or snapshot integrity changes | Run failure-injection tests and a small candidate snapshot first; add a larger accepted snapshot only after pointer, manifest, hash, count, and recovery behavior agree |
+| Bounds, streaming, allocation, or performance changes | Use synthetic boundary/skew tests and the small Project first, then one measured large/skew Project representative of the claimed bottleneck |
+| A new vendor field or possible capability is noticed | Preserve namespaced evidence if useful, but add common functionality only when exact evidence has stable meaning and a stated use case, query, validation, or compatibility need |
+| An existing result is wrong, lost, unstable, unsafe, or non-reproducible | Fix promptly with a minimal reproducer and regression test; expand to every vendor/shape that shares the faulty code path |
+| Behavior is merely awkward or a feature is imaginable | Add work only after a repeated workflow, demonstrated investigation gap, or specific user requirement establishes value and acceptance criteria |
+| Operation is slow or resource-heavy | Optimize only after reproducing the problem and measuring the dominant phase, CPU/RSS/I/O, input size/shape, and baseline result. Validate identical functional results on the small case before comparing the representative large case |
+
+More Projects are therefore a compatibility sample, not a confidence ritual.
+More Sessions are useful only when they add a distinct source shape, release,
+behavior, or scale distribution. Stop expanding a run when every affected
+contract and claimed boundary has direct evidence; do not pursue catalog-wide
+execution for a local change.
+
 Coverage measurement must enable coverage.py's subprocess patch; an ordinary
 single-process run omits CLI child execution and materially understates
 `query_cmd.py`. Coverage is an on-demand dated observation, not a checked-in
@@ -653,11 +975,12 @@ link here instead of maintaining another queue.
 To keep planning IDs legible, this registry uses a small fixed set. Do not mint
 new prefix families; add to an existing register.
 
-- **A** — work items (§8.2). The single register for actionable work. An item's
-  lifecycle state (postponed/active/triggered/done) is a property of the item,
-  not a separate ID space; `P` (§8.4 postponed) and the completed set (§8.6) are
-  presentation groupings of the same work, and `T` (§8.4.3) triggers are
-  conditions that *promote* work into A, not a parallel queue.
+- **A** — implemented or conditionally maintained work (§8.2).
+- **P** — postponed proposals (§8.4). A P item is not authorized work. When its
+  restart condition is met, it is re-scoped into an A item rather than silently
+  activated.
+- **T** — evidence or operational conditions (§8.4.5) that may reopen an A or P
+  topic.
 - **D** — decisions (§8.3). A resolved choice that constrains work; not itself a task.
 - **Gaps** (§8.5) — known limitations. The prefixes `L-*`, `V-*`, `E-*` are
   **category facets** of one gaps register (scope/measurement/output/content/
@@ -665,8 +988,11 @@ new prefix families; add to an existing register.
 - **UC** — user-facing use cases (README capability matrix).
 - **R** — settled review checkpoints (§8.1.1).
 
-There is no durable "PR-n" designator. A proposed change is tracked as an **A**
-item.
+There is no durable "PR-n" designator. Priorities are written as words
+(`critical`, `high`, `normal`, `later`) so they cannot be confused with P-item
+identifiers. Completed identifiers are not recycled, but this registry does not
+retain their implementation chronology; Git and the relevant document version
+resolve old references.
 
 - Work active items in dependency order unless a production defect or source
   format change takes priority.
@@ -700,36 +1026,19 @@ Preserve useful vendor/release evidence, normalized common mappings, exact
 source designations, and dated immutable snapshots. `--force` remains the
 escape hatch for suspected fingerprint sampling or vendor-timestamp gaps.
 
-#### 8.1.2 Review backlog disposition
+#### 8.1.2 Work intake
 
-This is the single disposition for the former long numbered review. A row is
-either active under one owner, postponed under one restart condition, or
-dismissed; its feature list is not itself another task list.
+New work starts from a current use case, reproduced defect, vendor-format
+change, or explicit research question. It joins an existing A or P item when
+the owner and exit condition match. Otherwise, add one compact gap entry with
+an impact statement and restart condition. Do not retain the review sequence
+that led to the item.
 
-| Former item | Precise name | Disposition and unpacking method |
-|---:|---|---|
-| 1 | Typed query-kernel hardening | **A1/A9.** Keep the implemented version-1 typed request/executor. Test only use-case-required predicates, bounds, and execution equivalence now |
-| 2 | Reusable investigation packages | **P17.** Package infrastructure is later-phase research; the first-tranche scenarios below remain acceptance cases for existing A-items |
-| 3 | External query-specification composition | **P17.** Compare carriers and client tooling only when the later phase starts; no version-2 JSON shape is approved |
-| 4 | Resolved-cohort identity and readiness | **A25 completed.** `catalog status` reports each Project and `N/N` query-ready coverage. Exact results retain resolved Project/snapshot identities. Source refresh remains separately assessed |
-| 5 | Result-field selection and result identity | **A7** owns mandatory result identity and constituent IDs. Caller-selected field projection moves to **P17**. It is not developer telemetry |
-| 6 | Typed result composition | **A7** owns homogeneous result/replay operations; **A19** investigates cross-Project analytical products. Heterogeneous joins are not implied |
-| 7 | Provenance checks | **A3 completed** for the four-actor core; **A12** applies the same source-specific method to model/configuration facts. A check begins with a claimed behavior and exact source evidence, not a combinatorial matrix |
-| 8 | Search report | **P18**, further phase. Preserve canonical order and all occurrences now; restart only from a recorded investigation in which useful matches were materially hard to find |
-| 9 | Allocation and execution measurement | Existing bounded execution remains **A9**; deeper measurement and limit promotion remain **P14–P16** |
-| 10 | Analysis datasets and exports | **A19** may investigate a manifest and direct query. SQLite/JSONL/Parquet/DuckDB Assembly exports are **P19** and follow requirements comparison |
-| 11 | Source-specific preservation | The completed **A3-Claude/Codex/Cursor** contract covers the core exchange; configuration provenance continues under **A12**. Common mappings never erase namespaced source evidence |
-| 12 | Read-only SQL equivalence and diagnostics | **A9.** Add fixture differential tests, direct SQL reconciliation, query-plan inspection, and representative real-snapshot smoke tests in that order |
-| 13 | Raw-source search | **P13**, further phase. Normalized search and exact evidence resolution remain the current supported paths |
-| 14 | Capability requirements | UC1–UC11 below are the requirements index. Each remaining behavior must name inputs, output/evidence, bounds, failure/completeness semantics, and a validation case before entering an A-item |
-| 15 | Developer execution reporting | **A9/P14.** Phase timing, row/allocation counters, SQL plans, and RSS are maintainer evidence and remain outside caller result projection |
-
-Newly discovered work is handled in this order: reproduce against an existing
-UC; decide whether it is a defect, missing requirement, or research idea;
-attach it to an existing A/P item when the owner and exit criterion match;
-otherwise add one compact gap row with a restart trigger. Duplicated feature
-lists are deleted. Speculative variants without a demonstrated use case are
-dismissed or left in the relevant design discussion, not promoted into tasks.
+Classify the evidence before changing the registry: a defect needs a failing
+case, a requirement needs an affected use case and expected outcome, and a
+research idea needs a question and decision it could inform. Duplicated feature
+lists are deleted. Speculative variants stay in the owning design discussion
+until evidence justifies implementation work.
 
 Layered JSON query design can therefore be set aside safely. The current
 version-1 typed request/result contract, CLI bindings, saved requests/results,
@@ -784,21 +1093,12 @@ ordinary retention removes them; any source records that a current adapter can
 attribute to the repository/worktree enter the new Zero400 snapshot through
 the normal path.
 
-**A26 Extraction Validity immediate work** covers the low-cost status path,
-removal of transient count gates, test-registry isolation, worktree catalog
-disposition, and the rule “assess selected observations before large Cursor
-extraction.” Git is a strong primary signal, but vendor source/index mtimes,
-`.claude`/`.codess` state, and exact source revision markers are independent
-signals. Build outputs, logs, and generated artifacts are conservatively
-treated as activity hints unless a retained invocation links them to a source
-system.
-
-The larger **P20 Extraction Validity model** is postponed. It owns a formal
-multi-signal freshness state, per-source update observations, evidence
-confidence for tool-state/artifact changes, repository/worktree-aware
-attribution, reasoned re-ingest selection, and a first-class status result
-contract. It must extend the current cheap shell/index workflow from measured
-failures; it does not gate current query, mapping, or validation work.
+Extraction validity uses a low-cost status pass before large Cursor work. Git
+activity is a strong primary signal, while vendor index times, tool-state files,
+receipts, and exact source revisions supply independent observations. Build
+outputs and logs are only activity hints unless a retained invocation links
+them to a source system. A wrong status or selection claim opens a narrowly
+reproduced A item; it does not justify an unbounded all-signal freshness model.
 
 ### 8.2 Implementation review and active work
 
@@ -820,15 +1120,15 @@ complete.
 
 | Use case | State | What is coded and validated now | Most direct next work |
 |---|---|---|---|
-| **UC1 — find Sessions for Projects** | **Partial, broadly usable** | Exact Project IDs, saved current/named-snapshot sets, explicit directories, per-Project catalog readiness with `N/N` coverage, and explicit historical diff/union | **A1:** add catalog-attribute selection only after concrete predicates are specified. **P12:** repository-level Zero400/ZeroPerf catalog migration is postponed |
+| **UC1 — find Sessions for Projects** | **Partial, broadly usable** | Exact Project IDs, saved current/named-snapshot sets, explicit directories, per-Project catalog readiness with `N/N` coverage, dated routine-refresh observations, and explicit historical diff/union | **A1:** add catalog-attribute selection only after concrete predicates are specified. A wrong readiness/refresh or repository/worktree claim becomes a focused A26/A28 defect |
 | **UC2 — select by source system** | **Partial, broadly usable** | Claude/Codex/Cursor unions plus Session, time, model, event-kind, status, artifact, tool, actor, role, origin, relation, and initiation scope | **A1:** missing normalized predicates/action parity. Caller-selected fields are P17 |
 | **UC3 — orient by volume and time** | **Implemented core; measured extensions remain** | Session relation and Interaction-initiation partitions; UTC months; bounded UTC daily human/model exchange and actor engagement; daily/monthly raw tool call/result/input/output metrics; Event-gap histogram; Session/Interaction/turn/Event/text/tool/artifact/model volume, elapsed span, event days, and active-time sensitivity. `evidence audit orientation` independently reconciles the core observations to read-only SQL across current query-ready Projects | **A2/A9:** retain empty/tiny/skew fixtures and add only measured high-cardinality distributions or performance work |
 | **UC4 — open a known Session** | **Implemented for whole Sessions and bounded typed Event windows** | Select by ordinal, stable global ID, or unambiguous vendor ID and display chosen content classes; typed sequence/window results can feed the next operation | Terminal presentation remains separate from typed result composition |
 | **UC5 — find and reconstruct an exchange or event group** | **Implemented for the scoped core exchange** | Stable Event, Interaction, and Model-Turn selection in global canonical order; complete Interaction/turn expansion and sequence windows; end-to-end Claude/Codex/Cursor provenance checks across human, harness, tool, and model evidence. Claude and Cursor delegated prompts and current Codex protocol subagent/collaboration shapes are mapped; current Codex tool-search/MCP-transport/rollback records are retained | Add new vendor shapes only when direct evidence appears; local Codex subagent/collaboration occurrence remains a T4 evidence trigger, not a blocker |
-| **UC6 — search text, paths, errors, symbols, or topics** | **Partial, broadly usable** | Bounded normalized substring search over content, tool input/output, and artifact paths with scope/completeness warnings, returned-row facets, and lossless exact repetition groups | **A4:** maintain current semantics. **P18:** alternative result order is further-phase. **P13:** raw-source search is further-phase. Alternative indexed retrieval is distant |
+| **UC6 — search text, paths, errors, symbols, or topics** | **Partial, broadly usable** | Bounded normalized substring search over content, tool input/output, and artifact paths with scope/completeness warnings, returned-row facets, and lossless exact repetition groups | **A4:** maintain current semantics and change order only from a reproduced usability defect. **P13:** raw-source search is further-phase. Alternative indexed retrieval is distant |
 | **UC7 — investigate tool operations, outcomes, failures, or denials** | **Partial, scoped typed path validated** | Tool lineage, audit, permission, task-review, tool histogram, typed actor/tool/status filtering, and tested denial/failure expansion across Claude/Codex/Cursor | Fixed legacy reports remain table-oriented; broader runtime-component and context analysis is evidence-triggered |
-| **UC8 — correlate work across vendors or artifacts** | **Partial** | Artifact extraction, event links, confidence-bearing correlation assertions, aggregate reports, and SQL drill-down | **A2/A19:** expose constituent stable IDs where a demonstrated typed aggregate requires them. **P12:** repository/worktree catalog consolidation remains postponed |
-| **UC9 — export and compose investigations** | **Implemented for homogeneous typed results** | Typed JSON results, failure-tested atomic saves, stable-ID derivations, guarded changed-snapshot comparison, explicit historical union, constituent-ID repetition groups, and cited summaries. Mandatory result identity is separate from maintainer timing/allocation/SQL reporting | **P17:** optional caller field selection/package presentation. **A9/P14:** developer execution evidence. Heterogeneous analytical products remain A19/P19 |
+| **UC8 — correlate work across vendors or artifacts** | **Partial** | Artifact extraction, event links, confidence-bearing correlation assertions, aggregate reports, and SQL drill-down | **A2/A19:** expose constituent stable IDs where a demonstrated typed aggregate requires them. Repository/worktree identity is settled by D21 |
+| **UC9 — export and compose investigations** | **Implemented for homogeneous typed results** | Typed JSON results, failure-tested atomic saves, stable-ID derivations, guarded changed-snapshot comparison, explicit historical union, constituent-ID repetition groups, and cited summaries. Mandatory result identity is separate from maintainer timing/allocation/SQL reporting | **P17:** optional caller field selection/package presentation. **A9:** developer execution evidence. Heterogeneous analytical products remain A19/P19 |
 | **UC10 — verify exact source evidence** | **Implemented** | Event → source record → exact sealed/captured/live resolver with mismatch and unavailability reporting; exercised on Claude, Codex, and Cursor evidence | Maintenance only under **T1/T2/T6** when vendor shapes, mappings, or code change |
 | **UC11 — assemble cross-Project analytical data** | **Designed; basic virtual composition works** | Repeated `--dir`/`--dirs`, typed saved results, and external SQLite/DuckDB/pandas composition | **A19:** compare top-down workproducts with bottom-up fields and prototype a manifest plus current virtual query. **P19/P17:** Assembly export formats/optional fields |
 
@@ -856,27 +1156,30 @@ The current validation sequence is:
    reviewed Projects;
 2. keep the completed A3 Claude/Codex/Cursor core checks as adapter-change
    gates; their actor proof set is human, harness, tool, and model;
-3. next add A12 model/effort/service provenance assertions beside the matching
-   source case, never as a separate combinatorial sweep;
+3. keep the completed A12 model/effort/service provenance assertions beside
+   their matching source cases and add another only when direct evidence or a
+   changed source shape requires it;
 4. keep the completed A7 changed-snapshot, constituent-citation, atomic-save,
    incompatible-shape, and result-composition cases green; and
-5. leave field projection, search-report refinement, raw search, and
-   Assembly exports to P17/P18/P13/P19 respectively.
+5. leave field projection, raw search, and Assembly exports to P17/P13/P19;
+   change search ordering only from a reproduced A4 usability defect.
 
 #### 8.2.2 Query and investigation completion checklist
 
 | Work item | Remaining functional behavior | Required validation before completion |
-| **A27 — actor/origin and runtime lineage** | **Core mapping complete for current evidence.** Claude sidechain/agent-path and Cursor `isSubagent` user envelopes map as harness-delegated prompts. Current Codex OSS parent/fork/thread-source and collaboration shapes map to Session lineage and harness Events, with fixture validation because no reviewed local rollout contains them. Direct-user, unpaired harness context, assistant role, MCP transport/application outcome, and rollback mappings remain covered. MCP repeated source-call IDs are duplicate candidates, not presumed global identities | Keep focused fixtures and real-snapshot assertions green; retain NULL instead of inferred parentage; add a local Codex occurrence only under T4. Ordinary field truncation disposition remains A6/P16 rather than blocking actor mapping |
+|---|---|---|
+| **A27 — actor/origin and runtime lineage** | **Complete for current evidence.** Claude sidechain/agent-path and Cursor `isSubagent` user envelopes map as harness-delegated prompts. Current Codex OSS parent/fork/thread-source and collaboration shapes map to Session lineage and harness Events, with fixture validation because no reviewed local rollout contains them. Direct-user, unpaired harness context, assistant role, MCP transport/application outcome, and rollback mappings remain covered. MCP repeated source-call IDs are duplicate candidates, not presumed global identities | Maintenance only: keep focused fixtures and real-snapshot assertions green; retain NULL instead of inferred parentage. A real local Codex collaboration occurrence or changed vendor shape reopens the smallest mapping case under T1/T4. Richer speculative runtime context and ordinary truncation policy are not A27 work |
 | **A1 — typed query-kernel hardening** | Exact IDs, saved Project/snapshot sets, typed row predicates, global ordering, bounds, and limit pushdown are implemented. Add only demonstrated catalog predicates or missing normalized predicates | Predicate/NULL/obsolete-location tests and read-only SQL reconciliation; version-2 layered JSON and caller field projection are postponed under P17 |
 | **A2 — orientation** | **Core implementation and real-store reconciliation complete.** Relation/initiation partitions, UTC months, Event-gap histogram, active-time sensitivity, bounded daily exchange/actor/subagent engagement, labelled response anchors, and daily/monthly raw tool observations are implemented. Monthly tool Interaction counts are distinct across day boundaries. `evidence audit orientation` independently reconciles current query-ready Projects to SQLite. Displays may calculate ratios/percentages; cost/quota/token-burn/timeout remain out of scope | Retain the SQL audit plus empty/tiny/long-idle/skew fixtures. Add distributions only from a demonstrated investigation or measured performance need under A9 |
 | **A3 — core exchange provenance checks** | **Complete for the approved scope.** Claude, Codex, and Cursor each pass source→adapter→store→typed Interaction→exact live-evidence tests with human, harness, tool, and model actors plus real denial/failure status evidence | `tests/test_provenance_checks.py` is the contract. Agent/subagent, MCP, and context variants remain preserved and evidence-triggered but do not reopen A3 |
-| **A4 — bounded normalized finding** | Literal escaping, returned-row facets, and lossless exact-repetition grouping are implemented. Retain measured repeated-shape coverage and canonical ordering | Exact matches, bounds, completeness, and occurrence preservation remain regression-tested. Search-report refinement is postponed under P18 |
+| **A4 — bounded normalized finding** | Literal escaping, returned-row facets, and lossless exact-repetition grouping are implemented. Retain measured repeated-shape coverage and canonical ordering | Exact matches, bounds, completeness, and occurrence preservation remain regression-tested. No separate search-report project remains |
 | **A7 — reusable results and typed composition** | **Complete for homogeneous typed results.** Stable-ID derivation, explicit observation-preserving historical union, guarded changed-snapshot comparison, cited investigation records, saved tool-result → complete four-actor Interaction expansion, repetition-group constituent citations, failure-tested atomic saves, and incompatible-shape rejection are implemented | Current query/investigation regressions are the contract. Heterogeneous joins/analytical products remain A19/P19; optional package presentation remains P17 |
+| **A28 — routine-refresh observations** | **Implemented.** Each Project's latest completed preflight/apply observation is derived from bounded checkpointed `codess.refresh-receipt/1` discovery. Status reports stage, outcome, observation time, receipt, source selection, raw mode, and resulting snapshot when known without claiming that every vendor Source is fresh | Plan-only and malformed receipts are ignored; completion time, not filename, selects the latest result; failed outcomes remain visible; tests cover supersession and no-evidence behavior |
 | **P17 — query language and package research** | Further phase: reevaluate layered JSON, caller-selected fields, public/private package registries, and external clients as one design programme | Restart with use-case requirements and carrier comparison; no current interface is deprecated merely to begin the prototype |
 
-These items do not include raw-source search (**P13**),
-repository-level ZeroPerf migration (**P12**), or cross-Project Assembly
-exports (**P19**).
+These items do not include raw-source search (**P13**) or cross-Project
+Assembly exports (**P19**). Zero400/ZeroPerf repository identity is already
+settled and is not a pending migration.
 
 #### 8.2.3 First investigation-package tranche mapping
 
@@ -888,7 +1191,7 @@ trees. Their current and deferred owners are:
 | `project-session-inventory` | UC1–UC2, A1 typed Sessions and source scope | A1 concrete catalog predicates; P17 package wrapper/field selection |
 | `project-orientation` | UC3, A2 overview, activity sensitivity, and daily exchange engagement | A2 diverse-real-store reconciliation and only measured distributions; P17 renderer/package metadata |
 | `exchange-window` | UC5/UC7, completed A3 expansion/provenance and A7 result composition | P17 wrapper only if a repeated consumer warrants it |
-| `normalized-findings` | UC6, A4 bounded literal finding/facets | A4 presentation-order questions only if promoted from P18; P17 wrapper |
+| `normalized-findings` | UC6, A4 bounded literal finding/facets | A4 ordering change only after a reproduced usability defect; P17 wrapper |
 | `tool-outcome-review` | UC7, completed A3 tool/permission provenance and A7 composable rows | P17 wrapper only if a repeated consumer warrants it |
 
 This tranche does not authorize the later JSON carrier. Each scenario is first
@@ -900,42 +1203,112 @@ may package only behavior already defined in the core.
 Priority reflects importance and urgency; dependencies control execution order.
 Complexity is relative (`S`, `M`, `L`) and is not a time estimate.
 
+There is currently no mandatory new feature or performance implementation.
+The review choices are **A1** for a demonstrated query-kernel gap, **A19** for
+a deliberately bounded Assembly-requirements investigation, and **A20** as
+opportunistic terminology maintenance when a public contract changes. A12 and
+A27 are evidence-triggered compatibility maintenance. A5, the performance
+portion of A9, and all deeper performance work are postponed together in
+§8.4.3. Completed core items remain in §8.6 rather than competing for priority.
+**A20 alone owns terminology work:** A12 owns model/configuration provenance
+and A27 owns actor/origin/runtime lineage.
+
 ##### Group 0 — correctness gates
 
 | Priority | ID | State | Dependencies | Complexity | Next outcome |
 |---:|---|---|---|:---:|---|
-| **P0** | **A27** | Core current-evidence mapping complete; evidence-triggered maintenance | A3 four-actor core | S | Keep Claude/Cursor real assertions and Codex protocol fixtures green; add a local Codex collaboration occurrence under T4; leave general field-truncation disposition to A6/P16 |
-| **P2** | **A12** | Active | A3 core source checks completed | M | Extend the same source-evidence method to release/model/effort/service occurrence provenance without inferring absent values |
+| **critical** | **A27** | Complete for current evidence; compatibility maintenance only | A3 four-actor core | S | Keep Claude/Cursor real assertions and Codex protocol fixtures green; add a local Codex collaboration occurrence only under T4 |
+| **critical** | **A28** | Complete | Routine refresh receipts | S | Maintain bounded receipt parsing and conservative status vocabulary |
+| **normal** | **A12** | Complete for current evidence; compatibility maintenance only | A3 four-actor source checks | S | Maintain vendor/release evidence under T1/T2; add new fields only from direct evidence |
 
 ##### Group 1 — query specification and reusable workflows
 
 | Priority | ID | State | Dependencies | Complexity | Next outcome |
 |---:|---|---|---|:---:|---|
-| **P1** | **A1** | Active | A22 completed | M | Harden the current typed kernel and add only demonstrated catalog/normalized predicates; layered JSON and caller projection are P17 |
-| **P2** | **A2** | Core complete and reconciled | A1 scope/bounds; A27 actor corrections | S | Maintain `evidence audit orientation` and skew fixtures; promote only measured follow-up distributions or A9 performance work |
-| **P3** | **P18** | Postponed further phase | Measured UC6 investigation failures | M | If promoted, refine one search report using a small reviewed question set and one deterministic order; preserve all occurrences and keep judgments outside CoSchema |
+| **high** | **A1** | Conditional maintenance; no current unmet predicate is approved | A22 completed | M | Add a catalog or normalized predicate only for a demonstrated query gap; layered JSON and caller projection are P17 |
+| **normal** | **A2** | Core complete and reconciled | A1 scope/bounds; A27 actor corrections | S | Maintain `evidence audit orientation` and skew fixtures; promote only measured follow-up distributions or A9 performance work |
 
 ##### Group 2 — investigation automation
 
 | Priority | ID | State | Dependencies | Complexity | Next outcome |
 |---:|---|---|---|:---:|---|
-| **P2** | **A8** | Active cited-result workflow | A7 | M | Exercise one supplied-summary/citation workflow using the current result contract; native language generation and P17 packaging remain postponed |
-| **P2** | **A20** | Parallel | Public contract changes | M | Apply the glossary incrementally to new public fields while preserving compatible CLI/result spellings |
+| **normal** | **A8** | Core cited-result workflow exercised on current Zero400 evidence | A7 | S | Maintain content/whole-row citation binding; native summary generation and paired-result packaging require a demonstrated consumer |
+| **normal** | **A20** | Parallel | Public contract changes | M | Apply the glossary incrementally to new public fields while preserving compatible CLI/result spellings |
 
 ##### Group 3 — execution, storage, and profiling
 
 | Priority | ID | State | Dependencies | Complexity | Next outcome |
 |---:|---|---|---|:---:|---|
-| **P2** | **A9** | Core planner/SQL validation active; Cursor programme specified in Designs §10 | A1 typed operations | L | Review the five-phase Cursor call graph, measure the documented load-shape matrix, inspect plans/allocations only in dominant phases, attempt one bounded-state change at a time, and retain fixes only with identical ordering/identity/rollback/fixed-point outcomes |
-| **P1** | **P14** | Active, approved | Existing runtime observations | M | Reconcile selected, emitted, retained, and allocated units without turning transient corpus totals into maintained status |
-| **P1** | **P16** | Active, approved | P14 unit definitions and existing admission behavior | M | Ship the approved defaults, exact boundary/override tests, and pre-commit failure checks; do not invent additional ceilings |
-| **P3** | **A5** | Event-triggered | Next changed large capture | M | Measure cache restore I/O/RSS when naturally exercised; retain current bounded-marker caveats |
+| **normal** | **A9** | Query-correctness maintenance only; performance portion postponed in §8.4.3 | A1 typed operations | M | Maintain the §8.2.6 test contract; add a missing mechanism only for a reproduced defect |
+| **later** | **A5** | Postponed in §8.4.3 | Next changed large Cursor capture | M | No current work; retain bounded markers and measure cache restore only after explicit resumption |
+
+There is no current list of reproduced **A9 correctness defects**. A9 is the
+owner if a typed operation disagrees with its reference/SQL result on
+qualification, NULL/literal handling, identity, ordering, expansion, row/byte
+bounds, or completeness. L-E1, L-E3, and L-E4 are recorded performance or
+allocation limitations and remain postponed in §8.4.3; they are not open
+correctness bugs.
 
 ##### Group 4 — analytical Assemblies
 
 | Priority | ID | State | Dependencies | Complexity | Next outcome |
 |---:|---|---|---|:---:|---|
-| **P3** | **A19** | Investigation only | A1/A7; P12 before Zero400/ZeroPerf input | L | Compare desired analysis workproducts with bottom-up entities/fields; prototype one manifest plus virtual query. Assembly exports and optional field selection remain P19/P17 |
+| **later** | **A19** | Investigation only | A1/A7 | L | Compare desired analysis workproducts with bottom-up entities/fields; prototype one manifest plus virtual query. Assembly exports and optional field selection remain P19/P17 |
+
+A8's real cited-result exercise is complete. Its required reconsideration
+covers **P15**, **P19**, and **P10** below.
+
+The reconsideration keeps P10/P15/P19 postponed. The A8 sample adds a
+useful P15 case—tool-call Events may have empty message content yet remain
+semantically nonempty through typed tool input and configuration provenance—
+but it does not justify the full cross-vendor admission programme. It exposed
+no search-order failure, no Misses assessment consumer for P10, and no
+Assembly format requirement beyond A19 for P19. Zero400/ZeroPerf is closed by
+the successful repository-Project rebuild and D21; another incorrect duplicate
+becomes a focused catalog defect rather than a generic enforcement programme.
+
+#### 8.2.5 A12 model, release, and configuration provenance
+
+A12 is complete for the configuration values currently evidenced by Claude,
+Codex, and Cursor. It remains a compatibility contract, not an open programme
+for adding nullable columns. New source fields or states are admitted only
+under T1/T2 with exact evidence and a consuming query.
+
+| ID | State | Implemented contract | Maintenance trigger / linked use cases |
+|---|---|---|---|
+| **A12.1** | **complete** | Typed Session/Event filters and Event/facet/overview output cover exact model plus seven independent configuration dimensions; representative current stores were exercised | T1/T2; **UC2, UC5, UC10** |
+| **A12.2** | **complete** | Set-based audit reports linked/default turn counts, bounded Source revision/locator examples, direct versus inherited occurrence evidence, and normalized/representative/recorded states | Add `derived`, `ambiguous`, `unsupported`, or profile/range specialization only when a real producer requires it; **UC5, UC9, UC10** |
+| **A12.3** | **complete** | Codex evidence proves provider, exact model, effort, service tier, and mode across defaults/turn settings | Changed `turn_context`/`thread_settings_applied`; **UC2, UC5, UC7** |
+| **A12.4** | **complete** | Claude evidence proves assistant model and usage service tier with direct occurrence provenance; effort/speed correctly remain NULL | Changed source shape; **UC2, UC3, UC5** |
+| **A12.5** | **complete** | Cursor exact `modelInfo.modelName`, turn links, and explicitly inherited governing-selection provenance are queryable and baseline-validated | Changed source shape; never infer effort/speed/service; **UC2, UC8, UC10** |
+| **A12.6** | **complete** | Harness release, decoder/validator profiles, and model configuration are distinct | Package/profile change; **UC1, UC9** |
+| **A12.7** | **complete at observed scope** | Exact mode is queryable without cross-vendor aliasing; unevidenced family/revision/speed/sampling/capability values remain namespaced or NULL | A direct producer plus demonstrated query; **UC3, UC8** |
+
+No A12 implementation remains scheduled. Vendor documentation owners are
+`CCSchema.md`, `CodexSchema.md`, and `CursorSchema.md`; common-field meaning
+remains in `CoSchema.md` and implementation design in `Designs.md §9`.
+
+#### 8.2.6 A9 test levels and current contract
+
+A9 is a correctness backstop for the typed query executor. It is not an
+authorization to build every test mechanism once proposed in Designs. The
+current coverage is:
+
+| Level | A9 area and criterion | Current evidence | Disposition |
+|---|---|---|---|
+| **Unit/contract** | Invalid requests fail; exact IDs, NULLs, literal `%`, `_`, and `\`, row/byte bounds, configuration provenance, and stable result identities retain defined meaning | `tests/test_query_api.py`, `tests/test_cli.py`, and focused identity/configuration tests | **implemented**; add a case with each changed predicate or contract |
+| **Functional** | A typed operation qualifies, orders, expands, and bounds rows correctly in one or more temporary stores | Query API tests cover representative filters, global order-before-limit, Interaction/window expansion, repetition, derivation, comparison, evidence, and configuration audit | **implemented**; a backend-neutral all-predicate evaluator is set aside until a mismatch demonstrates its value |
+| **Feature/workflow** | Public CLI operations compose into a useful investigation without a private side path | `tests/test_cli.py` covers bounded search → saved result → complete exchange/window → exact evidence, JSON/CSV, multi-Project scope, and failure handling | **implemented** for UC1–UC7, UC9, and UC10 paths exercised there |
+| **Integration** | Source-specific evidence survives source reader → adapter → CoSchema store → typed query, and multiple stores compose consistently | `tests/test_provenance_checks.py`, `tests/test_integration.py`, and `tests/test_scale.py` cover all three vendors, subprocess boundaries, 60-store ordering, and limits | **implemented**; keep one changed vendor shape beside its mapping |
+| **System** | A rebuilt immutable candidate is fixed-point stable, contract-valid, queryable, evidence-resolvable, and publication-safe on representative real Projects | Baseline validation/apply/freeze and query-smoke workflows cover small and diverse Projects; large Zero400 is used only when scale or Cursor evidence requires it | **implemented as an operational validation ladder**, not a mandatory pytest corpus |
+
+Two Designs proposals are intentionally not current acceptance requirements:
+there is no separate backend-neutral reference executor, and no brittle
+`EXPLAIN QUERY PLAN` suite. Independent read-only SQL reconciliation exists for
+orientation and selected counts, but not as a combinatorial oracle for every
+predicate. Reopen either mechanism only for a reproduced qualification,
+ordering, bounds, completeness, or required-access-path defect; reduce the
+failure to a deterministic fixture before using a large real store.
 
 ### 8.3 Decision register
 
@@ -954,7 +1327,7 @@ implementation or vendor evidence.
 | **D3** | Derived active-time sensitivity | **A2** | **Adopted: sensitivity, not one duration.** Report observed elapsed span separately and estimate active time with declared 5, 30, and 120-minute gap caps plus configurable values. Never label the estimate observed, billable, or charged; add the gap histogram next. |
 | **D4** | Raw-source search over authorized vendor fields and messages | **P13** | **Adopted: postpone as a feature.** The earlier “full-source” name overclaimed completeness. Raw-source search covers policy-authorized searchable values in exact vendor revisions, including evidence not projected into normalized content. It is not raw capture, exact-evidence resolution, or normalized search; retaining a raw Source never authorizes indexing it. |
 | **D5** | Exact evidence resolution precedence | **A6** | **Adopted: equality before location.** Resolve a verified exact sealed/captured object first and exact live evidence next. Report changed live files as mismatches and unavailable sources as unavailable—never silently substitute a different revision. |
-| **D6** | SQL and query-package boundary | **A1**, **A9**, **P17** | **Adopted: typed application specifications own behavior; SQL is one optimized backend and expert escape hatch.** Prove pushable operations against a backend-neutral reference executor; keep non-equivalent expansion, cross-store ordering, byte bounds, evidence, and raw access in core stages. Add a stable SQL view only after two independent consumers repeat a row contract. |
+| **D6** | SQL and query-package boundary | **A1**, **A9**, **P17** | **Adopted: typed application specifications own behavior; SQL is one optimized backend and expert escape hatch.** Current contract, functional, workflow, integration, and independent-reconciliation tests own correctness. Build a backend-neutral oracle only after a mismatch shows the existing tests cannot isolate a pushable operation. Keep non-equivalent expansion, cross-store ordering, byte bounds, evidence, and raw access in core stages. Add a stable SQL view only after two independent consumers repeat a row contract. |
 | **D7** | Topic/phase derivation methods and composition | **A8** | **Adopted: multiple composed methods, iteratively:** (1) deterministic lexical rules and explicit vendor events; (2) phase heuristics over ordered windows; (3) optional versioned embeddings for recall; (4) optional LLM labels only on bounded candidates; (5) an ensemble assertion that cites its inputs. Preserve every method/version/evidence/confidence separately and promote a stage only after a labelled evaluation set shows added value. |
 | **D8** | What result provenance is mandatory? | **A1**, **A7**, **P17** | **Adopted:** optional future package identity; canonical bound request and hash; result identity; dated execution observation; processor, Project/store/snapshot/package/decoder/validator identities; policy hashes; multidimensional completeness; limits/truncation; limitations; and constituent stable IDs. Observation time identifies the run but remains outside stable result meaning/content identity. |
 | **D9** | Historical snapshot semantics | **A1**, **A7** | **Adopted:** one verified current or explicitly named immutable snapshot by default. Diff compares two named observations by stable IDs, source revisions, semantic/content and package hashes. Union is separately explicit and retains observation identity plus duplicate diagnostics. Discovery is metadata-first from the maintained registry/manifests. Never combine per-row “latest” observations implicitly; see **Designs.md §13**. |
@@ -969,7 +1342,7 @@ implementation or vendor evidence.
 | **D18** | Field-state resilience | **A16**, D13, D17 | **Adopted:** every adapter field is classified `present`/`absent`/`empty`/`null`/`sentinel`/`malformed` (umbrella `vacant` = absent-family, excludes `malformed`). Non-present states emit `info` (or `warn` for `malformed`) diagnostics; **no input ever crashes the program** — a bad field is dropped with a diagnostic and the record still lands; only an unreadable source quarantines. Shares the `vacant` token and `fatal`/`advisory` scale with D17. Impl: `field_state.py`. |
 | **D19** | Decoder/validator dating and path identity | **A12**, D10, D17 | **Adopted:** CoSchema continues to version readable stored meaning/layout; independent decoder and validator profiles begin at `0.2` for the current capability/filter update and are recorded in stores, manifests, reports, and policy requirements. Logical Projects use generated UUIDv4 IDs as cross-store keys. Path hashes remain only for machine-local location identity and idempotent evidence identities. Vendor-observed historical paths remain provenance and carry explicit `path_obsolete`; they never replace the active Project root. |
 | **D20** | Global database versus reproducible analytical Assemblies | **A1**, **A7**, **A9**, **A19**, **P19** | **Adopted direction:** retain immutable per-Project snapshots as authority and use explicit Assemblies above them. Before selecting a default Assembly export, compare desired analysis workproducts with bottom-up common and namespaced source-specific fields through a manifest plus virtual-query prototype. Candidate JSONL/Parquet/DuckDB/SQLite outputs are derivatives, never vendor parsers or second authorities; the input relation supports both Assembly→Project and Project→Assembly lookup. |
-| **D21** | Git repository versus worktree/workspace Project identity | **P12** | **Adopted: exactly one Codess Project per Git repository.** Clones, linked worktrees, workspace directories, branches, and vendor workspace IDs are Project locations, bindings, or dated observations under that Project, even when substantial independent work occurs in them. They never mint additional Project IDs. Non-Git work may still have a Project. A discovered duplicate worktree Project is marked non-selected and related to the repository Project; ordinary re-ingest refreshes the repository Project while historical duplicate snapshots remain addressable until retention. Do not rewrite normalized identities merely to consolidate the catalog. |
+| **D21** | Git repository versus worktree/workspace Project identity | **A26/A28** | **Adopted: exactly one Codess Project per Git repository.** Clones, linked worktrees, workspace directories, branches, and vendor workspace IDs are Project locations, bindings, or dated observations under that Project, even when substantial independent work occurs in them. They never mint additional Project IDs. Non-Git work may still have a Project. A discovered duplicate worktree Project is marked non-selected and related to the repository Project; ordinary re-ingest refreshes the repository Project while historical duplicate snapshots remain addressable until retention. Do not rewrite normalized identities merely to consolidate the catalog. |
 
 ### 8.4 Postponed topics
 
@@ -977,51 +1350,59 @@ Intentionally outside the active sequence. The externally orchestratable table
 can be composed today from Codess commands and system tooling; native
 implementation is justified only when orchestration, portability, provenance,
 or atomic failure semantics become product requirements. Event triggers
-(§8.4.4) name the conditions that promote a postponed or gap item into Active.
+(§8.4.5) name the conditions that promote a postponed or gap item into Active.
 
 #### 8.4.1 Externally orchestratable
 
-| ID | Topic | Restart condition |
-|----|-------|-------------------|
-| **P1** | Enterprise PII/secret scanning beyond configured regex policy | External scanners can gate source/raw promotion now. Add native policy integration only when a deployment threat model requires uniform findings, suppression, and provenance. |
-| **P2** | Periodic storage/query scheduling and notifications | Use `launchd` on macOS, systemd timers on Linux, or cron/CI to invoke stable commands and retain outputs. Add an internal scheduler only when cross-platform lifecycle and notification state are product requirements. |
-| **P3** | Proactive baseline refreshes and vendor audits | An external scheduler may run dry-run/audit commands; promotion remains reviewed. Reopen native automation under **T1/T2** only if safe apply policy is defined. |
-| **P6** | Natural-language query execution | An external LLM can formulate a proposed typed request after **A1–A7**; Codess must validate and display it before execution. Native formulation waits for evaluation and trust requirements. |
-| **P7** | Standalone `queries.sql` package | SQLite CLI, Datasette, sqlite-utils, and notebooks can consume documented read-only recipes. Package only when **D6** has repeated external consumers and a versioned contract. |
-| **P8** | Multi-Project reviewed-`baseline refresh` orchestration | Native routine `codess refresh` now resolves explicit lists or annotation cohorts, gates all apply on complete preflight, checks unchanged inputs, and records partial per-Project outcomes. It intentionally does not approve/freeze baselines or provide cross-Project rollback. The stricter preflight → fixed-point apply → validate → freeze composition remains postponed until reviewed-publication rollback semantics are required. |
-| **P9** | First-class Markdown report export | `jq`, templates, notebooks, or report tools can render typed JSONL/CSV. Add a native format only when a stable customer-facing Markdown contract is required. |
+There is no open Codess implementation in this category. P1–P3 and P6–P9
+were closed because standard scanners, schedulers, LLM clients, SQLite/data
+tools, and report renderers already compose with Codess's typed commands.
+Routine multi-Project refresh is also implemented at the approved scope.
+If external composition later proves insufficient, record the concrete missing
+atomicity, portability, provenance, or lifecycle behavior as a new A item; do
+not reactivate the broad proposal.
 
 #### 8.4.2 Product functionality still postponed
 
-| ID | Topic | Restart condition |
-|----|-------|-------------------|
-| **P4** | Broad historical discovery implementation or additional vendors | Current, named-snapshot, saved-set union, and result comparison now preserve observation versus logical identity. Broad metadata discovery and any additional vendors remain postponed. Filesystem/Git discovery may propose but cannot approve scope. |
-| **P5** | Alternative indexed retrieval | Distant future only. Reopen after a standard query repeatedly fails measured latency/resource requirements and A1 planner improvements cannot resolve it. Any derivative remains rebuildable and does not authorize raw-source indexing under **P13/D4**. |
-| **P10** | Misses assessment-store integration | Keep Misses inputs as a companion consumer of saved Codess selections/results. Reopen merged or aligned assessment storage only when a concrete assessment workflow proves which extra entities must persist. |
-| **P11** | Full planning-designator reconciliation | **Problem:** `A`/`P`/`T`/done are lifecycle stages of one work register but use separate ID spaces, and `L-*`/`V-*`/`E-*` are three prefixes over one gaps register. **Resolution:** keep IDs as strings; treat `A`/`P`/`triggered`/`done` as a `state` on one register (Postponed and Completed become filtered views of Active), and `L-*`/`V-*`/`E-*` as facets of one gaps register; keep `D` and `UC` distinct. **Restart:** when a planning-doc reorganization is already underway. |
-| **P12** | Complete repository-level Project identity after the Zero400/ZeroPerf transitional disposition | ZeroPerf is now non-selected `worktree` catalog evidence related to Zero400. The next refresh assesses and re-ingests Zero400 normally; no specialized normalized-row migration is planned. Resume generic discovery/onboarding enforcement only when a second duplicate-worktree case appears or before A19 requires repository-identity invariants. Preserve historical snapshots/IDs and let explicit retention handle them. |
-| **P13** | Raw-source search over authorized vendor fields and messages | This is a distinct future feature, not a synonym for raw retention or exact-evidence lookup. The architecture and normalized-search comparison are now specified in **Designs.md §13**. Reopen only through P13.1–P13.8; any result must identify the exact Source revision and record/field locator. |
-| **P15** | Semantic admission of empty, tiny, and structured Events | **Work item C, postponed.** Empty textual statements/prompts/responses do not become message Events. Preserve meaningful tiny text and bodyless structured Events whose canonical mapped payload is nonempty; keep source-record diagnostics and distinguish semantic from provenance metadata. |
-| **P17** | Layered JSON query language, caller-selected fields, and investigation-package infrastructure | Further phase. Reevaluate requirements and existing version-1 sufficiency first; then compare carriers, parameter binding, projection, package governance, external clients, and compatibility as a hierarchy. Do not implement the earlier flat feature list |
-| **P18** | Search report | Further phase. Reopen only when a recorded UC6 investigation shows useful matches were materially hard to find in canonical order; refine one report without removing occurrences |
-| **P19** | Analysis datasets and Assembly exports | Further phase after A19's top-down/bottom-up requirements and saved-selection/query prototype. Compare SQLite, JSONL, Parquet, and DuckDB against actual workproducts, provenance, reverse lookup, update, and scale requirements before selecting any default |
-| **P20** | Formal Extraction Validity and freshness model | The cheap A26 workflow is sufficient now. Reopen only when Project status or re-ingest selection is wrong/ambiguous in a recorded case. Then define per-source observations, multi-signal freshness states, evidence confidence, repository/worktree attribution, reasoned selection, and a typed status contract without treating Git, mtimes, build products, or global Cursor DB change as exclusive proof. |
+| ID | Topic | Current capability or recent evidence | Restart condition |
+|----|-------|---------------------------------------|-------------------|
+| **P5** | Alternative indexed retrieval | Current bounded normalized search and ordinary query planning remain adequate | See §8.4.3; any derivative remains rebuildable and does not authorize raw indexing under **P13/D4** |
+| **P10** | Misses assessment-store integration | Saved Codess selections, cited results, and exact evidence can feed Misses without merging authorities | A concrete assessment workflow proves which additional entities and relationships must persist |
+| **P13** | Raw-source search | Normalized search plus exact evidence supports current investigations | A recorded investigation cannot be answered by those paths; then follow P13.1–P13.8 |
+| **P15** | Semantic admission of empty, tiny, and structured Events | Current bounds/diagnostics preserve meaningful tiny text and bodyless structured tool Events; empty textual messages are excluded | Reopen when inconsistent adapter outcomes cause a demonstrated loss or misclassification |
+| **P17** | Layered query language, caller projection, and packages | Version-1 typed requests/results, CLI binding, saved requests/results, and homogeneous composition cover current workflows | An external client or repeated workflow requires parameterized packages/projection; begin with carrier and compatibility comparison |
+| **P19** | Analysis datasets and Assembly exports | Project sets and typed cross-Project reads provide virtual composition; no bulk consumer or export profile is yet selected | After A19 proves one top-down workproduct and vendor-specific projection; compare formats using **Designs §13 “Cross-Project analytical assemblies”** |
+| **P21** | Rebuild legacy `package_mismatch` Projects | `harduw`, `setpack`, and `wp` remain outside current query/review needs | They enter a needed cohort or a release requires all eligible Projects query-ready; preflight the `incomplete` designator first |
+| **P22** | Cursor performance optimization | Selective bounded access and diagnostics remain supported; the historical high-water observation is not a current defect | See §8.4.3; require a new measured current problem or changed large capture |
 
-#### 8.4.3 Follow-up implementation decomposition
+#### 8.4.3 Performance concerns — postponed as one group
 
-P13 and P15 remain postponed specifications. P14 and P16 are approved and
-active for the bounded measurement/default/boundary tranche recorded above;
-approval does not invent other ceilings or authorize unrelated raw search.
+Performance work is not part of the current implementation sequence. Preserve
+the observations and existing diagnostics, but do not add instrumentation,
+benchmarks, caches, indexes, streaming rewrites, or snapshot changes until the
+group is explicitly resumed.
 
-The four `.0` reviews are complete. P14/P16 authorize only the bounded active
-tranche above; P13/P15 authorize no `.1+` work:
-
-| Review | Outcome | Recommendation |
+| Reference | Concern retained for review | Resume condition |
 |---|---|---|
-| **P13.0 raw-search need** | The retained `c9d1` Source used a Claude `user` envelope for three tagged local-command blocks. The old mapper treated envelope role as actor and emitted three human prompts. Exact evidence lookup exposed the tags; normalized search found the retained values. The adapter now maps caveat → harness context, command name → human command, and stdout → harness result | This was a provenance-mapping defect, not a missing raw-field query. Keep P13 postponed until one investigation cannot be answered by normalized rows plus exact evidence |
-| **P14.0 measure use** | Keep effective limit/origin, selected/mapped/stored/truncated, result-byte, SQLite/raw-allocation, warning, and diagnostic measures. Keep phase timing/RSS debugging-only. Do not promote transient corpus totals into maintained documentation. Clarify container size versus selected/retained content | **Approved:** implement reconciliation and only decision-bearing missing measures |
-| **P15.0 admission sample** | The command-only correction is source-shape-specific. Current adapters still perform parts of admission independently; there is no single cross-vendor candidate/outcome contract for empty text, bodyless structure, attachments/external content, oversized logs, and unsupported-but-retained records | Keep P15 postponed. The present design can fix known mappings and enforce bounds, but cannot yet promise identical `admitted`/informational/unsupported/rejected decisions across all three source systems |
-| **P16.0 limit need** | Existing maximums map to concrete binary/database/log or runaway-event accidents, are configurable, and retain overrides. Approved defaults are 200,000 Events per Source, 100,000 per Session, and 250,000 characters per context body | **Approved:** implement defaults and boundary/override/pre-commit validation; add no other ceilings |
+| **A5 / L-E4** | Cursor cache restore I/O and RSS for a newly selected or changed cohort | A naturally required changed large capture, followed by explicit approval to measure it |
+| **A9 / L-E1 / L-E3** | Cross-store materialization, complete-composer buffering, SQL plans, and execution diagnostics | A reproducible user-facing latency/RSS defect in a current supported query or ingest path |
+| **P5** | Alternative indexed retrieval | Repeated standard-query failure after ordinary planner/query fixes are exhausted |
+| **P22** | Cursor selection, grouping, writing, and large-container optimization | A new measured current Cursor problem or changed large capture—not the historical high-water result alone |
+| **T8** | Recurrence of slow Claude operation | A materially slow current Claude command recurs after the fixed configuration-audit query |
+| **T9** | Slow snapshot construction with high CPU | Explicit resumption. Begin with subphase measurements on SWEmore; add a large/skew Project only if the cause or proposed change is scale-dependent |
+
+When resumed, use the §7.1 ladder: reproduce, measure the dominant phase,
+preserve a baseline result, change one mechanism, prove identical small-case
+behavior, and only then run the representative large case.
+
+#### 8.4.4 Follow-up implementation decomposition
+
+P13 and P15 are postponed specifications, not authorized implementation. Raw
+source search restarts only when normalized search plus exact evidence cannot
+answer a recorded investigation. Shared semantic admission restarts only when
+adapter differences cause demonstrated loss or inconsistent classification.
+
+The tables below state the implementation order if either topic is resumed.
 
 | ID | Stage | Work and output | Validation or exit criterion |
 |---|---|---|---|
@@ -1036,26 +1417,14 @@ tranche above; P13/P15 authorize no `.1+` work:
 
 | ID | Stage | Work and output | Validation or exit criterion |
 |---|---|---|---|
-| **P14.1** | Investigation and definitions | Freeze the unit dictionary in Designs: container, selected record, source semantic payload, retained logical Event payload, result serialization, raw allocation, SQLite allocation, and RSS | Each unit has one owner, byte/character definition, attribution path, additivity rule, and explicit non-equivalences |
-| **P14.2** | Instrumentation design | Place streaming counters at admission, vendor selection, Event emission, commit, capture, snapshot, query serialization, and phase completion; define versioned histograms/top-N observations | Design proves counters do not retain bodies or require a second pass over a global Cursor container |
-| **P14.3** | Implementation | **Partial:** runtime/preflight reports now add retained searchable Event characters and UTF-8 bytes to container/Event/RSS totals, with an explicit `content`/`tool_output` alias rule. Next add only decision-bearing selected/source-semantic, result, and allocation measures | NULL/empty/multibyte/double-projected unit tests pass; reports remain bounded and backward-compatible |
-| **P14.4** | Reconciliation | Add checks for selected→mapped→retained counts/bytes, unique raw-object allocation, SQLite page/table totals, and non-additive container/RSS labels | Synthetic fixtures reconcile exactly; deliberate duplicate accounting and omitted units fail visibly |
-| **P14.5** | Corpus measurement | Run current approved recent Projects per source system plus large/skew cohorts; record fixed histograms, percentiles, top outliers, allocation, and phase RSS | Every top outlier resolves to exact evidence and receives an assessment classification |
-| **P14.6** | Analysis | Separate valid large content, mapping/source defects, duplicate accounting, repetition, and buffering/serialization amplification; recommend no ceilings yet | Reviewed report explains all material tails and identifies code defects to fix before P16 |
 | **P15.1** | Investigation | Build an admission matrix for textual messages/context and bodyless structured tool/status/permission/lifecycle/mode/attachment records | Matrix identifies required canonical payload, meaningful tiny examples, empty cases, and vendor-specific ambiguity |
 | **P15.2** | Design | Define `admitted`, `informational_non_event`, `unsupported`, and `rejected` outcomes with reason, compliance descriptors, Source-record identity, and severity | Missing preferred fields or irregular format is informational unless semantic meaning is unavailable or unsafe |
 | **P15.3** | Shared implementation | Add one semantic-admission function after decoding/policy and before Event emission; adapters provide typed candidate fields rather than independent size rules | Identical canonical candidates receive identical outcomes across adapters; no path/min-size heuristic decides Event meaning |
 | **P15.4** | Adapter integration | Apply to Claude, Codex, and Cursor while preserving structured payloads, external links, and mapping diagnostics | Tiny meaningful text and valid bodyless structured Events survive; empty textual message Events do not |
 | **P15.5** | Corpus review | Reclassify current empty/tiny/irregular records and inspect all behavior changes against exact evidence | No reasonable relevant record is rejected for preferred-format noncompliance; changed counts are explained |
 | **P15.6** | Fixed-point validation | Rebuild representative three-vendor and irregular/large baselines twice under the same policy | Semantic identities/counts are stable; rejected/non-Event records retain source provenance and deterministic diagnostics |
-| **P16.1** | Candidate analysis | Derive warning/rejection candidates only from P14 distributions plus P15 classes and threat goal—binary/database/log accidents, not arbitrary percentile clipping | Each candidate names protected failure mode, affected unit, corpus headroom, override, and recovery |
-| **P16.2** | Boundary tests | Test disabled, below, equal, one-above, multi-field aggregate, multibyte, streaming-abort, and override behavior for every candidate | Rejection occurs before unbounded allocation; no silent truncation or partial commit/state advancement |
-| **P16.3** | Report-only rollout | Ship candidate warnings and classifications without changing admission | Current corpus produces reviewed, explainable warnings with acceptable volume and no hidden false negatives |
-| **P16.4** | Opt-in enforcement | Add explicit policy values and preflight rejection for selected candidates | Preflight errors include unit, observed/maximum, Source/Event identity, remediation, and reviewed override path |
-| **P16.5** | Real acceptance | Run recent active Projects, large/skew cohorts, hostile/misclassified fixtures, and repeated clean builds | No unexplained outlier, silent loss, unstable identity/count, or excessive allocation remains |
-| **P16.6** | Promotion decision | Review evidence and promote only accepted candidates to built-ins; retain others as warnings or explicit policies | Documentation, examples, schemas, tests, release/version record, and prior-policy access all agree |
 
-#### 8.4.4 Event-triggered maintenance
+#### 8.4.5 Event-triggered maintenance
 
 Conditions that promote a postponed or gap item into Active work.
 
@@ -1066,8 +1435,84 @@ Conditions that promote a postponed or gap item into Active work.
 | **T3** | Material ingest/rebuild or unexplained storage growth | Run storage observation and dry-run prune; apply only a reviewed selection with a receipt |
 | **T4** | Representative local Codex subagent/collaboration records, distinct speed tier, direct usage/billing attribution evidence, a new lifecycle shape, or another recorded evidence gap appears | Add the minimal source shape, mapping, fixture, and compatibility assertion; update the gap disposition |
 | **T5** | Project move, replacement checkout, or demonstrated cross-vendor correlation need | Update stable location/source bindings; add a corpus member only when the existing corpus cannot answer the compatibility question |
-| **T6** | Every implementation change | Keep the full suite and representative candidate, onboarding, evidence, baseline, relocation, and real-store smoke workflows green |
+| **T6** | Every implementation change | Follow the §7.1 validation ladder; keep the relevant full-suite and representative candidate, onboarding, evidence, baseline, relocation, and real-store workflows green |
 | **T7** | Rule authors who cannot ship Python become a bottleneck for a vendor mapping | Reopen the transform-DSL question per `experiments/JsonDSL.md`; JSONata is the designated candidate |
+| **T8** | A materially slow Claude operation recurs on a current Project | Follow the investigation in **T8 — Claude operation performance** below |
+| **T9** | Snapshot construction was observed to be slow with sustained high CPU | **Explicitly postponed.** Retain the observation under §8.4.3 and follow **T9 — snapshot construction performance** below only after resumption |
+
+#### T8 — Claude operation performance
+
+**Scope and observed problem.** One configuration-audit invocation over a
+current Claude store ran long enough to appear stalled. The command did not
+provide enough phase detail to distinguish vendor decoding, database access,
+or report construction while it was running.
+
+**Analysis and completed resolution.** The delay was caused by Codess issuing
+correlated per-configuration database scans. It was not traced to Claude's
+source format or decoder. Set-based aggregation and bounded representative
+occurrence selection fixed that query path. There is therefore no established
+general Claude performance defect to fix now.
+
+**Alternatives if slowness recurs.**
+
+- changing the Claude adapter before measurement risks optimizing the wrong
+  layer;
+- adding only more progress messages improves observability but not execution;
+- immediately caching results adds invalidation and provenance complexity; or
+- measuring the actual dominant phase first permits a targeted query, adapter,
+  store, or progress-reporting change.
+
+**Recommendation and trigger.** Keep this item dormant. On the next materially
+slow Claude scan, ingest, or query, record the exact command, Project and
+snapshot, Source count/bytes, store size, phase timings, and peak RSS. Inspect
+the dominant SQLite query plan or adapter phase and compare incremental with
+forced/fresh execution where applicable. Change code only after that evidence
+identifies the bottleneck. This costs little during normal operation, avoids
+attributing an application defect to a vendor format, and produces evidence
+that can validate the eventual fix.
+
+#### T9 — snapshot construction performance
+
+**Observed problem.** Snapshot construction has been slow while sustaining high
+CPU utilization. The current progress trace brackets the entire snapshot phase
+but does not identify which internal operation consumes the time. No vendor,
+Project size, store, or subphase is yet established as the cause.
+
+**Implementation analysis.** Construction currently performs a SQLite backup
+for each store, updates snapshot metadata, runs `PRAGMA integrity_check`, hashes
+the completed store, and counts the logical rows used by the manifest.
+Immediate publication then verifies the candidate by hashing its stores again,
+checking their database contracts and snapshot metadata, and recounting the
+manifested rows. Sealed raw objects are also verified individually. These
+checks protect snapshot integrity, but some full-store work is repeated across
+construction and immediate publication and is a plausible CPU cost—not yet a
+measured diagnosis.
+
+**Candidate resolutions.**
+
+- add subphase elapsed/CPU measurements and byte/row counters around backup,
+  integrity checking, hashing, logical counts, sealed-object verification, and
+  pre-publication verification;
+- determine whether repeated hashes or logical counts can be safely shared
+  across construction and immediate publication without weakening later
+  independent snapshot verification;
+- consolidate database scans only where benchmark evidence shows a material
+  gain and the same corruption, package, identity, and row-count failures
+  remain detectable; and
+- retain strict validation rather than introduce a routine low-assurance
+  snapshot mode merely to improve reported speed.
+
+**Recommendation and follow-up.** This issue is explicitly postponed with the
+other performance concerns in §8.4.3. If resumed, instrument before optimizing,
+then benchmark unchanged and rebuilt snapshots across a small store and add a
+current large or skewed Project only when the cause or proposed change is
+scale-dependent. Record store/raw bytes, logical rows, wall and process CPU
+time per subphase, peak RSS, filesystem type, sealed mode, and whether the
+candidate is immediately published. Optimize the dominant repeated pass,
+rerun failure-injection and snapshot-integrity tests, and require identical
+manifests, pointer rollback behavior, and readable published stores. High
+aggregate CPU alone indicates active work, not which check is redundant or
+safe to change.
 
 ### 8.5 Known gaps
 
@@ -1077,113 +1522,69 @@ its active item or trigger.
 
 | ID | Known gap | Disposition |
 |----|-----------|-------------|
-| **L-S1** | Exact IDs, saved Project sets, per-Project readiness, and the compatibility broad-cohort selector resolve durable central snapshots. Typed catalog-attribute predicates remain; path selectors remain compatibility bindings rather than stable identities | **A1/A19** |
-| **L-S2** | Typed selection covers date/model/Event/Interaction/turn/status/artifact/tool/actor/role/origin/initiation/parent/relation scope, complete exchange expansion, sequence windows, and completed three-source core provenance checks. Broader action parity remains; layered JSON/field selection is postponed | **A1/P17** |
-| **L-S3** | Explicit saved-set historical union and guarded changed-snapshot comparison are implemented. Broad snapshot discovery and a single shortcut command for creating both sides of a diff remain | **P4**; composition is authoritative until a shortcut proves useful |
-| **L-O1** | Typed actions emit one structured reusable JSON result; nested-result CSV projection and streaming row envelopes remain external/legacy-only | **A9/P17**; add only with a demonstrated consumer |
-| **L-O2** | Aggregate reports outside the demonstrated repetition-group path often omit constituent stable Session/Event identities | **A2/A19**; add IDs only when the aggregate must feed a subsequent typed investigation |
-| **L-O3** | Stable result derivations, observation-preserving historical union, changed-snapshot replay/compare, atomic persistence, aggregate constituent citation, and cited investigation records are implemented. A named branching investigation graph and native summary generation are not | **A8/P6**; add only after a repeated consumer/evaluation |
-| **L-M1** | Typed orientation includes UTC months, bounded UTC daily exchange/actor engagement, raw daily/monthly tool call/result/input/output metrics, labelled response anchors, and a fixed Event-gap histogram. Ratios and percentages are display derivations. Independent read-only SQL reconciliation passes across the current query-ready catalog; measured high-cardinality needs and deeper scale/skew profiling remain | Maintain under **A2**; new performance work belongs to **A9** |
-| **L-M2** | D3 active-time sensitivity is implemented for 5/30/120-minute caps alongside a fixed Event-gap histogram. Daily first/last prompt and same-Interaction response spans are separately labelled observed endpoints; neither is active or billable time | **A2** |
-| **L-M3** | Utilization differs by vendor: Codex cumulative attribution is permanently non-billing evidence, Cursor lacks verified local tokens, and quota/price facts are dated external evidence | Preserve the A10 boundary; reopen only under **T4**; never infer tokens from text |
-| **L-M4** | Overview partitions related Session entities and typed Session rows expose/filter `parent_session_id` and `session_relation_kind`. Relation is not authorship. Known Claude sidechain and Cursor `isSubagent` user envelopes now map as harness-delegated prompts, while absent parent IDs remain NULL. Claude scan still excludes subagents by default while ingest preserves them, so scan headline and normalized entity totals answer different questions | Mapping is covered by **A27** and orientation by **A2**; maintain per vendor/release under T1/T4 |
-| **L-C1** | Bounded literal-substring search, returned-row facets, exact complete-content repetition groups, and saved results exist. An explicit wildcard-pattern operator, evaluated deterministic result ordering, topic classification, near-duplicate analysis, and a package catalog do not | **P18/P17/A8**; add pattern syntax only from a demonstrated use case |
-| **L-C2** | Normalized content may be sanitized, filtered, redacted, bounded, or externally referenced; a miss does not prove raw absence. Source/container oversize stops admission for classification and review rather than silently discarding the source. Context bounds retain original length/truncation, but ordinary prompt/response/tool fields do not yet expose disposition uniformly | Preserve completeness under **A6/A27/P16** and evidence-triggered mapping maintenance |
-| **L-P1** | Interaction, Model Turn, phase, actor, origin, and cross-vendor correlation confidence varies; source role and shared evidence are not authorship | Preserve exact evidence/method/confidence in **A27/A2–A8** |
-| **L-P2** | Cursor repetition has three shapes: duplicate storage copies of one logical bubble, distinct repeated operational/state events, and repeated retained content. Exact compatible complete-content grouping is now a lossless presentation summary with occurrence IDs/time span; it does not prove duplicate evidence. In the current Zero400 baseline, 22,921 nonempty event rows share content with another row, while tool-heavy records account for 34,291 calls and 34,291 results. Truncation-prefix equality, near duplicates, and semantically repetitive model output remain separate derived-analysis questions | **A4**: measure the implemented facets/groups on current Cursor data, test diverse repeated shapes, and evaluate ranking. Any future near-duplicate or semantic grouping is versioned/confidence-bearing and never removes source occurrences |
-| **L-E1** | Cross-store reports materialize and sort selected sessions in Python | **A9** |
-| **L-E2** | Repeated substring search has no rebuildable policy-aware index | Benchmark after **A4**; decide under **D4** |
-| **L-E3** | Cursor selection and SQLite writes are composer-streamed, but ordering/deduplication and Interaction construction still buffer one complete composer; a real 19,661-event composer reached about 531 MiB RSS. Store-wide orphan pruning is now deferred to once per source transaction instead of once per composer, eliminating a repeated full-store scan; phase tracing separates read-buffer and write work | **A9**, using **Designs §10 “Cursor architecture and performance programme”**: measure the batch-pruning improvement and make grouping/stateful writes incremental without weakening rollback, canonical ordering, stable identity, diagnostics, or fixed-point output |
-| **L-E4** | First capture of changed selected Cursor evidence still requires one transactional backup and streaming compression; a newly selected Project may require one verified streaming restore of an unchanged cached cohort. Real exact revisions `368bb3…` and `ae3c23…` differed while all three selected markers and normalization digests matched, proving whole-DB invalidation was too coarse | **A5/A9**: selected markers are implemented; measure cache-restore I/O/RSS and keep `--force` for suspected vendor timestamp/edge-sampling gaps |
-| **L-E5** | Exact/saved/broad-cohort Project snapshot selection plus Event/Session `project_id`, `snapshot_id`, and `observation_id` are implemented. No cataloged Assembly manifest, streaming common export, Parquet/DuckDB workspace, merged SQLite model, reverse lookup, or complete Source-record projection exists | **A19/P19**, in the documented remaining stages |
-| **L-E6** | The transcript and Cursor-container guards are separate and configurable. Runtime/preflight `resource_summary` deduplicates observed containers, sums emitted Events and retained searchable Event characters/UTF-8 bytes, takes the largest Session, and treats RSS as non-additive. Selected/pre-truncation source-semantic payload and physical allocation remain distinct missing units | **P14/P16/A9**, active bounded tranche: add only decision-bearing missing measures and retain distinct units |
+| **L-S1** | Typed catalog-attribute predicates are incomplete | **A1/A19** |
+| **L-S2** | Some typed actions lack predicate parity; layered requests are postponed | **A1/P17** |
+| **L-S3** | No broad historical-discovery shortcut | Add an A item only for a blocked investigation |
+| **L-O1** | No native nested CSV projection or streaming result envelope | **A9/P17**, with a demonstrated consumer |
+| **L-O2** | Some aggregates omit constituent Session/Event IDs | **A2/A19**, when downstream composition requires them |
+| **L-O3** | No native investigation graph or summary generator | **A8**, with a repeated consumer |
+| **L-M1** | High-cardinality orientation and scale/skew profiling remain limited | **A2/A9**, after measurement |
+| **L-M2** | Observed response spans and gap caps are not active or billable time | Preserve labels under **A2** |
+| **L-M3** | Token and quota evidence is incomplete and vendor-specific | Reopen only under **T4**; never infer tokens from text |
+| **L-M4** | Claude scan and ingest use different default subagent scopes | **A2/A27**, maintained under **T1/T4** |
+| **L-C1** | No wildcard, topic, near-duplicate, or packaged search layer | **A4/P17**, only from a reproduced use case |
+| **L-C2** | Content-disposition reporting is uneven across retained fields | **A6/A27**, evidence-triggered |
+| **L-P1** | Actor, phase, turn, and correlation confidence varies by source | Preserve evidence and confidence under **A27/A2–A8** |
+| **L-P2** | Exact repetition does not establish duplicate or semantically repetitive evidence | **A4**; retain every occurrence |
+| **L-E1** | Cross-store reports materialize and sort in Python | **A9** |
+| **L-E2** | Substring search has no policy-aware rebuildable index | Benchmark only after an **A4** need |
+| **L-E3** | Cursor Interaction construction buffers one complete composer | **A9**, after performance work resumes |
+| **L-E4** | Changed Cursor cohorts still require backup/compression and may require restore | **A5/A9**, after performance work resumes |
+| **L-E5** | No cataloged Assembly manifest or standardized bulk export | **A19/P19** |
+| **L-E6** | Pre-truncation semantic size and physical allocation are not fully measured | **A9**, only for a decision-bearing need |
 | **V-CC1** | Claude slug decoding is lossy when the index lacks an explicit Project path | Prefer indexed paths; reopen mapping only with new evidence |
-| **V-CC2** | Claude model/service settings, custom/AI titles, agent names, direct fork/subagent references, bounded product state, and structural delegated-prompt origin are mapped. `userType=external` is not treated as human evidence. Richer runtime-context snapshots remain partially specialized | Validate settings under **A12**; actor/origin mapping is maintained under **A27/T1**; other context remains evidence-triggered |
-| **V-CC3** | Decoder 0.2 classifies signature-only empty thinking and fallback markers as known raw state, but image-only user records are still unsupported attachment evidence (8 records/52 image blocks in the current Misses source set) | Add bounded attachment identities/content links without copying base64 bodies; validate on Misses before allowing the diagnostic in policy |
-| **V-CC4** | Claude product surfaces can provide MCP-qualified visualization, browser, and session-administration tools even when the current CLI has no user-configured MCP server. Historical names therefore do not establish present configuration; repeated large `read_me` results can also consume or exceed result bounds | Keep configuration inventory separate from occurrence evidence; use **A27** MCP audit classifications and cache/version tool instructions rather than repeatedly retaining oversized bodies |
-| **V-CTX1** | Compaction summaries and selected Cursor request-context/context-window observations are represented as bounded context operations, but memory, skills/tool schemas, arbitrary attachment/context selections, reasoning state, and detailed token snapshots are not a complete first-class common model | Continue evidence- and use-case-triggered specialization; do not collapse semantically different context into one JSON dump |
-| **V-CX1** | The earlier and current reviewed local Codex cohort supplies no direct parent/collaboration occurrence. Current OSS protocol fields for parent, fork, structured subagent source, participant identity, and collaboration spawn/interaction/wait/close/resume/activity are mapped and fixture-tested | **T4:** add the smallest real occurrence when one appears; never infer from time/path/content |
-| **V-CX2** | Codex app/plugin connectors can be MCP-backed without a manual `mcp_servers` entry. Current rollout evidence includes useful connector results, malformed/overbroad searches, and application errors inside successful MCP transports | Preserve connector/plugin/server provenance and transport/application status separately; use smaller valid queries and **A27** audit before calling the connector reliable |
-| **V-CU1** | Cursor's current header list is incomplete for historical sessions. Workspace `composer.composerData` fallback recovery is implemented and current headers take precedence; composers absent from both indexes or ambiguously bound remain unattributed | Validate fallback provenance across releases; evidence-triggered mapping maintenance under **T1** |
+| **V-CC2** | Rich Claude runtime-context snapshots remain partially specialized | **A12/A27/T1**, evidence-triggered |
+| **V-CC3** | Image-only Claude user records lack bounded attachment entities | Add identity/link records without copying base64 bodies |
+| **V-CC4** | Claude product tools and configured MCP servers cannot be inferred from names alone | Separate configuration and occurrence evidence under **A27** |
+| **V-CTX1** | Context, memory, skills, attachments, reasoning, and token state lack one complete common model | Specialize only for evidenced use cases |
+| **V-CX1** | No reviewed local Codex parent/collaboration occurrence | **T4**; retain fixture mappings and NULL unknowns |
+| **V-CX2** | Codex connector transport success may contain application failure | Preserve both statuses under **A27** |
+| **V-CU1** | Cursor headers are incomplete for some historical sessions | Maintain indexed fallback and ambiguity fixtures under **T1** |
 | **V-CU2** | Cursor scan time range is incomplete when headers lack usable timestamps | Preserve coverage diagnostics; do not decode all bubbles merely for dates |
 | **V-CU3** | Cursor exposes exact `modelInfo.modelName` and accepted/rejected `toolFormerData.userDecision`, but no separate observed effort, speed, or service-tier fields | Validate model/permission provenance under **A12**; retain absent settings as NULL |
-| **V-CU4** | Cursor subagent Sessions and their delegated user-shaped prompts are classified, but reviewed Zero400 records do not yield parent composer/session IDs; two ZeroPerf-referencing subagents therefore have NULL parent lineage. Cursor tool-derived ZeroPerf artifacts/event links are preserved, while repository-object identity is not populated | Maintain the NULL lineage under **A27/T1** unless a direct parent field appears. Repository/worktree identity remains P12 |
-| **V-CU5** | Cursor mixes built-in app-control operations, dynamic MCP discovery, and user server registrations. Discovery may succeed while the target server is unavailable; repeated source call IDs are only duplicate candidates; completed envelopes can contain application failures. The unintended local `~/.cursor/mcp.json` Brave registration, its known-server index entry, and its migration markers have been removed; historical interaction records remain evidence | Retain bounded exact call IDs, candidate grouping, discovery target status, and explicit nested failures under **A27**. Provider-side key revocation and Cursor restart/reload are external operational actions |
+| **V-CU4** | Cursor subagent lineage may lack a parent Session ID | Preserve NULL lineage under **A27/T1** |
+| **V-CU5** | Cursor discovery, transport, and application outcomes are distinct | Preserve bounded call IDs and nested status under **A27** |
 | **E-1** | Lifecycle abort is fixture-only in the reviewed corpus | Add a real shape only under **T4** |
-| **E-2** | Settings are uneven: Codex records model/effort and newer service tier; Claude records model/service tier; Cursor records model only; no distinct speed-tier evidence was observed | **A12**; preserve exact values and field provenance, never derive speed from a model label |
+| **E-2** | Model settings are uneven across source systems | **A12**; preserve exact values and NULL unknowns |
 
-### 8.6 Completed foundation retained for follow-up
+### 8.6 Established foundation
 
-Only completed capabilities that constrain current work are retained here:
+Completed work is retained here only when it defines the platform on which an
+open item depends. Detailed implementation history belongs in Git, tests, and
+versioned evidence reports.
 
-- CoSchema v4 package, two-way contract/DDL and JSON enforcement, canonical
-  DDL, common/vendor mappings and event-level mapping evidence, diagnostics,
-  content lineage, raw modes, immutable snapshots, and reader compatibility.
-- Automated preflight, fixed-point validation, reviewed/approved catalogs,
-  exact retained-snapshot verification independent of mutable current pointers,
-  semantic/query gates, and the bounded three-vendor compatibility corpus.
-- **A3/A7 scoped query foundation:** all three source adapters pass the
-  human/harness/tool/model provenance path through exact evidence; homogeneous
-  saved-result derivation, explicit historical union, changed-snapshot
-  comparison, aggregate citation, atomic persistence failure, and incompatible
-  row-shape behavior are regression-tested.
-- Stable Project/location/workspace identities, source links, candidate review,
-  curated onboarding, relocation, evidence audits, and retention receipts.
-- Correct vendor filtering, stable session IDs, sequence ordering, lineage,
-  audit/diagnostic/artifact reports, sessions/stats JSONL and protected CSV,
-  user-assigned Session names that map to rather than replace stable IDs,
-  single-report validation, and pipeline-safe shutdown.
-- Resource limits/telemetry, storage observations, latest-only pruning, and
-  derived token observations with a permanent non-billing confidence boundary.
-- **A13 doc truth-sync:** `CoSchema.md` states v4 is written and in use with an
-  honest promotion gate; `CompatibilityReview.md` is scoped to the historical v3
-  baseline; vendor docs state the Codex/Cursor compaction shapes.
-- **A15 capture stability loop:** `cursor_cohort.prepare_cursor_cohort` stamps
-  `change_detection.capture_stability` (`stable_during_capture` / `source_advanced`
-  + `post_capture_revision`) and emits `cursor.cohort.source_advanced` on drift,
-  without failing the capture; two fixtures cover both cases.
-- **A6 exact evidence resolution:** event/source-record lineage, streamed exact
-  verification, sealed/central-captured/live precedence, and real Claude,
-  Codex, and Cursor checks including a changed live Cursor database.
-- **A10 token-attribution feasibility:** per-file reset/interleave/model/time
-  classification and explicit `utilization_ready` versus always-false
-  `billing_ready`; new direct vendor evidence reopens it under T4.
-- **A11/A14/A16:** thin vendor wrappers, centralized admission, contract
-  acceptance, and non-crashing field-state diagnostics now share the common
-  ingest path.
-- **A17/A18:** initiation lineage and evidence-graded Claude/Codex/Cursor
-  context/compaction mappings are implemented without inferring absent
-  relationships or plaintext.
-- **A21 SHA transition:** current code and normalized Source revisions use
-  labelled SHA-256 fingerprints; superseded transition snapshots and raw
-  copies were pruned with receipts, and unsupported historical digest labels
-  now follow the generic mismatch path.
-- **A22 candidate publication:** baseline apply builds immutable candidates
-  without changing either current pointer, validates the exact candidates,
-  compares repeat builds, runs query smoke against the accepted candidate, and
-  only then replaces the central/Project pointer pair. Injected policy and
-  second-pointer failures preserve prior pointer bytes; candidates remain
-  retention-visible.
-- **A25 catalog readiness:** `catalog status` reports every Project's selection,
-  active-location, current-snapshot compatibility, and `N/N` query-ready
-  coverage. `catalog annotations` adds a reason-bearing, filterable
-  included/core/query-ready/incomplete/large/limited/suspect/multi-vendor view
-  without mutating curation. Neither command infers source refresh from
-  pointers or Git activity.
-- **A25 routine refresh composition:** `codess refresh` accepts repeated
-  Project references, a maintained Project-list file, or one distinctive
-  annotation designator. Read-only plan is the default; all-Project preflight,
-  unchanged-input gating, per-Project apply isolation, timeouts, checkpointed
-  receipts, and explicit partial-failure status are implemented. Reviewed
-  baseline publication remains P8.
-- **A26 Extraction Validity immediate tranche:** editable packaging exposes the
-  direct `codess` command; `tools/project_status.sh` combines bounded Git and
-  filesystem observations before a Project-limited source scan; living
-  baseline policies no longer freeze corpus counts; tests isolate the personal
-  registry; catalog dispositions exclude duplicate worktree/test entries
-  without deleting historical evidence; an excluded Project may retire its
-  final stale location while retaining its stable identity and disposition.
-  Formal freshness semantics are P20.
+- **Schema and provenance.** CoSchema v4 supplies the canonical database and
+  JSON contracts, common and vendor mappings, content lineage, diagnostics,
+  immutable snapshots, and explicit reader compatibility.
+- **Ingestion and validation.** Preflight, bounded admission, fixed-point checks,
+  exact evidence verification, candidate publication, and three-vendor fixtures
+  protect the normalized store without inventing absent source facts.
+- **Catalog and refresh.** Stable Project identities, locations, annotations,
+  readiness status, selective refresh, capture-stability observations, and
+  retention receipts support reviewed operation across projects.
+- **Investigation.** Typed selection, saved results, historical union,
+  changed-snapshot comparison, aggregate citation, and structured export form
+  the reusable query foundation.
+- **Vendor evidence.** Claude, Codex, and Cursor preserve observed model,
+  configuration, actor, origin, lineage, context, and compaction evidence.
+  Unsupported settings and relationships remain NULL.
+- **Operational safeguards.** SHA-256 fingerprints, resource limits and
+  observations, pipeline-safe shutdown, latest-only pruning, and explicit
+  non-billing token attribution bound routine processing.
+
+Closed A and P identifiers are not maintained as a second history ledger. An
+older reference resolves through Git or the document version that contained it;
+new work receives a current item only when it changes an unresolved outcome.
 
 ### 8.7 Elicitation checklist
 
@@ -1215,6 +1616,8 @@ Documentation ownership is in **Codess.md §4**:
 - User-visible investigation behavior → **README.md** and the relevant **A/L/D**
   registry rows.
 - Vendor source fact → the matching vendor schema; actionable status → §8.
+- Module/component boundary, entity composition, data/configuration flow, CLI
+  wiring, or feature-to-code ownership → §§1–5 here.
 - Functional or research rationale → **Designs.md**; schema
   compatibility/evolution rationale → **Schemas.md**.
 - New database shape → **CoSchema.md**,
@@ -1223,3 +1626,7 @@ Documentation ownership is in **Codess.md §4**:
   **CompatibilityReview.md** or its machine-readable catalog.
 - Every implementation change updates its registry disposition and acceptance
   evidence without creating a second task list.
+
+The form of maintained documentation follows **Codess.md §4.2**. In
+particular, registry rows remain terse; detailed problem statements, analysis,
+and alternatives live in the owning prose section rather than in a table cell.

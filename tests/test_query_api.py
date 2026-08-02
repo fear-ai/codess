@@ -11,8 +11,8 @@ from codess.fileio import source_fingerprint
 from codess.investigation import build_investigation
 from codess.orientation_audit import _compare, _sqlite_observations
 from codess.query_api import (
-    QueryContractError, compare_results, execute, load_document, make_request,
-    merge_selection, save_document, selected_project_ids,
+    QueryContractError, compare_results, content_hash, execute, load_document,
+    make_request, merge_selection, save_document, selected_project_ids,
     selected_project_snapshots, selection_from_result,
 )
 from codess.raw_store import RawStore
@@ -108,6 +108,118 @@ def test_typed_overview_events_search_and_saved_selection(tmp_path, monkeypatch)
             save_document(saved, overview)
         assert saved.read_bytes() == original
         assert list(saved.parent.glob(f".{saved.name}.*")) == []
+    finally:
+        opened["conn"].close()
+
+
+def test_configuration_filters_and_occurrence_provenance_are_queryable(
+    tmp_path,
+):
+    project = tmp_path / "configured-project"
+    store = project / ".codess" / "sessions_codex.db"
+    init_db(store)
+    configuration = {
+        "model_provider": "openai",
+        "model_family": "gpt",
+        "model": "gpt-test-2026-07",
+        "model_revision": "2026-07",
+        "reasoning_effort": "high",
+        "speed_tier": "fast",
+        "service_tier": "priority",
+        "mode": "default",
+    }
+    occurrence = {
+        **configuration,
+        "configuration_provenance": {
+            "model": {
+                "field": "turn_context.model",
+                "value": "gpt-test-2026-07",
+            },
+            "reasoning_effort": {
+                "field": "turn_context.effort",
+                "value": "high",
+            },
+        },
+    }
+    conn = connect(store)
+    replace_session_events(
+        conn,
+        {
+            "id": "configured",
+            "source": "Codex",
+            "type": "Code",
+            "project_path": str(project),
+            "metadata": configuration,
+        },
+        [
+            {
+                "session_id": "configured",
+                "event_id": "prompt",
+                "event_type": "user_message",
+                "subtype": "prompt",
+                "role": "user",
+                "content": "investigate",
+                "timestamp": 1_000.0,
+            },
+            {
+                "session_id": "configured",
+                "event_id": "response",
+                "event_type": "assistant_message",
+                "subtype": "response",
+                "role": "assistant",
+                "content": "result",
+                "timestamp": 2_000.0,
+                "metadata": occurrence,
+            },
+        ],
+        session_id="configured",
+    )
+    conn.commit()
+    conn.close()
+    filters = {
+        "models": ["gpt-test-2026-07"],
+        "model_providers": ["openai"],
+        "model_families": ["gpt"],
+        "model_revisions": ["2026-07"],
+        "reasoning_efforts": ["high"],
+        "speed_tiers": ["fast"],
+        "service_tiers": ["priority"],
+        "model_modes": ["default"],
+    }
+    opened = _scope(project, store)
+    try:
+        events = execute(
+            [opened], make_request("events", filters=filters)
+        )
+        assert [row["event_id"] for row in events["rows"]] == ["response"]
+        row = events["rows"][0]
+        assert row["model_provider"] == "openai"
+        assert row["reasoning_effort"] == "high"
+        assert row["configuration_provenance"]["model"]["field"] == (
+            "turn_context.model"
+        )
+        sessions = execute(
+            [opened], make_request("sessions", filters=filters)
+        )
+        assert [row["id"] for row in sessions["rows"]] == ["configured"]
+        overview = execute(
+            [opened], make_request("overview", filters=filters)
+        )["summary"]
+        assert overview["events"] == 1
+        assert overview["model_providers_by_event"] == {"openai": 1}
+        assert overview["reasoning_efforts_by_event"] == {"high": 1}
+        report = audit([opened])
+        observed = next(
+            item for item in report["configurations"]
+            if item["model_name_exact"] == "gpt-test-2026-07"
+        )
+        assert observed["model_turn_occurrences"] == 1
+        assert observed["session_default_occurrences"] == 1
+        assert observed["model_turns_with_configuration_provenance"] == 1
+        assert observed["occurrence_provenance_state"] == "recorded"
+        assert observed["occurrence_examples"][0][
+            "configuration_provenance"
+        ]["reasoning_effort"]["value"] == "high"
     finally:
         opened["conn"].close()
 
@@ -714,6 +826,9 @@ def test_cited_investigation_binds_summary_to_exact_result_rows(tmp_path):
         assert record["input_result_hash"] == result["result_hash"]
         assert record["citations"][0]["global_event_id"] == event_id
         assert record["citations"][0]["content_sha256"].startswith("sha256:")
+        assert record["citations"][0]["row_sha256"] == content_hash(
+            result["rows"][0]
+        )
         assert record["investigation_hash"].startswith("sha256:")
         with pytest.raises(QueryContractError, match="absent"):
             build_investigation(
@@ -875,6 +990,71 @@ def test_configuration_audit_keeps_nullable_settings_independent(tmp_path):
         assert config["model_name_exact"] == "gpt-test"
         assert config["speed_tier"] is None
         assert config["provenance_state"] == "recorded"
+        assert config["model_turn_occurrences"] == 0
+        assert config["occurrence_examples"] == []
+    finally:
+        opened["conn"].close()
+
+
+def test_configuration_audit_honors_native_session_scope(tmp_path):
+    project = tmp_path / "configuration-scope"
+    store = project / ".codess" / "sessions_codex.db"
+    init_db(store)
+    conn = connect(store)
+    for session_id, model in (("selected", "gpt-selected"), ("other", "gpt-other")):
+        configuration = {"model_provider": "openai", "model": model}
+        replace_session_events(
+            conn,
+            {
+                "id": session_id,
+                "source": "Codex",
+                "type": "Code",
+                "project_path": str(project),
+                "metadata": configuration,
+            },
+            [
+                {
+                    "session_id": session_id,
+                    "event_id": f"{session_id}-prompt",
+                    "event_type": "user_message",
+                    "subtype": "prompt",
+                    "role": "user",
+                    "content": "request",
+                    "timestamp": 1_000.0,
+                },
+                {
+                    "session_id": session_id,
+                    "event_id": f"{session_id}-response",
+                    "event_type": "assistant_message",
+                    "subtype": "response",
+                    "role": "assistant",
+                    "content": "result",
+                    "timestamp": 2_000.0,
+                    "metadata": configuration,
+                },
+            ],
+            session_id=session_id,
+        )
+    conn.commit()
+    conn.close()
+    opened = _scope(project, store)
+    try:
+        report = audit([opened], session_ids={"selected"})
+        assert report["totals"]["model_turns"] == 1
+        assert report["totals"]["configured_model_turns"] == 1
+        assert [
+            row["model_name_exact"] for row in report["configurations"]
+        ] == ["gpt-selected"]
+        assert report["configurations"][0]["model_turn_occurrences"] == 1
+        assert {
+            row["session_global_id"]
+            for row in report["configurations"][0]["occurrence_examples"]
+        } == {
+            conn_row[0]
+            for conn_row in opened["conn"].execute(
+                "SELECT global_id FROM sessions WHERE id='selected'"
+            )
+        }
     finally:
         opened["conn"].close()
 

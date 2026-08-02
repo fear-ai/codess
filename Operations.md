@@ -165,8 +165,24 @@ uses the largest observed size once per container path during the run;
 `retained_searchable_characters` and `retained_searchable_utf8_bytes` are
 additive logical Event-payload measures. They count `content`, `tool_input`,
 `tool_output`, and `artifact_path`; when a tool result is projected identically
-into both `content` and `tool_output`, it is counted once. They do not claim
-selected raw-record or pre-truncation source-semantic bytes.
+into both `content` and `tool_output`, it is counted once.
+
+`selected_input_bytes` is separate: it is the input selected for decoding, not
+the enclosing container and not source-semantic text. A selected Claude/Codex
+JSONL transcript contributes its file bytes; a selectively measured Cursor
+source contributes the serialized vendor values for that Project. The summary
+reports `selected_input_observations`, `unmeasured_selected_input_observations`,
+and `selected_input_complete`; unavailable measurements never become zero.
+`normalized_store_usage` and `raw_object_usage` report file counts plus logical,
+allocated, and hard-link-aware unique allocated bytes. Referenced raw objects
+are deduplicated by resolved object path. These physical quantities must not be
+added to retained searchable bytes.
+
+Pre-truncation source-semantic bytes and query-result serialization are
+distinct possible observations, not values that may be estimated from decoder
+input or retained Event text. They are not current requirements; add one under
+A9 only when it answers a concrete limit, completeness, or performance
+decision.
 
 `--min-size` remains separate. Its legacy 20 KiB default is a source-selection
 noise heuristic, not a validity or safety maximum, and it may hide valid tiny
@@ -185,7 +201,7 @@ manifests, stores, and result identities use SHA-256. Older digest labels are
 unsupported for live equality verification; rebuild the derived snapshot with
 a supported decoder/validator and never rewrite its immutable manifest.
 
-Further telemetry and limits under CoPlan P14–P16 must distinguish:
+Any future telemetry or limit change must continue to distinguish:
 
 1. vendor container bytes;
 2. bytes in selected source records;
@@ -525,6 +541,37 @@ source evidence from normalized-store counts so an old baseline cannot make a
 source capability look absent. Evidence-gap and corpus-expansion actions are
 governed by **CoPlan A12/T4–T5**, not by this procedure.
 
+To inspect the normalized configuration inventory and its bounded occurrence
+evidence:
+
+```text
+codess query configurations --project-id PROJECT_ID --source codex
+codess query configurations --project-id PROJECT_ID --session-id SESSION_ID
+codess query events --project-id PROJECT_ID \
+  --model MODEL --reasoning-effort high --service-tier default \
+  --limit 20 --byte-limit 1048576
+codess query sessions --project-id PROJECT_ID --model MODEL
+```
+
+The first command reports independent nullable fields, Model-Turn and Session
+default occurrence counts, and at most three examples with Source revision,
+URI, record locator, and field provenance. `recorded` means occurrence Events
+carry that evidence; `representative_only` means only the configuration-level
+observation is available in the selected snapshot; `normalized_only` means no
+structured source mapping was retained. An Event may additionally mark
+`configuration_provenance_scope.state=inherited` and name the governing Event
+when a vendor records a selection before the governed model output. These
+states describe evidence availability, not model capability or snapshot
+freshness.
+
+Use `refresh --force` when decoder, mapping, or store behavior changed but the
+vendor source fingerprint did not. Forced ingestion builds selected vendor
+stores in a fresh Project-local staging directory and promotes them only after
+successful mapping and derived processing; this avoids slow in-place deletion
+and upsert against a large indexed store. A failed staged rebuild retains an
+existing working store, and the immutable current snapshot pointer remains
+guarded by normal publication.
+
 Useful bounded component audits are:
 
 ```text
@@ -643,6 +690,14 @@ reviewed-baseline fixed-point rebuild, semantic sampling, approval, or freeze.
 Use `baseline apply|freeze|verify` for that release-maintainer workflow.
 Designators are computed labels rather than durable research identities, so
 the receipt retains the exact resolved Project IDs and input fingerprints.
+
+`codess catalog status` reads the latest usable completed result for each
+Project from bounded `~/.codess/reports/refresh-*.json` discovery. It reports
+`preflight_passed`, `preflight_failed`, `refresh_applied`, `refresh_failed`, or
+`not_assessed`, plus the observation time, receipt, requested Source/raw mode,
+and snapshot ID when available. Plan-only and malformed receipts are ignored.
+This is execution evidence, not a formal freshness claim: a later failed
+attempt remains visible even when an older valid snapshot is still queryable.
 
 The normal curator workflow is intentionally two human actions:
 

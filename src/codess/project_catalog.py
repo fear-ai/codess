@@ -352,9 +352,11 @@ def _entry_is_query_eligible(entry: dict[str, Any]) -> bool:
 
 def catalog_readiness(registry_root: Path) -> dict[str, Any]:
     """Report per-Project query readiness without claiming source freshness."""
+    from codess.refresh_receipts import latest_refresh_observations
     from codess.snapshot import SnapshotError, snapshot_store_paths_from_base
 
     registry_root = registry_root.expanduser().resolve()
+    refresh_observations = latest_refresh_observations(registry_root)
     projects = []
     for entry in sorted(
         load_catalog(registry_root).get("projects", []),
@@ -394,6 +396,7 @@ def catalog_readiness(registry_root: Path) -> dict[str, Any]:
                     else "snapshot_fail"
                 )
         curation = entry.get("curation")
+        refresh_observation = refresh_observations.get(project_id)
         projects.append({
             "project_id": project_id,
             "logical_name": entry.get("logical_name"),
@@ -419,9 +422,13 @@ def catalog_readiness(registry_root: Path) -> dict[str, Any]:
             "current_snapshot_id": current_id,
             "query_status": status,
             "detail": detail,
-            # Detecting newer vendor data is a preflight/ingest observation,
-            # not something a current pointer or Git status can prove.
-            "source_refresh_status": "not_assessed",
+            # This is a receipt-backed operation result, not a freshness
+            # inference from a pointer, Git status, or vendor-store mtime.
+            "source_refresh_status": (
+                refresh_observation["status"]
+                if refresh_observation is not None else "not_assessed"
+            ),
+            "refresh_observation": refresh_observation,
         })
     eligible_projects = [
         item for item in projects if item["selection_eligible"]
@@ -430,6 +437,9 @@ def catalog_readiness(registry_root: Path) -> dict[str, Any]:
         item["query_status"] == "query_ready" for item in eligible_projects
     )
     total = len(eligible_projects)
+    assessed = sum(
+        item["source_refresh_status"] != "not_assessed" for item in projects
+    )
     return {
         "format": "codess.catalog-readiness/1",
         "generated_at": _now(),
@@ -439,7 +449,8 @@ def catalog_readiness(registry_root: Path) -> dict[str, Any]:
             "not_query_ready_projects": total - ready,
             "query_ready_coverage": f"{ready}/{total}",
             "all_eligible_query_ready": bool(total and ready == total),
-            "source_refresh_assessed_projects": 0,
+            "source_refresh_assessed_projects": assessed,
+            "source_refresh_coverage": f"{assessed}/{len(projects)}",
         },
         "projects": projects,
     }
@@ -451,6 +462,7 @@ def resolve_project_query_scopes(
     *,
     project_set: Path | None = None,
     all_current: bool = False,
+    allow_package_mismatch: bool = False,
 ) -> list[dict[str, Any]]:
     """Resolve one exact, saved, or all-current Project scope without mutation."""
     registry_root = registry_root.expanduser().resolve()
@@ -475,13 +487,33 @@ def resolve_project_query_scopes(
         selection_kind = "project_set"
         selection_sha256 = saved["selection_sha256"]
     elif all_current:
+        # A broad selector must be usable as resolved.  In exact mode, omit
+        # retained snapshots that the current package cannot open rather than
+        # admitting them here and failing the entire multi-Project query later.
+        # The explicit read-compatible policy deliberately widens this set.
+        from codess.snapshot import SnapshotError, snapshot_store_paths_from_base
+
+        def selectable_current(project_id: str, entry: dict[str, Any]) -> str | None:
+            if not _entry_is_query_eligible(entry):
+                return None
+            base = durable_project_root(registry_root, project_id)
+            snapshot_id = _current_snapshot_id(base)
+            if snapshot_id is None:
+                return None
+            try:
+                snapshot_store_paths_from_base(
+                    base,
+                    snapshot_id,
+                    allow_package_mismatch=allow_package_mismatch,
+                )
+            except (OSError, ValueError, SnapshotError):
+                return None
+            return snapshot_id
+
         requested = [
-            {"project_id": project_id, "snapshot_id": None}
+            {"project_id": project_id, "snapshot_id": snapshot_id}
             for project_id, entry in sorted(by_id.items())
-            if _entry_is_query_eligible(entry)
-            and _current_snapshot_id(
-                durable_project_root(registry_root, project_id)
-            ) is not None
+            if (snapshot_id := selectable_current(project_id, entry)) is not None
         ]
         selection_kind = "all_current"
         if not requested:

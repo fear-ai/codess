@@ -134,6 +134,107 @@ class TestInitDb:
         assert "sessions" in tables and "events" in tables
         conn.close()
 
+    def test_model_turn_inherits_session_default_configuration(self, tmp_path):
+        db = tmp_path / "default-model.db"
+        init_db(db)
+        conn = connect(db)
+        replace_session_events(
+            conn,
+            {
+                "id": "s1",
+                "source": "Codex",
+                "type": "Code",
+                "metadata": {
+                    "model_provider": "openai",
+                    "model": "gpt-default",
+                    "reasoning_effort": "medium",
+                },
+            },
+            [
+                {
+                    "session_id": "s1",
+                    "event_id": "response",
+                    "event_type": "assistant_message",
+                    "subtype": "response",
+                    "role": "assistant",
+                    "content": "autonomous response",
+                },
+            ],
+            session_id="s1",
+        )
+        row = conn.execute(
+            """
+            SELECT mc.model_name_exact,mc.reasoning_effort
+            FROM model_turns mt
+            JOIN model_configurations mc ON mc.id=mt.model_config_id
+            WHERE mt.session_id='s1'
+            """
+        ).fetchone()
+        assert tuple(row) == ("gpt-default", "medium")
+        conn.close()
+
+    def test_model_turn_retains_inherited_configuration_provenance(
+        self, tmp_path
+    ):
+        db = tmp_path / "inherited-configuration.db"
+        init_db(db)
+        conn = connect(db)
+        replace_session_events(
+            conn,
+            {"id": "s1", "source": "Cursor", "type": "Code"},
+            [
+                {
+                    "session_id": "s1",
+                    "event_id": "selection",
+                    "event_type": "user_message",
+                    "subtype": "prompt",
+                    "role": "user",
+                    "content": "continue",
+                    "source_record_locator": "bubble:user:1",
+                    "metadata": {
+                        "model": "composer-test",
+                        "configuration_provenance": {
+                            "model": {
+                                "source_field": "modelInfo.modelName",
+                                "source_record_locator": "bubble:user:1",
+                                "source_record_type": "bubble.user",
+                            },
+                        },
+                    },
+                },
+                {
+                    "session_id": "s1",
+                    "event_id": "response",
+                    "event_type": "assistant_message",
+                    "subtype": "response",
+                    "role": "assistant",
+                    "content": "done",
+                    "source_record_locator": "bubble:assistant:2",
+                },
+            ],
+            session_id="s1",
+        )
+        row = conn.execute(
+            """
+            SELECT e.metadata,mc.model_name_exact
+            FROM events e
+            JOIN model_turns mt ON mt.id=e.model_turn_id
+            JOIN model_configurations mc ON mc.id=mt.model_config_id
+            WHERE e.event_id='response'
+            """
+        ).fetchone()
+        metadata = json.loads(row["metadata"])
+        assert row["model_name_exact"] == "composer-test"
+        assert metadata["configuration_provenance"]["model"][
+            "source_field"
+        ] == "modelInfo.modelName"
+        assert metadata["configuration_provenance_scope"] == {
+            "state": "inherited",
+            "governing_event_id": "selection",
+            "governing_source_record_locator": "bubble:user:1",
+        }
+        conn.close()
+
     def test_long_source_call_id_uses_bounded_relational_key(self, tmp_path):
         db = tmp_path / "calls.db"
         init_db(db)
