@@ -5,6 +5,23 @@ import platform
 import re
 from pathlib import Path
 
+from codess.resource_policy import BUILTIN_MAXIMUMS
+
+
+_CONFIG_ERRORS: list[str] = []
+
+
+def env_int(key: str, default: int) -> int:
+    """Read an integer env value without making module import fail."""
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        _CONFIG_ERRORS.append(f"{key}={raw!r} must be an integer")
+        return default
+
 
 def env_bool(key: str, default: str = "0") -> bool:
     """True if env ``key`` is ``1`` / ``true`` / ``yes`` (case-insensitive); else false."""
@@ -18,8 +35,19 @@ DEFAULT_WORK = Path.home() / "Work"
 CC_PROJECTS = Path(
     os.environ.get("CODESS_CC_PROJECTS", str(Path.home() / ".claude" / "projects"))
 )
+_CODEX_SESSIONS_OVERRIDE = os.environ.get("CODESS_CODEX_SESSIONS")
 CODEX_SESSIONS = Path(
-    os.environ.get("CODESS_CODEX_SESSIONS", str(Path.home() / ".codex" / "sessions"))
+    _CODEX_SESSIONS_OVERRIDE or str(Path.home() / ".codex" / "sessions")
+)
+_CODEX_ARCHIVED_OVERRIDE = os.environ.get("CODESS_CODEX_ARCHIVED_SESSIONS")
+CODEX_ARCHIVED_SESSIONS: Path | None = (
+    Path(_CODEX_ARCHIVED_OVERRIDE)
+    if _CODEX_ARCHIVED_OVERRIDE
+    else (
+        None
+        if _CODEX_SESSIONS_OVERRIDE
+        else Path.home() / ".codex" / "archived_sessions"
+    )
 )
 
 
@@ -48,22 +76,14 @@ AGGREGATORS = frozenset(
 # Path prefixes (relative to work root) excluded as review/backup-style trees in `is_excluded`.
 EXCLUDE_REVIEW_DIRS = (
     "CodingTools",
+    "group/project",
     "MCP/review",
     "group/project",
     "group/project",
     "group/project",
     "Claude/review",
 )
-CODESS_DAYS = int(os.environ.get("CODESS_DAYS", "90"))
-
-# --- Recursion exclude (case-insensitive) ---
-# Dirname skip: `helpers.should_skip_recurse` also skips any name starting with "." (covers .git, .venv, …).
-EXCLUDE_RECURSE = frozenset({
-    "node_modules", "__pycache__",
-    "build", "debug", "release", "test", "tests",
-    "doc", "docs", "bin", "lib", "libs", "var", "log", "logs",
-    "env", "venv", "OLD", "Save",
-})
+CODESS_DAYS = env_int("CODESS_DAYS", 90)
 
 # --- Store layout ---
 STORE_DIR = ".codess"
@@ -80,14 +100,11 @@ REGISTRY = Path(os.environ.get("CODESS_REGISTRY", str(Path.home() / ".codess")))
 # --- CLI / logging ---
 VERBOSE = env_bool("CODESS_VERBOSE")
 
-# --- Scan (walk / recursion; flag not yet passed through run_scan — see scan_cmd) ---
-NOREC = env_bool("CODESS_NOREC")
-
 # --- Debug ---
 DEBUG = env_bool("CODESS_DEBUG")
 
 # --- Ingest ---
-MIN_SIZE = int(os.environ.get("CODESS_MIN_SIZE", str(20 * 1024)))  # 20 KB
+MIN_SIZE = env_int("CODESS_MIN_SIZE", 20 * 1024)  # 20 KB
 FORCE = env_bool("CODESS_FORCE")
 
 # --- Subagent (CC scan) ---
@@ -95,6 +112,30 @@ SUBAGENT = env_bool("CODESS_SUBAGENT")
 
 # --- Ingest redaction default (CLI --redact ORs on top) ---
 INGEST_REDACT = env_bool("CODESS_REDACT")
+RAW_MODE = os.environ.get("CODESS_RAW_MODE", "reference").strip().lower()
+STRICT_MAPPING = env_bool("CODESS_STRICT_MAPPING")
+CONTENT_POLICY = os.environ.get("CODESS_CONTENT_POLICY")
+RESOURCE_POLICY = os.environ.get("CODESS_RESOURCE_POLICY")
+MAX_TRANSCRIPT_BYTES = env_int(
+    "CODESS_MAX_TRANSCRIPT_BYTES", BUILTIN_MAXIMUMS["transcript_bytes"]
+)
+# Compatibility alias. New configuration should use MAX_TRANSCRIPT_BYTES.
+MAX_SOURCE_BYTES = env_int("CODESS_MAX_SOURCE_BYTES", MAX_TRANSCRIPT_BYTES)
+MAX_CURSOR_CONTAINER_BYTES = env_int(
+    "CODESS_MAX_CURSOR_CONTAINER_BYTES",
+    BUILTIN_MAXIMUMS["cursor_container_bytes"],
+)
+MAX_EVENTS_PER_SOURCE = env_int(
+    "CODESS_MAX_EVENTS_PER_SOURCE", BUILTIN_MAXIMUMS["events_per_source"]
+)
+MAX_EVENTS_PER_SESSION = env_int(
+    "CODESS_MAX_EVENTS_PER_SESSION", BUILTIN_MAXIMUMS["events_per_session"]
+)
+MAX_CONTEXT_CONTENT_CHARS = env_int(
+    "CODESS_MAX_CONTEXT_CONTENT_CHARS", BUILTIN_MAXIMUMS["context_content_chars"]
+)
+MAX_CODESS_DB_BYTES = env_int("CODESS_MAX_CODESS_DB_BYTES", 2 * 1024**3)
+MAX_CURSOR_DB_BYTES = env_int("CODESS_MAX_CURSOR_DB_BYTES", 10 * 1024**3)
 
 # --- Batch / resilience: stop entire command on first error (otherwise log and continue) ---
 STOP = env_bool("CODESS_STOP")
@@ -134,27 +175,60 @@ def get_state_path(project_root: Path) -> Path:
 def get_stats_path(registry_root: Path | None = None) -> Path:
     """Return path to ``ingested_projects.json`` — merged project registry.
 
-    Updated by **scan** (index metrics), **ingest** (store counts), **query** (e.g. ``--stats``),
-    and (when wired) **walk** via ``codess.registry_store``.
+    Updated by **scan** (index metrics), **ingest** (store counts), and **query**
+    (for example, ``--stats``) via ``codess.registry_store``.
     """
     root = registry_root if registry_root is not None else REGISTRY
     return root / STATS_FILE
 
 
 def validate_config() -> list[str]:
-    """Return list of validation warnings/errors. Empty if ok."""
-    errs = []
-    if CODESS_DAYS < 1 or CODESS_DAYS > 3650:
-        errs.append(f"CODESS_DAYS={CODESS_DAYS} out of range [1, 3650]")
+    """Return configuration errors. Empty if configuration is usable."""
+    errs = list(_CONFIG_ERRORS)
+    if CODESS_DAYS < 0 or CODESS_DAYS > 3650:
+        errs.append(f"CODESS_DAYS={CODESS_DAYS} out of range [0, 3650]")
     if MIN_SIZE < 0:
         errs.append(f"CODESS_MIN_SIZE={MIN_SIZE} must be >= 0")
+    for name, value in (
+        ("CODESS_MAX_TRANSCRIPT_BYTES", MAX_TRANSCRIPT_BYTES),
+        ("CODESS_MAX_CURSOR_CONTAINER_BYTES", MAX_CURSOR_CONTAINER_BYTES),
+        ("CODESS_MAX_EVENTS_PER_SOURCE", MAX_EVENTS_PER_SOURCE),
+        ("CODESS_MAX_EVENTS_PER_SESSION", MAX_EVENTS_PER_SESSION),
+        ("CODESS_MAX_CONTEXT_CONTENT_CHARS", MAX_CONTEXT_CONTENT_CHARS),
+        ("CODESS_MAX_CODESS_DB_BYTES", MAX_CODESS_DB_BYTES),
+        ("CODESS_MAX_CURSOR_DB_BYTES", MAX_CURSOR_DB_BYTES),
+    ):
+        if value <= 0:
+            errs.append(f"{name}={value} must be > 0")
+    if "CODESS_MAX_SOURCE_BYTES" in os.environ and MAX_SOURCE_BYTES <= 0:
+        errs.append(
+            f"CODESS_MAX_SOURCE_BYTES={MAX_SOURCE_BYTES} must be > 0"
+        )
+    if RAW_MODE not in {"none", "reference", "capture", "seal"}:
+        errs.append(
+            f"CODESS_RAW_MODE={RAW_MODE!r} must be none, reference, capture, or seal"
+        )
     if not CC_PROJECTS.is_absolute():
         errs.append(f"CODESS_CC_PROJECTS must be absolute: {CC_PROJECTS}")
+    if not CODEX_SESSIONS.is_absolute():
+        errs.append(f"CODESS_CODEX_SESSIONS must be absolute: {CODEX_SESSIONS}")
+    if CODEX_ARCHIVED_SESSIONS is not None and not CODEX_ARCHIVED_SESSIONS.is_absolute():
+        errs.append(
+            "CODESS_CODEX_ARCHIVED_SESSIONS must be absolute: "
+            f"{CODEX_ARCHIVED_SESSIONS}"
+        )
+    if not CURSOR_DATA.is_absolute():
+        errs.append(f"CODESS_CURSOR_DATA must be absolute: {CURSOR_DATA}")
     return errs
 
 
 def get_project_stores(project_root: Path) -> list[Path]:
-    """Return existing DB paths: legacy sessions.db first, else per-vendor DBs."""
+    """Return current snapshot stores, falling back to legacy working paths."""
+    from codess.snapshot import current_store_paths
+
+    current = current_store_paths(project_root)
+    if current:
+        return current
     base = project_root / STORE_DIR
     legacy = base / STORE_DB
     if legacy.exists():

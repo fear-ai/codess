@@ -1,0 +1,5 @@
+[
+  ["composer-main", "bubble-user", {"type": 1, "text": "Inspect the project.", "createdAt": "2026-07-10T12:00:00Z"}],
+  ["composer-main", "bubble-assistant", {"type": 2, "text": "Inspection complete.", "createdAt": "2026-07-10T12:00:01Z", "toolResults": [{"toolName": "Read", "result": "Project notes"}]}],
+  ["composer-undated", "bubble-undated", {"type": 1, "text": "No reliable timestamp.", "timingInfo": {"clientStartTime": 42}}]
+]

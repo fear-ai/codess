@@ -1,20 +1,15 @@
 """Tests for config paths and options."""
 
-import os
-from pathlib import Path
-
-import pytest
-
 from types import SimpleNamespace
 
 from codess.project import (
     build_ingest_run_options,
-    build_scan_run_options,
     resolve_registry_directory,
     validate_scan_source_for_cli,
 )
 from codess.config import (
     CC_PROJECTS,
+    CODEX_ARCHIVED_SESSIONS,
     CODEX_SESSIONS,
     env_bool,
     get_state_path,
@@ -47,6 +42,10 @@ class TestEnvOverrides:
 
     def test_codex_sessions_default(self):
         assert "codex" in str(CODEX_SESSIONS).lower()
+        assert (
+            CODEX_ARCHIVED_SESSIONS is None
+            or "archived_sessions" in str(CODEX_ARCHIVED_SESSIONS)
+        )
 
     def test_paths_are_absolute(self):
         assert CC_PROJECTS.is_absolute()
@@ -97,6 +96,10 @@ class TestEnvBool:
         monkeypatch.setenv("CODESS_TESTBOOL", "2")
         assert env_bool("CODESS_TESTBOOL") is False
 
+    def test_empty_false(self, monkeypatch):
+        monkeypatch.setenv("CODESS_TESTBOOL", "")
+        assert env_bool("CODESS_TESTBOOL") is False
+
 
 class TestCliOptionsEnvMerge:
     """ENV-backed bools merged in build_*_run_options (monkeypatch config module)."""
@@ -115,18 +118,19 @@ class TestCliOptionsEnvMerge:
         )
         assert build_ingest_run_options(args).redact is True
 
-    def test_scan_norec_env(self, monkeypatch):
-        monkeypatch.setattr("codess.config.NOREC", True)
+    def test_ingest_context_limit_cli_override(self):
         args = SimpleNamespace(
-            stop=False,
-            debug=False,
-            subagent=False,
-            norec=False,
-            days=None,
-            source=None,
+            stop=False, force=False, min_size=100, debug=False, redact=False,
+            max_context_content_chars=4096,
         )
-        assert build_scan_run_options(args).norec is True
+        assert build_ingest_run_options(args).max_context_content_chars == 4096
 
+    def test_ingest_no_resource_limits_disables_context_limit(self):
+        args = SimpleNamespace(
+            stop=False, force=False, min_size=100, debug=False, redact=False,
+            no_resource_limits=True, max_context_content_chars=4096,
+        )
+        assert build_ingest_run_options(args).max_context_content_chars is None
 
 class TestValidateScanSource:
     """Scan --source is validated globally before run (see scan_cmd)."""

@@ -8,8 +8,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import pytest
-
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
@@ -63,7 +61,6 @@ def test_cc_subagent_vs_main_detailed(capsys):
             {"type": "assistant", "isSidechain": True, "agentId": "sub-1", "message": {"content": [{"type": "text", "text": "Sub task"}]}},
         ]
         sub_file.write_text("\n".join(json.dumps(r) for r in sub_content))
-        sub_size = sub_file.stat().st_size
 
         # Index: main (s1) + subagent (s2). fullPath for main; subagent uses fallback (sess_dir)
         idx_entries = [

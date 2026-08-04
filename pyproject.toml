@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codess"
+description = "Local session record store for Claude Code, Codex, and Cursor"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = [
+  "zstandard>=0.23",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=7.0",
+]
+
+[project.scripts]
+codess = "codess.project:console_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["codess*", "cli*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "codess.__version__"}

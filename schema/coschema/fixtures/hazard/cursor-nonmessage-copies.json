@@ -1,0 +1,53 @@
+{
+  "hazards": [
+    "repeated-server-bubble-copies",
+    "whitespace-only-assistant-envelopes-are-not-messages"
+  ],
+  "bubbles": [
+    [
+      "c1",
+      "later",
+      {
+        "type": 2,
+        "text": "same",
+        "serverBubbleId": "server-1",
+        "createdAt": "2026-07-10T00:00:02Z"
+      }
+    ],
+    [
+      "c1",
+      "earlier",
+      {
+        "type": 2,
+        "text": "same",
+        "serverBubbleId": "server-1",
+        "createdAt": "2026-07-10T00:00:01Z"
+      }
+    ],
+    [
+      "c1",
+      "context-only",
+      {
+        "type": 2,
+        "text": "  \n",
+        "relevantFiles": ["README.md"]
+      }
+    ],
+    [
+      "c2",
+      "other-composer",
+      {
+        "type": 2,
+        "text": "same",
+        "serverBubbleId": "server-1",
+        "createdAt": "2026-07-10T00:00:03Z"
+      }
+    ]
+  ],
+  "expected_events": [
+    ["c1", "c1:earlier"],
+    ["c2", "c2:other-composer"]
+  ],
+  "expected_duplicate_records": 1,
+  "expected_ignored_records": 1
+}

@@ -1,0 +1,19 @@
+{
+  "session_id": "session-maximal",
+  "event_id": "record-1:block-1",
+  "sequence_no": 1,
+  "source_record_type": "response_item",
+  "source_record_subtype": "function_call",
+  "event_type": "tool_call",
+  "subtype": null,
+  "role": "assistant",
+  "content": null,
+  "content_len": null,
+  "tool_name": "Read",
+  "tool_input": "{\"path\":\"README.md\"}",
+  "tool_output": null,
+  "timestamp": 1784000000000,
+  "file_path": "README.md",
+  "source_file": "/vendor/session.jsonl",
+  "metadata": "{\"call_id\":\"call-1\",\"status\":\"completed\"}"
+}

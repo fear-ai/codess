@@ -1,13 +1,16 @@
 """Integration tests for ingest and query."""
 
+import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from codess.project import path_to_slug, slug_to_path
+from codess.snapshot import current_raw_records
 
 
 def test_path_to_slug_roundtrip():
@@ -18,6 +21,30 @@ def test_path_to_slug_roundtrip():
     assert slug == "-home-user-work-project"
     back = slug_to_path(slug)
     assert back == path
+
+
+def test_ingest_invalid_source_is_global_error(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "main",
+            "ingest",
+            "--dir",
+            str(project),
+            "--source",
+            "bogus",
+        ],
+        cwd=str(Path(__file__).parent.parent),
+        env={**os.environ, "CODESS_REGISTRY": str(tmp_path / "registry")},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "invalid ingest --source" in result.stderr
+    assert not (project / ".codess").exists()
 
 
 def test_sanitize_control_chars():
@@ -115,6 +142,117 @@ def test_full_ingest_and_query():
         assert "test-session" in result.stdout or "Claude" in result.stdout
 
 
+def test_cc_ingest_includes_nested_subagent_with_parent_metadata():
+    """Nested subagent transcripts become sessions linked to their main session."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        project_root = tmp / "myproj"
+        project_root.mkdir()
+        projects_dir = tmp / "cc_projects"
+        slug_dir = projects_dir / path_to_slug(project_root.resolve())
+        nested_dir = slug_dir / "parent-session" / "subagents"
+        nested_dir.mkdir(parents=True)
+        fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
+        shutil.copy(fixture, slug_dir / "parent-session.jsonl")
+        shutil.copy(fixture, nested_dir / "child-session.jsonl")
+
+        env = os.environ.copy()
+        env["CODESS_CC_PROJECTS"] = str(projects_dir)
+        env["CODESS_REGISTRY"] = str(tmp / "registry")
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "main",
+                "ingest",
+                "--dir",
+                str(project_root),
+                "--source",
+                "cc",
+                "--force",
+                "--min-size",
+                "0",
+            ],
+            cwd=str(Path(__file__).parent.parent),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+        conn = sqlite3.connect(project_root / ".codess" / "sessions_cc.db")
+        try:
+            sessions = {
+                row[0]: row[1]
+                for row in conn.execute("SELECT id, metadata FROM sessions")
+            }
+            assert set(sessions) == {"parent-session", "child-session"}
+            assert sessions["parent-session"] is None
+            child_metadata = json.loads(sessions["child-session"])
+            assert child_metadata == {
+                "is_sidechain": True,
+                "parent_session_id": "parent-session",
+                "source_relpath": "parent-session/subagents/child-session.jsonl",
+            }
+            assert conn.execute(
+                "SELECT COUNT(*) FROM events WHERE session_id = 'child-session'"
+            ).fetchone()[0] > 0
+        finally:
+            conn.close()
+
+
+def test_cc_force_reingest_replaces_shortened_transcript(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    projects = tmp_path / "claude"
+    session_dir = projects / path_to_slug(project.resolve())
+    session_dir.mkdir(parents=True)
+    transcript = session_dir / "replace-me.jsonl"
+    records = [
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "one"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "two"}],
+            },
+        },
+    ]
+    env = {
+        **os.environ,
+        "CODESS_CC_PROJECTS": str(projects),
+        "CODESS_REGISTRY": str(tmp_path / "registry"),
+    }
+    command = [
+        sys.executable, "-m", "main", "ingest",
+        "--dir", str(project), "--source", "cc",
+        "--force", "--min-size", "0",
+    ]
+    transcript.write_text(
+        "".join(json.dumps(record) + "\n" for record in records)
+    )
+    assert subprocess.run(
+        command, cwd=str(Path(__file__).parent.parent), env=env,
+        capture_output=True, text=True,
+    ).returncode == 0
+    transcript.write_text(json.dumps(records[0]) + "\n")
+    assert subprocess.run(
+        command, cwd=str(Path(__file__).parent.parent), env=env,
+        capture_output=True, text=True,
+    ).returncode == 0
+    with sqlite3.connect(
+        project / ".codess" / "sessions_cc.db"
+    ) as store:
+        assert store.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
+        assert store.execute("SELECT content FROM events").fetchone()[0] == "one"
+
+
 def test_malformed_json_skipped():
     """Malformed JSON lines are skipped; ingest continues."""
     from codess.adapters.cc import iter_cc_records
@@ -128,9 +266,6 @@ def test_malformed_json_skipped():
 
 def test_codex_ingest_and_query():
     """Codex ingest → query cycle with temp Codex dir."""
-    import json
-    import sqlite3
-
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         proj = tmp / "myproj"
@@ -142,7 +277,7 @@ def test_codex_ingest_and_query():
         sess_file.write_text(
             f'{{"type":"session_meta","payload":{{"id":"s1","cwd":"{proj_str}"}}}}\n'
             '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}}\n'
-            '{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"Hello"}]}}\n'
+            '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}}\n'
         )
         reg = tmp / "_central_reg"
         reg.mkdir()
@@ -171,6 +306,74 @@ def test_codex_ingest_and_query():
         assert "Sessions:" in r.stdout and "Events:" in r.stdout
 
 
+def test_codex_force_reingest_replaces_and_empty_removes_session(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    sessions = tmp_path / "codex" / "sessions"
+    sessions.mkdir(parents=True)
+    transcript = sessions / "rollout.jsonl"
+    meta = {
+        "type": "session_meta",
+        "payload": {"id": "replace-me", "cwd": str(project)},
+    }
+    user = {
+        "type": "response_item",
+        "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "one"}],
+        },
+    }
+    assistant = {
+        "type": "response_item",
+        "payload": {
+            "type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": "two"}],
+        },
+    }
+    env = {
+        **os.environ,
+        "CODESS_CODEX_SESSIONS": str(sessions),
+        "CODESS_REGISTRY": str(tmp_path / "registry"),
+    }
+
+    def ingest():
+        return subprocess.run(
+            [
+                sys.executable, "-m", "main", "ingest",
+                "--dir", str(project), "--source", "codex",
+                "--force", "--min-size", "0",
+            ],
+            cwd=str(Path(__file__).parent.parent),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+    transcript.write_text(
+        "".join(json.dumps(record) + "\n" for record in (meta, user, assistant))
+    )
+    assert ingest().returncode == 0
+    store = project / ".codess" / "sessions_codex.db"
+    with sqlite3.connect(store) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 2
+
+    transcript.write_text(
+        "".join(json.dumps(record) + "\n" for record in (meta, user))
+    )
+    assert ingest().returncode == 0
+    with sqlite3.connect(store) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
+        assert conn.execute("SELECT content FROM events").fetchone()[0] == "one"
+
+    transcript.write_text(json.dumps(meta) + "\n")
+    result = ingest()
+    assert result.returncode == 0
+    assert "empty_sources=1" in result.stderr
+    with sqlite3.connect(store) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+
+
 def test_cursor_ingest_and_query():
     """Cursor ingest from workspace DB → query cycle."""
     import json
@@ -189,11 +392,11 @@ def test_cursor_ingest_and_query():
         conn.execute("CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
         conn.execute(
             "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
-            ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "hi", "timingInfo": {"clientStartTime": 1}})),
+            ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "hi", "createdAt": "2026-07-10T00:00:01Z"})),
         )
         conn.execute(
             "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
-            ("bubbleId:c1:b2", json.dumps({"type": 2, "text": "ok", "timingInfo": {"clientStartTime": 2}})),
+            ("bubbleId:c1:b2", json.dumps({"type": 2, "text": "ok", "createdAt": "2026-07-10T00:00:02Z"})),
         )
         conn.commit()
         conn.close()
@@ -223,6 +426,386 @@ def test_cursor_ingest_and_query():
         )
         assert r.returncode == 0
         assert "Sessions:" in r.stdout and "Events:" in r.stdout
+
+
+def test_cursor_force_reingest_removes_sessions_deleted_from_source(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    workspace = cursor_base / "workspaceStorage" / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"folder": {"path": str(project)}})
+    )
+    db = workspace / "state.vscdb"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    conn.executemany(
+        "INSERT INTO cursorDiskKV VALUES (?, ?)",
+        [
+            ("bubbleId:keep:b1", json.dumps({"type": 1, "text": "keep"})),
+            ("bubbleId:remove:b1", json.dumps({"type": 1, "text": "remove"})),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    env = {
+        **os.environ,
+        "CODESS_CURSOR_DATA": str(cursor_base),
+        "CODESS_REGISTRY": str(tmp_path / "registry"),
+    }
+    command = [
+        sys.executable, "-m", "main", "ingest",
+        "--dir", str(project), "--source", "cursor", "--force",
+    ]
+    first = subprocess.run(
+        command,
+        cwd=str(Path(__file__).parent.parent),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert first.returncode == 0
+
+    conn = sqlite3.connect(db)
+    conn.execute("DELETE FROM cursorDiskKV WHERE key LIKE 'bubbleId:remove:%'")
+    conn.commit()
+    conn.close()
+    second = subprocess.run(
+        command,
+        cwd=str(Path(__file__).parent.parent),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert second.returncode == 0
+
+    with sqlite3.connect(
+        project / ".codess" / "sessions_cursor.db"
+    ) as store:
+        assert [
+            row[0] for row in store.execute("SELECT id FROM sessions")
+        ] == ["keep"]
+
+
+def test_cursor_global_ingest_is_scoped_by_composer_headers():
+    """Global Cursor bubbles are ingested only when their header maps to the project."""
+    import json
+    import sqlite3
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        proj = tmp / "myproj"
+        proj.mkdir()
+        cursor_base = tmp / "cursor" / "User"
+        ws = cursor_base / "workspaceStorage" / "ws-project"
+        ws.mkdir(parents=True)
+        (ws / "workspace.json").write_text(f'{{"folder":"file://{proj}"}}')
+
+        global_dir = cursor_base / "globalStorage"
+        global_dir.mkdir(parents=True)
+        global_db = global_dir / "state.vscdb"
+        conn = sqlite3.connect(global_db)
+        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "CREATE TABLE composerHeaders ("
+            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+        )
+        conn.executemany(
+            "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("mapped", "ws-project", 1, 2, 0, 0),
+                ("other", "ws-other", 1, 2, 0, 0),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO cursorDiskKV VALUES (?, ?)",
+            [
+                (
+                    "bubbleId:mapped:b1",
+                    json.dumps(
+                        {
+                            "type": 1,
+                            "text": "keep",
+                            "createdAt": "2026-07-10T00:00:01Z",
+                        }
+                    ),
+                ),
+                (
+                    "bubbleId:mapped:b2",
+                    json.dumps(
+                        {
+                            "type": 2,
+                            "text": "second mapped event",
+                            "createdAt": "2026-07-10T00:00:02Z",
+                        }
+                    ),
+                ),
+                (
+                    "bubbleId:other:b1",
+                    json.dumps(
+                        {
+                            "type": 1,
+                            "text": "drop",
+                            "createdAt": "2026-07-10T00:00:01Z",
+                        }
+                    ),
+                ),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        reg = tmp / "registry"
+        reg.mkdir()
+        env = {
+            **os.environ,
+            "CODESS_REGISTRY": str(reg),
+            "CODESS_CURSOR_DATA": str(cursor_base),
+        }
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "main",
+                "ingest",
+                "--dir",
+                str(proj),
+                "--source",
+                "cursor",
+                "--force",
+            ],
+            cwd=str(Path(__file__).parent.parent),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+        store = proj / ".codess" / "sessions_cursor.db"
+        conn = sqlite3.connect(store)
+        sessions = conn.execute(
+            "SELECT id, project_path, metadata FROM sessions ORDER BY id"
+        ).fetchall()
+        events = conn.execute("SELECT session_id FROM events ORDER BY session_id").fetchall()
+        conn.close()
+        assert [row[0] for row in sessions] == ["mapped"]
+        assert sessions[0][1] == str(proj.resolve())
+        assert json.loads(sessions[0][2])["workspace_id"] == "ws-project"
+        assert events == [("mapped",), ("mapped",)]
+
+
+def test_cursor_multi_project_capture_reuses_one_consistent_cohort(tmp_path):
+    projects = [tmp_path / "first", tmp_path / "second"]
+    for project in projects:
+        project.mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    workspace_root = cursor_base / "workspaceStorage"
+    for index, project in enumerate(projects, 1):
+        workspace = workspace_root / f"ws-{index}"
+        workspace.mkdir(parents=True)
+        (workspace / "workspace.json").write_text(
+            json.dumps({"folder": project.resolve().as_uri()}), encoding="utf-8"
+        )
+        if index == 1:
+            workspace_db = workspace / "state.vscdb"
+            with sqlite3.connect(workspace_db) as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute(
+                    "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
+                )
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            Path(str(workspace_db) + "-wal").unlink(missing_ok=True)
+            Path(str(workspace_db) + "-shm").unlink(missing_ok=True)
+    global_dir = cursor_base / "globalStorage"
+    global_dir.mkdir(parents=True)
+    global_db = global_dir / "state.vscdb"
+    with sqlite3.connect(global_db) as conn:
+        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "CREATE TABLE composerHeaders ("
+            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+        )
+        for index in (1, 2):
+            conn.execute(
+                "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+                (f"composer-{index}", f"ws-{index}", 1, 2, 0, 0),
+            )
+            conn.execute(
+                "INSERT INTO cursorDiskKV VALUES (?, ?)",
+                (
+                    f"bubbleId:composer-{index}:prompt",
+                    json.dumps({"type": 1, "text": f"prompt {index}"}),
+                ),
+            )
+    registry = tmp_path / "registry"
+    command = [sys.executable, "-m", "main", "ingest"]
+    for project in projects:
+        command.extend(["--dir", str(project)])
+    command.extend([
+        "--source", "cursor", "--raw-mode", "capture",
+    ])
+    result = subprocess.run(
+        command,
+        cwd=str(Path(__file__).parent.parent),
+        env={
+            **os.environ,
+            "CODESS_REGISTRY": str(registry),
+            "CODESS_CURSOR_DATA": str(cursor_base),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "cursor.marker.start" in result.stderr
+    assert "raw.sqlite_backup.start" in result.stderr
+    assert "cursor.composer.read.done" in result.stderr
+    assert "cursor.composer.write.done" in result.stderr
+    assert "snapshot.done" in result.stderr
+
+    records = []
+    source_rows = []
+    for project in projects:
+        pointer = json.loads(
+            (project / ".codess" / "current.json").read_text(encoding="utf-8")
+        )
+        snapshot = Path(pointer["path"])
+        with (snapshot / "raw-manifest.jsonl").open(encoding="utf-8") as stream:
+            records.append([
+                json.loads(line) for line in stream
+                if '"record_type":"header"' not in line
+                and '"record_type": "header"' not in line
+            ])
+        with sqlite3.connect(project / ".codess" / "sessions_cursor.db") as conn:
+            source_rows.append(conn.execute(
+                "SELECT source_uri, source_revision, capture_method, consistency "
+                "FROM sources WHERE source_uri=?",
+                (str(global_db.resolve()),),
+            ).fetchone())
+    global_records = [
+        next(record for record in project_records
+             if record.get("source_locator") == str(global_db.resolve()))
+        for project_records in records
+    ]
+    assert global_records[0]["object_id"] == global_records[1]["object_id"]
+    assert global_records[0]["object_relpath"] == global_records[1]["object_relpath"]
+    assert source_rows[0] == source_rows[1]
+    assert source_rows[0][0] == str(global_db.resolve())
+    assert source_rows[0][2:] == ("sqlite-backup", "transactional-snapshot")
+
+    pointers_before = [
+        (project / ".codess" / "current.json").read_bytes()
+        for project in projects
+    ]
+    # Cursor routinely mutates unrelated global/workbench state. Such a change
+    # must not invalidate selected workspace/composer ingestion.
+    with sqlite3.connect(global_db) as conn:
+        conn.execute("CREATE TABLE unrelatedCursorState(value TEXT)")
+        conn.execute("INSERT INTO unrelatedCursorState VALUES ('changed')")
+    unchanged = subprocess.run(
+        command,
+        cwd=str(Path(__file__).parent.parent),
+        env={
+            **os.environ,
+            "CODESS_REGISTRY": str(registry),
+            "CODESS_CURSOR_DATA": str(cursor_base),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert unchanged.returncode == 0, unchanged.stderr
+    assert "Cursor cohort: unchanged" in unchanged.stdout
+    assert "cursor.cohort.unchanged" in unchanged.stderr
+    assert "cursor.project.unchanged" in unchanged.stderr
+    assert "artifact_correlation.start" not in unchanged.stderr
+    assert [
+        (project / ".codess" / "current.json").read_bytes()
+        for project in projects
+    ] == pointers_before
+
+    cached = subprocess.run(
+        command,
+        cwd=str(Path(__file__).parent.parent),
+        env={
+            **os.environ,
+            "CODESS_REGISTRY": str(registry),
+            "CODESS_CURSOR_DATA": str(cursor_base),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert cached.returncode == 0, cached.stderr
+    marker_line = next(
+        line for line in cached.stderr.splitlines()
+        if "cursor.marker.done" in line
+    )
+    assert "status=reused" in marker_line
+    assert [
+        (project / ".codess" / "current.json").read_bytes()
+        for project in projects
+    ] == pointers_before
+
+
+def test_cursor_capture_upgrades_an_unchanged_reference_snapshot(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    workspace = cursor_base / "workspaceStorage" / "ws-project"
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"folder": project.resolve().as_uri()}), encoding="utf-8"
+    )
+    global_dir = cursor_base / "globalStorage"
+    global_dir.mkdir(parents=True)
+    global_db = global_dir / "state.vscdb"
+    with sqlite3.connect(global_db) as conn:
+        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "CREATE TABLE composerHeaders ("
+            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
+            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
+        )
+        conn.execute(
+            "INSERT INTO composerHeaders VALUES ('composer', 'ws-project', 1, 2, 0, 0)"
+        )
+        conn.execute(
+            "INSERT INTO cursorDiskKV VALUES (?, ?)",
+            ("bubbleId:composer:prompt", json.dumps({"type": 1, "text": "prompt"})),
+        )
+    registry = tmp_path / "registry"
+    base_command = [
+        sys.executable, "-m", "main", "ingest", "--dir", str(project),
+        "--source", "cursor",
+    ]
+    env = {
+        **os.environ,
+        "CODESS_REGISTRY": str(registry),
+        "CODESS_CURSOR_DATA": str(cursor_base),
+    }
+    reference = subprocess.run(
+        [*base_command, "--raw-mode", "reference"],
+        cwd=str(Path(__file__).parent.parent), env=env,
+        capture_output=True, text=True,
+    )
+    assert reference.returncode == 0, reference.stderr
+    pointer_before = (project / ".codess" / "current.json").read_bytes()
+
+    capture = subprocess.run(
+        [*base_command, "--raw-mode", "capture"],
+        cwd=str(Path(__file__).parent.parent), env=env,
+        capture_output=True, text=True,
+    )
+    assert capture.returncode == 0, capture.stderr
+    assert "Cursor cohort: captured" in capture.stdout
+    assert (project / ".codess" / "current.json").read_bytes() != pointer_before
+    records = current_raw_records(project)
+    global_record = next(
+        record for record in records
+        if record.get("source_locator") == str(global_db.resolve())
+    )
+    assert global_record["availability"] == "captured"
 
 
 def test_incremental_skip_unchanged():
@@ -262,8 +845,7 @@ def test_incremental_skip_unchanged():
             capture_output=True,
             text=True,
         )
-        count1 = len(r2.stdout.strip().split("\n"))
-
+        assert r2.returncode == 0
         # Second ingest (unchanged)
         r3 = subprocess.run(
             [sys.executable, "-m", "main", "ingest", "--dir", str(project_root), "--min-size", "0"],
@@ -273,6 +855,4 @@ def test_incremental_skip_unchanged():
             text=True,
         )
         assert r3.returncode == 0
-        assert "0 file(s)" in r3.stdout or "Ingested 0" in r3.stdout
-
-
+        assert "0 file(s)" in r3.stdout or "Processed: 0" in r3.stdout

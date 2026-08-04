@@ -1,3 +1,6 @@
-# CodingSess — no external deps for Phase 1
-# pytest for tests
+# Compatibility requirements file for contributor environments.
+# Runtime dependency
+zstandard>=0.23
+
+# Test dependency
 pytest>=7.0

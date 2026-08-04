@@ -1,0 +1,40 @@
+{
+  "charset": {
+    "encoding": "utf-8",
+    "errors": "replace",
+    "normalization": "NFKC"
+  },
+  "max_chars": 20000,
+  "privacy_patterns": [
+    {
+      "pattern": "(?i)person@example\\.com",
+      "replacement": "[EMAIL]"
+    }
+  ],
+  "scopes": [
+    {
+      "when": {
+        "vendor": "Claude",
+        "record_type": "external.tool_result"
+      },
+      "max_chars": 4000,
+      "suppress_patterns": [
+        "(?i)known-hostile-payload-marker"
+      ]
+    },
+    {
+      "when": {
+        "phase": "post",
+        "project_path": "/path/to/private/project"
+      },
+      "topics": {
+        "exclude": [
+          "(?i)unwanted-topic"
+        ]
+      },
+      "vocabulary_blank": [
+        "private codename"
+      ]
+    }
+  ]
+}

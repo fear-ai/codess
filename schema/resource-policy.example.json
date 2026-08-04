@@ -1,0 +1,10 @@
+{
+  "format": "codess.resource-policy/1",
+  "maximums": {
+    "transcript_bytes": 268435456,
+    "cursor_container_bytes": 10737418240,
+    "events_per_source": 200000,
+    "events_per_session": 100000,
+    "context_content_chars": 250000
+  }
+}

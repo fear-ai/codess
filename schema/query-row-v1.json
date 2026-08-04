@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codess.local/schema/query-row-v1.json",
+  "title": "Codess query row envelope version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "report", "project_path", "row_number", "data"],
+  "properties": {
+    "schema": {"const": "codess.query-row/1"},
+    "report": {"type": "string", "minLength": 1},
+    "project_path": {"type": ["string", "null"]},
+    "row_number": {"type": ["integer", "null"], "minimum": 1},
+    "data": {"type": "object"}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "report": {"const": "sessions"},
+        "project_path": {"type": "string"},
+        "row_number": {"type": "integer", "minimum": 1},
+        "data": {"$ref": "#/$defs/sessionData"}
+      }
+    },
+    {
+      "properties": {
+        "report": {"const": "stats.project"},
+        "project_path": {"type": "string"},
+        "row_number": {"type": "integer", "minimum": 1},
+        "data": {"$ref": "#/$defs/statsProjectData"}
+      }
+    },
+    {
+      "properties": {
+        "report": {"const": "stats.total"},
+        "project_path": {"type": "null"},
+        "row_number": {"type": "null"},
+        "data": {"$ref": "#/$defs/statsTotalData"}
+      }
+    }
+  ],
+  "$defs": {
+    "sessionData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "global_session_id", "source", "release", "started_at", "ended_at", "source_project_path", "metadata"],
+      "properties": {
+        "session_id": {"type": "string"},
+        "global_session_id": {"type": "string"},
+        "source": {"type": "string"},
+        "release": {"type": ["string", "null"]},
+        "started_at": {"type": ["number", "null"]},
+        "ended_at": {"type": ["number", "null"]},
+        "source_project_path": {"type": ["string", "null"]},
+        "metadata": {"type": "object"}
+      }
+    },
+    "statsProjectData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessions", "events"],
+      "properties": {
+        "sessions": {"type": "integer", "minimum": 0},
+        "events": {"type": "integer", "minimum": 0}
+      }
+    },
+    "statsTotalData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projects", "sessions", "events"],
+      "properties": {
+        "projects": {"type": "integer", "minimum": 0},
+        "sessions": {"type": "integer", "minimum": 0},
+        "events": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

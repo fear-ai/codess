@@ -4,9 +4,12 @@ import pytest
 
 from codess.sanitize import (
     apply_sanitization,
+    protect_csv_cell,
     redact,
     sanitize_for_display,
+    sanitize_tabular,
     sanitize_text,
+    sanitize_value,
 )
 
 
@@ -21,6 +24,9 @@ class TestSanitizeText:
         assert sanitize_text("a\x00b") == "ab"
         assert sanitize_text("\x01\x02\x1f\x7f") == ""
         assert sanitize_text("keep\t\n") == "keep\t\n"  # tab and newline preserved
+
+    def test_c1_control_chars(self):
+        assert sanitize_text("before\x85after\x9b") == "beforeafter"
 
     def test_ansi_sequences(self):
         assert sanitize_text("hello\x1b[31mred\x1b[0m") == "hellored"
@@ -86,3 +92,27 @@ class TestApplySanitization:
     def test_with_redact(self):
         out = apply_sanitization("key sk-abcdefghij1234567890xyz", True)
         assert "[REDACTED]" in out
+
+
+def test_sanitize_tabular_flattens_rows():
+    assert sanitize_tabular("a\tb\nc\x00") == "a b c"
+
+
+def test_sanitize_value_recurses_and_redacts():
+    value = {
+        "sk-abcdefghij1234567890xyz": "key",
+        "nested": ["safe\x00", {"token": "sk-abcdefghij1234567890xyz"}],
+    }
+    result = sanitize_value(value, redact_enabled=True)
+    assert result["[REDACTED]"] == "key"
+    assert result["nested"][0] == "safe"
+    assert result["nested"][1]["token"] == "[REDACTED]"
+
+
+@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "＝", "＋", "－", "＠"])
+def test_protect_csv_cell_blocks_formula_prefixes(prefix):
+    assert protect_csv_cell(prefix + "payload") == "\t" + prefix + "payload"
+
+
+def test_protect_csv_cell_preserves_numeric_values():
+    assert protect_csv_cell(-1) == -1

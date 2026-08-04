@@ -1,0 +1,9 @@
+{
+  "session_id": "session-negative",
+  "event_id": "bad-order",
+  "sequence_no": 0,
+  "event_type": "user_message",
+  "subtype": "prompt",
+  "role": "user",
+  "content": "invalid sequence"
+}

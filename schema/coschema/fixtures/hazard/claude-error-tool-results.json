@@ -1,0 +1,37 @@
+{
+  "hazard": "source-role-is-not-actor",
+  "source": "Claude",
+  "session": {
+    "id": "claude-error-results",
+    "source": "Claude",
+    "type": "Code"
+  },
+  "events": [
+    {
+      "session_id": "claude-error-results",
+      "event_id": "call",
+      "event_type": "tool_call",
+      "role": "assistant",
+      "tool_name": "Read",
+      "metadata": "{\"call_id\":\"fixture-call\"}"
+    },
+    {
+      "session_id": "claude-error-results",
+      "event_id": "denied",
+      "event_type": "user_message",
+      "subtype": "permission_denied",
+      "role": "user",
+      "tool_name": "Read",
+      "content": "denied",
+      "tool_output": "denied",
+      "metadata": "{\"call_id\":\"fixture-call\"}"
+    }
+  ],
+  "expected_result": {
+    "event_kind": "tool.result",
+    "actor_kind": "tool",
+    "content_role": "tool_result",
+    "normalized_status": "denied",
+    "is_error": 1
+  }
+}

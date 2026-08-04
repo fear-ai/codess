@@ -1,0 +1,12 @@
+{"timestamp":"2026-07-10T12:00:00Z","type":"session_meta","payload":{"id":"codex-modern","cwd":"__PROJECT__","cli_version":"1.2.3","model_provider":"openai","originator":"codex_cli_rs","source":"cli"}}
+{"timestamp":"2026-07-10T12:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect the project."}]}}
+{"timestamp":"2026-07-10T12:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"duplicate notification"}}
+{"timestamp":"2026-07-10T12:00:03Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":\"pwd\"}","call_id":"call-shell"}}
+{"timestamp":"2026-07-10T12:00:04Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-shell","output":"__PROJECT__"}}
+{"timestamp":"2026-07-10T12:00:05Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch\n*** End Patch","call_id":"call-patch","status":"completed"}}
+{"timestamp":"2026-07-10T12:00:06Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-patch","output":"Done!"}}
+{"timestamp":"2026-07-10T12:00:07Z","type":"response_item","payload":{"type":"web_search_call","status":"completed","action":{"type":"search","query":"official documentation"}}}
+{"timestamp":"2026-07-10T12:00:08Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Inspection complete."}]}}
+{"timestamp":"2026-07-10T12:00:09Z","type":"event_msg","payload":{"type":"turn_aborted","reason":"user interrupted"}}
+{"timestamp":"2026-07-10T12:00:10Z","type":"response_item","payload":{"type":"reasoning","summary":[]}}
+{"timestamp":"2026-07-10T12:00:11Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":1}}}

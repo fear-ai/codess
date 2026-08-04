@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codess.local/schema/candidate-policy-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["policy_format"],
+  "properties": {
+    "policy_format": {"const": "codess.candidate-policy/1"},
+    "min_sessions": {"type": "integer", "minimum": 0},
+    "consider_active_git_without_sessions": {"type": "boolean"}
+  }
+}
