@@ -5,7 +5,7 @@ Sessions from Claude Code, Codex, and Cursor. It preserves exact vendor evidence
 while providing regular Project, Session, Event, tool, model, and Artifact
 structures that can be queried together.
 
-Use Codess to find work associated with a repository, reconstruct an exchange,
+Use Codess to find work associated with a repository, reconstruct an Interaction,
 inspect tool or model activity, compare source systems, and supply structured
 inputs to later research or assessment.
 
@@ -21,16 +21,16 @@ ingest, orient, and search one repository. Start here if you want to answer:
 - What are the largest or most active Sessions?
 - Where did a particular prompt, response, tool call, error, or file appear?
 
-### I Want to Investigate Sessions or Exchanges
+### I Want to Investigate Sessions or Interactions
 
-Read [Core Capabilities](Codess.md#5-core-capabilities), then use the typed query
+Read [Search and Investigation](Codess.md#5-search-and-investigation), then use the typed query
 actions described under [Investigation](#investigation). These operations can
 filter Events, expand complete Interactions or Model Turns, and retain stable
 identities for later evidence review.
 
 ### I Want to Compare Projects, Vendors, or Models
 
-Read [Vendor and Model Comparison](Codess.md#53-vendor-and-model-comparison) and
+Read [Vendor, Harness, and Model Comparison](Codess.md#43-vendor-harness-and-model-comparison) and
 the relevant vendor reference:
 
 - [Claude Code Source Schema](CCSchema.md)
@@ -194,7 +194,7 @@ capture. Storage deletion remains a reviewed maintenance operation.
 | [Codess](Codess.md) | Problem, solution, product capabilities, terminology, boundaries, and longer-term vision |
 | [Operations](Operations.md) | Installation, source locations, normal execution, diagnosis, and maintenance commands |
 | [Functional Design](Designs.md) | Decided functional behavior, rationale, invariants, and explicitly optional directions |
-| [Implementation Plan](CoPlan.md) | Components, modules, data flows, implemented state, work in progress, planned work, and postponed work |
+| [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, current state, code review, and work registry |
 | [CoSchema](CoSchema.md) | Common entities, relationships, fields, vocabularies, and query/store contracts |
 | [Claude Code Source Schema](CCSchema.md) | Claude Code storage, records, selective access, mapping, and limitations |
 | [Codex Source Schema](CodexSchema.md) | Codex storage, records, selective access, mapping, and limitations |

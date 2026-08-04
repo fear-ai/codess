@@ -54,7 +54,7 @@ Array under `entries` (typical fields used by Codess):
 Line-delimited JSON contains both transcript content and Claude Code product
 state. Persisted records are not a verbatim copy of the model's runtime context.
 
-Runtime context can include system/project instructions, a conversation working
+Runtime context can include system/project instructions, a Session working
 set or compacted summary, a memory index, skill descriptions, loaded tool
 schemas, deferred tool names, attachments, and tool results. Exact contents are
 assembled dynamically and are not recoverable from normalized message events.
@@ -75,7 +75,7 @@ or an unanswered final record can show that the observed Source is open-ended;
 none proves a currently running Claude process. Runtime state remains unknown
 unless a separate dated runtime observation supplies it.
 
-The current adapter emits conversation events from `user` and `assistant`
+The current adapter emits message Events from `user` and `assistant`
 records, distinguishes typed human prompts from harness/system inputs carried
 in user envelopes, and emits bounded product-state and lifecycle events. It
 recognizes Claude's tagged local-command trio in either observed release
@@ -85,7 +85,7 @@ envelope: `<local-command-caveat>` is harness context,
 store these as `user.message.content`; others use `system/local_command`.
 Their source envelope role therefore never decides the normalized actor.
 Command-only Sessions remain valid operational evidence, but Session
-orientation should de-emphasize them relative to substantive conversations.
+orientation should de-emphasize them relative to substantive Sessions.
 The adapter
 maps a `system` `compact_boundary` to `context.compact` and preserves its
 trigger, pre/post token counts, duration, preserved-segment/message counts, and
@@ -104,7 +104,7 @@ processes.
 
 Decoder 0.2 distinguishes unsupported content from non-semantic state:
 signature-only `thinking` blocks with empty plaintext and model-fallback
-markers are known retained-raw state, not missing conversation text.
+markers are known retained-raw state, not missing Session content.
 Image-only user records are reported as `attachment_only_records` and
 `unsupported_records`; their bytes remain in source evidence until the
 attachment/content-link mapper is implemented.

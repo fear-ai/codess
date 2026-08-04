@@ -120,7 +120,7 @@ positive and unique within one Session.
 
 `started_at`, `ended_at`, and `event_at` contain explicit source or mapping time
 or remain `NULL`. File modification time is stored separately as Source
-observation evidence and is not promoted silently to conversation time.
+observation evidence and is not promoted silently to Session time.
 
 Event-oriented numeric times use Unix milliseconds. Manifest, ingest, and
 observation timestamps use RFC 3339 UTC strings. Time-basis fields state the
@@ -250,7 +250,7 @@ replacement is transactional. Query opens normalized databases read-only.
 Raw retention uses the `codess.raw/1` sidecar format outside query databases.
 Reference mode records locator and update evidence. Capture stores an exact
 content-addressed revision. Seal makes the selected raw objects part of the
-published Project store set. Raw objects are not duplicated into conversation
+published Project store set. Raw objects are not duplicated into Session
 tables.
 
 JSONL capture uses bounded streaming. Cursor capture uses SQLite backup so

@@ -72,7 +72,7 @@ codess scan --dir "$PROJECT" --out -
 ```
 
 Scan consults vendor indexes and bounded metadata. It does not normalize
-conversation content. Confirm that the row names the intended Project and
+Session content. Confirm that the row names the intended Project and
 source systems before ingesting.
 
 ### 4.2 Validate
@@ -96,7 +96,7 @@ codess ingest --dir "$PROJECT" --source all
 Ingest selects relevant vendor records, decodes and classifies them, validates
 the common records, writes per-source-system SQLite stores, and publishes the
 completed Project store set. Progress is emitted on standard error without
-printing conversation content.
+printing Session content.
 
 ### 4.4 Orient
 
@@ -168,7 +168,7 @@ codess query overview \
   --dir /path/to/project-a \
   --dir /path/to/project-b
 
-codess query search --dirs projects.csv --text 'specific exchange'
+codess query search --dirs projects.csv --text 'specific interaction'
 ```
 
 Inspect the resolved Project scope before drawing cross-Project conclusions.
@@ -211,7 +211,7 @@ Raw capture can contain private code, prompts, tool data, and credentials. Use
 it only with an explicit retention purpose and adequate local storage. Raw
 objects support provenance and recovery; they are not inserted wholesale into
 the searchable database. The functional tradeoffs and mode boundaries are
-defined in [Raw Evidence and Capture](Designs.md#85-raw-evidence-and-capture).
+defined in [Raw Evidence and Integrity](Designs.md#48-raw-evidence-and-integrity).
 
 ## 9. Basic Diagnosis
 

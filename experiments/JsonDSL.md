@@ -30,8 +30,8 @@ adapters actually perform, without weakening the pipeline's guarantees:
 - conditional emission (skip a field when its source is absent/empty);
 - string surgery (split multi-line tool output, trim, normalize timestamps);
 - table lookup (status/role/event-kind vocabularies; tool-name canonicalization);
-- **loud failure on unmappable input** — never a silent null (the never-guess
-  rule, [Designs §4.5](../Designs.md#45-translation-admission-and-conformance));
+- **loud failure on unmappable input** — never a silent null (the field-state
+  rule, [Designs §4.1](../Designs.md#41-field-states-and-admission));
 - and it must not force us to abandon host functions we already require
   (deterministic global-ID hashing, JSON canonicalization, bounded redaction).
 
@@ -39,7 +39,7 @@ adapters actually perform, without weakening the pipeline's guarantees:
 
 The evaluation criteria are read off Codess's non-negotiable contracts so the
 result is authoritative rather than a matter of taste:
-- **Never-guess / dead-letter** ([Designs §4.5](../Designs.md#45-translation-admission-and-conformance)):
+- **Never-guess / diagnose** ([Designs §4.1](../Designs.md#41-field-states-and-admission)):
   a miss is a diagnostic, not
   a guessed value or a silent null.
 - **Never crash on input** (see §9): no record, however malformed, may abort the
@@ -124,7 +124,7 @@ decision 004 anticipates by naming its own acceptance test.
 
 Reopen only when rule authors who cannot ship Python become a demonstrated
 bottleneck for adding or correcting a vendor mapping. Absent that, named Python
-transforms remain. This trigger is registered in `CoPlan §12` as the reopen
+transforms remain. This trigger is registered in `CoPlan §14.4` as the reopen
 condition for the mapping-DSL deferral.
 
 ## 10. Relationship to Universal Field Resilience

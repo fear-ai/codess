@@ -4,23 +4,32 @@ CoPlan explains how Codess is implemented, how components relate, how behavior
 is tested, what is operational now, and what engineering work remains. It is
 the sole current implementation-status and work registry.
 
-## 1. Implementation Priorities
+## 1. Implementation Scope
 
-Implementation work follows the product value chain:
+By this point, the reader has already seen how to start Codess, why the product
+exists, and which functional rules its conversions must preserve. CoPlan begins
+at the software boundary. It identifies the code that owns each responsibility,
+the allowed dependencies between components, the data passed at runtime, the
+physical store implementation, and the tests that establish conformance.
 
-1. selective vendor Source access;
-2. precise and resilient vendor decoding;
-3. evidence-preserving classification and normalization;
-4. constrained, indexed SQLite storage;
-5. strong search, reconstruction, and structured results;
-6. representative validation and performance measurement; and
-7. supporting publication, catalog, raw evidence, and retention.
+The first part of this document describes the intended implementation
+architecture. It distinguishes that intended structure from the current code:
+the implementation-status and code-review sections state what exists and where
+it diverges, while the work registry turns each unresolved finding into a
+prioritized item with completion evidence. Product capabilities and functional
+rationale are not restated here unless they impose a concrete software
+boundary or verification obligation.
 
-Supporting subsystems are maintained when they protect correctness or routine
-operation. They do not take priority over decode, classification, search, or a
-reproduced performance problem.
+Vendor record processing receives the most implementation attention because it
+contains the greatest structural variation and uncertainty. Catalog,
+publication, raw evidence, refresh, and retention are supporting services. They
+remain important, but do not define vendor meaning or common query semantics.
 
-## 2. Repository Structure
+## 2. Repository Layout
+
+This is a static filesystem map: it answers where implementation, contracts,
+tests, catalogs, and maintenance wrappers live in the source tree. It does not
+show imports, runtime calls, database contents, or deployed data locations.
 
 ```text
 CodeSess/
@@ -44,48 +53,78 @@ applications.
 
 ## 3. Architecture
 
-### 3.1 Component Hierarchy
+### 3.1 Software Layers
+
+The diagram is a static code-dependency model, not a function call tree or
+runtime data flow. A solid arrow means that the upper component may import or
+depend on the public interface of the lower component. It does not assert that
+every invocation follows the complete chain. Dashed lines mean that executable
+contracts and shared utilities constrain or support several layers without
+owning their domain behavior.
 
 ```mermaid
 flowchart TB
-    Entry["codess.project and argparse"]
-    CLI["cli.*_cmd command adapters"]
-    Selection["catalog, scan, and source selection"]
-    Access["codex_source, cursor_source,<br/>bounded_jsonl, sqlite3"]
-    Adapter["adapters.cc, adapters.codex,<br/>adapters.cursor"]
-    Domain["mapping, field_state,<br/>content and identity policy"]
-    Store["store and schema_contract<br/>CoSchema SQLite databases"]
-    Query["query_api and query_cmd<br/>selection, merge, expansion"]
-    Evidence["evidence_resolver and raw_store<br/>zstandard sidecars"]
-    Support["registry, refresh, snapshots,<br/>storage and retention"]
-    Contracts["schema JSON, mapping profiles,<br/>DDL, fixtures, and tests"]
+    Interface["Interface Layer"]
+    Operations["Application Operations"]
+    Access["Source Access"]
+    Decode["Vendor Decode"]
+    Mapping["Common Mapping"]
+    Query["Query Engine"]
+    Catalog["Catalog Services"]
+    Storage["Storage Services"]
+    Contracts["Executable Contracts"]
+    Utilities["Shared Utilities"]
 
-    Entry --> CLI
-    CLI --> Selection --> Access --> Adapter --> Domain --> Store
-    CLI --> Query --> Store
-    Query --> Evidence --> Access
-    Support --> Selection
-    Store --> Support
-    Contracts --> Domain
-    Contracts --> Store
-    Contracts --> Query
+    Interface --> Operations
+    Operations --> Access
+    Access --> Decode
+    Decode --> Mapping
+    Mapping --> Storage
+    Operations --> Query
+    Query --> Storage
+    Operations --> Catalog
+    Catalog --> Storage
+    Contracts -.-> Decode
+    Contracts -.-> Mapping
+    Contracts -.-> Query
+    Contracts -.-> Storage
+    Utilities -.-> Operations
+    Utilities -.-> Access
+    Utilities -.-> Decode
+    Utilities -.-> Mapping
+    Utilities -.-> Storage
 ```
 
-| Component | Principal modules | Responsibility |
-|---|---|---|
-| Entry and dispatch | `codess.project`, `cli.*_cmd` | Parse one public interface, resolve common options, dispatch operations, render results and exit status. |
-| Project selection | `project_catalog`, `catalog`, `project_annotations`, `catalog_operations`, `registry_store` | Stable Project identity, locations, workspace bindings, catalog scope, and observations. |
-| Source discovery | `scan`, `codex_source`, `cursor_source`, Claude path helpers | Find attributable source records and calculate bounded metadata without normalization. |
-| Vendor decode | `adapters.cc`, `adapters.codex`, `adapters.cursor` | Interpret selected vendor records and emit common candidates plus exact source evidence. |
-| Mapping and policy | `mapping`, `field_state`, `ingest_pipeline`, `ingest_review`, `content_processing`, `context_content`, `tool_identity`, `tool_result_status` | Classify, diagnose, sanitize, bound, and normalize vendor candidates. |
-| Persistence | `store`, `schema_contract`, `identity`, `processing_contract` | Enforce CoSchema, replace source-owned records transactionally, maintain indexes and stable identities. |
-| Query | `query_api`, `cli.query_cmd`, `configuration_audit`, `artifact_correlation` | Select stores, push predicates, order and merge results, expand exchanges, facet, and render structured output. |
-| Evidence | `evidence_resolver`, `evidence`, `raw_store` | Resolve normalized identities to captured, sealed, or verified live source evidence. |
-| Supporting operation | `snapshot`, `baseline_*`, `refresh_*`, `retention`, `storage_report` | Publish complete Project store sets, compose routine refresh, inventory storage, and prune reviewed derivatives. |
-| Focused audits | `vendor_audits.*`, `mcp_audit`, `codex_parent_audit`, `cursor_feature_audit`, `orientation_audit`, `token_usage` | Gather bounded evidence for one source capability or derived measure; never act as alternate ingesters. |
-| Shared infrastructure | `config`, `helpers`, `fileio`, `bounded_jsonl`, `resources`, `resource_policy`, `sanitize`, `progress` | Configuration, safe I/O, limits, progress, and common utilities. |
+Vendor decoding and common mapping are adjacent but separate. The former knows
+the source record; the latter knows CoSchema classifications and content
+policies. Query and catalog services share storage infrastructure but do not
+enter the ingest chain. Runtime records flowing through these components are
+shown later under Data Flows.
 
-### 3.2 Dependency Rules
+### 3.2 Component Responsibilities
+
+“Behavioral authority” means the component in which the behavior is implemented
+and which must change when that behavior changes. It is not a named human
+maintainer, a documentation location, or a list of every caller. “Implementation
+location” identifies the current code; the dependency diagram identifies
+permitted consumers; Designs, CoSchema, and the vendor schema documents remain
+the authorities for functional meaning rather than code ownership.
+
+| Component | Implementation location | Behavioral authority |
+|---|---|---|
+| Interface layer | `codess.project`, `cli.*_cmd` | Parse the public CLI, adapt arguments, render output, and return exit status. |
+| Application operations | `scan`, `query_api`, `refresh_operations`, `baseline_operations`, and currently parts of `cli.ingest_cmd` | Coordinate one use case without defining vendor formats or physical schemas. |
+| Project catalog | `project_catalog`, `catalog_operations`, `project_annotations`, `registry_store` | Project identity, locations, workspace bindings, selection, and observations. |
+| Source access | `bounded_jsonl`, `codex_source`, `cursor_source`, plus Claude selection in `scan` and ingest coordination | Locate and read attributable source records with stable locators and bounds. |
+| Vendor decode | `adapters.cc`, `adapters.codex`, `adapters.cursor` | Interpret one selected source family and emit source-annotated candidate Sessions and Events. |
+| Common mapping | `mapping`, `field_state`, `content_processing`, `context_content`, `tool_identity`, `tool_result_status`, `ingest_review` | Apply common classifications, field-state rules, content policy, diagnostics, and mapping evidence. |
+| Storage services | `store`, `schema_contract`, `identity`, `processing_contract`, `raw_store`, `snapshot` | Enforce CoSchema, transactions, identities, publication, and retained evidence. |
+| Query engine | `query_api`, `investigation`, `configuration_audit`, `artifact_correlation` | Execute typed predicates, bounded merge, expansion, correlation, and structured results. |
+| Operational services | `refresh_*`, `baseline_*`, `retention`, `storage_report`, `evidence_resolver` | Compose updates, verify publication, resolve evidence, report storage, and perform reviewed cleanup. |
+| Evidence audits | `vendor_audits.claude_features`, `vendor_audits.codex_features`, `cursor_feature_audit`, `codex_parent_audit`, `mcp_audit`, `orientation_audit`, `token_usage` | Measure a bounded source or stored capability without authorizing a mapping. |
+| Shared utilities | `config`, `helpers`, `fileio`, `resources`, `resource_policy`, `sanitize`, `progress` | Configuration, safe I/O, resource control, sanitization, and progress reporting. |
+
+### 3.3 Dependency Rules
 
 - Source-access modules may know vendor storage but not CoSchema query behavior.
 - Adapters may depend on common mapping and content helpers but not query,
@@ -99,64 +138,98 @@ flowchart TB
 - Administrative wrappers call domain operations instead of implementing a
   second workflow.
 
+Focused evidence audits may inspect a vendor store directly when the source
+shape itself is the subject of the audit. That exception is read-only,
+explicitly bounded, and prohibited from becoming an alternate ingest path.
+
 Cross-cutting utilities remain content-neutral unless their stated purpose is
 content processing. Logging, progress, resource observation, and catalog code
 must not become hidden vendor parsers.
 
-## 4. Structured Store Realization
+## 4. CoSchema Read and Write Path
 
-CoSchema is authoritative for entities, fields, and cardinality. The
-implementation translates domain records into grouped SQLite tables without
-letting physical column names define vendor interpretation.
+This section concerns the physical and code realization of the store, not the
+logical entity design. CoSchema remains authoritative for entities,
+cardinalities, fields, and vocabularies. Repeating its entity-relationship
+diagram here would create a second schema description; the implementation view
+instead shows where records are checked, written, indexed, and read.
 
 ```mermaid
-flowchart LR
-    Adapter["Vendor adapters"]
-    Domain["Typed domain records<br/>and mapping diagnostics"]
-    Writer["Store API<br/>identity and transactions"]
-    Core["Core tables<br/>Projects, Sources, Sessions, Events"]
-    Relations["Relationship tables<br/>Interactions, Model Turns, tools, Artifacts"]
-    Content["Content and provenance<br/>objects, links, processing runs"]
-    Indexes["Indexes and constraints"]
-    Reader["Query API<br/>read-only selection and merge"]
+flowchart TB
+    Records["Mapped Records"]
+    Store["Store API"]
+    Transaction["SQLite Transaction"]
+    Tables["CoSchema Tables"]
+    Indexes["Indexes and Constraints"]
+    Query["Read-Only Query"]
+    Contract["Physical Contract"]
 
-    Adapter --> Domain --> Writer
-    Writer --> Core
-    Writer --> Relations
-    Writer --> Content
-    Indexes --> Core
-    Indexes --> Relations
-    Indexes --> Content
-    Core --> Reader
-    Relations --> Reader
-    Content --> Reader
+    Records --> Store
+    Store --> Transaction
+    Transaction --> Tables
+    Contract -.-> Store
+    Contract -.-> Tables
+    Indexes -.-> Tables
+    Tables --> Query
 ```
 
-| Relationship | Construction | Query use |
+| Store concern | Responsible component | Enforcement |
 |---|---|---|
-| Project to location/workspace | Catalog operations and vendor discovery | Project resolution and source selection |
-| Source to Source record | Adapter record locators and Source revision | Provenance and evidence resolution |
-| Session to ordered Event | Adapter ordering followed by store validation | Session reconstruction and sequence windows |
-| Interaction and Model Turn to Event | Vendor boundaries or adapter structural mapping | Complete exchange expansion and activity measures |
-| Model Turn to configuration | Direct or explicitly inherited vendor setting evidence | Model and configuration filters |
-| Tool invocation to result | Vendor call identifier and source relationship | Lineage, failure, denial, and missing-result analysis |
-| Event to Artifact | Adapter extraction and correlation assertions | File/repository investigation across Sessions |
-| Event or record to content | Content processing and deduplicated content identity | Search, bounded display, and derivation tracking |
+| Physical initialization | `schema_contract`, `store.init_db` | Package verification, DDL execution, application ID, schema version, constraints, and indexes |
+| Project and Source identity | `identity`, `store.sync_project_catalog`, `store.ensure_source` | Stable IDs, observed locations, Source revisions, and provenance keys |
+| Session replacement | `ingest_pipeline`, `store.replace_session_events`, `store.replace_source_sessions` | Source ownership, transaction rollback, stale-row removal, and state advancement after commit |
+| Relationships | `store.upsert_event` and specialized recorders | Foreign keys plus source-supported Interaction, Model Turn, tool, content, and Artifact edges |
+| Content and processing | `content_processing`, `store.record_processing_run` | Bounded content identity, derivation links, policy identity, and transformation evidence |
+| Diagnostics | `ingest_review`, mapping diagnostics in `store` | Source-, record-, and field-scoped limitations retained beside usable records |
+| Read access | `store.connect`, `query_api` | Read-only connections, qualified predicates, deterministic order, and global limits |
 
-Adapters construct source-supported relationships. Store code validates and
-persists them. Query code follows them but never invents missing edges.
+Adapters construct source-supported candidate relationships. Common mapping
+classifies them. Store code validates and persists them; query code follows
+persisted edges but never manufactures a missing relationship.
 
 ## 5. Data Flows
 
-### 5.1 Scan
+This diagram describes runtime data movement. Unlike the dependency diagram,
+its arrows mean that observations or normalized records pass between stages.
+Scan ends in catalog observations; ingest ends in a published Project store
+set; query starts from selected stores and ends in a bounded result.
 
-```text
-Project roots or catalog scope
-  → vendor indexes and metadata
-  → bounded source-system observations
-  → Project attribution and candidate rows
-  → CSV and registry observation
+```mermaid
+flowchart TB
+    Scope["Project Scope"]
+
+    subgraph Scan["Scan Flow"]
+        Observe["Source Observation"]
+        Catalog["Catalog Record"]
+        Observe --> Catalog
+    end
+
+    subgraph Ingest["Ingest Flow"]
+        Select["Source Selection"]
+        Read["Bounded Read"]
+        Decode["Vendor Decode"]
+        Map["Common Mapping"]
+        Write["Transactional Write"]
+        Publish["Project Publication"]
+        Select --> Read --> Decode --> Map --> Write --> Publish
+    end
+
+    subgraph Query["Query Flow"]
+        Stores["Store Selection"]
+        Filter["Typed Filtering"]
+        Merge["Bounded Merge"]
+        Result["Structured Result"]
+        Stores --> Filter --> Merge --> Result
+    end
+
+    Scope --> Observe
+    Scope --> Select
+    Catalog --> Select
+    Publish --> Stores
+    Scope --> Stores
 ```
+
+### 5.1 Scan
 
 `scan.run_scan` is index-led. It uses Claude indexes or path bindings, Codex
 `session_meta` records, and Cursor workspace/header metadata. Explicit bounded
@@ -167,17 +240,6 @@ Scan writes observations, not normalized Events. Its Session and Event counts
 are source-system metrics and can differ from normalized store counts.
 
 ### 5.2 Ingest
-
-```text
-resolved Project and source-system scope
-  → selected Source revisions
-  → bounded source reader
-  → vendor adapter
-  → field-state, classification, content, and resource processing
-  → source-level transactional replacement
-  → common validation and indexes
-  → complete Project publication
-```
 
 `cli.ingest_cmd` coordinates the run. Vendor access and adapters produce
 records; `store` owns SQLite transactions. State advances only after the
@@ -191,72 +253,294 @@ selected database observation in one transaction.
 
 ### 5.3 Query
 
-```text
-Project and store selection
-  → canonical typed request
-  → per-store SQL predicate and limit
-  → deterministic bounded merge
-  → optional Interaction or Model Turn expansion
-  → facets and structured result
-  → optional evidence resolution or derived consumer
-```
-
 `query_api` owns typed request validation, filter semantics, stable results,
 facets, expansion, comparison, and byte/row limits. `cli.query_cmd` owns command
 adaptation and human or structured rendering. Direct report modes remain
 separate renderers over the same stores.
 
-## 6. Vendor Pipelines
+## 6. Vendor Record Processing
 
-### 6.1 Claude Code
+Vendor record processing is the most specialized part of Codess. Each source
+family has different selection indexes, storage envelopes, ordering evidence,
+role semantics, tool lineage, context records, and update behavior. An adapter
+therefore owns interpretation of one selected source family; it does not own
+Project identity, common vocabulary, SQLite layout, publication, or query.
 
-```text
-~/.claude/projects
-  → project index/path binding
-  → selected top-level and supported subagent JSONL
-  → bounded line reader
-  → adapters.cc
-  → common Events, tools, context, configuration, and relations
-```
+### 6.1 Adapter Contract
 
-Claude work centers on reliable distinction between direct prompts,
-harness-carried user envelopes, tool results, delegated prompts, assistant
-messages, tool operations, compaction, and subagent relationships.
+Source access supplies an adapter with bounded records plus a Source revision,
+stable locator, selected Project, and any direct Session-level metadata. The
+adapter emits candidate Sessions and Events that retain exact source type,
+subtype, role, identifier, order, and field provenance. Candidate records may
+also carry tool, configuration, context, lineage, status, and Artifact evidence
+for the common conversion stage.
 
-### 6.2 Codex
+Every adapter must handle these cases independently:
 
-```text
-active/archive Session trees
-  → codex_source inventory and Project cwd match
-  → selected rollout JSONL
-  → bounded line reader
-  → adapters.codex
-  → messages, reasoning summaries, tools, context, lifecycle, and settings
-```
+- a valid record that emits one, several, or no common Events;
+- an optional field that is absent, null, empty, malformed, or unsupported;
+- a record with useful source evidence but no accepted common classification;
+- content that is external, structured, non-text, or over a configured bound;
+- direct, structurally mapped, inherited, ambiguous, and unavailable
+  relationships; and
+- a source format that changes without changing every surrounding record.
 
-Codex work centers on canonical versus notification records, tool call/result
-lineage, context and compaction envelopes, turn settings, lifecycle events, and
-structured collaboration evidence.
+Adapters stream or group only as much as the source relationship requires.
+They attach mapping candidates and diagnostics but do not write SQL. Current
+violations of that boundary are recorded in the code review.
 
-### 6.3 Cursor
+### 6.2 Claude Code Records
 
-```text
-Cursor User directory
-  → workspace bindings and composer indexes
-  → cursor_source read-only SQL selection
-  → selected headers, fallback indexes, bubbles, and context values
-  → adapters.cursor
-  → messages, inferred turns, tools, context, status, and model selection
-```
+Claude Code uses Project-scoped JSONL trees under `~/.claude/projects`. Its
+directory slug is lossy, so `sessions-index.json.projectPath`, reviewed catalog
+bindings, and the selected checkout carry more authority than reversing the
+slug. Main transcript files and supported subagent files are selected before
+the bounded line reader enters `adapters.cc`.
 
-Cursor performance depends on indexed selection of relevant composer key ranges
-instead of decoding the complete shared database. Source-level physical
-duplicate handling uses stable vendor bubble identity; repeated real Events are
-retained.
+| Stage | Implementation detail |
+|---|---|
+| Session selection | Index entries supply `sessionId`, `fullPath`, `fileMtime`, `isSidechain`, and Project path evidence; top-level and related subagent JSONL remain distinguishable. |
+| Record identity | JSONL line, `uuid`, `parentUuid`, `sessionId`, and available `tool_use_id` establish record and call lineage. |
+| Message decode | `user`, `assistant`, and `system` envelopes can contain strings or typed `text`, `tool_use`, and `tool_result` blocks; one source line can emit several Events. |
+| Participant decode | A `user` envelope can contain a direct prompt, local-command control, delegated task, compacted context, or tool result. Prompt-origin and tagged-command evidence override the envelope role. |
+| Context decode | `compact_boundary` and its `isCompactSummary` record become related context Events; system/project instructions, attachments, memory, and product state remain separately classified. |
+| Tool decode | Tool-use IDs link calls and results; permission denial is separated from other failures; persisted output paths are validated inside the Session subtree before becoming external content. |
+| Configuration | Assistant message model and usage service tier are direct observations; harness version and Session titles remain separate metadata. |
+| Session relations | `isSidechain`, agent fields, fork context, and explicit parent identifiers can support a subagent relation; time or path proximity cannot. |
 
-## 7. Persistence and Indexing
+Claude's envelope role cannot be copied directly into `actor_kind`. A `user`
+envelope containing `tool_result` is a tool result; one containing
+`<local-command-caveat>` is harness context; one containing
+`<local-command-stdout>` is harness-produced command output; and one marked
+`isCompactSummary` is injected compacted context. Treating all four as human
+prompts would corrupt prompt counts, response pairing, and utilization reports.
+The adapter therefore classifies the typed block or tagged payload before it
+uses the envelope role.
 
-### 7.1 Store Layout
+Non-message records require an explicit retention decision. Current behavior
+and remaining work are:
+
+| Source case | Current decision | Remaining action |
+|---|---|---|
+| Image-only user record | Record `attachment_only_records`; do not emit empty human text | Define Artifact/content-link mapping before retaining the image as searchable content (W02) |
+| `attachment` product-state record | Emit bounded attachment type, item count, initial/command flags, and content-presence metadata; do not copy an unbounded body | Validate newer attachment shapes and decide which fields support search (W02, W12) |
+| `toolUseResult.persistedOutputPath` | Accept only a path inside the selected Session tree and retain it as related external content | Replace the current complete-file read with bounded streaming and explicit oversize diagnostics (W07) |
+| `isSidechain`, `agentId`, fork context, or parent field | Preserve each observed field; create a Session relation only when an explicit parent identity resolves | Measure field availability by Claude Code release and report unresolved parentage (W02, W12) |
+| Mode, permission, title, queue, snapshot, and similar product state | Emit the currently mapped bounded subtypes; retain unknown shapes as diagnostics rather than message text | Add a subtype only when it has defined query or reconstruction value (W02, W12) |
+
+`vendor_audits.claude_features` inventories these shapes and field-presence
+rates without retaining content bodies.
+
+### 6.3 Codex Records
+
+Codex stores active and archived rollout JSONL in separate trees. `codex_source`
+builds an inventory from `session_meta` before ingest and selects Sessions by
+their reported working directory and approved Project bindings. Archive
+location is observation evidence, not a different Session identity.
+
+| Stage | Implementation detail |
+|---|---|
+| Session selection | `session_meta.payload.id`, `cwd`, CLI version, source surface, and active/archive location define the selected rollout and its Session metadata. |
+| Record envelopes | `session_meta`, `response_item`, `event_msg`, `turn_context`, and `compacted` have different authority; notification records do not automatically duplicate canonical content. |
+| Message decode | Role-bearing response items supply human, developer, system, or model content; reasoning summaries remain distinct from ordinary model responses. |
+| Tool decode | Function, custom, web, and tool-search request/result variants retain exact names and call IDs; output linkage uses explicit source identifiers rather than adjacency. |
+| Context decode | Developer/system messages, request context, compaction replacement history, and context-compacted notifications remain distinguishable. Encrypted content stays opaque. |
+| Turn decode | `turn_context.payload.turn_id` supplies Model Turn identity; model, provider, effort, speed, service tier, and collaboration mode are nullable independent settings with direct or explicit inherited provenance. |
+| Lifecycle | Task start/completion, abort, thread settings, and supported collaboration records become typed lifecycle or configuration evidence rather than message text. |
+| Session relations | Parentage is stored only from an explicit identifier that resolves to an observed Session. Active/archive location, chronology, and similar content do not establish it. |
+
+The rollout is an execution log, not a guaranteed copy of the complete
+harness-to-model transport. Codess therefore claims completeness only for the
+selected locally retained records. It does not infer hidden planning, encrypted
+reasoning, or omitted request/response traffic.
+
+| Source case | Current decision | Remaining action |
+|---|---|---|
+| Canonical `response_item` plus an `event_msg` notification carrying the same message or reasoning | Retain the `response_item`; count the notification as a known duplicate envelope | Extend duplicate-shape fixtures when Codex adds notification variants (W02, W12) |
+| `response_item.reasoning.summary` and `encrypted_content` | Store exposed summary text as reasoning-summary content; never decode encrypted reasoning. Encrypted compaction content remains bounded opaque context | Verify each placement of `encrypted_content`; field spelling alone cannot determine its meaning (W02) |
+| `turn_context` or settings update followed by Events | Attach only directly observed settings and explicitly inherited settings to subsequent Model Turns; keep provenance for each value | Define and test termination at the next replacement setting, Turn, or Session boundary for every supported field (W02) |
+| Collaboration begin/end records | Emit lifecycle/activity Events; do not create a separate Session merely because an agent nickname or operation appears | Create parent/child Sessions only from stable child and parent identifiers observed in rollout metadata (W02) |
+| `parent_thread_id` or `forked_from_id` | Preserve the exact field and create the corresponding relation only when the referenced Session resolves | Audit positive, missing, and dangling identifiers by supported release (W02, W12) |
+| `compacted` envelope plus `context_compacted` notification | Emit the replacement-history compaction once from `compacted`; suppress the notification duplicate | Verify that newer compaction item variants retain the complete searchable summary or mark opaque/partial content explicitly (W02) |
+
+`vendor_audits.codex_features` measures general record and setting shapes;
+`codex_parent_audit` measures resolvable, missing, and dangling parent evidence.
+
+### 6.4 Cursor Records
+
+Cursor combines workspace-local SQLite state with a large shared global
+database. Project attribution must be established before bubble decoding.
+`cursor_source` resolves workspace bindings, reads current `composerHeaders`,
+uses workspace `composer.composerData` only as a provenance-labelled fallback,
+and selects indexed key ranges for the resulting composer IDs.
+
+| Stage | Implementation detail |
+|---|---|
+| Project selection | `workspace.json`, header `workspaceId`, fallback composer indexes, catalog bindings, and explicit source links determine the selected Project cohort. |
+| SQLite access | Query-only connections include the live WAL, use bounded busy timeouts, and issue prefix ranges over composer IDs; unrelated global rows are not decoded. |
+| Source records | `composerHeaders`, `bubbleId:*`, `messageRequestContext:*`, and selected `composerData:*` values have separate Session, Event, context, and diagnostic roles. |
+| Value decode | Bubble values are normally UTF-8 JSON with a supported base64-wrapped fallback. Only mapped fields are projected before composer ordering and grouping. |
+| Message decode | Bubble type is source evidence, not sufficient participant evidence. Direct user bubbles and assistant-shaped bubbles emit messages only when usable message or tool evidence exists. |
+| Tool decode | `toolFormerData`, nonempty legacy `toolResults`, source status, `userDecision`, and call identifiers produce linked calls, results, permission decisions, and application-failure evidence. |
+| Context decode | `conversationSummary`, truncation boundaries, request-context values, and context-window observations become bounded context Events or metadata without duplicating summary bodies. |
+| Model decode | A non-default `modelInfo.modelName` governs the following inferred Model Turn with inherited provenance; missing or `default` values do not invent a model. |
+| Repetition | Within one composer, matching source type and `serverBubbleId` can prove physical duplication. Equal content, repeated tools, or similar responses remain separate Events. |
+| Update detection | Selected headers, fallback indexes, bubble ranges, and request-context ranges form the Project change marker; whole-database modification time is only a cheap container observation. |
+
+Cursor still violates the intended source-access boundary:
+`adapters.cursor` opens SQLite and executes bubble and request-context queries.
+That prevents testing decode from bounded source records alone and spreads
+vendor table knowledge across two components. W10 moves all Cursor SQL and
+key-range iteration into `cursor_source`; the adapter will receive selected
+records plus provenance and will have no SQLite dependency.
+
+| Source case | Current decision | Remaining action |
+|---|---|---|
+| Composer absent from headers but present in workspace `composerData` | Use the workspace index only as a provenance-labelled fallback | Measure false attribution and stale entries before treating the fallback as equivalent to a header (W09, W12) |
+| Composer absent from both indexes | Do not attribute it to a Project from content or chronology alone | Report it as unbound source evidence and require an explicit catalog binding if it matters (W12) |
+| Agent/subagent-looking Composer state without a stable parent ID | Preserve the source fields; do not manufacture a parent Session | Identify and validate an explicit Cursor parent/child field before adding the relation (W02) |
+| File-backed or oversized context/tool content | Keep the reference and bounded metadata; do not load it as an ordinary message | Define Artifact linkage and bounded content access for observed reference shapes (W02, W07) |
+| Adapter projection omits a source field | The omitted field is neither normalized nor silently claimed as supported | Compare audit shape inventories with projected keys and report loss or unknown fields (W12) |
+
+`cursor_feature_audit` performs the structure-only inventory. W09 verifies that
+selection remains bounded as unrelated global-database content grows.
+
+### 6.5 Evidence Audits
+
+“Audit” is Codess implementation terminology, not a vendor record type or a
+CoSchema field. It does not mean a security or compliance audit. It is a
+read-only, bounded source-shape measurement that answers one question without
+retaining message bodies. Examples include counting Claude `user` envelopes
+containing a `tool_result`, measuring resolvable and dangling Codex
+`parent_thread_id` values, or comparing Cursor composers found in headers with
+those found only in a workspace fallback index.
+
+The challenge is that vendor formats are release-dependent, sparse, and only
+partly documented. Observing a field proves presence and shape, but not stable
+semantics, completeness, or suitability for a common mapping. Negative evidence
+also matters: a parent field absent from the selected records does not prove
+that the vendor never emits it. Audit output therefore records selection,
+source versions, counts, field types, and unresolved cases. It must feed a
+mapping decision, fixture selection, or source-to-common gap report; otherwise
+the audit has no continuing purpose.
+
+A mapping decision additionally requires understood semantics, a common or
+specialized consumer, a declared retention class, and fixtures covering normal
+and irregular states.
+
+Audits are deliberately narrower than adapters. Feature audits omit content
+bodies; parentage audits inspect only candidate lineage fields; MCP audits
+distinguish discovery from actual invocation; orientation and utilization
+audits operate on normalized stores. Their output belongs in generated reports,
+not durable implementation claims or alternate ingest paths.
+
+## 7. Common Conversion and Mapping
+
+Vendor adapters expose source evidence in different shapes. The common
+conversion stage gives that evidence regular names, types, identities, and
+relationships without replacing the exact source designation. This stage is
+implemented by shared domain modules and enforced again at the store boundary.
+
+### 7.1 Candidate Record Boundary
+
+A candidate Event carries Session identity, source locator, exact record type
+and subtype, available order and time, source role, content, and optional tool,
+model, context, status, Artifact, and lineage evidence. `mapping.annotate_mapping`
+adds the selected rule, source path, and structured trace. Candidate dictionaries
+are currently the adapter-to-domain interface; they are validated when stored,
+but a single explicit typed boundary is not yet enforced for all three adapters.
+
+“Dictionary” here means a mutable Python `dict[str, Any]`, not necessarily a
+JSON object. Required and optional keys are established by convention across
+adapter and store code. This accommodates sparse and changing vendor evidence,
+but static analysis cannot reliably catch a misspelled key, an invalid value
+type, or inconsistent null handling, and some failures appear only at the store
+boundary.
+
+The immediate improvement is a shared `TypedDict` family for candidate Session,
+Event, tool, configuration, and diagnostic shapes plus one runtime validator at
+the post-decode boundary. `TypedDict` preserves optional source-specific fields
+with little conversion cost; runtime validation supplies the protection that
+Python type hints alone cannot. Dataclasses can be reconsidered after the
+candidate shapes stabilize. W04 includes this candidate contract as well as
+mapping-profile enforcement.
+
+### 7.2 Field States and Admission
+
+`field_state` distinguishes absent, explicit null, empty, sentinel-valued,
+malformed, unsupported, and valid values before defaults are applied.
+`ingest_review` records Source-, record-, or field-scoped diagnostics.
+`ingest_pipeline` decides whether a Source can be read and whether its prior
+normalized rows can be replaced. A malformed optional field removes only that
+mapping; missing identity or an unreadable container can reject the record or
+Source at the appropriate boundary.
+
+### 7.3 Names and Representations
+
+| Source evidence | Common representation |
+|---|---|
+| Vendor record name and subtype | Exact `source_record_type` and `source_record_subtype`, plus a mapped `event_kind` when supported |
+| Vendor role or envelope | Exact source role plus independent `actor_kind`, `content_role`, and `origin_kind` |
+| Vendor Session or record identifier | Exact vendor ID plus deterministic common identity scoped by its source authority |
+| Source order and time | Stable `sequence_no`, nullable explicit time, and separate time-basis and observation fields |
+| Tool operation | Exact source tool name and call ID, optional canonical alias, structured input, results, permission evidence, and separate source/common status |
+| Model setting | Nullable provider, family, exact name, revision, effort, speed, service tier, and mode in one configuration identity |
+| Scalar content | Bounded UTF-8 text with original length, processing state, content identity, and searchable role |
+| Structured content | Valid bounded JSON when internal shape is needed; opaque or display text remains text |
+| File or URI evidence | Project-relative or external Artifact identity plus evidence-backed Event relation |
+| Unknown or partial material | Exact source designation, retained evidence when selected, and a scoped diagnostic rather than a guessed common value |
+
+Common storage uses lowercase `snake_case`; exact vendor spelling remains in
+source fields and mapping traces. A source status and normalized outcome can
+coexist. A source role never collapses into Actor, and one suggestive model
+string does not populate unrelated configuration dimensions.
+
+### 7.4 Content and Resource Processing
+
+`content_processing` applies the selected pre-processing policy before bounded
+retention and the post-processing policy before publication. Character decoding,
+Unicode handling, control removal, secret suppression, privacy masking,
+vocabulary blanking, and topical filtering are ordered and attributable.
+`context_content` owns the tighter context/compaction limits. Structured tool
+input and output pass through JSON normalization rather than ambiguous string
+coercion.
+
+Classification precedes the final size decision so an oversized value can be
+diagnosed as a likely wrong record type, external content, or bounded derivation
+instead of disappearing as an undifferentiated limit failure. Source, Session,
+Event, and context bounds come from versioned policies with safe built-in
+defaults.
+
+### 7.5 Mapping Profiles and Conformance
+
+The released profiles in `schema/mappings` declare source selectors, target
+structures, operations, and one of `core`, `specialized`, `extension`,
+`raw_only`, or `discard`. `schema_contract` verifies profile syntax, referenced
+rules, and package integrity. Fixtures demonstrate representative source
+shapes and expected common output.
+
+The remaining enforcement gap is runtime symmetry. Adapters annotate mapped
+Events, but the same post-decode conformance check and strict/diagnostic policy
+do not yet govern every vendor. The intended boundary is:
+
+1. adapter emits a source-annotated candidate;
+2. common validation resolves field states and vocabulary;
+3. the selected mapping rule is checked against the released profile;
+4. diagnostics preserve partial, unsupported, and malformed evidence; and
+5. only a conforming candidate enters transactional persistence.
+
+This work is tracked explicitly in the work registry and code review.
+
+## 8. Database Lifecycle and Indexing
+
+Section 4 explains the code path that validates, writes, and reads CoSchema
+rows during one operation. This section explains the longer-lived database
+artifacts: where files are kept, what one atomic replacement includes, when a
+Project store set becomes selectable, how integrity is checked, and why an
+index is added. It is therefore about database lifecycle and operational
+behavior rather than logical schema or repository layout.
+
+### 8.1 Store Layout
 
 Each Project can have source-system stores such as:
 
@@ -275,7 +559,19 @@ into a Project store set. Published sets are also retained in the central
 registry so query and evidence access do not depend entirely on the checkout.
 This layout does not change the logical entities exposed to query.
 
-### 7.2 Transaction Boundaries
+### 8.2 Transaction Boundaries
+
+A transaction here is one SQLite atomic write unit. Codess begins the unit
+before deleting or replacing source-owned rows, writes the new Session, Events,
+relationships, content links, and diagnostics, and commits only after all those
+writes succeed. An exception rolls back the unit, leaving its previous rows
+visible. Incremental ingest state is updated only after that commit.
+
+The transaction is deliberately smaller than a complete multi-vendor ingest:
+one Claude Code or Codex transcript is one replacement unit, while one selected
+Cursor database/cohort observation is a replacement unit. Project publication
+is a later validated pointer change over completed source-system databases, not
+part of the same SQLite transaction.
 
 - One Claude or Codex transcript replacement is atomic.
 - One selected Cursor cohort replacement is atomic.
@@ -284,7 +580,7 @@ This layout does not change the logical entities exposed to query.
 - Project publication selects a complete validated result, never a partial
   working transaction.
 
-### 7.3 Index Strategy
+### 8.3 Index Strategy
 
 The physical schema indexes identity, Session ordering, source lineage,
 Interactions, Model Turns, Event kinds, Actors, statuses, tools, time, model
@@ -301,28 +597,72 @@ Index changes require:
 Do not add an index merely because a field is available. Write and storage cost
 must be justified by a repeated predicate or relationship traversal.
 
-## 8. Configuration
+### 8.4 Publication and Integrity
 
-Configuration has four layers:
+Query and source inspection use read-only SQLite connections where the platform
+permits them. Ingest writes through explicit transactions with foreign keys and
+source-owned replacement. A working database can change during ingest while
+the Project pointer continues to select the last complete published store set;
+this is staging, not partial publication.
 
-1. built-in safe defaults;
-2. environment variables for machine locations and ordinary run defaults;
-3. command arguments for one invocation; and
-4. versioned JSON policies for structured content and resource behavior.
+Published stores and captured objects are immutable by identity and
+verification, not by filesystem permissions. A local writer can modify a file,
+but its manifest or content verification then fails. The integrity model detects
+uncoordinated corruption; it is not protection against a writer able to alter
+both content and its manifest.
 
-The command line overrides environment-backed defaults where an explicit value
-is supplied. Structured policies are preferable to a growing matrix of
-source-specific flags. Source locations and ordinary run defaults are resolved
-by `config`; content and resource policies are parsed by their domain modules;
-command adapters pass the resolved configuration into operations.
+## 9. Command-Line Interface
 
-`config.validate_config()` validates the resolved machine configuration before
-scan, ingest, or query work begins. Exact current flags and defaults remain in
-the parser, policy schemas, and `codess --help`, not in this plan.
+The `codess` command is the public application interface. Command modules adapt
+arguments and render results; they should not own vendor SQL, ingest policy,
+transactions, or reusable analysis. Python modules and direct read-only SQLite
+remain integration surfaces, but are not parallel command implementations.
 
-## 9. Interfaces
+### 9.1 Configuration Resolution
 
-### 9.1 Daily Commands
+Configuration resolves in four layers: safe built-ins, environment-backed
+machine locations and ordinary defaults, invocation-specific CLI arguments,
+and versioned JSON policies for structured content and resources. An explicit
+command argument overrides its environment default. Structured policies avoid
+a growing matrix of vendor-specific flags.
+
+`config` resolves and validates machine configuration before scan, ingest, or
+query. Domain modules parse content and resource policies; command adapters
+pass the resolved values into application operations. The parser, policy
+schemas, and `codess --help` remain authoritative for current flags and
+defaults.
+
+### 9.2 Construction and Dispatch
+
+The installed command is constructed by the package entry in `pyproject.toml`:
+
+```toml
+[project.scripts]
+codess = "codess.project:console_main"
+```
+
+`main.py` provides the equivalent source-tree development entry and delegates
+to the same function. This is implementation construction. A user invocation,
+such as `codess query overview --dir /path/to/project`, enters that function,
+passes through `parse_and_run`, and dispatches to a command adapter.
+
+```mermaid
+flowchart TB
+    Shell["Shell Invocation"]
+    Entry["Console Entry"]
+    Dispatch["Argument Dispatch"]
+    Adapter["Command Adapter"]
+    Operation["Domain Operation"]
+
+    Shell --> Entry --> Dispatch --> Adapter --> Operation
+```
+
+This is a deliberately shallow runtime dispatch path, not a generated function
+call graph. `scan`, `ingest`, and `query` use the primary parser and their
+`cli.*_cmd` adapters. Administrative first tokens use `cli.admin_cmd`, which
+then calls catalog, evidence, baseline, storage, or other domain operations.
+
+### 9.3 Primary Commands
 
 - `codess scan` discovers and observes candidate Project evidence.
 - `codess ingest` decodes and writes source-system stores and publishes a
@@ -330,7 +670,7 @@ the parser, policy schemas, and `codess --help`, not in this plan.
 - `codess query` searches, reconstructs, summarizes, and emits structured
   results.
 
-### 9.2 Administrative Families
+### 9.4 Administrative Commands
 
 Administrative operations are grouped under:
 
@@ -345,7 +685,7 @@ Administrative operations are grouped under:
 Thin scripts in `tools/` may provide familiar focused entry points, but their
 logic belongs in `codess` modules and command families.
 
-### 9.3 Structured Query Interface
+### 9.5 Structured Query Interface
 
 The reusable query contract supports Sessions, overview, Events, and search.
 Requests and results use checked-in JSON contracts. Structured output includes
@@ -356,64 +696,257 @@ New predicates belong in the common typed executor when they serve repeated
 use cases. Project-specific or experimental analysis can use direct read-only
 SQL or external processing without expanding the public query contract.
 
-## 10. Validation
+### 9.6 Operational Reporting
 
-### 10.1 Test Layers
+Operational reporting covers command status, progress, warnings, failures, and
+diagnostic context produced while Codess runs. It is separate from query result
+data and from source-to-common mapping diagnostics stored in CoSchema. A record
+that says an adapter could not map a vendor field belongs with the extracted
+data; a record that says a source read started, consumed a number of bytes, or
+failed with an I/O error belongs to operational reporting. When an operational
+failure also limits extraction completeness, the durable Source diagnostic
+records that effect independently.
 
-| Layer | Evidence |
+The intended subsystem is small and synchronous. Codess does not need a
+logging server, an in-process message broker, thread supervision, or a general
+event bus. Standard stream writes and Python logging locks are sufficient for
+the limited parallel work currently performed. An operation identifier and
+ordered timestamps provide correlation when a command invokes a subprocess or
+performs concurrent reads.
+
+#### 9.6.1 Future Logging Task
+
+**W18** implements `codess.reporting` as the single application facility for
+status logging, progress messages, and error reporting. It must preserve the
+existing separation of output channels:
+
+- stdout contains the requested human or machine-readable result;
+- stderr contains ordinary human status, progress, warnings, and errors;
+- JSON Lines operational output contains the same events under a stable
+  machine-readable contract; and
+- durable ingest or refresh reports retain only selected bounded operational
+  events, not the complete live log.
+
+Every event has a fixed envelope:
+
+| Field | Meaning |
 |---|---|
-| Unit | Field-state decoding, identity, mapping, content, status, helper, and predicate behavior |
-| Contract | CoSchema package, DDL, mapping profiles, JSON requests/results, and policy validation |
-| Adapter | Representative Claude, Codex, and Cursor records, including malformed and hazard cases |
-| Store | Transactions, constraints, ordering, replacement, and relationship persistence |
-| Query | Qualification, NULL and literal handling, ordering, limits, facets, expansion, and result identity |
-| CLI | Real argument parsing, subprocess execution, exit behavior, and structured output |
-| Integration | Scan, ingest, update, query, evidence, and publication across temporary vendor layouts |
-| Real Project | Small representative source-system stores followed by multi-source and scale cases when required |
+| `format` | `codess.operational-event/1` contract identifier |
+| `at` | UTC observation time |
+| `elapsed_seconds` | Monotonic time since the operation began |
+| `level` | `debug`, `info`, `warning`, or `error` |
+| `event` | Stable dotted event code such as `ingest.source.done` |
+| `message` | Concise human explanation |
+| `operation_id` | Correlation identity for one command operation |
 
-The default verification command is:
+Optional scope fields identify the command, phase, Project, vendor, Source, or
+Session only when known. Numeric observations such as events, bytes, rows,
+duration, and queue or buffer size remain numeric. Additional details are
+bounded JSON scalars or shallow arrays under a defined extension object; they
+must not carry transcript bodies, tool input or output, raw request data,
+secrets, or unbounded exception text.
+
+One event is rendered by interchangeable sinks rather than reconstructed at
+each call site:
+
+- a concise human stderr renderer;
+- a one-object-per-line JSON renderer;
+- a bounded collector for selected report events; and
+- a standard logging bridge for library call sites that cannot receive a
+  reporter directly.
+
+Expected domain failures remain typed where boundaries need different
+behavior. The command boundary converts them into a stable event code, safe
+message, appropriate exit status, and optional debug exception detail. A deep
+shared exception hierarchy is not required. Unexpected exceptions are logged
+once at the owning boundary; ordinary mode omits the traceback, while debug
+mode includes bounded exception information. Mapping diagnostics and content
+validation records continue through their existing CoSchema paths and are not
+silently replaced by operational logs.
+
+Implementation and transition proceed in this order:
+
+1. define the event value types, privacy bounds, renderers, and contract tests;
+2. implement the synchronous reporter and bounded collector in a standalone
+   module with no dependency on vendor adapters, stores, or command parsers;
+3. adapt `ProgressTrace` event names and report collection to the new facility;
+4. route ingest status and its top-level failures through the reporter;
+5. route scan, query, and administrative errors and status through the same
+   command-boundary handling;
+6. replace operational `print()` calls and ad hoc logger setup while retaining
+   dedicated stdout result renderers; and
+7. remove the transitional progress and logging paths after their tests and
+   report consumers use the common contract.
+
+Completion requires:
+
+- default human output remains concise and machine-result stdout remains clean;
+- every JSON log line validates and preserves numeric value types;
+- normal expected failures have a stable event code, message, and exit status
+  without a traceback;
+- debug mode exposes useful bounded exception evidence;
+- sensitive or conversational content cannot enter operational fields through
+  ordinary reporter calls;
+- retained report events are bounded and disclose their dropped-event count;
+- scan, ingest, query, and administrative integration tests cover success,
+  warning, expected failure, and unexpected failure; and
+- emission remains correct under the small amount of current concurrent or
+  subprocess work without adding a queue or lifecycle framework.
+
+## 10. Quality Requirements
+
+### 10.1 Accuracy and Completeness
+
+Accuracy means that every normalized identity, value, order, and relationship
+represents the selected source evidence and its declared mapping. Completeness
+means that every supported record and relationship inside the declared
+selection boundary is retained or explicitly accounted for. Success does not
+imply support for an entire Source family, vendor release, Session, or field
+set.
+
+The conversion and query paths must satisfy these requirements:
+
+- source selection identifies its Project, source system, Source revision, and
+  applicable support boundary;
+- source-field states remain distinguishable through decode, mapping, and
+  diagnostics;
+- identity, ordering, Actor classification, and relationships are not inferred
+  without a documented evidence basis;
+- unknown shapes, ambiguous attribution, exclusions, malformed fields,
+  transformations, truncation, and external content remain visible; and
+- an important query result can be traced to its stable common identities,
+  source locator, mapping evidence, processing state, and result limits.
+
+Supported, unsupported, excluded, rejected, partial, and diagnosed material
+must reconcile with the declared selection. A successful partial conversion
+must not present itself as complete merely because some values were usable.
+
+### 10.2 Resource and Performance Requirements
+
+Source work should be proportional to the selected Project and records, not to
+the complete contents of a shared vendor store. Readers use vendor indexes,
+key ranges, bounded streaming, and selective SQLite queries where the Source
+permits them. Conversion uses explicit transactions and bounded content;
+queries push typed predicates into each selected store, use justified indexes,
+and merge globally bounded ordered results.
+
+Large inputs are classified before content limits decide whether to retain,
+derive, externalize, or reject them. Hashing and copying stream. Transient
+buffers are released after the relevant record or transaction, and progress
+identifies the active phase of work. An alternative search or storage engine
+requires a measured workload that the existing design cannot satisfy.
+
+### 10.3 Change Traceability
+
+A change is complete when its original requirement can be followed through the
+necessary design decision, implementation owner, and validation evidence. Not
+every change modifies every artifact; the affected contract determines the
+path.
+
+| Stage | Required decision or evidence | Completion condition |
+|---|---|---|
+| Requirement | Named use case, defect, source gap, or measured limitation in the work registry | Scope, priority, affected vendors or components, and expected outcome are explicit |
+| Source analysis | Representative exact records, field states, source versions, and relationship evidence | The observed source behavior and unsupported cases are reproducible |
+| Design | Functional rule in Designs, source interpretation in the vendor schema, common contract in CoSchema, or component plan here | Only the documents and executable contracts whose authority changes are updated |
+| Implementation | Changes in the modules that own source access, decode, mapping, store, query, or interface behavior | Dependency boundaries remain intact or the deviation is recorded |
+| Automated validation | Focused unit/contract cases followed by the complete suite | Normal, malformed, partial, and failure paths produce stable expected identities and diagnostics |
+| Real-source validation | Smallest current Project with the affected shape, then additional vendors or scale only when claimed | Normalized rows and query results agree with inspected source evidence |
+| Release and operation | Package identity, user workflow, or operational guidance only when those surfaces changed | Published contracts and instructions identify the resulting behavior without transient corpus detail |
+
+The work-item ID is the traceability key. Code-review findings cite that ID,
+and completion evidence is recorded against the same item rather than in a
+separate chronology.
+
+## 11. Test Structure and Coverage
+
+Testing has two distinct purposes: demonstrate expected behavior and reveal
+implementation paths that the suite did not execute. Test organization answers
+the first question; coverage measurement helps with the second. Neither alone
+establishes source-format support or correctness on current real data.
+
+### 11.1 Automated Test Structure
+
+| Test group | Principal evidence | Boundary |
+|---|---|---|
+| Unit | Field states, identity, mapping, content, status, helpers, configuration, and resource policy | One function or small component with controlled inputs |
+| Contract | CoSchema package, DDL, mapping profiles, query/result JSON, and policy schemas | Executable agreement between components or releases |
+| Vendor adapter | Claude Code, Codex, and Cursor fixtures including malformed, partial, and hazard records | Source record to candidate/common output without live vendor stores |
+| Store | Constraints, transactions, replacement, ordering, relationships, content, and diagnostics | Candidate records to one temporary CoSchema database |
+| Query | Predicate qualification, NULL and literal handling, order, limits, facets, expansion, and result identity | Read-only operations over controlled stores |
+| CLI | Packaging entry, argument parsing, dispatch, exit status, and structured rendering | Installed or source-tree command surface |
+| Integration | Scan, ingest, update, query, evidence, and publication across temporary vendor layouts | Several components and filesystem/database boundaries together |
+| Scale and hazard | Large counts, skewed Sessions, oversized records, rollback, and bounded allocation cases | A named resource or failure claim rather than general correctness |
+
+Tests and fixtures live under `tests/`; contract inputs also come from `schema/`.
+Temporary vendor roots, registries, and Project store sets prevent the automated
+suite from mutating live Claude Code, Codex, or Cursor data. The ordinary suite
+is:
 
 ```bash
 pytest -q
 ```
 
-Tests use temporary vendor roots, registries, and Project store sets. They must not
-depend on or mutate the developer's live Claude, Codex, or Cursor data.
+### 11.2 Coverage Measurement
 
-### 10.2 Validation Ladder
+Coverage is measured over both `codess` and `cli`, with branches enabled:
+
+```bash
+pytest --cov=codess --cov=cli --cov-branch --cov-report=term-missing
+```
+
+Line coverage shows whether a statement executed; branch coverage distinguishes
+alternate decisions inside an executed function. Neither proves that assertions
+were strong, vendor fields were interpreted correctly, all source releases were
+represented, or important query combinations were exercised.
+
+Coverage must therefore be read along several dimensions:
+
+| Dimension | Evidence |
+|---|---|
+| Python path | Line and branch reports for the measured process |
+| Contract behavior | Valid and invalid executable-schema cases |
+| Source-shape coverage | Fixture and audit inventory of supported, malformed, and unknown vendor records |
+| Scenario coverage | Named scan, ingest, replacement, query, evidence, and failure workflows |
+| Real-source coverage | Inspected source records compared with normalized rows and stable query results |
+| Scale coverage | Timings, query plans, rows, allocations, and result identity for one stated workload |
+
+CLI integration tests launch child processes. An ordinary parent-process
+coverage run does not attribute those child paths, so a low scan or ingest
+percentage can coexist with successful installed-command tests. W13 must add
+subprocess-aware collection or directly test extracted domain coordinators
+while retaining the subprocess tests. Coverage percentage remains diagnostic;
+completion depends on the named behavior and expected evidence.
+
+### 11.3 Validation Sequence
 
 For a change:
 
-1. run focused unit and contract tests;
-2. run the complete automated suite;
-3. exercise the smallest real Project containing the affected source shape;
-4. add one Project for each additional adapter changed;
-5. use a multi-source Project for common classification or query behavior; and
-6. use a large or skewed Project only for the scale claim being made.
+1. inspect the exact source shape and distinguish absent, malformed,
+   unsupported, and valid field states;
+2. state the mapping and retained source evidence;
+3. run focused unit, contract, adapter, store, or query tests;
+4. run the complete automated suite;
+5. exercise the smallest real Project containing the affected source shape;
+6. add one Project for each additional adapter changed;
+7. use a multi-source Project for common classification or query behavior; and
+8. use a large or skewed Project only for the scale claim being made.
 
-Every classification or mapping change should inspect exact source evidence and
-the resulting normalized row. Every query change should compare stable result
-identities with focused direct SQL or a reference implementation.
+Every classification or mapping change inspects exact source evidence and the
+resulting normalized row. Every query change compares stable result identities
+with focused direct SQL or a reference implementation.
 
-### 10.3 Performance Evidence
+### 11.4 Performance Workloads
 
-Performance work records:
-
-- workload and selected Project/source shape;
-- phase timing;
-- source bytes and selected record counts;
-- SQLite query plans and rows visited;
-- peak resident memory or allocation evidence;
-- progress stage where a stall appears; and
-- ordered result identity before and after.
-
+Performance evidence records the selected Project and source shape, phase
+timing, source bytes, selected record counts, SQLite plans and rows visited,
+peak memory or allocation evidence, progress stage, and ordered result identity.
 Optimization is complete only when the functional result remains equal and the
-measured bottleneck improves on both a small correctness case and the intended
-large case.
+measured bottleneck improves on a small correctness case and the intended scale
+case.
 
-## 11. Current Implementation Status
+## 12. Current Implementation Status
 
-### 11.1 Core Pipeline
+### 12.1 Core Pipeline
 
 | Capability | Implemented scope |
 |---|---|
@@ -426,55 +959,259 @@ large case.
 | Query and reconstruction | Typed Session, overview, Event, search, configuration, expansion, saved-result, comparison, evidence, and citation operations |
 | Cross-Project querying | Bounded ordered merge over explicitly selected Project store sets |
 
-### 11.2 Supporting Operation
+### 12.2 Supporting Operation
 
 Catalogs, raw evidence, complete Project publication, refresh, storage
 observation, and reviewed pruning are implemented sufficiently for current
 operation. Work in these areas is maintenance unless a correctness, recovery,
 or storage defect blocks the core pipeline.
 
-## 12. Current Work Registry
+Operational reporting is partial. Ingest has bounded structured progress
+records and attaches selected records to its report, but application logging,
+status rendering, error rendering, and exit behavior do not yet share one
+contract. W18 defines the transition without changing CoSchema mapping
+diagnostics or stdout query results.
 
-This registry contains only incomplete work. Status means:
+## 13. Code Review
 
-- **WIP:** implementation or evidence work has begun;
-- **Planned:** accepted and ordered, but not yet begun;
-- **TODO:** accepted but not scheduled;
-- **Under review:** the problem is established but the resolution is not yet
-  accepted; and
-- **Postponed:** intentionally excluded from the current development phase.
+This section records durable conclusions from comparing the implementation and
+tests with the architecture, data flows, contracts, and operating model above.
+It does not reproduce generated Project status, corpus measurements, or a
+transient list of passing test counts.
 
-### 12.1 Immediate Core Work
+### 13.1 Review Method
 
-| Priority | Status | Work | Completion evidence |
-|---|---|---|---|
-| Critical | WIP | Audit source-type and Actor classification across representative Claude Code, Codex, and Cursor Sessions. | Fixtures and real-source checks agree on Actors, roles, origins, relations, and counts. |
-| Critical | WIP | Strengthen current tool, context, compaction, model-setting, and agent/subagent decode. | Each supported family has exact source evidence, mapping, partial/malformed coverage, diagnostics, and an explicit validation basis. |
-| Critical | Under review | Separate exact package integrity from SQLite-layout, logical-schema, decoder, mapping, and fixture identity. | A non-semantic package-file change cannot make an unchanged store layout unwritable; each identity has a defined consumer and test. |
-| High | Planned | Review high-value predicates and reconstruction against actual investigations. | Bounded deterministic results and complete requested expansions agree with focused direct queries. |
-| High | Planned | Establish repeatable query and ingest performance workloads. | Small correctness and representative scale cases report timing, query plans, rows, memory, and stable result identities. |
-| High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. | Selection, fingerprinting, decode, and query remain bounded as unrelated Cursor content grows. |
+The review examines:
 
-### 12.2 Next Functional Work
+1. package entry points, command dispatch, module imports, and SQL ownership;
+2. source discovery, vendor access, adapter output, and mapping enforcement;
+3. CoSchema package verification, DDL agreement, transactions, publication,
+   and read-only query behavior;
+4. identity, provenance, raw evidence, resource bounds, and large-file access;
+5. unit, contract, adapter, store, query, CLI, integration, and scale tests; and
+6. branch coverage as evidence about which implementation paths the tests
+   actually execute in the measured process.
 
-| Priority | Status | Work | Start condition |
-|---|---|---|---|
-| Normal | TODO | Improve search reports and structured-query examples. | Core predicate and reconstruction checks are stable. |
-| Normal | TODO | Report source-to-common coverage, loss, and unknown shapes. | The report can derive from profiles, diagnostics, and selected source observations. |
-| Normal | Under review | Exercise third-party read-only query and visualization interfaces. | A real investigation identifies the interface and required provenance. |
-| Normal | Under review | Expand cross-Project analysis inputs. | A consumer identifies entities, fields, selection, and output checks. |
+`pytest -q`, package-contract tests, `compileall`, static import inspection,
+targeted SQL-location searches, and branch coverage provide the repeatable
+automated basis. Real vendor Sources remain a separate validation layer: the
+automated suite uses temporary roots and fixtures so it cannot alter a
+developer's live harness data.
 
-### 12.3 Secondary Maintenance
+### 13.2 Compliance Summary
 
-- Fix snapshot, catalog, raw, refresh, or retention behavior when it threatens
-  correctness, recoverability, bounded storage, or normal operation.
-- Add resource controls only for observed accidental or pathological input.
-- Maintain session aliases and utilization observations without allowing them
-  to displace core decode and search work.
+| Area | Assessment | Basis |
+|---|---|---|
+| Entry and packaging | Compliant | The installed `codess` command and source-tree entry both dispatch through `codess.project:console_main`; package discovery follows the documented `src/` layout. |
+| Discovery | Largely compliant | Scan is index-led, rejects broad system roots, prunes known generated trees, and attributes nested workspaces to repository Projects. Known-source fallback traversal remains bounded to vendor storage rather than arbitrary work trees. |
+| Vendor separation | Partially compliant | Claude Code and Codex source traversal are separated from their adapters. Cursor selection is centralized substantially, but the Cursor adapter still issues vendor-table SQL. |
+| Mapping and classification | Partially compliant | Mapping profiles, traces, field diagnostics, and representative adapter fixtures exist. Common runtime conformance and strict behavior are not yet enforced uniformly across vendors. |
+| CoSchema persistence | Compliant in the principal path | The released package is hash-checked, the DDL is centralized, logical and physical contracts are compared, foreign keys are enabled, and source replacement commits or rolls back atomically. |
+| Query | Partially compliant | The typed executor provides bounded, deterministic, multi-store results with provenance and stable identities. Several report modes still execute separate SQL inside the command renderer. |
+| Publication and evidence | Largely compliant | SQLite backup, manifest hashes, atomic pointer replacement, content-addressed raw objects, and read-time verification implement reproducible publication. Raw-mode semantics remain unresolved under W15. |
+| Configuration | Compliant | Scan, ingest, and query validate resolved configuration before source work; built-ins, environment, command arguments, and JSON policies have explicit ownership. |
+| Operational reporting | Partially compliant | `ProgressTrace` supplies bounded timed ingest events, but ordinary logging, direct stderr messages, error conversion, and result-channel rules are not implemented through one structured facility. |
+| Maintenance wrappers | Partially compliant | Most wrappers adapt arguments and call library operations. A small number still contain catalog or pruning workflow logic that belongs in a domain module. |
+| Tests | Broad but unevenly observable | Contract, adapter, store, query, CLI, integration, hazard, and scale behaviors are exercised. Subprocess execution prevents the current coverage run from attributing much scan and ingest execution to those modules. |
 
-### 12.4 Deferred Directions
+### 13.3 Finding-to-Work Map
 
-The following are **Postponed** until a concrete consumer or measured
+| Finding | Impact | Related work |
+|---|---|---|
+| Source and command boundaries | Cursor decode and CLI coordinators own SQL or workflow outside their intended layer | W06, W10 |
+| Runtime mapping conformance | Released profiles do not govern every emitted vendor candidate uniformly | W04 |
+| Query path fragmentation | Some reports bypass the typed executor and query-contract parity is incomplete | W05, W06, W13 |
+| Ancillary unbounded reads | Tool output and worktree identity can materialize large bodies | W07 |
+| Project identity fallback | Direct library writes can create unrelated provisional Project IDs | W14 |
+| Raw mode ambiguity | `none` has no bytes but still creates a raw-manifest observation | W15 |
+| Package identity coupling | Non-semantic package changes can affect current-layout write compatibility | W03 |
+| Test observability | Child-process scan and ingest paths are not attributed by ordinary coverage | W13 |
+| Operational reporting fragmentation | Status, progress, logger calls, exceptions, and exit results lack one event and rendering contract | W18 |
+
+### 13.4 Deviations and Defects
+
+#### 13.4.1 Source and Command Boundaries
+
+Completing the Cursor source-access boundary is tracked by **W10**.
+`adapters.cursor` still opens and queries `cursorDiskKV`, coupling selection to
+interpretation. `cursor_source` must return bounded selected records and
+metadata, after which the adapter can lose its SQLite dependency. Direct
+vendor SQL remains acceptable only in the bounded audit exception.
+
+Command-layer separation is tracked by **W06**. `cli.ingest_cmd` contains
+source workflows, transactions, raw-record handling, and publication
+coordination. `cli.query_cmd` contains direct report queries that do not use the
+typed executor. Vendor ingest coordinators and specialized read-only analyses
+belong in `codess` modules. Command modules should retain argument adaptation,
+presentation, and exit status. The few maintenance scripts that still perform
+catalog or pruning workflows require the same treatment.
+
+#### 13.4.2 Mapping and Query Contracts
+
+Uniform runtime mapping conformance is tracked by **W04**. Released profiles are
+package-checked and sampled by adapter tests, but `validate_mapped_event` is not
+a common ingest boundary. Strict mapping currently covers selected Claude Code
+failures without equivalent Codex and Cursor semantics. A vendor-neutral
+post-decode stage must provide diagnostic and strict modes over partial,
+malformed, unsupported, and hazard records.
+
+Query-contract parity is part of **W13**. Checked-in JSON schemas and the
+hand-written runtime validator can change independently. Schema-derived valid
+and invalid cases should exercise the runtime contract, or one validator
+surface should be generated from the other while retaining Codess canonical
+ordering rules.
+
+#### 13.4.3 Bounded Processing
+
+Ancillary large-file handling is tracked by **W07**. Persisted Claude tool output
+uses `read_bytes`, while snapshot worktree identity captures complete binary
+diffs and untracked files in memory. Both paths can encounter exactly the large
+logs or binary objects that resource policy is intended to contain. They must
+stat and classify first, then stream through bounded hashing or decoding and
+record an explicit rejection or limitation before excessive allocation.
+
+#### 13.4.4 Identity and Evidence Semantics
+
+Uncatalogued Project identity is tracked by **W14**. Store code can generate a
+new Project UUID when no catalog binding is supplied. Normal CLI operation
+supplies the binding, but direct library writes can assign different Project
+identities to separate vendor stores for one repository. Current-format writes
+should require Project identity, or mark the generated identity explicitly
+provisional and reconcile it before publication.
+
+Raw mode `none` is tracked by **W15**. It retains no raw bytes but writes
+a `not_retained` source-revision observation into the snapshot raw manifest.
+The design can be read as promising no raw-manifest record. The decision must
+state whether `none` means no bytes or no raw observation and then align the
+mode name, manifest, documentation, and tests. Normalized Source provenance is
+required either way.
+
+Package identity separation is tracked by **W03** because it can
+block current-format writes. Snapshot identity currently uses one digest over exact package files;
+a non-semantic packaged-file edit therefore changes write compatibility. Exact
+package integrity must remain available without equating it to logical schema,
+physical layout, decoder, mapping, or fixture compatibility.
+
+#### 13.4.5 Test Observability
+
+Subprocess coverage is tracked by **W13**. CLI integration tests execute scan and
+ingest in child processes, so ordinary branch coverage cannot attribute those
+paths and cannot locate their untested branches reliably. Subprocess coverage
+or directly tested domain coordinators should supply that evidence while the
+installed-interface subprocess tests remain in place.
+
+#### 13.4.6 Operational Reporting
+
+The current implementation has four distinct reporting paths. Command modules
+write requested results and many status or error messages directly with
+`print()`. Project, scan, helper, Cursor-source, adapter, and command modules
+use standard library loggers, but `parse_and_run()` configures them only through
+`logging.basicConfig()` when verbose mode is selected. `ProgressTrace`
+independently emits timed ingest events to stderr and retains a bounded deque.
+Domain functions also return or mutate report and diagnostic dictionaries that
+command code later renders.
+
+`ProgressTrace` is the most complete current contract. It records UTC and
+monotonic time, uses stable dotted event names, declares transcript content
+out of scope for its call sites, caps retained events, reports drops, and can
+select the events attached to each Project report. Ingest, raw capture, Cursor
+cohort work, and selected adapters emit useful stage, count, size, reuse, and
+completion events through it. Focused tests cover rendering, disabled output,
+retention, drop reporting, and representative ingest progress sequences.
+
+Its limits are also concrete. Arbitrary field names and values have no runtime
+contract or privacy enforcement. Human rendering is built into the collector,
+and only ingest uses it systematically. Scan and query rely primarily on direct
+stderr text. Standard logger records and progress records have different
+formats and configuration. There is no operation correlation identity, stable
+application error code, JSON operational stream, or common boundary that maps
+typed failures to messages and exit status.
+
+Error handling is correspondingly distributed. The administrative dispatcher
+catches a selected group of exceptions, scan logs some unexpected root
+failures, and ingest and query contain many local catches and stderr messages.
+`console_main()` handles `BrokenPipeError` but is not a general application
+error boundary. Tests establish several valuable surface rules—invalid input
+must not expose a traceback, progress stays on stderr, machine outputs remain
+parseable, and broken downstream pipes remain quiet—but those rules are not
+owned by one implementation component.
+
+This finding does not apply to CoSchema mapping diagnostics. Those diagnostics
+are evidence about decoded Source records and must remain queryable beside the
+data. W18 consolidates only application operation reporting under the contract
+in Section 9.6.1.
+
+### 13.5 Mechanical Enforcement
+
+The test layout matches the intended validation layers, but file names alone do
+not prove architectural compliance. The following checks should become
+mechanical:
+
+- an import-boundary test for adapter, source, store, query, and CLI layers;
+- an SQL-ownership check that recognizes the narrow focused-audit exception;
+- mapping-profile conformance over every emitted adapter fixture;
+- runtime-versus-JSON query contract parity cases;
+- transaction-failure tests at each source replacement and publication edge;
+- subprocess-aware coverage for scan and ingest, without replacing installed
+  CLI integration tests;
+- operational-event contract, channel-separation, privacy, and error-boundary
+  tests for scan, ingest, query, and administrative commands; and
+- small real-Source validation for each changed vendor decoder, followed by a
+  multi-vendor Project only when common classification or query behavior
+  changes.
+
+Coverage percentage is supporting evidence, not an acceptance criterion by
+itself. Completion depends on the named failure, boundary, and use case being
+exercised with the expected normalized identities and results.
+
+## 14. Current Work Registry
+
+This registry contains only incomplete work. Its identifiers connect
+requirements, code-review findings, implementation changes, and completion
+evidence. Status means **WIP** for active work, **Planned** for accepted and
+ordered work, **TODO** for accepted but unscheduled work, **Under review** for
+an established problem without an accepted resolution, and **Postponed** for
+work intentionally outside the current phase.
+
+### 14.1 Immediate Core Work
+
+| ID | Priority | Status | Work | Completion evidence |
+|---|---|---|---|---|
+| W01 | Critical | WIP | Audit source-type and Actor classification across representative Claude Code, Codex, and Cursor Sessions. | Fixtures and real-source checks agree on Actors, roles, origins, relations, and source-accounting totals. |
+| W02 | Critical | WIP | Strengthen tool, context, compaction, model-setting, and agent/subagent decode. | Each supported family has exact source evidence, mapping, partial/malformed coverage, diagnostics, and an explicit validation basis. |
+| W03 | Critical | Under review | Separate exact package integrity from SQLite layout, logical schema, decoder, mapping, and fixture identity. | A non-semantic package-file change cannot make an unchanged store layout unwritable; each identity has a defined consumer and test. |
+| W04 | High | Planned | Define the shared candidate-record contract and enforce released mapping profiles at the runtime decode boundary. | All three adapters satisfy the typed and runtime candidate contract, pass the same post-decode conformance check, and share strict/diagnostic semantics. |
+| W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. | Bounded deterministic results and complete requested expansions agree with focused direct queries. |
+| W06 | High | Planned | Move domain SQL and workflows out of command modules. | Commands adapt arguments and render results; ingest operations live in domain modules; repeated reports use the typed executor or an explicit read-only analysis component. |
+| W07 | High | Planned | Bound ancillary reads that can encounter large source or repository content. | Persisted tool output, worktree fingerprinting, and growing manifests stream or reject by explicit policy without first materializing the complete body. |
+| W08 | High | Planned | Establish repeatable query and ingest performance workloads. | Small correctness and representative scale cases report timing, query plans, rows, memory, and stable result identities. |
+| W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. | Selection, fingerprinting, decode, and query remain bounded as unrelated Cursor content grows. |
+| W10 | High | Planned | Complete the Cursor source-access boundary. | `cursor_source` owns vendor SQL and returns bounded selected records and metadata; the adapter has no SQLite dependency. |
+
+### 14.2 Next Functional Work
+
+| ID | Priority | Status | Work | Start or completion condition |
+|---|---|---|---|---|
+| W11 | Normal | TODO | Improve search reports and structured-query examples. | Core predicate and reconstruction checks are stable. |
+| W12 | Normal | TODO | Report source-to-common coverage, loss, and unknown shapes. | The report derives from profiles, diagnostics, and selected source observations. |
+| W13 | Normal | TODO | Mechanically enforce architecture and contract paths and make coverage observe child-process execution. | Import and SQL ownership checks enforce declared layers; query schemas exercise runtime validation; scan and ingest execution contributes usable coverage evidence. |
+| W14 | Normal | TODO | Require or explicitly mark Project identity for direct library writes. | Separate vendor stores cannot silently create unrelated Project identities for one repository. |
+| W15 | Normal | Under review | Resolve the meaning and name of raw mode `none`. | Mode semantics, manifest behavior, documentation, and tests agree while normalized Source provenance remains intact. |
+| W16 | Normal | Under review | Exercise third-party read-only query and visualization interfaces. | A real investigation identifies the interface, selected data, and required provenance. |
+| W17 | Normal | Under review | Expand cross-Project analysis inputs. | A consumer identifies entities, fields, selection, transformation, and output checks. |
+| W18 | Normal | Planned | Implement and transition to the structured operational-reporting subsystem defined in Section 9.6.1. | One event contract and its renderers govern status, progress, warnings, and command-boundary errors; stdout results remain clean, retained events remain bounded, and all command families pass channel, privacy, and failure-path tests. |
+
+### 14.3 Secondary Maintenance
+
+- Fix publication, catalog, raw, refresh, or retention behavior when it
+  threatens correctness, bounded storage, or normal operation.
+- Add resource controls for observed accidental or pathological input.
+- Maintain Session names and utilization observations without displacing
+  source decode, mapping, or search work.
+
+### 14.4 Deferred Directions
+
+The following remain **Postponed** until a concrete consumer or measured
 limitation justifies reopening them:
 
 - a mapping expression language;
@@ -485,23 +1222,3 @@ limitation justifies reopening them:
 - automatic narrative or assessment generation;
 - cost, quota, or billing analysis; and
 - broad raw-source search.
-
-## 13. Change Procedure
-
-Every core change should land vertically:
-
-1. state the affected use case and current failure or limitation;
-2. capture representative vendor or query evidence;
-3. update functional design only when the rule or rationale changes;
-4. update source-format evidence and its mapping when source meaning changes;
-5. update the common logical contract and physical DDL only when stored meaning
-   or layout changes;
-6. implement source access, adapter, store, and query behavior in their owning
-   components;
-7. add focused, contract, integration, and representative real-source checks;
-8. update operating instructions only when the normal workflow changes; and
-9. update the project entry point only when user entry or navigation changes.
-
-Avoid copying current command flags, corpus counts, Project lists, or generated
-status into durable prose. The parser, executable contracts, catalogs, reports,
-and tests remain authoritative for those facts.

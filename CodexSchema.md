@@ -76,7 +76,7 @@ Ingest adapter primarily uses:
 | Paired `event_msg.user_message` plus `response_item.message role=user` | Exact pairing identifies a direct UI prompt in current rollouts. An unpaired user-role message is retained as harness context; the source role remains `user` in mapping evidence |
 | `response_item.reasoning.summary[].text` | Vendor-exposed reasoning summary retained as `message.reasoning_summary`; encrypted reasoning state is not decoded |
 | `response_item.function_call` / `custom_tool_call` | Tool calls with sanitized JSON input and call-id metadata; structured failed/error/incomplete status becomes `tool_failure` |
-| `response_item.tool_search_call` / `tool_search_output` | Server-side tool discovery request/result, retained as one linked tool exchange |
+| `response_item.tool_search_call` / `tool_search_output` | Server-side tool discovery request/result, retained as one linked tool request/result pair |
 | `response_item.web_search_call` | `web_search` tool call with sanitized action metadata |
 | Matching call-output records | Tool results; call id restores the tool name. For an MCP call, an explicit error body is application failure even when the MCP transport completed successfully |
 | `compacted` | Replacement-history envelope; its dedicated `compaction` item becomes one bounded `context.compact` event |
@@ -86,12 +86,12 @@ Ingest adapter primarily uses:
 | `event_msg.web_search_end` / `patch_apply_end` | Linked result/status evidence for the corresponding tool call when a call id is available |
 | `event_msg.mcp_tool_call_end` | Harness transport/status evidence for the corresponding MCP invocation: server/tool, connector/app/action/plugin identifiers, duration, and transport result status. The result body is not copied a second time; application status is linked from the matching call-output record |
 | `event_msg.thread_rolled_back` | Bounded `context.rollback` lifecycle evidence with the number of removed user turns |
-| `turn_context` | Not emitted as conversation text. Exact `payload.model` and `payload.effort`/`reasoning_effort`, plus the specifically identified collaboration mode, are attached to subsequent normalized events with source-record/field provenance; observed `payload.turn_id` becomes vendor `model_turns.source_turn_id` |
+| `turn_context` | Not emitted as Session content. Exact `payload.model` and `payload.effort`/`reasoning_effort`, plus the specifically identified collaboration mode, are attached to subsequent normalized Events with source-record/field provenance; observed `payload.turn_id` becomes vendor `model_turns.source_turn_id` |
 | `event_msg.thread_settings_applied` | Newer bounded settings envelope. Exact model, provider, reasoning effort, service tier, approval policy, and collaboration mode update subsequent event/model-turn configuration |
 | `response_item.message` with `developer` or `system` role | Bounded harness/context injection, not a human prompt |
 | Duplicate `event_msg` message/reasoning notifications | Counted as known duplicate envelopes after the canonical `response_item` representation is retained |
-| `event_msg.token_count` | Counted as a known usage observation and consumed by utilization reporting, not duplicated as conversation text |
-| `response_item.ghost_snapshot` / `world_state` | Counted as known intermediate state, not conversation text |
+| `event_msg.token_count` | Counted as a known usage observation and consumed by utilization reporting, not duplicated as Session content |
+| `response_item.ghost_snapshot` / `world_state` | Counted as known intermediate state, not Session content |
 | Unsupported record shapes | Counted as unknown ignored diagnostics and require review |
 
 The typed configuration query uses exact provider, model, effort, service, and
