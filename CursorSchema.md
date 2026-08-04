@@ -1,4 +1,4 @@
-# CursorSchema — Cursor IDE session storage
+# CursorSchema — Cursor IDE Session Storage
 
 Vendor-specific structure for Cursor chat persistence. `codess.cursor_source`
 owns installation discovery, workspace mapping, read-only SQLite access,
@@ -9,7 +9,7 @@ shared components rather than implementing independent database readers.
 Cursor's SQLite format is private and can change without notice. Use read-only
 access and tolerate missing tables, null values, and new fields.
 
-## 1. Locations
+## 1. Source Scope and Locations
 
 `CODESS_CURSOR_DATA` overrides the platform default Cursor `User` directory.
 
@@ -33,9 +33,9 @@ accepts an object whose `folder.path` contains the path.
 The separate `~/.cursor/projects/<project-slug>/agent-transcripts/` tree is not
 part of the SQLite pipeline and is not currently ingested.
 
-## 2. SQLite tables
+## 2. Storage Layout
 
-### `cursorDiskKV`
+### 2.1 `cursorDiskKV`
 
 Key/value table with unique text keys and text, blob, or null values.
 
@@ -50,7 +50,7 @@ Key/value table with unique text keys and text, blob, or null values.
 JSON values are usually UTF-8 JSON text. Codess also attempts base64-wrapped
 JSON for bubble and composer data. Null or undecodable values are skipped.
 
-### `composerHeaders`
+### 2.2 `composerHeaders`
 
 Session-level index:
 
@@ -66,12 +66,9 @@ Codess uses this as the primary global-session index. Composers whose
 `workspaceId` maps to the selected Project are imported. Missing timestamp or
 classification columns default to null/false; additional columns are ignored.
 Session metadata records `selection_source=composerHeaders`; the selected
-evidence fingerprint includes that designation. Adding this provenance changed
-the fingerprint method to
-`cursor-workspace-header-source-key-length-edge-sha256-fingerprint-v2`;
-existing v1 markers therefore cause one ordinary assessed refresh rather than
-silently comparing different algorithms.
-The table is not a complete historical catalog: Cursor can retain full
+evidence fingerprint includes that designation and uses
+`cursor-workspace-header-source-key-length-edge-sha256-fingerprint-v2`.
+The table is not a complete Session catalog: Cursor can retain full
 `composerData:*` and `bubbleId:*` rows after removing a composer header.
 
 `isSubagent` is Session-relation and record-origin evidence. Codess stores the
@@ -83,7 +80,7 @@ parent composer/session is not consistently available, so
 `parent_session_id` remains NULL instead of being inferred from time, content,
 or workspace proximity.
 
-### `ItemTable`
+### 2.3 `ItemTable`
 
 Most rows are editor/workbench state and are ignored. One workspace-local row,
 `composer.composerData`, is a secondary session index. Its `allComposers`
@@ -96,7 +93,37 @@ fallback-selected Session records
 `selection_source=workspace.composerData`; current global headers override an
 overlapping fallback.
 
-## 3. Bubble JSON
+## 3. Selective Access
+
+Use SQLite read-only mode:
+
+```text
+file:/absolute/path/to/state.vscdb?mode=ro
+```
+
+Useful queries:
+
+```sql
+SELECT COUNT(*) FROM cursorDiskKV WHERE key LIKE 'bubbleId:%';
+SELECT COUNT(*) FROM cursorDiskKV WHERE key LIKE 'composerData:%';
+SELECT workspaceId, COUNT(*) FROM composerHeaders GROUP BY workspaceId;
+
+-- One composer/session: the cursorDiskKV primary-key index supports this range.
+SELECT key, value FROM cursorDiskKV
+WHERE key >= 'bubbleId:<composer-id>:'
+  AND key <  'bubbleId:<composer-id>:\U0010ffff';
+```
+
+The main DB may have `-wal`, `-shm`, and backup companions. Do not modify or
+vacuum Cursor's live database from Codess. Codess uses URI-safe, query-only
+connections with a bounded busy timeout; committed rows still present only in
+the live WAL are visible. Global ingest and project-level scan metrics issue
+prefix-range queries for the mapped composer ids rather than scanning or
+decoding unrelated bubbles in the global database. Workspace selection and SQL
+live in `codess.cursor_source`; the adapter only decodes selected values and
+normalizes events.
+
+## 4. Bubble Records
 
 Fields relevant to normalization:
 
@@ -105,9 +132,9 @@ Fields relevant to normalization:
 | `type` | `1` user, `2` assistant-shaped envelope | Mapped only when the record contains message or tool-result evidence |
 | `text` | Message body | Sanitized and truncated |
 | `createdAt` | ISO-8601 event timestamp | Primary normalized timestamp and sort key |
-| `timingInfo.clientStartTime` | Relative client timing, or an epoch value in some legacy shapes | Used only when it plausibly represents Unix seconds or milliseconds |
+| `timingInfo.clientStartTime` | Relative client timing, or an epoch value in alternate shapes | Used only when it plausibly represents Unix seconds or milliseconds |
 | `toolFormerData` | One tool name/call id/model-call id, arguments, result, status, and optional `userDecision` | Emitted as a linked invocation and, for final states or a result body, a result/failure event; exact accepted/rejected permission evidence is retained |
-| `toolResults` | Legacy/possible tool-result array | Nonempty arrays are mapped for compatibility; the audited local store contains only empty arrays |
+| `toolResults` | Alternate tool-result array | Nonempty arrays are mapped when present; selected stores commonly contain empty arrays |
 | `modelInfo.modelName` | Model selection attached to a user request | Non-`default` values configure the following inferred model turn with exact source-field provenance; `default` remains source metadata |
 | `conversationSummary` | JSON string with summary body and truncation boundary IDs | Bounded `context.compact` event |
 | `contextWindowStatusAtCreation` | Context usage observation (`tokensUsed`, `tokenLimit`, percentages) | Preserved as source metadata on the bubble's emitted events |
@@ -116,8 +143,7 @@ Fields relevant to normalization:
 Current `toolFormerData.status` values include `completed`, `error`, `loading`,
 and `cancelled`. Codess preserves the source value and maps those to succeeded,
 failed, running, and cancelled. Cursor therefore contributes evidence-backed
-tool-failure audit rows. The current dated audit contains 2,973 accepted and 20
-rejected `userDecision` values. Rejection maps to normalized `denied`
+tool-failure audit rows. A rejected `userDecision` maps to normalized `denied`
 independently of the status value; acceptance does not erase an observed error.
 For MCP-qualified tools, `completed` describes the harness call envelope, not
 necessarily the operation. An explicit nested `Error:`/`Failed to` result or
@@ -166,11 +192,10 @@ not infer effort, speed, or service tier from names such as `*-fast` or
 `*-thinking`. Those labels remain exact model selections.
 
 Cursor records that selection on a governing user bubble, not necessarily on
-each later model bubble. New normalized writes carry its exact field/locator
+each later model bubble. Normalized writes carry its exact field/locator
 provenance to governed model Events and mark the scope `inherited`; the
-governing Event remains identifiable. A current forced staged Zero400 rebuild
-validated that every configured Model Turn has this occurrence evidence;
-turns before any observed governing selection remain unconfigured rather than
+governing Event remains identifiable. Turns before any observed governing
+selection remain unconfigured rather than
 receiving a guessed model.
 
 The adapter uses parsed `createdAt` for sorting and event timestamps. Numeric
@@ -190,7 +215,7 @@ explicitly supported context subset is `conversationSummary`,
 `contextWindowStatusAtCreation`, and top-level `messageRequestContext`; other
 large attachment/context-selection envelopes remain in captured raw evidence.
 
-### Repetition and deduplication
+### 4.1 Repetition and Deduplication
 
 Cursor evidence has three distinct repetition cases:
 
@@ -216,8 +241,8 @@ filter or facet by event kind, actor/role, tool, status, artifact, or source
 classification. It may optionally group presentation by content identity plus
 semantic dimensions, but a group must retain its occurrence count, time span,
 and every constituent stable ID and must expand losslessly to the ordered
-events. Dated corpus counts and the corresponding query work are maintained in
-**CoPlan L-P2/A4**, rather than embedded as permanent vendor-format facts here.
+events. Corpus measurements and query work belong in generated reports and
+the current work registry rather than permanent vendor-format facts here.
 
 “Repeated content” currently means exact equality of the complete retained
 normalized content under the same content policy, with compatible event kind,
@@ -228,7 +253,7 @@ must be versioned and confidence-bearing, cite its constituent events, and
 produce a derived grouping or assertion only; it can never authorize source or
 Event removal.
 
-## 4. Composer data
+## 5. Composer Records
 
 `composerData:<composerId>` may include identity, title, model/mode, context,
 conversation-header, file-state, and opaque conversation-state fields. It can
@@ -241,7 +266,7 @@ release check establishes its meaning and observation time. Database/change
 mtime alone reports Source activity, not a live Session.
 
 `get_composer_data()` currently reports the composer id, top-level keys,
-decode/null status, a legacy `conversation` presence check, and selected possible
+decode/null status, a `conversation` presence check, and selected possible
 workspace fields. It is a diagnostic probe, not part of scan or ingest.
 
 Newer composer data may carry stronger structured identity in
@@ -256,14 +281,14 @@ workspace metadata come first from `composerHeaders`; workspace
 `composer.composerData` supplies a provenance-labeled fallback when the primary
 header is absent. A current header wins when both exist.
 
-## 5. Codess mapping
+## 6. Mapping Boundaries
 
 | Codess concept | Workspace DB | Global DB |
 |---|---|---|
 | Project | `workspace.json` folder plus workspace `composer.composerData` fallback index | `composerHeaders.workspaceId` joined to a matching `workspace.json`, plus explicitly approved source links for renamed/remote identities; observed local workspace bindings are persisted in the Project catalog |
 | Session | Distinct composer id with bubble rows | Same |
 | Event | Supported message evidence plus derived tool invocation/result events from each decodable `bubbleId:*` row | Same |
-| Event timestamp | Parsed bubble `createdAt`, with epoch-only legacy fallback | Same |
+| Event timestamp | Parsed bubble `createdAt`, with epoch-only alternate fallback | Same |
 | Stored project path | Resolved workspace folder | Resolved mapped project; header/storage details in metadata |
 
 Scan metrics:
@@ -306,8 +331,8 @@ SQLite read transactions and calculates a
 non-authenticating change marker from exact header fields, every key and value
 length, and the first/last 512 bytes of each value. A changed selected marker
 triggers one exact transactional backup for the cohort; unrelated table changes
-do not. Software 0.2.1 writes SHA-256 selected-row and combined-cohort markers;
-the bounded edge method remains a change detector rather than complete content
+do not. Selected-row and combined-cohort markers use SHA-256; the bounded edge
+method remains a change detector rather than complete content
 identity. Exact captured evidence remains fully SHA-256 addressed and verified.
 
 An immediate repeat may reuse those selected markers only when a metadata-only
@@ -324,37 +349,7 @@ only with `immutable=1` after confirming that neither `-wal` nor `-shm` exists.
 An indexed prefix existence probe then advances ingest state without parsing or
 retaining workspace databases that contain no `bubbleId:*` records.
 
-## 6. Read-only access
-
-Use SQLite read-only mode:
-
-```text
-file:/absolute/path/to/state.vscdb?mode=ro
-```
-
-Useful queries:
-
-```sql
-SELECT COUNT(*) FROM cursorDiskKV WHERE key LIKE 'bubbleId:%';
-SELECT COUNT(*) FROM cursorDiskKV WHERE key LIKE 'composerData:%';
-SELECT workspaceId, COUNT(*) FROM composerHeaders GROUP BY workspaceId;
-
--- One composer/session: the cursorDiskKV primary-key index supports this range.
-SELECT key, value FROM cursorDiskKV
-WHERE key >= 'bubbleId:<composer-id>:'
-  AND key <  'bubbleId:<composer-id>:\U0010ffff';
-```
-
-The main DB may have `-wal`, `-shm`, and backup companions. Do not modify or
-vacuum Cursor's live database from Codess. Codess uses URI-safe, query-only
-connections with a bounded busy timeout; committed rows still present only in
-the live WAL are visible. Global ingest and project-level scan metrics issue
-prefix-range queries for the mapped composer ids rather than scanning or
-decoding unrelated bubbles in the global database. Workspace selection and SQL
-live in `codess.cursor_source`; the adapter only decodes selected values and
-normalizes events.
-
-## 7. Current limitations
+## 7. Limitations
 
 - Global composers without a usable current-header or workspace-fallback
   mapping are excluded from Project ingest.
@@ -370,19 +365,3 @@ normalizes events.
 - Missing required tables or required header identity columns are surfaced as
   source failures or warnings. Optional/more recent header columns are
   tolerated.
-
-Known candidate dispositions:
-
-| Candidate | Current disposition | Evidence needed to reopen |
-|---|---|---|
-| Current versus fallback selection provenance | **Implemented.** Session metadata and the v2 selected-evidence fingerprint name `composerHeaders` or `workspace.composerData` |
-| Ambiguous fallback composer | **Implemented.** Exclude without guessing, log the composer ID, and report one structured diagnostic count even if it occurs in three or more indexes |
-| Derive scan dates by reading bubbles when headers lack timestamps | **Set aside.** Header/timestamp coverage already reports incompleteness | A workflow that requires those dates plus a selective-read cost measurement; never decode the global store merely to improve a scan summary |
-| Infer a parent composer for subagent Sessions | **Set aside.** `parent_session_id` remains NULL | A direct parent field or independently verifiable vendor relation; time, text, and workspace proximity are insufficient |
-| Import `~/.cursor/projects/.../agent-transcripts` | **Research required.** It is a separate storage family, not part of the SQLite contract | Representative current files, identity/overlap analysis against SQLite, retention/privacy review, and explicit scope approval |
-| Normalize `codeBlocks`, `fileActions`, and additional context/product state | **Evidence-triggered** | A concrete UC/query plus stable field meaning and representative current records; otherwise preserve only already mapped evidence |
-| Populate effort, speed, provider, or service tier | **Unavailable in reviewed Cursor evidence** | A distinct direct source field; never derive it from `modelInfo.modelName` |
-| Incrementalize complete-composer ordering/deduplication/Interaction construction | **Performance work postponed under P22** | A reproduced current latency/RSS problem and benchmark preserving canonical order, rollback, identities, and fixed-point output |
-
-Cross-vendor normalized columns are defined in `CoSchema.md`. Implementation
-tasks, gaps, and ordering are owned by `CoPlan.md` §8.

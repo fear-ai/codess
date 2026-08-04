@@ -1,4 +1,4 @@
-# CodexSchema — OpenAI Codex CLI session storage
+# CodexSchema — OpenAI Codex CLI Session Storage
 
 Vendor-specific structure for **Codex CLI** sessions. Normalized ingest: `src/codess/adapters/codex.py`. Scan: `src/codess/scan.py` (`_session_metrics_codex`).
 
@@ -7,9 +7,7 @@ format is not a stable public interface and may change. The shapes below
 describe the current tolerant Codess adapter and verified local fixtures, not a
 compatibility guarantee from Codex.
 
----
-
-## 1. Document metadata
+## 1. Source Scope
 
 | Field | Value |
 |-------|--------|
@@ -18,9 +16,7 @@ compatibility guarantee from Codex.
 | **Encoding** | UTF-8 JSONL |
 | **Time basis** | `timestamp` on lines: numeric (s or ms) or ISO 8601 string |
 
----
-
-## 2. Storage layout
+## 2. Storage Layout
 
 | Pattern | Role |
 |---------|------|
@@ -35,14 +31,14 @@ If active and archived roots contain the same session id, the active transcript
 wins; within one root the newest file wins. Re-ingest transactionally replaces
 the selected session rather than leaving events removed from the transcript.
 
-### Names, Projects, and runtime state
+### 2.1 Names, Projects, and Runtime State
 
 ChatGPT desktop Projects are application groupings of chats. They are not the
 same entity as a Codex CLI working directory or a Codess Project. Recent Codex
 CLI releases support `/rename`, and local Codex state databases can retain a
 thread title, but that title is not present in the session JSONL
 `session_meta`. Codess therefore keeps a user-assigned Session name separate
-from source title evidence and stable Session identity.
+from source title evidence and the stable Codess Session ID.
 
 The live Codex app protocol can report thread runtime states such as active,
 idle, not loaded, or system error. The JSONL transcript and persisted thread
@@ -50,9 +46,7 @@ index do not reconstruct that live state. Codess may record a dated runtime
 observation when such an interface supplies it; source mtime, an unanswered
 prompt, or an active-tree pathname alone yields runtime `unknown`.
 
----
-
-## 3. Recommended access
+## 3. Selective Access
 
 | Method | Use |
 |--------|-----|
@@ -60,9 +54,7 @@ prompt, or an active-tree pathname alone yields runtime `unknown`.
 | **Codess ingest** | `codess ingest --dir <project>`; collects files whose `cwd` resolves to project root |
 | **Direct read** | Open file; locate `session_meta`, then stream records tolerantly |
 
----
-
-## 4. session_meta (first line)
+## 4. Session Metadata
 
 | Field path | Type | Notes |
 |------------|------|--------|
@@ -73,9 +65,7 @@ prompt, or an active-tree pathname alone yields runtime `unknown`.
 | `payload.model_provider`, `originator`, `source` | scalar or version-specific structured value | Retained as bounded session metadata; provider can seed a session-level configuration. Current protocol releases can encode structured Session source/subagent evidence, so mapping must be shape- and release-aware |
 | `timestamp` | number or string | Session time for `--days` filter |
 
----
-
-## 5. Subsequent lines (record types)
+## 5. Rollout Records and Mapping
 
 Ingest adapter primarily uses:
 
@@ -104,9 +94,8 @@ Ingest adapter primarily uses:
 | `response_item.ghost_snapshot` / `world_state` | Counted as known intermediate state, not conversation text |
 | Unsupported record shapes | Counted as unknown ignored diagnostics and require review |
 
-The typed configuration query has been exercised against a current SWEmore
-snapshot. Exact provider/model/effort/service/mode filters reconstruct the
-governing Model Turns and expose their direct `turn_context` or
+The typed configuration query uses exact provider, model, effort, service, and
+mode filters to resolve governing Model Turns and expose their direct `turn_context` or
 `thread_settings_applied` field paths, record locators, and Source revisions.
 
 Record timestamps accept Unix seconds, Unix milliseconds, and ISO 8601. Tool
@@ -135,9 +124,7 @@ Malformed payload containers, tool inputs, timestamps, and configuration fields
 are diagnosed at field scope and dropped independently. A malformed optional
 field does not discard an otherwise supported record.
 
----
-
-## 6. Scan metrics (Codess)
+## 6. Scan Observations
 
 | Metric | Definition |
 |--------|------------|
@@ -147,9 +134,7 @@ field does not discard an otherwise supported record.
 | **days_ago** | From max `timestamp` among matching sessions (parsed to ms) |
 | **span_weeks** | Spread of timestamps across matching files |
 
----
-
-## 7. Quirks & limitations
+## 7. Limitations and Coverage Boundaries
 
 - Timestamp formats mixed (Unix s, Unix ms, ISO); parser normalizes to ms where possible.
 - “Events” in scan ≠ only chat messages; includes structural lines.
@@ -158,7 +143,7 @@ field does not discard an otherwise supported record.
   reasoning state remains raw evidence, token accounting remains a specialized
   utilization input, and snapshots/turn context are not collapsed into chat
   messages. Selected scalar turn settings are normalized into
-  `model_configurations`; see CoPlan rows **V-CTX1/E-2**.
+  `model_configurations`.
 - **Compaction is directly stored.** Current local transcripts contain
   top-level `type=compacted` envelopes. Each envelope has a
   `replacement_history` containing one dedicated `type=compaction` item plus
@@ -187,25 +172,22 @@ field does not discard an otherwise supported record.
 - A valid transcript with no supported events removes its prior normalized
   session and is counted in the `empty_sources` diagnostic.
 
-### Parent-session evidence
+### 7.1 Parent-Session Evidence
 
-The earlier repeatable metadata-only audit in
-`tools/audit_codex_parentage.py` found no parent-like field in its then-current
-local cohort; message, reasoning, prompt, and tool bodies were not inspected.
-That observation is release- and cohort-specific. Current Codex protocol
-source defines `parent_thread_id`, `forked_from_id`, structured `thread_source`
+Current Codex protocol source defines `parent_thread_id`, `forked_from_id`,
+structured `thread_source`
 and subagent source values, agent nickname/role/path, and collaboration events
 for spawn, interaction, wait, close, resume, and activity. Codess maps direct
 parent and fork fields into distinct Session relations and preserves the
 remaining participant/source fields as bounded lineage metadata. Collaboration
 records map to harness-origin system Events with their sender, receiver,
 spawned-thread, prompt, model/effort, status, role/path, and timing evidence.
-No current local rollout in the reviewed cohort contains these records, so
-their compatibility evidence is the current OSS protocol plus focused
-fixtures—not a claim of local occurrence. Codess still never infers parentage
+When a selected local Source does not contain these records, their validation
+basis is the current protocol plus focused fixtures rather than a claim of
+local occurrence. Codess never infers parentage
 from timestamps, path proximity, archive location, or content.
 
-### Coverage boundary and complete-transport capture
+### 7.2 Coverage Boundary and Complete-Transport Capture
 
 The rollout is a durable harness-side event history, not a byte-for-byte model
 request/response trace. It preserves user, harness, model-summary, tool,
@@ -224,25 +206,12 @@ request assembly, transport retries/stream frames, or otherwise unavailable
 wire latency. Even then it does not reveal server-hidden reasoning and does not
 capture local tool execution unless harness telemetry is collected too.
 
-### Configuration evidence
+### 7.3 Configuration Evidence
 
-`codess evidence audit codex-features` performs a bounded,
-structure-only audit. A local audit reviewed all 28 active/archive
-transcripts (about 449 MiB) with a 64 KiB per-record ceiling. It found 8,107
-`turn_context` records and 143 newer `thread_settings_applied` records. Exact
-model and effort are widespread; the newer settings records contain an explicit
-`service_tier=default`. No distinct speed-tier field was observed. Other fields
+`codess evidence audit codex-features` performs a bounded, structure-only
+audit. Exact model and effort occur in `turn_context`; settings records can
+contain an explicit service tier. No distinct speed-tier field is currently
+mapped. Other fields
 named `mode` mean sandbox policy or truncation units, so Codess maps only the
 identified `collaboration_mode.mode` and records its exact field provenance.
 Oversize bodies are counted, drained, and excluded from the structural audit.
-
----
-
-## 8. Cross-reference
-
-| Topic | Document |
-|-------|----------|
-| Unified DB columns | **CoSchema.md** |
-| Claude Code storage | **CCSchema.md** |
-| Cursor storage | **CursorSchema.md** |
-| Implementation, tests, and work queue | **CoPlan.md** |

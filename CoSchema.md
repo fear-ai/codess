@@ -1,423 +1,298 @@
-# CoSchema v4
+# CoSchema
 
-CoSchema is Codess's vendor-neutral logical record model and its current SQLite
-store format. Functional meaning is defined by
-`schema/coschema/contract.json`; the SQLite layout is defined only by
-`schema/coschema/sqlite/schema.sql`. Vendor facts remain in `CCSchema.md`,
-`CodexSchema.md`, and `CursorSchema.md`; executable translations are declared in
-`schema/mappings/` and implemented by the adapters/store mapper.
+CoSchema is the current vendor-neutral logical model and SQLite store contract
+for Codess. It defines the regular structures searched across Claude Code,
+Codex, and Cursor while retaining exact source-system evidence.
 
-## Package and version identity
+The machine-readable logical contract is
+`schema/coschema/contract.json`. The physical database contract is
+`schema/coschema/sqlite/schema.sql`. Those files are authoritative for fields,
+types, nullability, references, constraints, and indexes.
 
-The format-4 package is `schema/coschema/` plus the three mapping profiles.
-`schema/coschema/manifest.json` names and hashes every package file. Runtime
-initialization refuses a package whose files do not match that manifest.
-Format 4 is currently interpreted by decoder `0.2` and validator `0.2`.
-These behavior profiles are recorded independently because corrected
-selection/mapping or acceptance logic can change normalized results without
-making the format-4 row contract unreadable.
+## 1. Package Identity
 
-**Current state.** Format 4 is released and is the only format the current
-writer produces. The released package digest is
-`4be177965524dbfe2d5d0f9577b71aecc2901deec0627d8d9e64851f47707bad`;
-the approved and reviewed catalogs bind six decoder/validator-0.2 baselines to
-that package. Formats 2/3 remain readable historical inputs
-(`reader_compatibility.read = [2,3,4]`) but are never mutated.
+The current package is rooted at `schema/coschema/` and includes the common
+contract, mapping grammar, SQLite DDL, manifest, and conformance fixtures.
+Vendor mapping profiles under `schema/mappings/` are part of the package
+verified by `schema/coschema/manifest.json`.
 
-### Format-3 to format-4 candidate delta
+Current store identity is:
 
-Format 4 is primarily a contract and meaning correction over the existing
-physical design, not a wholesale replacement schema.
-
-| Impact | Change | Why it requires review |
-|---|---|---|
-| Critical | The logical contract now includes `model_configurations`, content links/derivations, event-artifact links, model-turn configuration, event causality/time basis, complete tool relations/status, diagnostic scope, and correlation evidence | Format 3 physically stored most of these but its claimed exhaustive contract omitted them; format 4 makes readers and validators acknowledge the real functional surface |
-| Critical | Contract JSON and JSON-extension fields have SQLite `json_valid()` constraints | Invalid Python representations or arbitrary text that previously entered structured columns now fail at write time; adapters must serialize or use a text field |
-| Critical | Source record type/subtype and mapping trace mean exact vendor evidence rather than normalized compatibility names | Existing format-3 rows cannot be reinterpreted as exact provenance; they remain historical and corrected rows require rebuilding from source |
-| Critical | Source revisions change from mtime/size identity to content-sensitive, non-authenticating update fingerprints, including SQLite WAL state | Session observation IDs and update detection can change even when normalized conversation content does not |
-| Significant | Model configuration identity adds family and null-safe uniqueness; occurrence provenance is separated conceptually from reusable configuration values | Duplicate configuration rows reduce, but the final provenance representation remains under **R3a/R3b** review |
-| Significant | Vendor mappings add Claude harness/configuration/fork fields, Codex turn/configuration/archive fields, and Cursor permission/subagent fields | Rebuilt counts, turns, archive state, relations, and model/configuration coverage may differ from format 3 |
-| Compatibility | Formats 2/3 remain readable; only released format 4 is writable by the current writer | Acceptance requires new stores and side-by-side comparison, never an in-place update of retained baselines |
-
-No accepted baseline or approved pointer is changed merely by defining this
-candidate.
-
-One monotonic integer versions the whole readable store contract:
-
-- format ID: `codess.coschema`
-- format version: `4`
-- SQLite `application_id`: `0x434F4445` (`CODE`)
-- SQLite `user_version`: `4`
-- Codess software version: independent, currently recorded in `store_meta` and
-  each snapshot manifest
-
-We do not separately version every table, index, taxonomy, adapter, or vendor
-mapping. A change advances the CoSchema format only when the stored contract or
-reader requirements change. Adapter corrections normally require a new software
-release and rebuilt snapshot, not a new database format.
-
-Once released, packages are immutable. Unknown package or database formats fail
-closed. Legacy unversioned stores may be read through the compatibility query
-surface but cannot be mutated; rebuild creates v2 stores beside retained
-baselines. Format-2 and format-3 stores remain read-only compatibility inputs;
-all writes and rebuilds now produce format 4. Format 4 makes the complete
-functional DDL surface and JSON obligations machine-verifiable in both
-directions; retained format-3 snapshots remain valid historical evidence.
-
-## Core terms
-
-- **Source** — one observed revision of vendor evidence, identified by source
-  system, locator, and revision. A source is not a session and need not be
-  retained as a raw object.
-- **Interaction** — one user- or environment-initiated unit that can encompass
-  several model turns, tool calls/results, harness events, and requests for more
-  input. Its boundary may be vendor-provided, mapped, inferred, or manual.
-- **Model turn** — one bounded model execution within an interaction. It is not
-  assumed to equal a displayed message or a user/assistant pair.
-- **Actor** — the immediate evidence-backed producer or operative participant
-  represented by `actor_kind` (principally human, model, harness, or tool;
-  `agent` is used only when the source exposes a distinct runtime
-  participant). Exact vendor `source_role`, content function, origin,
-  Interaction initiation, and Session relation are independent evidence.
-  A vendor `user` envelope is therefore not automatically human, and a
-  subagent Session is not automatically the author of every record it carries.
-- **Artifact** — a file, URI, repository object, or other durable object an event
-  reads, creates, modifies, deletes, executes, or mentions. Observed absolute
-  paths are evidence; project-relative paths are the preferred portable key.
-- **Project snapshot** — one immutable dated normalized observation of one
-  Project, bound to exact source revisions and processing/package identities.
-- **Assembly** — a reproducible selection over one or more Project snapshots,
-  with optional SQLite, JSONL, Parquet, or DuckDB exports. Assemblies
-  are derived query/export products, not additional CoSchema source entities.
-
-## Functional entities
-
-| Entity | Purpose and identity |
+| Property | Value |
 |---|---|
-| `projects` | Stable logical project identity plus observed root/cwd, ownership, activity, and selection state |
-| `project_locations` / `workspace_bindings` | Machine-local locations and evidence-backed vendor workspace attribution; `path_obsolete` distinguishes historical vendor placement from a current working root |
-| `sources` | Immutable observed source revision; unique by source system, URI, and revision |
-| `model_configurations` | Provider/model family/exact name and independently settable effort, speed, service, and mode values; `source_config` retains bounded vendor-field provenance |
-| `sessions` | Vendor/harness container; vendor session ID is scoped by source system and may be absent. Vendor `source_cwd` carries `path_obsolete` when it lies outside the active Project root |
-| `interactions` | Initiating work unit, ordered within a session, with explicit boundary source/confidence |
-| `model_turns` | Model execution, ordered within a session and optionally linked to an interaction |
-| `events` | Ordered normalized observation with preserved vendor type/subtype and mapping trace |
-| `source_records` | Stable vendor record position and classification within a source revision |
-| `content_objects` / typed links | Deduplicated content identities linked to events and source records |
-| `processing_runs` / `content_derivations` | Policy/software identity, actions, accepted/rejected inputs and outputs, and rejection reason |
-| `tool_invocations` | Requested operation with source/free-text tool name, optional canonical name, input, and status |
-| `tool_results` | One or more ordered results linked to an invocation when source evidence permits |
-| `artifacts` / `event_artifacts` | Durable objects and evidence-backed operations on them |
-| `mapping_diagnostics` | Source-, record-, or field-level loss, rejection, or ambiguity |
-| `correlation_assertions` | Reviewable cross-session/project/vendor claims with method, evidence, and confidence |
+| Format ID | `codess.coschema` |
+| Format version | `4` |
+| SQLite `application_id` | `0x434F4445` |
+| SQLite `user_version` | `4` |
+| Decoder profile | `0.2` |
+| Validator profile | `0.2` |
 
-`tool_invocations.source_call_id` is a vendor free-text lineage value, scoped
-by source system and Session rather than globally unique. The relational copy
-is bounded to 100 UTF-8 bytes: short values remain exact, while longer values
-use a UTF-8-safe prefix plus the full SHA-256 digest. Event metadata/raw
-evidence retains the original vendor value.
+Codess software version, source-system release, model configuration, decoder
+profile, validator profile, and CoSchema format describe different things and
+remain separate provenance.
 
-For Git-backed work, one repository has exactly one Codess Project identity.
-Clones, linked worktrees, workspace directories, branches, and vendor workspace
-IDs are Project locations, bindings, or dated observations; none creates a
-second Project. This rule does not require Git for a Project.
+## 2. Core Entities
 
-### Interaction-preservation rule
+| Entity | Purpose |
+|---|---|
+| `projects` | Stable work identity plus selected descriptive attributes. |
+| `project_locations` | Machine-local paths, clones, worktrees, and observed location state. |
+| `workspace_bindings` | Evidence-backed source-system workspace attribution to a Project. |
+| `sources` | One observed Source revision, locator, storage family, availability, and integrity evidence. |
+| `source_records` | Exact record positions, types, subtypes, ordering, and classification within a Source. |
+| `sessions` | Source-system conversation/thread identity, Project attribution, lifecycle, time, and relation evidence. |
+| `interactions` | Initiating work units within a Session. |
+| `model_turns` | Evidenced model executions and their optional Interaction and configuration. |
+| `events` | Ordered normalized observations with exact source classification and mapping evidence. |
+| `model_configurations` | Nullable independent provider, model, revision, effort, speed, service, and mode values. |
+| `tool_invocations` | Requested tool operations, exact names, call lineage, input, and status. |
+| `tool_results` | Ordered results and outcomes linked to invocations when source evidence permits. |
+| `artifacts` and `event_artifacts` | Durable files, URIs, repository objects, and evidence-backed Event operations. |
+| `content_objects` and content links | Deduplicated bounded content identity and its relation to Events, records, tools, and Artifacts. |
+| `processing_runs` and `content_derivations` | Content policy, processor, actions, inputs, outputs, and limitations. |
+| `mapping_diagnostics` | Source-, record-, or field-scoped mapping limitations and failures. |
+| `correlation_assertions` | Reviewable cross-record or cross-Project relationships with method and evidence. |
 
-Agent, subagent, harness, tool, MCP, skill/plugin, process, and model
-interactions are source evidence whenever a vendor exposes them. Ingest must
-preserve, subject only to the documented bounded-content policy:
+## 3. Relationships
 
-- the exact vendor record type/subtype, identifiers, names, status, and payload
-  representation;
-- participant and component identity when supplied, including server/provider
-  namespace and model or agent configuration;
-- parent, caller/callee, request/result, and caused-by relationships, without
-  requiring every vendor to express the same graph;
-- vendor ordering and timestamps, including result-fragment order; and
-- records that have no natural common-taxonomy equivalent.
+```mermaid
+erDiagram
+    PROJECT ||--o{ PROJECT_LOCATION : has
+    PROJECT ||--o{ WORKSPACE_BINDING : has
+    PROJECT o|--o{ SESSION : contains
+    SOURCE ||--o{ SOURCE_RECORD : contains
+    SOURCE o|--o{ SESSION : supplies
+    SESSION ||--o{ INTERACTION : partitions
+    SESSION ||--o{ MODEL_TURN : executes
+    SESSION ||--o{ EVENT : orders
+    INTERACTION o|--o{ MODEL_TURN : groups
+    INTERACTION o|--o{ EVENT : groups
+    MODEL_TURN o|--o{ EVENT : groups
+    EVENT o|--o{ TOOL_INVOCATION : requests
+    TOOL_INVOCATION ||--o{ TOOL_RESULT : returns
+    EVENT }o--o{ ARTIFACT : operates_on
+    EVENT }o--o{ CONTENT_OBJECT : projects
+    SOURCE_RECORD }o--o{ CONTENT_OBJECT : retains
+```
 
-Common Actors, Sessions, Events, Tool Invocations, Tool Results, Artifacts, and
-relations are additive normalized projections. They must not replace or flatten
-the vendor evidence. An unavailable relationship remains NULL with a
-diagnostic; it must not be invented. A vendor-only interaction remains
-queryable through its preserved source classification and mapping trace rather
-than being discarded because another vendor lacks an equivalent.
+Common relationships are additive projections over source evidence. An
+unavailable parent, call/result edge, Interaction boundary, Model Turn, or
+Artifact relationship remains absent with an applicable diagnostic. It is not
+inferred from proximity, timestamps, equal text, or suggestive names.
 
-The exhaustive field, nullability, reference, ordering, range, and vocabulary
-definitions are machine-readable in `contract.json`; this document does not
-duplicate that list. SQLite compatibility projection columns in `sessions` and
-`events` preserve the existing query surface but are not the global identity model.
+## 4. Identity
 
-CoSchema governs each authoritative Project snapshot. A cross-Project Assembly
-uses a separate read/export contract above CoSchema and must retain
-`project_id`, `snapshot_id`, stable entity/observation IDs, and source lineage.
-Creating an Assembly or a new export format does not advance the
-CoSchema format unless the authoritative per-Project stored meaning changes.
+### 4.1 Project
 
-## Important field decisions
+Projects use generated stable identifiers independent of paths. For Git-backed
+work, one repository is one Project. Locations, linked worktrees, workspace
+identifiers, and source-reported paths are observations related to that Project.
 
-### Identity and paths
+### 4.2 Source
 
-`source_system_id` identifies the source/harness namespace; a vendor session ID
-alone is not globally meaningful. Product, vendor, harness, storage format, and
-surface are separate because vendors reuse storage structures across IDE, CLI,
-desktop, agent, and API packaging.
+A Source revision is unique by source-system namespace, Source URI, and revision
+evidence. Source records are located within that revision. The same logical
+Session can be observed through several Source revisions without losing the
+distinction between Session identity and observation lineage.
 
-`sources`, `sessions`, and `events` persist deterministic global IDs. Session
-identity derives from source-system namespace plus vendor session ID; event
-identity adds the vendor event ID. `sessions.observation_id` additionally binds
-the logical session to a source revision and Project, so a copied conversation
-can retain one global identity while separate extractions keep distinct
-lineage. The current `sessions.id` remains a vendor/local compatibility key. A
-path hash or inode is not a Project identity: paths identify locations and
-inodes do not survive copying or cloning.
+### 4.3 Session and Event
 
-`root_path` is the normalized project anchor. `source_cwd` is what the source
-actually reported. An obsolete source or workspace path remains vendor-layout
-provenance and is explicitly marked by `path_obsolete`; it never replaces the
-active root. `relative_path` is preferred for artifact correlation;
-`observed_absolute_path` preserves local evidence. Source locators are URIs or
-absolute observed paths and are never treated as portable project identity.
-An artifact resolving outside `root_path` is not assigned a misleading `../`
-project-relative key. It uses a `file:` URI, retains the absolute observation,
-and records `path_scope=external` plus the source spelling in metadata. This
-allows later project correlation without claiming that the file belongs to the
-session's selected project.
+A Session ID is deterministic from the source-system namespace and available
+source Session identity. The exact upstream ID remains in
+`vendor_session_id`. An Event ID is deterministic within its Session and source
+record identity. Observation IDs additionally bind records to Project and
+Source revision context where required.
 
-External `file:` URIs are compared with catalog locations and aliases by
-longest-root containment. A unique longest match records the matched location,
-relative path, method, and confidence as an
-`artifact_path_within_project_location` assertion. Equal longest roots remain
-explicit candidates. Assertions do not change `artifacts.project_id` or claim
-authorship.
+Human-readable Session names and source titles are metadata, not identity.
 
-### Ordering and time
+### 4.4 Tool Calls
 
-`sequence_no` is the deterministic within-session order and is required for
-interactions/model turns and present for mapped events. Event sequence values
-must be positive and are unique within a session. Source record locators and
-vendor IDs remain alongside it for lineage.
+`tool_invocations.source_call_id` is an exact vendor free-text lineage value
+scoped by source system and Session. The relational copy is bounded to 100
+UTF-8 bytes. Longer values use a UTF-8-safe prefix plus a complete SHA-256
+digest; source metadata or retained evidence keeps the original.
 
-`started_at`, `ended_at`, and `event_at` are explicit vendor/mapping timestamps
-or `NULL`. Codess does not manufacture them from file modification time.
-`source_mtime` is captured separately. `time_basis`/`event_at_basis` tells an
-application which evidence supports a time value. SQLite stores event-oriented
-numeric time as Unix milliseconds; manifests and ingest/observation times use
-RFC 3339 UTC strings.
+## 5. Ordering and Time
 
-### Types, roles, and tools
+`sequence_no` is the deterministic within-Session order for normalized Events
+and applicable Interaction and Model Turn groups. Event sequence values are
+positive and unique within one Session.
 
-Vendor record type/subtype are retained in `source_record_type` and
-`source_record_subtype`. Broad common meaning is mapped into open
-`event_kind`, `actor_kind`, `content_role`, and `origin_kind` values. New vendor
-values therefore remain queryable even before the common vocabulary grows.
-Normalized names and formats are the stable mixed-vendor query surface, not a
-replacement for source designations. Each mapped event keeps scalar source
-type/subtype/locator fields and a named common mapping; `mapping_trace` records
-the structured source path and all applied rules. Adapter conformance checks
-require those rules to exist in the vendor mapping profile.
-Mapping profiles declare their direction. Current vendor profiles are
-`source_to_common`; future exports use separate `common_to_external` profiles
-and fixtures rather than reversing an ingest rule implicitly. Both directions
-use the same rule grammar and retain source/common values needed to explain the
-translation.
+`started_at`, `ended_at`, and `event_at` contain explicit source or mapping time
+or remain `NULL`. File modification time is stored separately as Source
+observation evidence and is not promoted silently to conversation time.
 
-Source tool names are free text because tool registries are vendor-, harness-,
-plugin-, and version-dependent. `canonical_tool_name` is an optional mapping,
-not a closed enum. `input_json`, `output_json`, and `output_text` describe the
-invocation boundary explicitly; a harness subprocess is not automatically
-classified as a model tool call.
+Event-oriented numeric times use Unix milliseconds. Manifest, ingest, and
+observation timestamps use RFC 3339 UTC strings. Time-basis fields state the
+evidence supporting a normalized value.
 
-`source_status` preserves the vendor value. `normalized_status` is the common
-taxonomy (`pending`, `running`, `succeeded`, `failed`, `denied`, `cancelled`,
-`incomplete`, `unknown`). Neither silently replaces the other.
+## 6. Types and Classification
 
-### Metadata and mapping trace
+Every mapped Event can retain:
 
-Typed, commonly queried meaning belongs in columns/relations. `metadata` is a
-JSON extension object for sparse vendor evidence that has not earned a common
-field. It must not duplicate canonical fields, conceal required identity, or
-become an unbounded raw-record dump. `mapping_rule` and `mapping_trace` identify
-the translation responsible for a normalized event. Structured mapping
-diagnostics record information that could not be mapped reliably.
-Their `diagnostic_level` is structural scope (`source`, `record`, or `field`),
-while `severity` is operational significance (`info`, `warn`, or `error`);
-these are independent dimensions. Field diagnostics retain the exact field
-path and classified state without rejecting the rest of a usable record.
+- exact `source_record_type` and `source_record_subtype`;
+- normalized `event_kind`;
+- `actor_kind`, `content_role`, and `origin_kind`;
+- Interaction initiation and Session relation where applicable;
+- exact and normalized status;
+- mapping rule and structured mapping trace; and
+- field- or record-level diagnostics.
 
-JSON is used only where the value is intrinsically compound: mapping traces,
-tool argument/result objects, configuration provenance, processing actions,
-correlation evidence, and sparse extension objects. Identifiers, field paths,
-record names, versions, statuses, normalized taxonomy values, paths, and the
-primary `mapping_rule` remain scalar text. SQLite format 4 enforces
-`json_valid()` for every contract field typed as `json` or `json_extension`;
-writers serialize structured values canonically instead of storing Python
-representations. Exact large or unbounded source objects remain in raw evidence.
+The principal Actor kinds are human, harness, tool, and model. Source role is
+independent: a `user` role can carry a tool result, delegated prompt, injected
+context, or direct human prompt.
 
-There is no `release_value`. Version strings remain exact source strings in the
-appropriate software/harness/model fields. There is no database `source_raw`
-column; raw evidence is handled by the sidecar store.
+Common classifications remain open where vendor evidence can introduce useful
+new values. Closed taxonomies are used only where stable query behavior requires
+a bounded vocabulary.
 
-Configuration values remain nullable and independent. A model name containing
-words such as `fast`, `high-thinking`, or `priority` does not populate speed,
-effort, or service tier. Per-event `configuration_provenance` records the source
-record type, locator, and exact field path for each normalized occurrence.
-When the setting was observed on a prior governing Event,
-`configuration_provenance_scope` explicitly says `inherited` and identifies
-that Event and source locator; absence of that marker means the provenance was
-recorded directly on the Event. This is an evidence scope, not an inference
-from a model label.
-The current writer stores `model_configurations.source_config` as a
-bounded representative JSON observation, not an exhaustive history; event
-provenance is authoritative. **CoPlan R3a** decides whether that representative
-is removed or narrowed, and **R3b** separately decides whether occurrence
-provenance also receives a materialized relational projection.
-Configuration identity includes provider, family, exact model, revision,
-effort, speed, service tier, and mode with null-safe database uniqueness.
-Absent, default, and unknown remain distinct.
+## 7. Tools and Outcomes
 
-## Raw evidence and immutable snapshots
+Source tool names are free text. `canonical_tool_name` can group reviewed aliases
+without replacing the exact name.
 
-Raw retention uses `codess.raw/1`, a content-addressed store outside query
-databases. JSONL sources use fixed-size stable-file reads; Cursor SQLite uses a
-paged SQLite backup into a temporary database so WAL-visible committed data is
-captured consistently. Source and stored hashes are computed in bounded passes,
-zstd output is staged, and only a verified content-addressed object is promoted.
-Capture and later raw verification both use fixed-size streaming reads, so
-memory does not scale with source size. The raw object and normalized SQLite
-store remain equally mutable local files. They expose different validation
-invariants but have the same local-writer trust boundary. The complete threat
-model and digest-role rationale are in **Designs.md §11**.
+Invocation input and result payload have explicit boundaries. Structured
+invocation input and structured result values use valid JSON; display or
+unstructured result bodies use text. A harness subprocess is not automatically
+called a model tool operation without source evidence.
 
-`--raw-mode` controls retention:
+Source status preserves the vendor value. Normalized status supports common
+search over pending, running, succeeded, failed, denied, cancelled, incomplete,
+and unknown outcomes. Transport and application status can coexist so a
+completed transport does not conceal an operation failure.
 
-- `none`: record that the source was not retained
-- `reference`: record locator plus a bounded source fingerprint (default)
-- `capture`: store a content-addressed exact revision
-- `seal`: capture and hard-link/copy the objects into the snapshot
+## 8. Model Configuration
 
-Each production ingest builds
-`~/.codess/projects/<project-id>/snapshots/<snapshot-id>/`, backs up its format-3
-working databases, writes `raw-manifest.jsonl` and `manifest.json`, verifies
-package/database/raw hashes and logical counts, then atomically replaces both
-the central and project-local current pointers. Project-local `.codess/` holds
-working caches, identity/source bindings, validation reports, and a pointer;
-the retained baseline no longer depends on survival of the checkout.
+Model configuration dimensions are nullable and independent:
 
-`projects.json` is the stable catalog. A minted Project ID owns multiple
-locations and vendor workspace bindings. `tools/retire_project.py` requires a
-fully accepted captured baseline, marks the old location retired, requires and
-binds a replacement, and verifies the replacement can read the durable
-snapshot. It never deletes the old directory. Reference mode remains useful
-for exploration but cannot authorize retirement.
+- provider;
+- model family;
+- exact model name;
+- model revision;
+- reasoning effort;
+- speed tier;
+- service tier; and
+- mode.
 
-The lifecycle separates three operations. **Add location** binds another
-observed/active path to an existing Project after identity and conflict checks;
-ordinary ingest can ensure a binding for its own path but is not an explicit
-cross-location assertion. **Retire location** changes one known location's
-state without requiring a replacement and must not strand the last reproducible
-evidence. **Relocate** composes add, durable-pointer installation, read
-verification, and retirement. The current `retire_project.py` requires
-`--new-location`, so its behavior is relocation despite its historical name;
-its compatibility-wrapper disposition is centralized in **CoPlan A11**. The
-catalog location operations define the current lifecycle surface.
+A missing value remains missing. Codess does not infer speed, effort, service,
+or mode from the model name. Configuration identity uses the complete null-safe
+tuple.
 
-`tools/validate_snapshot.py` verifies the current package and immutable-file
-hashes, SQLite integrity and foreign keys, manifest counts, event ordering,
-artifact identity/index invariants, JSON fields, raw object recovery, mapping
-diagnostic allowances, required source-system coverage, and optional Cursor
-scoping and turn rules. A policy `required_sources: ["Codex"]` means the
-reviewed baseline is a Codex adapter/format specimen; it does not mean that
-Codess or the Project requires Codex for ordinary operation. Living
-real-Project policies do not freeze Session, Event, or raw-record counts.
-Actual counts remain dated manifest/report observations; exact/minimum count
-assertions are reserved for deterministic fixtures or an explicitly frozen
-research cohort. `tools/apply_and_verify.py` applies this gate to one project
-at a time and can require two rebuilds with unchanged source revisions and
-equal canonical logical digests. It runs read-only query smoke tests before
-atomically updating `catalog/approved-baselines.json`. Policies are versioned
-data under `catalog/policies/`; their contract is
-`schema/validation-policy-contract.json`. The repeated-build path additionally
-streams canonical rows from both immutable stores through the D17 value gate.
-Identity, ordering, and lineage differences are fatal; other value differences
-are advisory and remain visible in the acceptance report. This comparison does
-not materialize either database in memory.
+Each normalized occurrence records direct source field and locator provenance.
+When a vendor places one setting on a governing record, propagated occurrences
+are explicitly marked as inherited and retain the governing Event or record.
 
-Sources at or below 64 MiB receive a full-file SHA-256 change fingerprint.
-Larger sources use an explicitly labelled eight-window SHA-256 sample plus size
-and mtime. Neither form is an authenticity claim, and the sampled form does not
-prove complete byte identity. Exact raw capture also hashes the complete stable
-file or transactional SQLite backup with SHA-256 because that digest is its
-content address and integrity identity. New ingestion and runtime verification
-use SHA-256 exclusively. Unsupported historical digest labels cannot prove
-equality to a current live Source. Derived data is rebuilt rather than
-rewriting the immutable historical snapshot. Complete raw-object, snapshot,
-store, manifest, package, and SHA-256 reference mismatches remain errors.
-Incremental ingest
-state records the revision, method, size, mtime, and consistency, so same-size
-and same-mtime changes are detected for fully hashed sources. When a SQLite WAL
-exists, its revision is combined with the main-file revision so WAL-only Cursor
-updates are not skipped. Every Source and
-Session records observation/ingestion time, while immutable snapshot manifests
-provide the dated extraction boundary and retain prior versions.
+## 9. Metadata and JSON
 
-Immediate apply validation compares a reference-only locator's current revision
-to the revision just ingested, preventing promotion after source drift. Frozen
-reviewed-baseline verification does not require a live mutable
-locator to remain unchanged forever; it verifies retained snapshot/store/raw-
-manifest identities and reports reference reproducibility as a limitation.
+Typed, frequently queried meaning belongs in columns or relations. JSON is used
+only for intrinsically structured or sparse values:
 
-The logical digest deliberately excludes snapshot creation time, surrogate
-row identifiers, and SQLite layout. It includes common entities, vendor/source
-values, ordering, lineage, diagnostics, artifact relations, and correlation
-assertions. It therefore proves repeatable normalization for the same sources;
-it is not a substitute for manual semantic review or exact raw capture.
+- mapping traces;
+- tool argument and result objects;
+- configuration source evidence;
+- processing actions;
+- correlation evidence; and
+- bounded namespaced extension objects.
 
-The separate normalization digest excludes source-revision and observation
-identity. A policy may explicitly use it for a captured shared database that
-advances between repeated reads; this never treats the raw revisions as equal.
-Each revision remains independently captured and identified, while the digest
-proves that the selected normalized Project records did not change.
+Identifiers, paths, versions, statuses, source types, field paths, and primary
+mapping rules remain scalar. Extension JSON cannot conceal required identity,
+duplicate canonical fields, contradict common values, or become an unbounded
+raw-record dump. SQLite enforces `json_valid()` for structured fields.
 
-Working databases are disposable derived state. A writer refuses a store whose
-recorded released-package digest differs from the current package. The guarded
-apply workflow first verifies the retained current snapshot, archives the old
-working databases and ingest state with hashes, then rebuilds from source. This
-is a rebuild boundary, not an in-place schema or mapping migration.
+## 10. Content
 
-Historical queries select one retained identity with `--snapshot-id`. Exact
-package matching is the default. The explicit `read-compatible` package policy
-checks immutable hashes and the supported SQLite contract but warns that it
-does not recreate the older mapping semantics; historical stats do not update
-the current registry.
+Content objects separate content identity from Event projections and raw-object
+location. They record media type, charset, byte and character length, storage
+class, bounded inline content or external raw-object identity, privacy class,
+and applicable metadata.
 
-## Compatibility and change procedure
+Typed links associate content with Events, Source records, tool results, and
+Artifacts. A record can be semantically useful through tool, configuration,
+status, or context data even when ordinary message content is absent.
 
-`tools/coschema_gate.py OLD_CONTRACT NEW_CONTRACT` classifies a change as same,
-compatible, breaking, or manual review. It checks entity/field removal,
-identity/order changes, type/nullability constraints, and vocabularies; unknown
-change shapes fail closed. Fixtures under `schema/coschema/fixtures/` cover
-minimal, maximal, edge, negative, and compatibility cases.
+Content processing records the selected policy, processor, action sequence,
+input/output identity, and rejection or truncation reason. Derived searchable
+content never silently claims to be exact source bytes.
 
-Runtime `validate_database_contract()` checks both directions: every logical
-field must exist physically, and every physical table/column must be contracted
-or listed in `physical_contract` as an internal/compatibility detail. It also
-verifies SQLite JSON enforcement. `validate_mapped_event()` checks an adapter
-event's source identity, declared mapping rules, structured trace, and JSON tool
-input. These checks turn omissions into test failures instead of documentation
-drift.
+## 11. Artifacts and Correlation
 
-For a proposed store change:
+Artifact identity prefers Project-relative paths for files inside a Project.
+Observed absolute paths remain evidence. External files use an external URI and
+scope rather than a misleading `../` relative path.
 
-1. Change the logical contract and mapping specs first.
-2. Run the compatibility gate and record the decision.
-3. Change the SQLite layout without mixing application semantics into SQL.
-4. Add/update fixtures and mapping/database tests.
-5. Advance `format_version` only when the readable contract requires it.
-6. Hash the final package into the manifest and treat it as released.
-7. Rebuild, validate, and atomically promote a new snapshot; never overwrite a
-   retained baseline in place.
+Cross-Project or cross-vendor correspondence is represented by a correlation
+assertion with method, evidence, confidence, and observation context. An
+assertion does not rewrite the original Project, Artifact, Session, or Event
+identity.
 
-See `Schemas.md` for rationale and compatibility-policy provenance and
-`Designs.md` for the broader source, correlation, catalog, and execution design.
+## 12. Diagnostics
+
+Mapping diagnostics separate structural scope from operational severity:
+
+- Source scope: selected Source cannot be processed safely;
+- record scope: one source record cannot produce valid common records; and
+- field scope: one value is absent, malformed, ambiguous, unsupported, or
+  omitted while other record content remains usable.
+
+Diagnostics retain Source, record locator, field path, source value state,
+mapping rule, reason, severity, and bounded detail. Query and validation can
+therefore distinguish unavailable evidence from a supported value that happens
+to be `NULL`.
+
+## 13. Store Sets and Raw Evidence
+
+Codess writes per-source-system SQLite stores for a selected Project and
+publishes them through a manifest and current pointer as one Project store set.
+A unified Codess store is the logical queryable collection of selected Project
+store sets; it does not require copying them into one SQLite file. Source
+replacement is transactional. Query opens normalized databases read-only.
+
+Raw retention uses the `codess.raw/1` sidecar format outside query databases.
+Reference mode records locator and update evidence. Capture stores an exact
+content-addressed revision. Seal makes the selected raw objects part of the
+published Project store set. Raw objects are not duplicated into conversation
+tables.
+
+JSONL capture uses bounded streaming. Cursor capture uses SQLite backup so
+committed write-ahead-log state is represented consistently. Exact retained
+objects and source-system stores use complete SHA-256 verification.
+
+## 14. Query Contract
+
+The common query contract supports Sessions, overview, Events, and search over
+one or more selected Project store sets. Predicates cover identifiers, source
+system, classification, status, model configuration, tool, Artifact, time, and
+bounded text.
+
+Results retain Project and store scope, stable row identities, deterministic
+order, applied limits, completeness or truncation information, and facets.
+Interaction and Model Turn expansion follows persisted relations and ordered
+Events. Structured request and result contracts live in `schema/query-*.json`.
+
+Direct SQLite access remains supported for exploratory joins, distributions,
+query-plan inspection, and specialized analysis.
+
+## 15. Mapping Contract
+
+`schema/coschema/mapping-contract.json` defines the executable profile shape.
+A mapping entry identifies its source system and storage family, supported
+record selector and field paths, target common or specialized field, named rule
+or host transform, guards and ordered alternatives, source and normalized
+vocabulary, retention class, ambiguity or loss, diagnostic behavior, and
+fixtures. Vendor profiles live under `schema/mappings/`.
+
+Mapping diagnostics identify Source, record, or field scope independently from
+severity. Conformance fixtures cover required minima, representative optional
+values, valid boundaries, named invariant failures, vendor hazards, and exact
+source-to-common outcomes.
+
+## 16. Contract Maintenance
+
+The schema package, mappings, DDL, writer, query code, and fixtures must agree.
+A current contract change proceeds from functional requirement and vendor
+evidence through mapping, query, machine-readable contract, DDL, tests, and
+representative real-source validation.
+
+Changes to identity, ordering, Actor meaning, lineage, status, or content
+semantics rebuild affected source-system stores and Project store sets. Vendor
+Sources remain unchanged.

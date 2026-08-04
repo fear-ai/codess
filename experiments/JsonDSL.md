@@ -1,4 +1,4 @@
-# Experiment record: JSON transform DSL for Codess mappings
+# JSON Transform DSL Experiment Record
 
 **Status: POSTPONED (not adopted).** This is the full lifecycle record for the
 question "should Codess mapping rules use an embedded JSON transform expression
@@ -13,7 +13,7 @@ immutable snapshot → DB query/analysis. Its value is the correctness and
 resilience of *every* step, not of the mapping step alone. A transform DSL would
 touch only the normalization step; this record is deliberately narrow.
 
-## 1. Use case
+## 1. Use Case
 
 Codess mapping profiles (`schema/mappings/{claude,codex,cursor}.json`) declare
 rules whose fields may name a transform. Today those transforms are named Python
@@ -22,7 +22,7 @@ functions in `src/codess/adapters/`. The recurring question is whether the
 JSONata / JMESPath / JSLT) so that a rule author could express field surgery
 without shipping Python.
 
-## 2. Desired functionality
+## 2. Desired Functionality
 
 A candidate language would have to express the transform classes our three
 adapters actually perform, without weakening the pipeline's guarantees:
@@ -31,26 +31,28 @@ adapters actually perform, without weakening the pipeline's guarantees:
 - string surgery (split multi-line tool output, trim, normalize timestamps);
 - table lookup (status/role/event-kind vocabularies; tool-name canonicalization);
 - **loud failure on unmappable input** — never a silent null (the never-guess
-  rule, `Schemas.md §2.7`);
+  rule, [Designs §4.5](../Designs.md#45-translation-admission-and-conformance));
 - and it must not force us to abandon host functions we already require
   (deterministic global-ID hashing, JSON canonicalization, bounded redaction).
 
-## 3. Derived requirements (from existing pipeline contracts, not invented)
+## 3. Pipeline-Derived Requirements
 
 The evaluation criteria are read off Codess's non-negotiable contracts so the
 result is authoritative rather than a matter of taste:
-- **Never-guess / dead-letter** (`Schemas.md §2.7`): a miss is a diagnostic, not
+- **Never-guess / dead-letter** ([Designs §4.5](../Designs.md#45-translation-admission-and-conformance)):
+  a miss is a diagnostic, not
   a guessed value or a silent null.
 - **Never crash on input** (see §9): no record, however malformed, may abort the
   program; the pipeline reports and continues.
-- **Exact provenance** (`CoSchema.md`): every emitted value keeps
+- **Exact provenance** ([CoSchema §6](../CoSchema.md#6-types-and-classification)):
+  every emitted value keeps
   `mapping_rule` + `mapping_trace`; a DSL must preserve which rule/path produced
   a value.
 - **Deterministic ordering and stable IDs**: transforms must be pure and
   reproducible so re-ingestion yields identical logical digests.
 - **Bounded output**: no transform may materialize an unbounded source object.
 
-## 4. Evaluation criteria and candidate vetting
+## 4. Evaluation Criteria and Candidate Vetting
 
 Candidates: only real JSON→JSON transform languages a Python/JS runtime can
 embed — **jq, JSONata, JMESPath**. Excluded on stated grounds: **JSLT**
@@ -66,7 +68,7 @@ are not expressible in any candidate, so a DSL can only *supplement*, never
 *replace*, the host transform registry. This caps the maximum possible benefit
 before any test runs.
 
-## 5. Test automation (methodology, borrowed from the Schema project's shootout)
+## 5. Test Automation Methodology
 
 The method — build the real mapping in each candidate, grade against one shared
 golden fixture, probe failure behavior — is adopted from the source project at
@@ -87,7 +89,7 @@ expressiveness + failure semantics; a candidate that fails the dead-letter test
 is out regardless of speed. If a future revisit is latency-bound, add a timing
 stage to the same harness; measure the axis that actually decides.
 
-## 6. Evaluating results and crafting the recommendation
+## 6. Result Evaluation and Recommendation
 
 The reference run of this method (Schema project, on an equivalent
 Salesforce mapping) produced: JMESPath eliminated (silent nulls, no
@@ -103,7 +105,7 @@ and Codess has no rule-authors-without-Python bottleneck. If revisited, **JSONat
 is the designated candidate** (native embedding, `$error()` → dead-letter, Python
 ports).
 
-## 7. Adoption and deployment (only if the trigger fires)
+## 7. Adoption and Deployment
 
 Not applicable now. If adopted later: JSONata would sit *beside* the host
 transform registry, host functions registered for ID/canonicalization/redaction;
@@ -111,21 +113,21 @@ every DSL-produced value still carries `mapping_rule`/`mapping_trace`; the chang
 advances no CoSchema format (it is an adapter-internal detail) but requires a
 rebuild of affected snapshots and the §5 harness green as the acceptance gate.
 
-## 8. Post-development review
+## 8. Outcome Review
 
 Deferred until adoption. When/if the DSL is adopted, this section records whether
 the predicted benefit (non-Python authorship) materialized and whether the added
 failure surface was worth it — the honest retrospective the Schema project's
 decision 004 anticipates by naming its own acceptance test.
 
-## 9. Trigger to reopen
+## 9. Reopening Trigger
 
 Reopen only when rule authors who cannot ship Python become a demonstrated
 bottleneck for adding or correcting a vendor mapping. Absent that, named Python
-transforms remain. This trigger is registered in `CoPlan §8` as the reopen
+transforms remain. This trigger is registered in `CoPlan §12` as the reopen
 condition for the mapping-DSL deferral.
 
-## 10. Relationship to universal field resilience
+## 10. Relationship to Universal Field Resilience
 
 This DSL question is separate from — but shares the never-guess/never-crash
 contracts with — the field-resilience requirement (`CoPlan` D18): whatever
@@ -133,7 +135,7 @@ executes transforms (host functions today, a DSL never) must treat every field
 state (absent / empty / null / sentinel / malformed) as a warn/info diagnostic
 and never abort. The resilience requirement is mainline; the DSL is postponed.
 
-## 11. Provenance of the method
+## 11. Method Provenance
 
 The shootout methodology is borrowed from `~/Work/Github/Schema`
 (`docs/decisions/004-transform-language.md`, `experiments/transform-languages/`).

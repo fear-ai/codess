@@ -1,199 +1,336 @@
 # Codess
 
----
+Codess turns locally retained coding-assistant sessions into reliable,
+searchable records of development work. It reads the distinct stores maintained
+by Claude Code, Codex, and Cursor, preserves their evidence, and maps understood
+meaning into a common database model.
 
-## 1. Goals and problem
+The immediate value is practical investigation: find the Sessions associated
+with a Project, locate an exchange, reconstruct its surrounding Interaction,
+inspect tool activity, and compare work across source systems. The larger vision
+is a persistent conversion discipline that supplies stable inputs to assessment,
+statistics, visualization, research, and other data systems.
 
-**Problem:** Session records from Claude Code, Cursor, and Codex are valuable for assessing model behaviors, tool usage, cost estimation, and audits—but they are scattered, hard to read (large JSONL, nested structures), and harder to interpret (schema varies by source).
+Vendor conversion, regular storage, and investigation are the central product.
+The external ecosystem describes compatible directions for extending those
+records; it is not a promise that every listed interface or service is bundled.
 
-**Solution:** Ingest from multiple sources → normalize to immutable per-Project
-snapshots → query directly or assemble explicit cross-Project analytical
-datasets. Discovery, source decoding, normalized storage, assembly, and
-investigation remain separate operations.
+## 1. Problem
 
-**Goals:** Discover projects with session data; ingest and normalize; query tools/sessions/content; support batch or per-directory workflows.
+Coding harnesses retain far more than a visible chat transcript. Depending on
+the product and release, local stores can include human prompts, model output,
+tool calls and results, permission decisions, context injections, compaction
+summaries, model settings, subagent activity, file references, lifecycle events,
+and usage observations.
 
----
+That evidence is difficult to use directly:
 
-## 2. Product framing (strategy → requirements)
+- each source system uses a different storage layout and record vocabulary;
+- structures change between releases and can be only partly documented;
+- one logical exchange may be spread across several records or tables;
+- vendor roles such as `user` and `assistant` do not reliably identify the
+  human, model, harness, or tool that produced the content;
+- tools, subprocesses, agents, plugins, and Model Context Protocol (MCP)
+  operations expose different identifiers and result relationships;
+- large shared stores require selective queries rather than complete decoding;
+- timestamps, identifiers, ordering, and Project attribution vary in quality;
+- exact source evidence and normalized meaning are both necessary; and
+- direct searches across vendor stores are difficult to reproduce or combine.
 
-### 2.1 Outcomes and constraints
+A collection of one-off export scripts does not solve this problem. Every
+consumer would have to rediscover vendor formats, classification hazards,
+Project attribution, and provenance. Results would be difficult to compare and
+could silently change when a product updates its local storage.
 
-- **Inclusion:** Path exists; session data present or explicit curator interest;
-  typically a Git root; not under backup/review dirs. Candidate observations
-  recommend consideration but never authorize ingest by themselves.
-- **Exclusion:** Invalid paths; slug-decode ambiguity; backup trees (`OLD`, `Save`); reference/review trees (`Code/CodingTools`, `MCP/MCPs`, `Spank/sOSS`, etc.). Third-party source may be inspected explicitly but is not promoted as owned work.
-- **Filters:** Scan supports source and recency filters. Ingest supports source
-  selection and a run-wide minimum source-file size; it does not define
-  vendor-specific event-count or duration thresholds.
+## 2. Solution
 
-### 2.2 Capabilities and priorities
+Codess separates six responsibilities:
 
-| Capability | Priority |
-|------------|----------|
-| Find projects with session data (scan) | Critical |
-| Ingest CC, Codex, Cursor | Critical |
-| Query sessions, orientation, events, and bounded normalized content | Critical |
-| Catalog-wide and filtered cross-Project analytical Assemblies | High |
-| Save/replay typed requests, chain stable result IDs, and verify exact evidence | High |
-| Batch / multi-root (`--dirs`, `--dir`) | Critical |
-| Review candidates using session, local Git, activity, ownership, and topic evidence | High |
-| Execute an explicit reviewed selection without a hidden “worthy” heuristic | High |
-| Per-source filters (`--source`) | High |
-| Redaction | High |
+1. **Discover and select** relevant Projects, workspaces, Sessions, and Sources.
+2. **Access** vendor stores through bounded filesystem reads and selective
+   database queries.
+3. **Decode** each storage family with a specialized, release-aware adapter.
+4. **Classify and normalize** understood evidence without discarding exact
+   source designations.
+5. **Store and index** regular Project records suitable for direct and composed
+   queries.
+6. **Search and reconstruct** Sessions, Interactions, Model Turns, tools,
+   artifacts, and supporting evidence.
 
-**Out of scope:** raw-source search over authorized vendor fields and messages,
-alternative indexed retrieval without measured need, and Markdown export.
-Bounded normalized substring search is implemented. Raw retention does not make
-raw vendor evidence searchable. The remaining
-dispositions are centralized in **CoPlan §8**.
+```mermaid
+flowchart LR
+    subgraph Evidence["Vendor Projects and Sessions"]
+        Claude["Claude Code Projects and Sessions"]
+        Codex["Codex Projects and Sessions"]
+        Cursor["Cursor Projects, workspaces,<br/>and Sessions"]
+    end
 
-### 2.3 People and scenarios
+    Ingest["Specialized access, decode,<br/>classification, and normalization"]
+    Unified["Unified Codess store<br/>selected CoSchema Project store sets"]
 
-| Who | Scenario |
-|-----|----------|
-| Developer | Tool usage across sessions |
-| Researcher | Model behavior, prompt adherence |
-| Project operator | Safely ingest, capture, relocate, or retire one owned Project |
-| Curator | Discover, compare, decide, and onboard a reviewed Project set |
-| Release maintainer | Rebuild, freeze, and verify accepted baselines |
-| Schema developer | Compare contracts and investigate vendor-format drift |
-| Auditor | Permissions, evidence coverage, and reproducibility review |
-| Automation / CI | Run noninteractive preflight and verification with versioned reports |
+    Claude --> Ingest
+    Codex --> Ingest
+    Cursor --> Ingest
+    Ingest --> Unified
 
----
+    Unified --> Search["Search and reconstruction"]
+    Unified --> Extract["Structured extraction"]
+    Unified --> SQL["SQLite and database tools"]
+    Unified --> Reindex["External indexes and retrieval"]
 
-## 3. Architecture
-
+    Search --> Uses["Investigation and research"]
+    Extract --> Uses
+    SQL --> Analysis["Statistics, notebooks, and ML"]
+    Reindex --> Interfaces["Search and visualization services"]
+    Uses --> Assessment["Assessment systems such as Misses"]
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   SCAN          │     │   INGEST        │     │   QUERY         │
-│ Discovery       │────▶│ Adapters →      │────▶│ SQL / CLI       │
-│ + source indices│     │ Project snapshot│     │ or ASSEMBLE     │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-```
 
-- **Project discovery** is index-led and separate from event normalization in vendor adapters.
-- **Source systems:** Claude Code, Codex, and Cursor Composer — filter with
-  `--source`. Vendor, product, harness/surface, storage format, and source
-  system are related but not interchangeable.
+The normalized database is not a replacement for vendor evidence. It is a
+searchable projection whose records retain the source system, Source revision,
+record locator, exact type and subtype, mapping rule, and available lineage.
+When a value cannot be interpreted reliably, Codess keeps the source evidence
+and records the limitation instead of manufacturing a common value.
 
----
+## 3. Conversion Discipline
 
-## 4. Documentation map
+Codess treats ingestion as a persistent conversion process rather than a file
+copy or transcript formatter.
 
-### 4.1 Documents and authority
+### 3.1 Specialized Source Access
 
-Each document is the single authority for its subject; others link to it rather
-than restating it.
+Source access is specific to each storage family. Claude and Codex transcripts
+can be streamed as bounded JSON Lines (JSONL). Cursor requires read-only,
+indexed SQLite selection of the workspaces and composers associated with the
+chosen Project. Source access avoids decoding unrelated content and supplies
+stable record locators to the adapter.
 
-| Document | Authoritative for |
-|----------|-------------------|
-| **README.md** | Installation, Project/vendor selection, investigation workflows, query composition, exports, read-only SQL |
-| **Codess.md** | Product goals, requirements, high-level architecture, glossary, and this map |
-| **Designs.md** | Functional design rationale, content-processing policy, and alternatives |
-| **Schemas.md** | Schema compatibility, evolution, and vendor-translation policy |
-| **CoSchema.md** | Logical normalized data, store semantics, and the format contract |
-| **CCSchema.md**, **CodexSchema.md**, **CursorSchema.md** | Vendor-owned storage, observed fields, mapping evidence, and access |
-| **CoPlan.md** | Modules/components, entity composition, data/configuration flows, code boundaries, runtime/CLI contract, tests, active work, decisions, and gaps |
-| **Operations.md** | Maintainer procedures, safety gates, evidence, storage, retained baselines |
-| **CompatibilityReview.md** | Evidence of the reviewed compatibility corpus |
-| **experiments/** | Self-contained evaluations that graduate into decisions |
-| **schema/** | Executable and machine-readable contracts |
+### 3.2 Disciplined but Opportunistic Decode
 
-### 4.2 Maintenance rules
+Vendor decoders are strict about evidence and tolerant about availability.
+They accept useful records even when optional fields are absent, malformed, or
+new. A defect in one optional value does not invalidate a usable message or tool
+operation. Conversely, a decoder does not guess identity, time, Actor,
+relationship, status, or meaning merely to fill a common field.
 
-Keep one authority for each fact; update the owning document when behavior
-diverges from prose. Vendor facts belong only in the matching vendor schema;
-executable DDL belongs in `schema/coschema/sqlite/schema.sql`. Do not add dated
-chronology, copied command catalogs, or duplicate backlogs to the durable set.
-Project-local manifests, receipts, and validation reports are operational
-records, not documentation.
+Opportunistic decode therefore means:
 
-Maintained documents describe the present system, the reasons for its design,
-and unresolved work. Git history and generated reports retain change history;
-the documentation does not narrate incremental fixes after their consequences
-have been incorporated.
+- recognize useful records as soon as their structure and meaning are supported;
+- preserve unknown or vendor-specific records for later investigation;
+- promote fields into the common model only when evidence and a use case justify
+  the mapping;
+- report partial, ambiguous, unsupported, and rejected values explicitly; and
+- improve adapters continuously as representative vendor evidence appears.
 
-Introduce a subject in prose before using a list or table. Use tables only for
-short, repeated fields that readers genuinely compare. A qualification that
-needs several sentences belongs in a prose subsection, with a terse registry
-entry pointing to it. Lists group parallel items; they do not replace an
-explanation of relationships or tradeoffs.
+### 3.3 Exact and Common Meaning
 
-Define a specialized term or abbreviation at first use and retain its agreed
-spelling in the glossary. Status, task, and cross-reference entries use familiar
-or glossary-defined terms, state one disposition, and name the authoritative
-location without repeating its argument.
+Codess stores two complementary views:
 
-## 5. Glossary
+- **source evidence** preserves vendor names, record types, field values,
+  identifiers, locators, ordering, and relationships; and
+- **normalized meaning** supplies regular Projects, Sources, Sessions,
+  Interactions, Model Turns, Events, Actors, tools, results, content, and
+  Artifacts for mixed-source queries.
 
-| Term | Definition |
-|------|------------|
-| adapter | Parser/mapper for one source-system storage family |
-| Assembly | Reproducible cross-Project selection over explicitly named Project snapshots, filters, and selected fields; it may be queried directly or exported |
-| analysis dataset | Reusable rows selected for an investigation, with their Project/snapshot/source provenance and limitations |
-| Assembly export | An analysis dataset encoded for a consumer as JSONL, Parquet, DuckDB, merged SQLite, or another declared format; it is a derived workproduct, not source authority |
-| directory / path | Machine-local location string; never a durable work identity |
-| event | One ordered normalized observation within a Session |
-| extraction | Informal operation/result name; use **Project snapshot** for the durable dated normalized Project object, **analysis dataset** for selected reusable rows, and **Assembly export** for an encoded cross-Project output |
-| raw-source search | A future bounded search over policy-authorized fields in exact vendor Source revisions, including evidence not projected into normalized content; raw capture alone is not such a search feature. Earlier documents called this full-source search, but encrypted, binary, unavailable, or unauthorized values prevent a truthful completeness claim |
-| harness / surface | Runtime or interface producing evidence, such as CLI, desktop, IDE extension, or agent runner |
-| ingest | Read selected Source revisions, normalize them, and atomically publish a new Project snapshot |
-| model | Model configuration used by a Model Turn; it is not a vendor, actor role, Session, or harness |
-| Project | Minted stable identity for one continuing body of work. For Git-backed work, exactly one Codess Project represents the repository; its clones, linked worktrees, workspace directories, and branches are locations, bindings, or observations under that Project |
-| Project location | Observed directory/worktree/subdirectory bound to a Project on one machine |
-| Project snapshot | Immutable dated normalized observation of one Project under recorded source revisions, package, decoder, validator, and policy |
-| repository | Version-control identity and the Project boundary for Git-backed work; one repository maps to one Codess Project, while non-Git work still has a Project without a repository |
-| scan | Discover candidate Project locations from source-system indexes without normalizing content |
-| Session | One source-system conversation/thread identity and lifecycle; globally namespaced by `source_system_id` |
-| Session name | Mutable human-readable key such as `slash_model` that maps to one `global_session_id`; unique within one Project and never itself an identity or provenance key. A source-system title remains separate upstream metadata |
-| Source / Source revision | Vendor/harness evidence container, and one observed byte/database revision of it; one Source can yield one or many Sessions |
-| source system | Namespace and storage family that makes upstream Session/record IDs meaningful, such as `anthropic.claude-code`, `openai.codex`, or `cursor.composer` |
-| provenance check | Bounded test with exact source records and expected Codess rows; it checks identity, order, relationships, values, source-specific evidence, diagnostics, query behavior, and evidence lookup for a claimed use case |
-| search report | Bounded, deterministic display of search matches and their result/provenance information. A future evaluation may compare report ordering without deleting matches or changing stored meaning |
-| vendor | Organization or ecosystem, such as Anthropic, OpenAI, or Cursor |
-| workspace | Source-system grouping attributed to a Project through an evidence-backed Workspace binding; not a synonym for Project or directory |
+Normalized fields are a common search surface, not a claim that every source
+system has identical semantics. A query can use common fields while retaining
+the source values needed to explain differences.
 
-Use the capitalized entity names Project, Project snapshot, Assembly, Source,
-Session, Interaction, Model Turn, Event, and Artifact when referring to Codess
-entities. Use lowercase words only for generic or exact upstream concepts. Do
-not shorten Project to repository, directory, workspace, or checkout; qualify
-those as Project locations, repository observations, or Workspace bindings.
-In code and new interfaces, use `source_system` for adapter/store selection,
-`vendor` for the organization/ecosystem, and `model` only for model
-configuration. Existing `--source` and legacy `vendor_filter` spellings remain
-compatibility surfaces until changed with aliases and migration tests.
+### 3.4 Accuracy and Completeness
 
-### 5.1 Vocabulary governance
+Conversion checks whether selected source evidence is represented accurately
+and completely within the declared support boundary. Structural readability,
+identity, ordering, relationships, content, classification, and query results
+are checked against representative vendor records and real investigations.
+Unsupported, ambiguous, excluded, and rejected material remains visible in
+diagnostics rather than disappearing behind a successful run.
 
-This glossary is the controlled terminology for documentation, public
-interfaces, and work-item names. The executable CoSchema contract separately
-owns closed stored-value vocabularies such as `normalized_status` and
-`location_state`; vendor Schema documents own exact upstream designations and
-their mappings. Open source-system values remain namespaced rather than being
-forced into a misleading common enum.
+## 4. Core Model and Terminology
 
-Four loose phrases are retired:
+Codess uses a small set of concepts consistently across source systems.
 
-- **materialization** becomes **analysis dataset** for the selected rows and
-  **Assembly export** for a JSONL/Parquet/SQLite/DuckDB encoding; the
-  logical-versus-physical distinction adds nothing useful here;
-- **semantic golden** becomes the expected rows inside a **provenance
-  check**; it does not assert that different source systems express identical
-  meaning;
-- **source-system evidence-preservation case** becomes **provenance check**;
-  preservation remains an acceptance property rather than part of the name;
-  and
-- **investigation result-order evaluation** becomes **search report**: first
-  establish the investigation scope, then present its bounded matches and
-  provenance in the requested order. It carries no evaluation claim.
+| Term | Meaning |
+|---|---|
+| **Project** | Stable identity for a continuing body of work. For Git-backed work, one repository is one Project; clones, worktrees, directories, and vendor workspaces are locations or bindings. |
+| **Source** | Logical upstream evidence container such as a transcript file or database. |
+| **Source revision** | One observed state of a Source, with update and provenance evidence. |
+| **Session** | One source-system conversation or thread identity and lifecycle. |
+| **Interaction** | Initiating work unit that may contain several Model Turns, tool operations, harness Events, clarification requests, and replies. |
+| **Model Turn** | One evidenced model execution within an Interaction. It is not necessarily a displayed message or user-assistant pair. |
+| **Actor** | Immediate evidence-backed producer or operative participant, principally human, harness, tool, or model. |
+| **Event** | One ordered normalized observation within a Session. |
+| **Artifact** | File, URI, repository object, or other durable object operated on or mentioned by an Event. |
+| **Source-system store** | One CoSchema SQLite database for one source system and Project observation. |
+| **Project store set** | The selected source-system stores, manifest, and current pointer that represent one Project observation. |
+| **Unified Codess store** | A logical queryable collection of selected Project store sets; it need not be one SQLite file. |
+| **Search result** | Bounded result carrying stable record identities, scope, and provenance. |
 
----
+Actor, source role, content role, origin, and Session relationship remain
+separate dimensions. A vendor `user` envelope can carry harness-generated
+context or a tool result; an `assistant` envelope does not by itself prove a
+new model execution. This separation is essential to reliable counts and
+behavioral research.
 
-## 6. References
+Use the capitalized entity names Project, Source, Source revision, Session,
+Interaction, Model Turn, Actor, Event, and Artifact for Codess concepts. Use
+lowercase words for generic or exact upstream concepts.
 
-- [Claude Code npm](https://www.npmjs.com/package/@anthropic-ai/claude-code)
-- [Codex CLI](https://github.com/openai/codex)
-- [Cursor forum: chat history](https://forum.cursor.com/t/chat-history-folder/7653)
-- [legel: Cursor export gist](https://gist.github.com/legel/ebd0bbc012bf019a1db5212b825e7d16)
+Important distinctions are:
+
+- a Project is not merely a directory, checkout, workspace, or Session;
+- a Source is not a Session and may contain one or many Sessions;
+- a Session ID is stable identity, while a Session name is a mutable operator
+  alias and a source title is source-system evidence;
+- a Model is configuration for a Model Turn, not an Actor or harness;
+- an Actor is not synonymous with a source role;
+- normalized fields do not replace exact source designations; and
+- a search result is a derived selection, not another source of truth.
+
+## 5. Core Capabilities
+
+### 5.1 Project and Session Orientation
+
+Codess can identify the source systems and Sessions associated with a Project,
+then summarize their ordering, time coverage, volume, model evidence, tool use,
+and participant classifications. This establishes where useful work exists
+before a researcher reads large bodies of content.
+
+Typical questions include:
+
+- Which Claude, Codex, or Cursor Sessions concern this repository?
+- Which Sessions contain the most tool activity or content?
+- When did activity occur, and which periods are worth examining?
+- Is a Session direct human work, delegated work, or another relationship?
+
+### 5.2 Exchange Location and Reconstruction
+
+Researchers can search for a distinctive prompt, response, tool operation,
+error, status, file, or content fragment and reconstruct the surrounding
+sequence. Expansion can recover the complete Interaction or Model Turn rather
+than returning an isolated matching row.
+
+This supports questions such as:
+
+- Where did a particular instruction first appear?
+- What model response and tool operations followed it?
+- Which result belongs to a tool invocation?
+- What happened immediately before and after an error or denial?
+- Was a short prompt direct human input or harness-generated control traffic?
+
+### 5.3 Vendor and Model Comparison
+
+Common fields permit comparisons without erasing source distinctions. A query
+can compare similar Event kinds, tools, Actors, model configurations, or
+outcomes across source systems while retaining the exact vendor types and
+values that qualify the comparison.
+
+Useful investigations include:
+
+- how vendors represent tools, planning, compaction, or delegated work;
+- which configuration dimensions are directly recorded by each harness;
+- where one vendor provides stronger ordering, lineage, or status evidence;
+- how similar work differs across models or harness releases; and
+- which normalized classifications are well supported, partial, or unavailable.
+
+### 5.4 Development-Process Investigation
+
+Session records expose the mechanics of development, not only conversation
+text. Codess can support analysis of file reads and edits, terminal commands,
+searches, tool failures, permission decisions, retries, planning operations,
+and overlapping work on common Artifacts.
+
+This helps reconstruct how an outcome was produced, find repeated failure
+patterns, compare manual and automated work, and identify interactions between
+several coding systems working on the same Project.
+
+### 5.5 Communication and Behavior Assessment
+
+Codess can select precisely framed inputs for systems that study
+misunderstandings, instruction following, assessment quality, or model
+behavior. A derived assessment can point back to the exact Events, surrounding
+Interaction, source classifications, and tool activity rather than copying an
+unstructured transcript fragment.
+
+The Misses project is one possible consumer. Codess remains responsible for
+vendor decode and normalized search; the assessment system remains responsible
+for its cases, labels, ratings, and interpretation.
+
+### 5.6 Evidence Review
+
+For any important normalized finding, Codess aims to answer:
+
+- which Project, Session, Source, and Source revision supplied it;
+- which exact record and field were used;
+- which mapping produced the normalized value;
+- whether content was bounded, transformed, redacted, or omitted;
+- which relationships were direct and which were unavailable; and
+- whether the result can be reconstructed from the selected evidence.
+
+## 6. Search Requirements
+
+Search is a principal product capability, not a presentation layer over ingest.
+Codess search should support:
+
+- one or many Projects;
+- one or many source systems;
+- Session, Event, Interaction, and Model Turn identifiers;
+- Event kind, Actor, content role, origin, status, tool, model, time, and
+  Artifact predicates;
+- bounded literal content search;
+- deterministic ordering and limits;
+- complete surrounding sequence expansion;
+- useful facets and volume summaries;
+- stable result identities and reusable result selection; and
+- direct access through SQLite and structured command output.
+
+Performance comes first from selecting only relevant vendor records during
+ingest, storing typed common fields, maintaining appropriate SQLite indexes,
+pushing predicates into each source-system store, and merging only bounded
+result streams. Alternative search engines are extensions justified by measured
+queries, not substitutes for correct classification or indexing.
+
+## 7. Derived Processing and External Ecosystem
+
+Regular source-system stores and Project store sets allow capabilities to grow
+beyond the built-in command line without requiring every consumer to
+reverse-engineer vendor formats.
+
+Potential consumers include:
+
+- the SQLite command line and database browsers;
+- Python, R, pandas, Polars, and notebook workflows;
+- analytical engines operating over selected databases or exports;
+- dashboards, timelines, and other visualizations;
+- graph views of Sessions, Events, tools, and Artifacts;
+- text search, ranking, and retrieval services;
+- qualitative and quantitative assessment systems;
+- structured datasets for statistics or machine learning; and
+- local APIs exposing selected search and evidence operations.
+
+Codess should make such extensions straightforward through regular fields,
+stable identities, read-only query access, structured output, and explicit
+derivation metadata. An external store or service may improve search,
+visualization, aggregation, or presentation, but it must not become an
+independent vendor decoder or erase source provenance.
+
+Session records can contain private source code, prompts, paths, credentials,
+and operational details. Local read-only use is the default. Export, remote
+indexing, or third-party services require explicit selection and appropriate
+content processing.
+
+## 8. Product Boundaries
+
+Codess concentrates on local coding-assistant evidence and the structures
+needed to investigate it. It does not attempt to:
+
+- recover server-hidden reasoning or data absent from vendor stores;
+- infer a human, model, parent Session, time, or causal link without evidence;
+- treat generated files or Git activity as proof that a particular harness
+  performed the work;
+- replace vendor stores as the source of truth;
+- turn every vendor field into a common field;
+- provide billing, quota, or cost accounting without authoritative data; or
+- make every possible analytical export a core storage format.
+
+Snapshots, catalogs, raw capture, refresh, and retention support reliable
+operation. They remain secondary to correct decode, classification, storage,
+and search.
