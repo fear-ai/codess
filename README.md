@@ -1,3 +1,10 @@
+<p align="center">
+  <img
+    src="prism34.png"
+    alt="Codess prism transforming session-record streams into diverse useful outcomes"
+    width="800"
+  >
+</p>
 # Codess
 
 Codess discovers, decodes, normalizes, and searches local coding-assistant
