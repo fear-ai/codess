@@ -295,14 +295,44 @@ can consume bounded query results or selected read-only databases. Derived
 datasets may use JSON, CSV, Parquet, DuckDB, or another appropriate format when
 a concrete consumer and provenance model justify the materialization.
 
-### 6.2 Search, Visualization, and Services
+### 6.2 Early Adoption and External Systems
 
-External indexes can add retrieval or ranking methods over selected normalized
-content. Dashboards and timelines can present Session activity, while graph
-views can show relationships among Sessions, Events, tools, and Artifacts.
-Local APIs can expose selected query and evidence operations to other tools.
-These systems extend analysis and presentation; they do not become independent
-vendor decoders or redefine common meaning without a CoSchema change.
+Early adopters need a short path from a current Project store set to a useful
+answer. The first external interfaces should support the same progression as
+Codess search rather than introduce a separate analytics model:
+
+| Entry point | Immediate question | Required result |
+|---|---|---|
+| Project orientation | Which source systems, Sessions, models, Actors, tools, and time ranges are represented? | A coverage and activity summary with current Project and snapshot scope. |
+| Activity exploration | When did human, model, harness, and tool activity occur, and how was it distributed? | Daily or hourly counts and volumes, observed latency measures, and vendor/model/tool breakdowns without invented cost or quota data. |
+| Session investigation | Which Session or Interaction contains a prompt, response, error, command, file, or distinctive text? | Bounded matches that expand through recorded sequence and relationships to their supporting Events. |
+| Cross-Project comparison | How do selected Projects, source systems, periods, models, or tool patterns differ? | The same defined measures over each cohort, with unknown and incomplete evidence visible. |
+| Reuse and publication | How can a result be charted, assessed, or supplied to another system? | Versioned JSON or CSV carrying selection, identity, ordering, completeness, and provenance. |
+
+These are activity and investigation uses, not billing features. Token counts
+are reported when the source records them. Codess does not manufacture prices,
+quota percentages, rate-limit windows, or model-call boundaries from textual
+volume.
+
+Most coding-assistant monitors begin with live APIs, account dashboards,
+status-line feeds, or token counters. They are well suited to current quota,
+reset, spend, request, and availability questions. Codess starts from locally
+retained development records. It can expose the prompts and responses that were
+preserved, harness and tool traffic, context and compaction records, agent work,
+files and commands, source ordering, and relationships among those Events.
+
+| Dimension | API and usage monitoring | Codess investigation |
+|---|---|---|
+| Principal unit | Request, quota window, token counter, or account | Project, Source, Session, Interaction, Model Turn, Event, and Artifact |
+| Primary questions | How much was used, what remains, what did it cost, and when does it reset? | What work occurred, how did it proceed, which evidence was involved, and where is the relevant exchange? |
+| Content | Commonly absent or deliberately excluded | Searchable when retained locally and admitted by content policy |
+| Internal activity | Usually request totals and limited tool or agent counters | Preserved harness, model, tool, context, compaction, and agent Events when the source records them |
+| Historical basis | API observations or product-specific counter reconstruction | Versioned local Source observations with record locators, mappings, ordering, and completeness evidence |
+
+The two perspectives can complement one another, but neither should be
+silently converted into the other. External interfaces may browse Codess
+stores, render typed results, or accept selected exports. They must not become
+parallel vendor decoders or redefine common meaning without a CoSchema change.
 
 ### 6.3 Derived Research and Assessment
 

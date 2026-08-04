@@ -793,6 +793,120 @@ Completion requires:
 - emission remains correct under the small amount of current concurrent or
   subprocess work without adding a queue or lifecycle framework.
 
+### 9.7 External Investigation Interfaces
+
+External interface work is not part of the current implementation tranche.
+This section records the reference implementations, their intersection with
+Codess use cases, and the boundaries that a later design must evaluate. It does
+not authorize a new report contract, dependency, service, user interface, or
+export path.
+
+#### 9.7.1 Capability Intersection
+
+Codess must continue to own Project selection, vendor access, decode,
+classification, mapping, and provenance. An external system may consume a
+published database or a typed Codess result; adopting another system's raw-file
+adapter would create a second, inconsistent decode path.
+
+| Codess use case | Required interface capability | Relevant candidates | Principal gap |
+|---|---|---|---|
+| Project orientation | Select Project store sets; summarize source systems, Sessions, time, models, Actors, tools, and evidence coverage | Datasette; CodeBurn and Claude Monitor UX patterns | Datasette browses databases independently; the monitors summarize a narrower token/cost model. |
+| Activity exploration | Apply period and cohort filters; return time buckets and breakdowns; retain unknown and incomplete measures | CodeBurn charts; ccusage periods and tables; Claude Monitor terminal views | Their measures emphasize calls, tokens, cost, quota, and inferred activity rather than Codess Events and relationships. |
+| Session investigation | Search content and structured fields; expand a match through Session order, Interaction, Model Turn, tool, and Artifact links | Datasette SQL and stored queries; a Codess-native renderer | Usage-monitor payloads lack the content and relationship graph required for reconstruction. |
+| Cross-Project comparison | Apply the same query and definitions to several selected Project store sets | Codess typed query; later analytical consumers | Loading several SQLite files does not itself provide a common cross-database query or reconcile scope and completeness. |
+| Reuse and publication | Emit bounded JSON or CSV with stable identities, scope, ordering, provenance, and truncation state | Datasette renderers; ccusage and Claude Monitor output patterns; OpenTelemetry and Langfuse | Existing external schemas omit Codess Source and mapping evidence or assume live, complete request traces. |
+
+#### 9.7.2 Reference Implementations
+
+**Datasette** is the strongest direct-data candidate. It can open a published
+SQLite database as immutable, provide read-only table and SQL exploration, and
+return JSON or CSV without copying the records. Stored parameterized queries
+could expose common Session, Event, tool, and Actor selections. Its plugin hooks
+could later add Project-manifest navigation or a Codess result renderer. The
+first design must account for one Project store set containing several
+source-system databases, restrict arbitrary publication and database download,
+preserve query limits, and avoid presenting an individual database as a complete
+cross-vendor Project view. Feeding Datasette requires configuration and possibly
+a small plugin; it does not require copying its server into Codess.
+
+**CodeBurn** provides the most relevant local web presentation. Its
+`src/menubar-json.ts` payload feeds both `src/web-dashboard.ts` and the React
+components under `dash/src`. Period selection, metric cards, time-series charts,
+ranked bars, tables, Project and Session breakdowns, compact summaries, and
+freshness/error handling are useful concepts. Its data contract is dominated by
+cost, model calls, cache tokens, and behavioral estimates; filling those fields
+with zeros or inferred Codess values would be misleading. A later design should
+compare two approaches: adapt generic MIT-licensed components to a Codess-native
+endpoint, or reproduce the small visual vocabulary without carrying the
+CodeBurn application structure. Its vendor providers, pricing, optimization,
+guard, and yield classifiers are not integration points.
+
+**Claude Code Usage Monitor** provides the nearest Python terminal precedent.
+`output/snapshots.py` builds one versioned and confidence-labelled snapshot;
+`output/formatters.py` renders machine and compact text forms; and
+`ui/table_views.py` plus `terminal/themes.py` implement Rich tables and themes.
+This separation is useful for a Codess result-first terminal design. Limit
+windows, plan assumptions, burn forecasts, and Claude-specific session logic
+must remain outside Codess. The design should compare using Rich as an optional
+renderer with lifting only isolated MIT-licensed layout and display-width code.
+
+**ccusage** is a useful CLI behavior and modularity reference. Its Rust workspace
+separates source adapters, common reporting, configuration, terminal output, and
+the CLI. Its date ranges, daily/weekly/monthly/Session cohorts, Project and
+source-system selection, compact tables, and JSON output match common entry
+points. Its token-and-cost report schema and vendor adapters do not represent
+Codess evidence and are not suitable data interfaces. The useful path is to
+compare commands and golden outputs while implementing equivalent controls over
+the Codess query executor.
+
+**CodexBar** is a focused quota and status application, not a Codess provider
+host. Its descriptors and fetch strategies produce usage-window snapshots with
+percentages, resets, credits, spend, and provider status. Its compact provider
+switching, stale/error treatment, refresh behavior, charts, and separation of
+core provider code from Swift UI are useful design references. A Codess provider
+would be dishonest until Codess owns those measurements, and the Swift UI is too
+platform-specific to adopt merely for historical Session activity. A separate
+consumer of a future Codess result is more plausible than extending its current
+provider enum.
+
+OpenTelemetry GenAI conventions and Langfuse remain possible selected-export
+targets. They offer trace, generation, tool, model, usage, latency, metadata,
+visualization, and assessment concepts. Their live-instrumentation assumptions
+do not directly describe reconstructed local history. Any design must decide
+whether an Interaction becomes a trace root, a Session groups several traces,
+Model Turns become generation observations, and linked tool operations become
+children; it must also mark reconstruction, missing time, completeness, Source
+revision, snapshot, and record identity. Content export remains explicit,
+bounded, and policy-filtered.
+
+LiteLLM is relevant only when it is intentionally placed in the live request
+path and later treated as another Source. QuotaMeter supplies no useful code or
+data interface. General BI systems add deployment and semantic-model work before
+they improve Session reconstruction. None belongs in the first evaluation
+tranche.
+
+#### 9.7.3 Evaluation Deliverables
+
+The backlog evaluation should produce a decision, not an implementation. It
+must:
+
+1. inventory the current Codess query results that already satisfy each early
+   use case and identify missing fields or relationships without presuming a
+   new public schema;
+2. test the architectural viability of direct immutable Datasette access across
+   the databases in one Project store set;
+3. compare a Codess-native terminal result renderer with isolated reuse from
+   Claude Monitor and behavioral compatibility with ccusage;
+4. compare adapting CodeBurn's generic web components with implementing a small
+   Codess-native local view;
+5. specify any proposed result or export contract, including Project and
+   snapshot scope, identity, ordering, units, unknown values, completeness,
+   truncation, content policy, and versioning;
+6. assess license attribution, dependency weight, update coupling, local-server
+   security, privacy, and test obligations for each reuse or integration; and
+7. recommend staged implementation work, acceptance criteria, and explicit
+   rejections for approaches that duplicate vendor decode or misstate evidence.
+
 ## 10. Quality Requirements
 
 ### 10.1 Accuracy and Completeness
@@ -1197,7 +1311,7 @@ work intentionally outside the current phase.
 | W13 | Normal | TODO | Mechanically enforce architecture and contract paths and make coverage observe child-process execution. | Import and SQL ownership checks enforce declared layers; query schemas exercise runtime validation; scan and ingest execution contributes usable coverage evidence. |
 | W14 | Normal | TODO | Require or explicitly mark Project identity for direct library writes. | Separate vendor stores cannot silently create unrelated Project identities for one repository. |
 | W15 | Normal | Under review | Resolve the meaning and name of raw mode `none`. | Mode semantics, manifest behavior, documentation, and tests agree while normalized Source provenance remains intact. |
-| W16 | Normal | Under review | Exercise third-party read-only query and visualization interfaces. | A real investigation identifies the interface, selected data, and required provenance. |
+| W16 | Normal | TODO | Evaluate, design, and plan the external investigation interfaces described in Section 9.7; this backlog item does not authorize implementation. | A written decision maps existing capabilities and gaps, selects or rejects data and code integration paths, specifies any proposed contracts, and defines staged work with licensing, privacy, security, and validation criteria. |
 | W17 | Normal | Under review | Expand cross-Project analysis inputs. | A consumer identifies entities, fields, selection, transformation, and output checks. |
 | W18 | Normal | Planned | Implement and transition to the structured operational-reporting subsystem defined in Section 9.6.1. | One event contract and its renderers govern status, progress, warnings, and command-boundary errors; stdout results remain clean, retained events remain bounded, and all command families pass channel, privacy, and failure-path tests. |
 
