@@ -10,6 +10,7 @@ import hashlib
 import tempfile
 import time
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 
 from codess.config import get_state_path, get_store_path, validate_config
@@ -89,12 +90,12 @@ log = logging.getLogger(__name__)
 def _resource_limits_report(iopt) -> dict:
     """Return effective limits with one compatibility spelling retained."""
     return {
-        "max_transcript_bytes": iopt.max_source_bytes,
-        "max_source_bytes": iopt.max_source_bytes,
-        "max_cursor_container_bytes": iopt.max_cursor_container_bytes,
-        "max_events_per_source": iopt.max_events_per_source,
-        "max_events_per_session": iopt.max_events_per_session,
-        "max_context_content_chars": iopt.max_context_content_chars,
+        "max_transcript_bytes": iopt["max_source_bytes"],
+        "max_source_bytes": iopt["max_source_bytes"],
+        "max_cursor_container_bytes": iopt["max_cursor_container_bytes"],
+        "max_events_per_source": iopt["max_events_per_source"],
+        "max_events_per_session": iopt["max_events_per_session"],
+        "max_context_content_chars": iopt["max_context_content_chars"],
     }
 
 
@@ -544,9 +545,7 @@ def _ingest_codex(
                 session=session,
                 events=events_list,
                 session_id=session_id,
-                after_replace=lambda conn: _record_raw(
-                    opts, path, "Codex", conn
-                ),
+                after_replace=partial(_record_raw, opts, path, "Codex"),
             )
             changed = True
             total_events += len(events_list)
@@ -1055,40 +1054,40 @@ def run(args) -> int:
         print(f"codess: invalid resource policy: {exc}", file=sys.stderr)
         return 1
     for name, value in (
-        ("--max-source-bytes", iopt.max_source_bytes),
-        ("--max-cursor-container-bytes", iopt.max_cursor_container_bytes),
-        ("--max-events-per-source", iopt.max_events_per_source),
-        ("--max-events-per-session", iopt.max_events_per_session),
-        ("--max-context-content-chars", iopt.max_context_content_chars),
+        ("--max-source-bytes", iopt["max_source_bytes"]),
+        ("--max-cursor-container-bytes", iopt["max_cursor_container_bytes"]),
+        ("--max-events-per-source", iopt["max_events_per_source"]),
+        ("--max-events-per-session", iopt["max_events_per_session"]),
+        ("--max-context-content-chars", iopt["max_context_content_chars"]),
     ):
         if value is not None and value <= 0:
             print(f"codess: {name} must be > 0", file=sys.stderr)
             return 1
     diagnostics: dict[str, int] = {}
     opts = {
-        "debug": iopt.debug,
-        "redact": iopt.redact,
+        "debug": iopt["debug"],
+        "redact": iopt["redact"],
         "diagnostics": diagnostics,
-        "raw_mode": iopt.raw_mode,
-        "strict_mapping": iopt.strict_mapping,
-        "validate_only": iopt.validate_only,
-        "max_source_bytes": iopt.max_source_bytes,
-        "max_cursor_container_bytes": iopt.max_cursor_container_bytes,
-        "max_events_per_source": iopt.max_events_per_source,
-        "max_events_per_session": iopt.max_events_per_session,
-        "max_context_content_chars": iopt.max_context_content_chars,
+        "raw_mode": iopt["raw_mode"],
+        "strict_mapping": iopt["strict_mapping"],
+        "validate_only": iopt["validate_only"],
+        "max_source_bytes": iopt["max_source_bytes"],
+        "max_cursor_container_bytes": iopt["max_cursor_container_bytes"],
+        "max_events_per_source": iopt["max_events_per_source"],
+        "max_events_per_session": iopt["max_events_per_session"],
+        "max_context_content_chars": iopt["max_context_content_chars"],
         "resource_observations": [],
         "content_failure_reviews": [],
         "claude_session_kinds": {"main": 0, "subagent": 0},
     }
-    progress_trace = ProgressTrace(enabled=iopt.live_progress)
+    progress_trace = ProgressTrace(enabled=iopt["live_progress"])
     opts["progress"] = progress_trace
     progress_trace(
         "ingest.start", projects=len(roots), sources=",".join(sources),
-        validate_only=iopt.validate_only, raw_mode=iopt.raw_mode,
+        validate_only=iopt["validate_only"], raw_mode=iopt["raw_mode"],
     )
-    if iopt.content_policy:
-        policy_path = Path(iopt.content_policy).expanduser()
+    if iopt["content_policy"]:
+        policy_path = Path(iopt["content_policy"]).expanduser()
         try:
             policy_data = json.loads(policy_path.read_text(encoding="utf-8"))
             if not isinstance(policy_data, dict):
@@ -1100,8 +1099,8 @@ def run(args) -> int:
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             print(f"codess: invalid content policy {policy_path}: {exc}", file=sys.stderr)
             return 1
-    force = True if iopt.validate_only else iopt.force
-    min_size = iopt.min_size
+    force = True if iopt["validate_only"] else iopt["force"]
+    min_size = iopt["min_size"]
 
     total_ingested = 0
     total_events = 0
@@ -1111,23 +1110,23 @@ def run(args) -> int:
     staged_store_roots: dict[Path, Path] = {}
 
     def _store_path(proj: Path, src: str) -> Path:
-        if iopt.validate_only:
+        if iopt["validate_only"]:
             key = hashlib.sha256(str(proj).encode()).hexdigest()[:16]
             proj = staging_root / key
         else:
             proj = staged_store_roots.get(proj.resolve(), proj)
         return get_store_path(proj, {"cc": "Claude", "codex": "Codex", "cursor": "Cursor"}[src])
 
-    temporary = tempfile.TemporaryDirectory(prefix="codess-preflight-") if iopt.validate_only else None
+    temporary = tempfile.TemporaryDirectory(prefix="codess-preflight-") if iopt["validate_only"] else None
     staging_root = Path(temporary.name) if temporary else None
-    if iopt.validate_only:
+    if iopt["validate_only"]:
         opts["raw_mode"] = "none"
     if "codex" in sources:
         index_started = time.monotonic()
         progress_trace("codex.index.start")
         opts["codex_session_index"] = build_codex_session_index(
             cache_path=(
-                None if iopt.validate_only else
+                None if iopt["validate_only"] else
                 registry_root / "cache" / "codex-session-index-v1.json"
             )
         )
@@ -1168,7 +1167,7 @@ def run(args) -> int:
         if live_cursor_global is not None
     }
     opts["cursor_project_headers"] = cursor_project_headers
-    if cursor_roots and not iopt.validate_only:
+    if cursor_roots and not iopt["validate_only"]:
         live_global = live_cursor_global
         if live_global is not None:
             try:
@@ -1262,7 +1261,7 @@ def run(args) -> int:
                     "cursor_project_markers": project_markers,
                 })
                 if (
-                    iopt.raw_mode in {"capture", "seal"}
+                    iopt["raw_mode"] in {"capture", "seal"}
                 ):
                     # Keep timing out of diagnostics: that map contains only
                     # integer counters consumed by existing reports.
@@ -1387,7 +1386,7 @@ def run(args) -> int:
             review_start = len(opts["content_failure_reviews"])
             diagnostic_start = dict(diagnostics)
             project_root = project_root.resolve()
-            if force and not iopt.validate_only:
+            if force and not iopt["validate_only"]:
                 rebuild_parent = project_root / ".codess"
                 rebuild_parent.mkdir(parents=True, exist_ok=True)
                 rebuild_temporary = tempfile.TemporaryDirectory(
@@ -1416,7 +1415,7 @@ def run(args) -> int:
                 "project.start", project=str(project_root),
                 project_index=project_index + 1, project_total=len(roots),
             )
-            if iopt.validate_only:
+            if iopt["validate_only"]:
                 digest = hashlib.sha256(str(project_root).encode()).hexdigest()[:24]
                 binding = {"project_id": f"codess:preflight-project:{digest}", "location_id": f"preflight:{digest}"}
                 project_entry = {
@@ -1439,12 +1438,12 @@ def run(args) -> int:
             state_path = get_state_path(work_root)
             proj_stats = {}
             project_raw_records: list[dict] = (
-                [] if iopt.validate_only
+                [] if iopt["validate_only"]
                 else load_current_raw_records(project_root)
             )
             raw_store = RawStore((staging_root / "raw") if staging_root else registry_root / "raw")
             opts["raw_records"] = project_raw_records
-            opts["raw_store"] = None if iopt.validate_only else raw_store
+            opts["raw_store"] = None if iopt["validate_only"] else raw_store
             opts["raw_records_changed"] = False
             opts["external_sources"] = []
             project_ingested = 0
@@ -1453,7 +1452,7 @@ def run(args) -> int:
             changed_vendors: set[str] = set()
             catalog_changed_vendors: set[str] = set()
             seal_upgrade = (
-                iopt.raw_mode == "seal"
+                iopt["raw_mode"] == "seal"
                 and not _current_snapshot_is_sealed(project_root)
             )
 
@@ -1476,7 +1475,7 @@ def run(args) -> int:
                     print(f"No CC project dir for {project_root}", file=sys.stderr)
                     had_error = True
                     project_had_error = True
-                    if iopt.stop_on_error:
+                    if iopt["stop_on_error"]:
                         cleanup_cursor_cohort()
                         progress_trace(
                             "ingest.failed", stage="project.source_selection",
@@ -1491,7 +1490,7 @@ def run(args) -> int:
                         opts,
                         force,
                         min_size,
-                        stop_on_error=iopt.stop_on_error,
+                        stop_on_error=iopt["stop_on_error"],
                     )
                     total_ingested += n
                     total_events += e
@@ -1549,7 +1548,7 @@ def run(args) -> int:
                     opts,
                     force,
                     min_size,
-                    stop_on_error=iopt.stop_on_error,
+                    stop_on_error=iopt["stop_on_error"],
                 )
                 total_ingested += n
                 total_events += e
@@ -1604,7 +1603,7 @@ def run(args) -> int:
                     state_path,
                     opts,
                     force,
-                    stop_on_error=iopt.stop_on_error,
+                    stop_on_error=iopt["stop_on_error"],
                 )
                 total_ingested += n
                 total_events += e
@@ -1640,7 +1639,7 @@ def run(args) -> int:
                 )
 
             if proj_stats:
-                if not iopt.validate_only:
+                if not iopt["validate_only"]:
                     project_entry = get_project_entry(registry_root, binding["project_id"])
                 for vendor in ("Claude", "Codex", "Cursor"):
                     source_key = {"Claude": "cc", "Codex": "codex", "Cursor": "cursor"}[vendor]
@@ -1716,7 +1715,7 @@ def run(args) -> int:
                             derived_changed = True
                         finally:
                             conn.close()
-                if force and not iopt.validate_only:
+                if force and not iopt["validate_only"]:
                     staged_project = staged_store_roots.pop(project_root)
                     promoted = []
                     if not project_had_error or not rebuild_had_existing_store:
@@ -1771,7 +1770,7 @@ def run(args) -> int:
                 candidate_snapshot_path = None
                 if (
                     project_raw_records
-                    and not iopt.validate_only
+                    and not iopt["validate_only"]
                     and snapshot_required
                 ):
                     working_stores = [
@@ -1783,43 +1782,43 @@ def run(args) -> int:
                         "snapshot.start", project=str(project_root),
                         stores=len([path for path in working_stores if path.exists()]),
                         raw_records=len(project_raw_records),
-                        sealed=iopt.raw_mode == "seal",
+                        sealed=iopt["raw_mode"] == "seal",
                     )
                     snapshot_path = create_snapshot(
                         project_root,
                         [path for path in working_stores if path.exists()],
                         project_raw_records,
                         raw_store=raw_store,
-                        seal=iopt.raw_mode == "seal",
+                        seal=iopt["raw_mode"] == "seal",
                         build_policy={
-                            "raw_mode": iopt.raw_mode,
+                            "raw_mode": iopt["raw_mode"],
                             "selected_sources": list(sources),
                             "minimum_source_size": min_size,
-                            "redaction_enabled": iopt.redact,
+                            "redaction_enabled": iopt["redact"],
                         },
                         registry_root=registry_root,
                         project_id=binding["project_id"],
-                        publish=not iopt.candidate_snapshot,
+                        publish=not iopt["candidate_snapshot"],
                     )
                     snapshot_id = snapshot_path.name
-                    if iopt.candidate_snapshot:
+                    if iopt["candidate_snapshot"]:
                         candidate_snapshot_path = str(snapshot_path)
                     progress_trace(
                         "snapshot.done", project=str(project_root),
                         snapshot_id=snapshot_path.name,
                         publication=(
-                            "candidate" if iopt.candidate_snapshot else "current"
+                            "candidate" if iopt["candidate_snapshot"] else "current"
                         ),
                         phase_seconds=round(time.monotonic() - snapshot_started, 3),
                     )
-                elif project_raw_records and not iopt.validate_only:
+                elif project_raw_records and not iopt["validate_only"]:
                     progress_trace(
                         "snapshot.skip", project=str(project_root),
                         reason="unchanged",
                     )
                 evidence_summary = None
                 evidence_summary_reused = False
-                if not iopt.validate_only:
+                if not iopt["validate_only"]:
                     _save_stats(project_root, registry_root, proj_stats)
                     evidence_paths = [_store_path(project_root, key) for key in ("cc", "codex", "cursor")]
                     previous_report = _load_runtime_report(project_root)
@@ -1874,11 +1873,11 @@ def run(args) -> int:
                     stored_events=sum(value["events"] for value in proj_stats.values()),
                     phase_seconds=round(time.monotonic() - project_started, 3),
                 )
-                if not iopt.validate_only:
+                if not iopt["validate_only"]:
                     _write_runtime_report(project_root, {
                         "report_format": "codess.ingest-runtime/1",
                         "progress_format": "codess.progress/1",
-                        "progress_live": iopt.live_progress,
+                        "progress_live": iopt["live_progress"],
                         "status": (
                             "completed_with_errors" if project_had_error else "accepted"
                         ),
@@ -1906,7 +1905,7 @@ def run(args) -> int:
                             str(project_root)
                         ),
                         "evidence_summary": evidence_summary,
-                        "resource_policy": iopt.resource_policy,
+                        "resource_policy": iopt["resource_policy"],
                         "limits": _resource_limits_report(iopt),
                     })
                 for k, v in proj_stats.items():
@@ -1921,7 +1920,7 @@ def run(args) -> int:
             )
             log.exception("Ingest failed for project root %s", project_root)
             had_error = True
-            if iopt.stop_on_error:
+            if iopt["stop_on_error"]:
                 cleanup_cursor_cohort()
                 progress_trace(
                     "ingest.failed", stage="project",
@@ -1939,7 +1938,7 @@ def run(args) -> int:
     overall_sessions = sum(s["sessions"] for s in source_stats.values())
     overall_events = sum(s["events"] for s in source_stats.values())
 
-    if iopt.validate_only:
+    if iopt["validate_only"]:
         store_checks = []
         for path in sorted(staging_root.rglob("*.db")):
             conn = connect(path, read_only=True)
@@ -1960,7 +1959,7 @@ def run(args) -> int:
         report = {
             "report_format": "codess.ingest-preflight/1",
             "progress_format": "codess.progress/1",
-            "progress_live": iopt.live_progress,
+            "progress_live": iopt["live_progress"],
             "status": "rejected" if had_error else "accepted",
             "decoder_version": DECODER_VERSION,
             "validator_version": VALIDATOR_VERSION,
@@ -1982,7 +1981,7 @@ def run(args) -> int:
             ),
             "store_checks": store_checks,
             "evidence_summary": _evidence_summary(sorted(staging_root.rglob("*.db"))),
-            "resource_policy": iopt.resource_policy,
+            "resource_policy": iopt["resource_policy"],
             "limits": _resource_limits_report(iopt),
             "mutation_boundary": "temporary stores only; project, registry, raw store, snapshots, and ingest state unchanged",
         }

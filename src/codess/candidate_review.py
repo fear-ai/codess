@@ -14,7 +14,7 @@ from codess.catalog import (
     classify_project_path,
     load_candidate_csv,
 )
-from codess.fileio import read_json, write_json_atomic
+from codess.fileio import check_policy_format, read_json, write_json_atomic
 from codess.helpers import should_prune_directory, unsafe_traversal_root_reason
 from codess.codex_source import build_session_index as build_codex_session_index
 from codess.scan import run_scan
@@ -32,11 +32,12 @@ def _now() -> str:
 
 
 def validate_policy(policy: dict[str, Any]) -> dict[str, Any]:
-    if policy.get("policy_format") != "codess.candidate-policy/1":
-        raise ValueError("candidate policy must declare codess.candidate-policy/1")
-    unknown = sorted(set(policy) - POLICY_FIELDS)
-    if unknown:
-        raise ValueError("unknown candidate policy fields: " + ", ".join(unknown))
+    check_policy_format(
+        policy,
+        expected_format="codess.candidate-policy/1",
+        allowed_fields=POLICY_FIELDS,
+        document_name="candidate policy",
+    )
     minimum = policy.get("min_sessions", 1)
     if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < 0:
         raise ValueError("candidate policy min_sessions must be a nonnegative integer")

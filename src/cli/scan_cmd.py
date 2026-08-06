@@ -93,7 +93,7 @@ def run(args) -> int:
             return 1
 
     opts = build_scan_run_options(args)
-    if opts.recent_days is not None and opts.recent_days < 0:
+    if opts["recent_days"] is not None and opts["recent_days"] < 0:
         print("codess: --days must be >= 0 (0 means all time)", file=sys.stderr)
         return 1
     merged: list[tuple[str, dict]] = []
@@ -102,7 +102,7 @@ def run(args) -> int:
     diagnostics: dict = {}
     write_root = resolve_registry_directory(args)
     codex_index = None
-    if opts.vendors is None or "codex" in opts.vendors:
+    if opts["vendors"] is None or "codex" in opts["vendors"]:
         codex_index = build_codex_session_index(
             cache_path=write_root / "cache" / "codex-session-index-v1.json",
             include_record_counts=True,
@@ -113,10 +113,10 @@ def run(args) -> int:
         try:
             rows = run_scan(
                 work_root,
-                vendor_filter=opts.vendors,
-                recent_days=opts.recent_days,
-                debug=opts.debug,
-                subagent=opts.subagent,
+                vendor_filter=opts["vendors"],
+                recent_days=opts["recent_days"],
+                debug=opts["debug"],
+                subagent=opts["subagent"],
                 diagnostics=diagnostics,
                 include_cursor_global=root_index == 0,
                 codex_index=codex_index,
@@ -125,13 +125,13 @@ def run(args) -> int:
             log.exception("Scan failed for work root %s", work_root)
             diagnostics["failed_roots"] = diagnostics.get("failed_roots", 0) + 1
             had_error = True
-            if opts.stop_on_error:
+            if opts["stop_on_error"]:
                 _print_scan_diagnostics(diagnostics)
                 return 1
             continue
         if diagnostics.get("failed_sources", 0) > failures_before:
             had_error = True
-            if opts.stop_on_error:
+            if opts["stop_on_error"]:
                 _print_scan_diagnostics(diagnostics)
                 return 1
         for r in rows:
@@ -143,7 +143,7 @@ def run(args) -> int:
                 merged.append((full, r))
 
     pruned_global = prune_legacy_cursor_global_entries(write_root)
-    if pruned_global and opts.debug:
+    if pruned_global and opts["debug"]:
         print(
             f"codess: removed {pruned_global} legacy Cursor global pseudo-projects",
             file=sys.stderr,
@@ -187,7 +187,7 @@ def run(args) -> int:
         w = csv.writer(sys.stdout)
         headers = (
             ["path", "dir_path", "vendor", "sess", "mb", "span_weeks"]
-            if opts.debug
+            if opts["debug"]
             else ["path", "vendor", "sess", "mb", "span_weeks"]
         )
         if reg_cols:
@@ -196,7 +196,7 @@ def run(args) -> int:
         for full, r in merged:
             row = (
                 [r["path"], r["dir_path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
-                if opts.debug
+                if opts["debug"]
                 else [r["path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
             )
             if reg_cols:
@@ -213,7 +213,7 @@ def run(args) -> int:
     else:
         headers = (
             ["path", "dir_path", "vendor", "sess", "mb", "span_weeks"]
-            if opts.debug
+            if opts["debug"]
             else ["path", "vendor", "sess", "mb", "span_weeks"]
         )
         if reg_cols:
@@ -222,7 +222,7 @@ def run(args) -> int:
         for full, r in merged:
             row = (
                 [r["path"], r["dir_path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
-                if opts.debug
+                if opts["debug"]
                 else [r["path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
             )
             if reg_cols:

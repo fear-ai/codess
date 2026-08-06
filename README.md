@@ -5,6 +5,7 @@
     width="800"
   >
 </p>
+
 # Codess
 
 Codess discovers, decodes, normalizes, and searches local coding-assistant
@@ -209,3 +210,167 @@ capture. Storage deletion remains a reviewed maintenance operation.
 | `schema/` | Executable SQL, JSON, mapping, policy, and fixture contracts |
 | `catalog/` and the configured registry | Project selections, source bindings, observations, reports, and receipts |
 | `experiments/` | Bounded investigations that are not part of the accepted design or implementation plan |
+
+## Release Notes
+
+### v0.0.1 — Initial Three-Vendor Prototype
+
+Codess v0.0.1 is the first integrated pre-release of a local investigation
+system for coding-assistant Sessions. It converts locally retained records
+from Claude Code, Codex, and Cursor into regular, provenance-preserving stores
+that can be searched individually or together.
+
+The release establishes the core architecture and a working path from vendor
+evidence to bounded investigation results. It does not claim complete support
+for every vendor release, replace the vendors' own stores, or provide a hosted
+analytics service.
+
+#### Release Capabilities
+
+- **Specialized decoding for three source systems.** Claude Code JSONL, Codex
+  rollout JSONL, and selected Cursor SQLite records are accessed through
+  source-specific discovery and decoding paths. Codess supports the record
+  shapes observed and validated during development, while retaining unknown
+  or source-specific evidence rather than claiming that every vendor structure
+  has an exact common equivalent.
+
+- **Project and Session discovery.** Codess associates locally retained
+  Sessions with repository-oriented Projects and records the contributing
+  source systems, directories, workspaces, and Source observations. It can
+  recognize selected workspaces and worktrees without treating every nested
+  directory as a separate Project, but it does not attempt fuzzy identification
+  of unrelated clones or automatically merge repositories that lack sufficient
+  identity evidence.
+
+- **A regular but provenance-preserving data model.** CoSchema represents
+  Projects, Sources, Sessions, Interactions, Model Turns, Events, Actors,
+  tools, models, Artifacts, and their relationships in constrained SQLite
+  databases. Common fields support cross-vendor work while source types,
+  source values, locators, and mapping evidence remain available when
+  normalization would otherwise conceal meaningful differences.
+
+- **Transactional Project store sets.** Each source system contributes a
+  separate database to a validated Project store set. Replacement is
+  transactional, and an incomplete or invalid conversion is not published as
+  current. This release does not maintain one continuously growing global
+  content database; several selected Project store sets are composed at query
+  time.
+
+- **Structured Session orientation.** Queries can summarize available
+  Sessions, time coverage, Event and content volumes, Actors, tools, models,
+  and source-system participation. These are measurements of retained local
+  evidence, not complete measures of everything transmitted between a harness
+  and a remote model.
+
+- **Bounded Event and content search.** Events can be selected by Project,
+  source system, Session, Interaction, Model Turn, Event kind, Actor kind,
+  content role, origin, tool, model, status, time, Artifact, stable identity,
+  or literal content. The current search is structured and bounded; it is not
+  fuzzy search, embedding search, a general raw-source search engine, or an
+  unrestricted full-corpus scan.
+
+- **Interaction reconstruction.** A selected Event can be expanded to its
+  recorded Interaction or Model Turn, or examined with nearby Session Events.
+  Reconstruction follows stored sequence and explicit relationships;
+  timestamps or textual resemblance are not silently treated as proof of
+  causality.
+
+- **Tool and automation evidence.** Supported tool invocations, results,
+  statuses, permission outcomes, commands, and Artifact references are
+  retained and linked where the vendor supplies adequate identifiers. Codess
+  does not invent a successful result, failure, or parent relationship when
+  the source evidence is absent or ambiguous.
+
+- **Agent, context, and compaction evidence.** Supported parent and delegated
+  Session relationships, context records, summaries, and compaction bodies are
+  preserved when present in vendor data. Codess can only expose planning,
+  agent, subagent, harness, or model traffic that the local source actually
+  records; it is not a proxy capturing the complete network exchange.
+
+- **Observed model configuration.** Exact model names and supported provider,
+  family, revision, reasoning-effort, speed-tier, service-tier, and mode values
+  can be queried when directly recorded or justifiably inherited. Missing
+  settings remain unknown rather than being inferred from unrelated defaults
+  or current product behavior.
+
+- **Cross-Project and cross-vendor investigation.** Explicitly selected
+  Project store sets can be queried as one bounded scope with deterministic
+  ordering and retained Project, Source, Session, and snapshot identity. The
+  release does not yet publish standardized merged SQLite, Parquet, or DuckDB
+  products.
+
+- **Reproducible query results.** Canonical query requests, structured JSON
+  results, stable row identities, completeness information, facets, and
+  derivation metadata can be saved and compared. Results can be narrowed or
+  expanded in later operations, but this is not yet a general-purpose query
+  language or workflow orchestration system.
+
+- **Evidence-bound summaries.** A human, model, or external process can bind a
+  summary to a saved result and record its processor identity. Codess preserves
+  the relationship between the selection and the resulting analysis; it does
+  not automatically judge, narrate, or rate the underlying development work.
+
+- **Direct analytical access.** Individual stores can be queried read-only
+  through SQLite and consumed by Python, notebooks, database browsers, or other
+  analytical tools. JSON Lines and CSV output support external processing, but
+  this release contains no built-in graphical interface, dashboard,
+  visualization service, or notebook package.
+
+- **Resource and content controls.** Configurable bounds cover Source size,
+  Event counts, context bodies, retained content, and query output. Exceeding a
+  bound is treated as evidence to inspect—potentially a changed vendor format,
+  misclassification, external payload, or truncation condition—not merely as
+  permission to discard arbitrary content.
+
+- **Raw-evidence choices without mandatory duplication.** The normal reference
+  mode records Source identity and update evidence without copying every
+  complete vendor record. Explicit capture modes can retain exact raw objects
+  for investigations that require them, but raw capture is not inserted
+  wholesale into searchable tables and is not intended as routine archival
+  duplication.
+
+- **Integrity and provenance checks.** Released schema files, mappings,
+  manifests, snapshots, and retained raw objects have explicit identities and
+  verification paths. Integrity checks detect accidental mismatch; they are
+  not presented as protection against an attacker able to rewrite both the
+  database and its verification metadata.
+
+- **Catalog and refresh operation.** Maintained Project records can carry
+  source bindings, annotations, review status, observations, and refresh
+  receipts. Refresh can assess and validate a Project before publishing an
+  update, but scheduling and unattended recurring execution remain
+  responsibilities of external operating-system tools.
+
+- **Executable contracts and validation fixtures.** The repository includes
+  SQLite DDL, JSON contracts, mapping profiles, controlled vocabularies,
+  representative fixtures, hazard cases, and automated unit, contract,
+  adapter, integration, and scale tests. Real vendor Sources remain a separate
+  validation layer, and coverage is not yet equally strong across every vendor
+  feature and command path.
+
+#### Important Boundaries
+
+Codess operates on locally retained evidence. It cannot recover omitted
+messages, remote-only activity, deleted vendor data, or traffic that was never
+written to a local store.
+
+Codess is an investigation and extraction system, not a billing monitor. It
+may report recorded tokens and activity measures, but it does not estimate
+prices, quota balances, reset windows, or account-level utilization.
+
+Vendor formats evolve independently. This release preserves source values and
+mapping diagnostics so unsupported shapes can be identified and improved
+without silently forcing them into misleading common categories.
+
+Session data may include private prompts, source code, file paths, commands,
+tool output, credentials, or other sensitive material. Local operation is the
+normal boundary; publication, remote indexing, or third-party processing
+requires explicit review.
+
+#### Release Status
+
+This release is suitable for controlled local evaluation, decoder validation,
+Project and Session investigation, and development of downstream research
+workflows. It remains a pre-release while cross-vendor classification, runtime
+mapping conformance, selective Cursor processing, performance workloads, and
+structured operational reporting continue to mature.

@@ -12,8 +12,8 @@ from codess.investigation import build_investigation
 from codess.orientation_audit import _compare, _sqlite_observations
 from codess.query_api import (
     QueryContractError, compare_results, content_hash, execute, load_document,
-    make_request, merge_selection, save_document, selected_project_ids,
-    selected_project_snapshots, selection_from_result,
+    make_request, merge_selection, sanitize_free_text_filter, save_document,
+    selected_project_ids, selected_project_snapshots, selection_from_result,
 )
 from codess.raw_store import RawStore
 from codess.snapshot import create_snapshot, snapshot_store_paths
@@ -481,6 +481,51 @@ def test_search_and_artifact_filters_treat_like_metacharacters_literally(tmp_pat
         assert [row["event_id"] for row in artifact["rows"]] == ["e1"]
     finally:
         opened["conn"].close()
+
+
+def test_sanitize_free_text_filter_accepts_ordinary_and_unicode_text():
+    assert sanitize_free_text_filter(
+        "permission denied", field="text"
+    ) == "permission denied"
+    assert sanitize_free_text_filter(
+        "café münchen 日本語 emoji 🎉", field="text"
+    ) == "café münchen 日本語 emoji 🎉"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "x" * 513,
+        "<script>alert(1)</script>",
+        "<img src=x onerror=alert(1)>",
+        "x' UNION SELECT password FROM users --",
+        "bad\x00null",
+        "bad\x1bescape",
+    ],
+)
+def test_sanitize_free_text_filter_rejects_by_default(value):
+    with pytest.raises(QueryContractError):
+        sanitize_free_text_filter(value, field="text")
+
+
+def test_sanitize_free_text_filter_strip_and_blank_modes():
+    assert sanitize_free_text_filter(
+        "<b>bold</b> ok text", field="text", mode="strip"
+    ) == "bold ok text"
+    assert sanitize_free_text_filter(
+        "<script>x</script>", field="text", mode="blank"
+    ) == ""
+
+
+def test_sanitize_free_text_filter_rejects_unsupported_mode():
+    with pytest.raises(ValueError):
+        sanitize_free_text_filter("ok", field="text", mode="drop")
+
+
+def test_validate_request_rejects_questionable_text_filter():
+    # make_request() validates internally, so the rejection surfaces there.
+    with pytest.raises(QueryContractError):
+        make_request("search", filters={"text": "<script>alert(1)</script>"})
 
 
 def test_multistore_events_are_globally_ordered_before_limit(tmp_path):

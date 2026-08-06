@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from codess.raw_store import RawCaptureError, RawStore, verify_captured_object
-from codess.fileio import hash_file, source_fingerprint, write_json_atomic
+from codess.fileio import (
+    check_policy_format, hash_file, load_versioned_policy, source_fingerprint,
+    write_json_atomic,
+)
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import FORMAT_VERSION, require_store, verify_package
 from codess.snapshot import (
@@ -23,6 +26,64 @@ from codess.snapshot import (
 
 
 REPORT_FORMAT = "codess.validation-report/1"
+
+_TABLE_COUNT_QUERIES = {
+    "projects": "SELECT COUNT(*) FROM projects",
+    "project_locations": "SELECT COUNT(*) FROM project_locations",
+    "workspace_bindings": "SELECT COUNT(*) FROM workspace_bindings",
+    "sources": "SELECT COUNT(*) FROM sources",
+    "sessions": "SELECT COUNT(*) FROM sessions",
+    "interactions": "SELECT COUNT(*) FROM interactions",
+    "model_turns": "SELECT COUNT(*) FROM model_turns",
+    "events": "SELECT COUNT(*) FROM events",
+    "source_records": "SELECT COUNT(*) FROM source_records",
+    "content_objects": "SELECT COUNT(*) FROM content_objects",
+    "event_content": "SELECT COUNT(*) FROM event_content",
+    "source_record_content": "SELECT COUNT(*) FROM source_record_content",
+    "tool_result_content": "SELECT COUNT(*) FROM tool_result_content",
+    "artifact_content": "SELECT COUNT(*) FROM artifact_content",
+    "processing_runs": "SELECT COUNT(*) FROM processing_runs",
+    "content_derivations": "SELECT COUNT(*) FROM content_derivations",
+    "tool_invocations": "SELECT COUNT(*) FROM tool_invocations",
+    "tool_results": "SELECT COUNT(*) FROM tool_results",
+    "artifacts": "SELECT COUNT(*) FROM artifacts",
+    "event_artifacts": "SELECT COUNT(*) FROM event_artifacts",
+    "mapping_diagnostics": "SELECT COUNT(*) FROM mapping_diagnostics",
+    "correlation_assertions": "SELECT COUNT(*) FROM correlation_assertions",
+}
+
+_GLOBAL_IDENTITY_DUPLICATE_QUERIES = (
+    ("sources.global_id", "SELECT COUNT(*)-COUNT(DISTINCT global_id) FROM sources"),
+    ("sessions.global_id", "SELECT COUNT(*)-COUNT(DISTINCT global_id) FROM sessions"),
+    (
+        "sessions.observation_id",
+        "SELECT COUNT(*)-COUNT(DISTINCT observation_id) FROM sessions",
+    ),
+    ("events.global_id", "SELECT COUNT(*)-COUNT(DISTINCT global_id) FROM events"),
+)
+
+_INVALID_JSON_QUERIES = (
+    (
+        "events.tool_input",
+        "SELECT COUNT(*) FROM events WHERE tool_input IS NOT NULL "
+        "AND NOT json_valid(tool_input)",
+    ),
+    (
+        "events.mapping_trace",
+        "SELECT COUNT(*) FROM events WHERE mapping_trace IS NOT NULL "
+        "AND NOT json_valid(mapping_trace)",
+    ),
+    (
+        "tool_invocations.input_json",
+        "SELECT COUNT(*) FROM tool_invocations WHERE input_json IS NOT NULL "
+        "AND NOT json_valid(input_json)",
+    ),
+    (
+        "tool_results.output_json",
+        "SELECT COUNT(*) FROM tool_results WHERE output_json IS NOT NULL "
+        "AND NOT json_valid(output_json)",
+    ),
+)
 POLICY_FORMAT = "codess.validation-policy/1"
 POLICY_FIELDS = {
     "policy_format", "project", "required_sources", "minimum_sessions",
@@ -46,17 +107,13 @@ _sha256 = hash_file
 def load_policy(path: Path | None) -> dict[str, Any]:
     if path is None:
         return {}
-    try:
-        policy = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"cannot load validation policy {path}: {exc}") from exc
-    if not isinstance(policy, dict):
-        raise ValueError("validation policy must be a JSON object")
-    if policy.get("policy_format") != POLICY_FORMAT:
-        raise ValueError(f"validation policy must declare {POLICY_FORMAT}")
-    unknown = sorted(set(policy) - POLICY_FIELDS)
-    if unknown:
-        raise ValueError("validation policy has unknown fields: " + ", ".join(unknown))
+    policy = load_versioned_policy(path, document_name="validation policy")
+    check_policy_format(
+        policy,
+        expected_format=POLICY_FORMAT,
+        allowed_fields=POLICY_FIELDS,
+        document_name="validation policy",
+    )
     if "project" in policy and not isinstance(policy["project"], str):
         raise ValueError("validation policy project must be a string")
     if "required_sources" in policy and not (
@@ -341,18 +398,9 @@ def _validate_store(
         fk_rows = conn.execute("PRAGMA foreign_key_check").fetchall()
         _add_check(report, f"{prefix}.foreign_keys", not fk_rows, len(fk_rows))
 
-        tables = (
-            "projects", "project_locations", "workspace_bindings", "sources",
-            "sessions", "interactions", "model_turns", "events",
-            "source_records", "content_objects", "event_content",
-            "source_record_content", "tool_result_content", "artifact_content",
-            "processing_runs", "content_derivations",
-            "tool_invocations", "tool_results", "artifacts", "event_artifacts",
-            "mapping_diagnostics", "correlation_assertions",
-        )
         counts = {
-            table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in tables
+            table: int(conn.execute(query).fetchone()[0])
+            for table, query in _TABLE_COUNT_QUERIES.items()
         }
         manifest_counts = expected.get("counts", {})
         _add_check(
@@ -376,15 +424,8 @@ def _validate_store(
             [row[0] for row in sequence_failures[:10]],
         )
         identity_failures = {
-            label: int(conn.execute(
-                f"SELECT COUNT(*)-COUNT(DISTINCT {column}) FROM {table}"
-            ).fetchone()[0])
-            for label, table, column in (
-                ("sources.global_id", "sources", "global_id"),
-                ("sessions.global_id", "sessions", "global_id"),
-                ("sessions.observation_id", "sessions", "observation_id"),
-                ("events.global_id", "events", "global_id"),
-            )
+            label: int(conn.execute(query).fetchone()[0])
+            for label, query in _GLOBAL_IDENTITY_DUPLICATE_QUERIES
         }
         _add_check(
             report, f"{prefix}.global_identity",
@@ -426,16 +467,8 @@ def _validate_store(
             {"duplicate_groups": duplicates, "orphan_artifacts": orphan_artifacts},
         )
         invalid_json = 0
-        for table, column in (
-            ("events", "tool_input"), ("events", "mapping_trace"),
-            ("tool_invocations", "input_json"), ("tool_results", "output_json"),
-        ):
-            invalid_json += int(
-                conn.execute(
-                    f"SELECT COUNT(*) FROM {table} "
-                    f"WHERE {column} IS NOT NULL AND NOT json_valid({column})"
-                ).fetchone()[0]
-            )
+        for _label, query in _INVALID_JSON_QUERIES:
+            invalid_json += int(conn.execute(query).fetchone()[0])
         _add_check(report, f"{prefix}.json_fields", invalid_json == 0, invalid_json)
         diagnostic_counts = {
             row[0]: int(row[1])

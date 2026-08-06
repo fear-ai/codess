@@ -1,0 +1,355 @@
+{
+  "format": "codess.validate-request-vectors/1",
+  "purpose": "Before/after correctness baseline for query_api.validate_request. Each vector is a minimal-diff request (the base valid shape with exactly one field changed) plus the expected outcome. Tool-agnostic by design: usable to test the current hand-written validator, or diff against any future replacement (pydantic, jsonschema, or otherwise) without assuming which one is adopted. Not a test file itself -- see tests/test_validate_request_vectors.py for the runner.",
+  "base_valid_request": {
+    "format": "codess.query-request/1",
+    "action": "events",
+    "project_ids": [],
+    "project_snapshots": [],
+    "filters": {},
+    "limit": null,
+    "byte_limit": null,
+    "snapshot_id": null,
+    "active_gap_caps_minutes": [5, 30, 120]
+  },
+  "vectors": [
+    {
+      "name": "base_valid_request_accepted",
+      "request": {},
+      "outcome": "accept"
+    },
+    {
+      "name": "unknown_top_level_field_rejected",
+      "request": {"bogus_field": true},
+      "outcome": "reject",
+      "message_contains": "unsupported request field"
+    },
+    {
+      "name": "wrong_format_string_rejected",
+      "request": {"format": "not-the-right-format"},
+      "outcome": "reject",
+      "message_contains": "format must be"
+    },
+    {
+      "name": "unsupported_action_rejected",
+      "request": {"action": "not_a_real_action"},
+      "outcome": "reject",
+      "message_contains": "unsupported action"
+    },
+    {
+      "name": "project_ids_not_a_list_rejected",
+      "request": {"project_ids": "not-a-list"},
+      "outcome": "reject",
+      "message_contains": "project_ids must be an array"
+    },
+    {
+      "name": "project_ids_empty_string_element_rejected",
+      "request": {"project_ids": [""]},
+      "outcome": "reject",
+      "message_contains": "project_ids must be an array"
+    },
+    {
+      "name": "project_ids_unsorted_rejected",
+      "request": {"project_ids": ["b", "a"]},
+      "outcome": "reject",
+      "message_contains": "unique and canonically sorted",
+      "capability": "sortedness"
+    },
+    {
+      "name": "project_ids_duplicate_rejected",
+      "request": {"project_ids": ["a", "a"]},
+      "outcome": "reject",
+      "message_contains": "unique and canonically sorted",
+      "capability": "sortedness"
+    },
+    {
+      "name": "project_ids_sorted_unique_accepted",
+      "request": {"project_ids": ["a", "b", "c"]},
+      "outcome": "accept"
+    },
+    {
+      "name": "project_snapshots_not_a_list_rejected",
+      "request": {"project_snapshots": "not-a-list"},
+      "outcome": "reject",
+      "message_contains": "project_snapshots must be an array"
+    },
+    {
+      "name": "project_snapshots_missing_key_rejected",
+      "request": {"project_snapshots": [{"project_id": "a"}]},
+      "outcome": "reject",
+      "message_contains": "must contain project_id and snapshot_id"
+    },
+    {
+      "name": "project_snapshots_empty_project_id_rejected",
+      "request": {"project_snapshots": [{"project_id": "", "snapshot_id": null}]},
+      "outcome": "reject",
+      "message_contains": "project_id must be non-empty"
+    },
+    {
+      "name": "project_snapshots_empty_snapshot_id_rejected",
+      "request": {"project_snapshots": [{"project_id": "a", "snapshot_id": ""}]},
+      "outcome": "reject",
+      "message_contains": "snapshot_id must be non-empty or null"
+    },
+    {
+      "name": "project_snapshots_unsorted_rejected",
+      "request": {
+        "project_ids": ["a", "b"],
+        "project_snapshots": [
+          {"project_id": "b", "snapshot_id": null},
+          {"project_id": "a", "snapshot_id": null}
+        ]
+      },
+      "outcome": "reject",
+      "message_contains": "unique and canonically sorted",
+      "capability": "sortedness"
+    },
+    {
+      "name": "project_snapshots_duplicate_rejected",
+      "request": {
+        "project_ids": ["a"],
+        "project_snapshots": [
+          {"project_id": "a", "snapshot_id": null},
+          {"project_id": "a", "snapshot_id": null}
+        ]
+      },
+      "outcome": "reject",
+      "message_contains": "unique and canonically sorted",
+      "capability": "sortedness"
+    },
+    {
+      "name": "project_snapshots_ids_mismatch_project_ids_rejected",
+      "request": {
+        "project_ids": ["a"],
+        "project_snapshots": [{"project_id": "b", "snapshot_id": null}]
+      },
+      "outcome": "reject",
+      "message_contains": "must equal project_ids",
+      "capability": "cross_field"
+    },
+    {
+      "name": "snapshot_id_wrong_type_rejected",
+      "request": {"snapshot_id": 123},
+      "outcome": "reject",
+      "message_contains": "snapshot_id must be a string or null"
+    },
+    {
+      "name": "filters_not_an_object_rejected",
+      "request": {"filters": "not-an-object"},
+      "outcome": "reject",
+      "message_contains": "filters must be an object"
+    },
+    {
+      "name": "filters_unknown_key_rejected",
+      "request": {"filters": {"not_a_real_filter": []}},
+      "outcome": "reject",
+      "message_contains": "unsupported filter"
+    },
+    {
+      "name": "filters_incompatible_with_action_rejected",
+      "request": {"action": "sessions", "filters": {"event_ids": ["x"]}},
+      "outcome": "reject",
+      "message_contains": "not valid for",
+      "capability": "action_dependent"
+    },
+    {
+      "name": "filters_array_field_not_a_list_rejected",
+      "request": {"filters": {"session_ids": "not-a-list"}},
+      "outcome": "reject",
+      "message_contains": "must be an array of strings"
+    },
+    {
+      "name": "filters_array_field_unsorted_rejected",
+      "request": {"filters": {"session_ids": ["b", "a"]}},
+      "outcome": "reject",
+      "message_contains": "unique and canonically sorted",
+      "capability": "sortedness"
+    },
+    {
+      "name": "filters_text_wrong_type_rejected",
+      "request": {"filters": {"text": 123}},
+      "outcome": "reject",
+      "message_contains": "must be a string"
+    },
+    {
+      "name": "filters_text_too_long_rejected",
+      "request": {"filters": {"text": "x_REPEAT_600"}},
+      "outcome": "reject",
+      "message_contains": "rejected",
+      "note": "request.filters.text should be replaced with 600 'x' characters by the test runner; JSON cannot express repetition directly"
+    },
+    {
+      "name": "filters_since_wrong_type_rejected",
+      "request": {"filters": {"since": "not-a-number"}},
+      "outcome": "reject",
+      "message_contains": "must be Unix milliseconds"
+    },
+    {
+      "name": "filters_since_after_until_rejected",
+      "request": {"filters": {"since": 100, "until": 50}},
+      "outcome": "reject",
+      "message_contains": "since must be <= filters.until",
+      "capability": "cross_field"
+    },
+    {
+      "name": "filters_since_before_until_accepted",
+      "request": {"filters": {"since": 1, "until": 100}},
+      "outcome": "accept"
+    },
+    {
+      "name": "limit_negative_rejected",
+      "request": {"limit": -1},
+      "outcome": "reject",
+      "message_contains": "must be a non-negative integer or null"
+    },
+    {
+      "name": "limit_zero_accepted",
+      "request": {"limit": 0},
+      "outcome": "accept"
+    },
+    {
+      "name": "byte_limit_negative_rejected",
+      "request": {"byte_limit": -1},
+      "outcome": "reject",
+      "message_contains": "must be a non-negative integer or null"
+    },
+    {
+      "name": "active_gap_caps_empty_rejected",
+      "request": {"active_gap_caps_minutes": []},
+      "outcome": "reject",
+      "message_contains": "must contain positive integers"
+    },
+    {
+      "name": "active_gap_caps_nonpositive_rejected",
+      "request": {"active_gap_caps_minutes": [0]},
+      "outcome": "reject",
+      "message_contains": "must contain positive integers"
+    },
+    {
+      "name": "search_without_text_rejected",
+      "request": {"action": "search", "filters": {}},
+      "outcome": "reject",
+      "message_contains": "search requires a non-empty filters.text",
+      "capability": "action_dependent"
+    },
+    {
+      "name": "search_with_text_accepted",
+      "request": {"action": "search", "filters": {"text": "hello"}},
+      "outcome": "accept"
+    },
+    {
+      "name": "overview_with_limit_rejected",
+      "request": {"action": "overview", "limit": 5},
+      "outcome": "reject",
+      "message_contains": "overview does not accept row or byte limits",
+      "capability": "action_dependent"
+    },
+    {
+      "name": "sessions_with_byte_limit_rejected",
+      "request": {"action": "sessions", "byte_limit": 5},
+      "outcome": "reject",
+      "message_contains": "does not return content",
+      "capability": "action_dependent"
+    },
+    {
+      "name": "expand_invalid_value_rejected",
+      "request": {"expand": "not_a_real_expansion"},
+      "outcome": "reject",
+      "message_contains": "expand must be interaction, model_turn, or null"
+    },
+    {
+      "name": "sequence_before_negative_rejected",
+      "request": {"sequence_before": -1},
+      "outcome": "reject",
+      "message_contains": "must be a non-negative integer"
+    },
+    {
+      "name": "sequence_before_bool_rejected",
+      "request": {"sequence_before": true},
+      "outcome": "reject",
+      "message_contains": "must be a non-negative integer",
+      "note": "bool is an int subclass in Python; validator must explicitly exclude it"
+    },
+    {
+      "name": "expand_requires_events_action_rejected",
+      "request": {
+        "action": "overview", "expand": "interaction",
+        "filters": {"interaction_ids": ["x"]}
+      },
+      "outcome": "reject",
+      "message_contains": "expansion and sequence windows require events",
+      "capability": "action_dependent",
+      "note": "sessions is the only action with no expansion-id filter in ACTION_FILTERS, so it always fails the earlier filter-compatibility check first; overview/search are the reachable path to this specific rule"
+    },
+    {
+      "name": "expand_requires_an_id_filter_rejected",
+      "request": {"expand": "interaction", "filters": {}},
+      "outcome": "reject",
+      "message_contains": "require an Event, Interaction, or Model Turn ID"
+    },
+    {
+      "name": "sequence_window_requires_event_ids_rejected",
+      "request": {"sequence_before": 1, "filters": {"interaction_ids": ["x"]}},
+      "outcome": "reject",
+      "message_contains": "sequence windows require filters.event_ids"
+    },
+    {
+      "name": "interaction_expand_with_model_turn_ids_rejected",
+      "request": {
+        "expand": "interaction",
+        "filters": {"interaction_ids": ["x"], "model_turn_ids": ["y"]}
+      },
+      "outcome": "reject",
+      "message_contains": "interaction expansion does not accept model_turn_ids",
+      "capability": "cross_field"
+    },
+    {
+      "name": "model_turn_expand_with_interaction_ids_rejected",
+      "request": {
+        "expand": "model_turn",
+        "filters": {"model_turn_ids": ["x"], "interaction_ids": ["y"]}
+      },
+      "outcome": "reject",
+      "message_contains": "model_turn expansion does not accept interaction_ids",
+      "capability": "cross_field"
+    },
+    {
+      "name": "expansion_with_restricting_filter_rejected",
+      "request": {
+        "expand": "interaction",
+        "filters": {"interaction_ids": ["x"], "tool_names": ["Bash"]}
+      },
+      "outcome": "reject",
+      "message_contains": "cannot be combined with event-content filters",
+      "capability": "cross_field"
+    },
+    {
+      "name": "group_repetitions_wrong_type_rejected",
+      "request": {"group_repetitions": "yes"},
+      "outcome": "reject",
+      "message_contains": "group_repetitions must be boolean"
+    },
+    {
+      "name": "facet_limit_out_of_range_rejected",
+      "request": {"facet_limit": 0},
+      "outcome": "reject",
+      "message_contains": "facet_limit must be an integer from 1 to 1000"
+    },
+    {
+      "name": "facet_limit_bool_rejected",
+      "request": {"facet_limit": true},
+      "outcome": "reject",
+      "message_contains": "facet_limit must be an integer from 1 to 1000",
+      "note": "bool is an int subclass in Python; validator must explicitly exclude it"
+    },
+    {
+      "name": "group_repetitions_requires_events_or_search_rejected",
+      "request": {
+        "action": "sessions", "group_repetitions": true, "filters": {}
+      },
+      "outcome": "reject",
+      "message_contains": "group_repetitions requires events or search",
+      "capability": "action_dependent"
+    }
+  ]
+}

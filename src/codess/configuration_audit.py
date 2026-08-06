@@ -1,4 +1,5 @@
-"""Audit normalized model/runtime settings and their source provenance."""
+"""Audit normalized model/runtime settings and their source provenance.
+"""
 
 from __future__ import annotations
 
@@ -65,6 +66,11 @@ def audit(
         """
         if session_clauses:
             selected_sessions = " AND ".join(session_clauses)
+            # `selected_sessions` appears once per EXISTS branch below, so its
+            # bound params must repeat once per occurrence -- one params list
+            # per branch keeps that pairing explicit if a branch is edited.
+            turn_branch_params = list(params)
+            default_branch_params = list(params)
             configuration_sql += f""" WHERE EXISTS (
                 SELECT 1 FROM model_turns mt JOIN sessions s ON s.id=mt.session_id
                 WHERE mt.model_config_id=mc.id AND {selected_sessions}
@@ -72,7 +78,7 @@ def audit(
                 SELECT 1 FROM sessions s
                 WHERE s.default_model_config_id=mc.id AND {selected_sessions}
             )"""
-            configuration_params = params + params
+            configuration_params = turn_branch_params + default_branch_params
         configuration_sql += " ORDER BY mc.id"
         source_and = ""
         if session_clauses:

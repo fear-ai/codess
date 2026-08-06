@@ -23,6 +23,11 @@ from codess.snapshot import (
     snapshot_store_paths_from_base,
 )
 
+_LEGACY_TABLE_COUNT_QUERIES = {
+    "sessions": "SELECT COUNT(*) FROM sessions",
+    "events": "SELECT COUNT(*) FROM events",
+}
+
 
 def preserve_legacy(project: Path, enabled: bool) -> Path | None:
     base = project / ".codess"
@@ -53,15 +58,13 @@ def preserve_legacy(project: Path, enabled: bool) -> Path | None:
         try:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
             counts = {}
-            for table in ("sessions", "events"):
+            for table, count_query in _LEGACY_TABLE_COUNT_QUERIES.items():
                 exists = conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
                     (table,),
                 ).fetchone()
                 if exists:
-                    counts[table] = int(
-                        conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                    )
+                    counts[table] = int(conn.execute(count_query).fetchone()[0])
         finally:
             conn.close()
         manifest["files"][source.name] = {

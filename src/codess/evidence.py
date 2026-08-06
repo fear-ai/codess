@@ -16,6 +16,14 @@ from codess.vendor_audits.claude_features import audit_claude_features
 from codess.vendor_audits.codex_features import audit_codex_features
 
 
+_TOTAL_COUNT_QUERIES = {
+    "tool_invocations": "SELECT COUNT(*) FROM tool_invocations",
+    "tool_results": "SELECT COUNT(*) FROM tool_results",
+    "model_configurations": "SELECT COUNT(*) FROM model_configurations",
+    "correlation_assertions": "SELECT COUNT(*) FROM correlation_assertions",
+}
+
+
 def summarize_store_evidence(paths: Iterable[Path]) -> dict[str, Any]:
     artifact_sources: dict[str, set[str]] = defaultdict(set)
     totals = {
@@ -32,13 +40,8 @@ def summarize_store_evidence(paths: Iterable[Path]) -> dict[str, Any]:
             continue
         conn = connect(path, read_only=True)
         try:
-            for key in (
-                "tool_invocations", "tool_results", "model_configurations",
-                "correlation_assertions",
-            ):
-                totals[key] += conn.execute(
-                    f"SELECT COUNT(*) FROM {key}"
-                ).fetchone()[0]
+            for key, query in _TOTAL_COUNT_QUERIES.items():
+                totals[key] += conn.execute(query).fetchone()[0]
             totals["events_missing_time"] += conn.execute(
                 "SELECT COUNT(*) FROM events WHERE event_at IS NULL"
             ).fetchone()[0]

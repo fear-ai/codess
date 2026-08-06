@@ -8,7 +8,6 @@ import logging
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -175,17 +174,6 @@ def resolve_registry_directory(args: Any) -> Path:
     return Path(str(raw).strip()).expanduser()
 
 
-@dataclass(frozen=True)
-class ScanRunOptions:
-    """Resolved scan behavior for one CLI invocation."""
-
-    stop_on_error: bool
-    debug: bool
-    subagent: bool
-    recent_days: int | None  # None when debug bypasses day filter
-    vendors: list[str] | None  # None = all vendors
-
-
 SCAN_SOURCE_TOKENS = frozenset({"cc", "codex", "cursor"})
 
 
@@ -216,7 +204,13 @@ def validate_scan_source_for_cli(source: str | None) -> str | None:
     )
 
 
-def build_scan_run_options(args: Any) -> ScanRunOptions:
+def build_scan_run_options(args: Any) -> dict[str, Any]:
+    """Return resolved scan behavior for one CLI invocation.
+
+    Keys: stop_on_error, debug, subagent (bool); recent_days (int | None,
+    None when debug bypasses the day filter); vendors (list[str] | None,
+    None meaning all vendors).
+    """
     from codess.config import CODESS_DAYS, DEBUG, STOP, SUBAGENT
 
     stop_on_error = flag_or_env(args, "stop", STOP)
@@ -233,37 +227,24 @@ def build_scan_run_options(args: Any) -> ScanRunOptions:
         if source_filter
         else None
     )
-    return ScanRunOptions(
-        stop_on_error=stop_on_error,
-        debug=debug,
-        subagent=subagent,
-        recent_days=recent_days,
-        vendors=vendors,
-    )
+    return {
+        "stop_on_error": stop_on_error,
+        "debug": debug,
+        "subagent": subagent,
+        "recent_days": recent_days,
+        "vendors": vendors,
+    }
 
 
-@dataclass(frozen=True)
-class IngestRunOptions:
-    stop_on_error: bool
-    force: bool
-    min_size: int
-    debug: bool
-    redact: bool
-    raw_mode: str
-    strict_mapping: bool
-    content_policy: str | None
-    resource_policy: dict[str, Any]
-    validate_only: bool
-    max_source_bytes: int | None
-    max_cursor_container_bytes: int | None
-    max_events_per_source: int | None
-    max_events_per_session: int | None
-    max_context_content_chars: int | None
-    live_progress: bool
-    candidate_snapshot: bool
+def build_ingest_run_options(args: Any) -> dict[str, Any]:
+    """Return resolved ingest behavior for one CLI invocation.
 
-
-def build_ingest_run_options(args: Any) -> IngestRunOptions:
+    Keys: stop_on_error, force, debug, redact, strict_mapping, validate_only,
+    live_progress, candidate_snapshot (bool); min_size (int); raw_mode (str);
+    content_policy (str | None); resource_policy (dict[str, Any] report);
+    max_source_bytes, max_cursor_container_bytes, max_events_per_source,
+    max_events_per_session, max_context_content_chars (int | None).
+    """
     from codess.config import (
         CONTENT_POLICY, DEBUG, FORCE, INGEST_REDACT, MIN_SIZE, RAW_MODE,
         RESOURCE_POLICY, STOP, STRICT_MAPPING,
@@ -311,25 +292,25 @@ def build_ingest_run_options(args: Any) -> IngestRunOptions:
         policy = policy.disabled(origin="--no-resource-limits")
     maximums = policy.maximums
 
-    return IngestRunOptions(
-        stop_on_error=flag_or_env(args, "stop", STOP),
-        force=flag_or_env(args, "force", FORCE),
-        min_size=min_size,
-        debug=flag_or_env(args, "debug", DEBUG),
-        redact=flag_or_env(args, "redact", INGEST_REDACT),
-        raw_mode=str(getattr(args, "raw_mode", None) or RAW_MODE).lower(),
-        strict_mapping=flag_or_env(args, "strict_mapping", STRICT_MAPPING),
-        content_policy=getattr(args, "content_policy", None) or CONTENT_POLICY,
-        resource_policy=policy.report(),
-        validate_only=bool(getattr(args, "validate", False)),
-        max_source_bytes=maximums["transcript_bytes"],
-        max_cursor_container_bytes=maximums["cursor_container_bytes"],
-        max_events_per_source=maximums["events_per_source"],
-        max_events_per_session=maximums["events_per_session"],
-        max_context_content_chars=maximums["context_content_chars"],
-        live_progress=not bool(getattr(args, "no_progress", False)),
-        candidate_snapshot=bool(getattr(args, "candidate_snapshot", False)),
-    )
+    return {
+        "stop_on_error": flag_or_env(args, "stop", STOP),
+        "force": flag_or_env(args, "force", FORCE),
+        "min_size": min_size,
+        "debug": flag_or_env(args, "debug", DEBUG),
+        "redact": flag_or_env(args, "redact", INGEST_REDACT),
+        "raw_mode": str(getattr(args, "raw_mode", None) or RAW_MODE).lower(),
+        "strict_mapping": flag_or_env(args, "strict_mapping", STRICT_MAPPING),
+        "content_policy": getattr(args, "content_policy", None) or CONTENT_POLICY,
+        "resource_policy": policy.report(),
+        "validate_only": bool(getattr(args, "validate", False)),
+        "max_source_bytes": maximums["transcript_bytes"],
+        "max_cursor_container_bytes": maximums["cursor_container_bytes"],
+        "max_events_per_source": maximums["events_per_source"],
+        "max_events_per_session": maximums["events_per_session"],
+        "max_context_content_chars": maximums["context_content_chars"],
+        "live_progress": not bool(getattr(args, "no_progress", False)),
+        "candidate_snapshot": bool(getattr(args, "candidate_snapshot", False)),
+    }
 
 
 # --- Argparse + dispatch (minimal main.py delegates here) ---
