@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from codess import __version__
+from codess.config import STORE_DIR
 from codess.fileio import hash_file
 from codess.raw_store import RAW_FORMAT, RawStore
 from codess.project_catalog import durable_project_root
@@ -34,30 +35,67 @@ class SnapshotError(RuntimeError):
 
 _sha256 = hash_file
 
+MANIFEST_FILE = "manifest.json"
+MANIFEST_BACKUP_FILE = "manifest.json.bak"
+CURRENT_POINTER_FILE = "current.json"
+RAW_MANIFEST_FILE = "raw-manifest.jsonl"
+SNAPSHOTS_DIR = "snapshots"
 
-def current_raw_records(project_root: Path) -> list[dict[str, Any]]:
-    """Read the verified raw-record set from the current project snapshot.
+
+def read_manifest(snapshot_dir: Path) -> dict[str, Any]:
+    """Read manifest.json. Plain read: manifest.json is write-once, so no
+    hash check is needed here (see resolve_current_snapshot for the one
+    file that does need one). Falls back to manifest.json.bak if the
+    primary is missing, not if it exists but fails to parse."""
+    primary = snapshot_dir / MANIFEST_FILE
+    if not primary.exists():
+        backup = snapshot_dir / MANIFEST_BACKUP_FILE
+        if backup.exists():
+            return json.loads(backup.read_text(encoding="utf-8"))
+        raise SnapshotError(
+            f"manifest.json missing and no manifest.json.bak at {snapshot_dir}"
+        )
+    return json.loads(primary.read_text(encoding="utf-8"))
+
+
+def resolve_current_snapshot(base: Path) -> tuple[Path, dict[str, Any]] | None:
+    """Resolve the snapshot base/current.json points to, verifying its
+    manifest_sha256 claim. Returns (snapshot_dir, pointer_document), or
+    None if no pointer exists yet."""
+    pointer = base / CURRENT_POINTER_FILE
+    if not pointer.exists():
+        return None
+    try:
+        current = json.loads(pointer.read_text(encoding="utf-8"))
+        snapshot_path = Path(current["path"])
+        if not snapshot_path.is_absolute():
+            snapshot_path = pointer.parent / snapshot_path
+        manifest_path = snapshot_path / MANIFEST_FILE
+        if not manifest_path.exists():
+            raise SnapshotError(f"current snapshot manifest missing at {manifest_path}")
+        if _sha256(manifest_path) != current["manifest_sha256"]:
+            raise SnapshotError("current snapshot manifest hash mismatch")
+        return snapshot_path, current
+    except SnapshotError:
+        raise
+    except (OSError, KeyError, json.JSONDecodeError) as exc:
+        raise SnapshotError(f"invalid current snapshot pointer: {exc}") from exc
+
+
+def current_raw_records(project_path: Path) -> list[dict[str, Any]]:
+    """Read the raw-record set from the current project snapshot.
 
     A partial-vendor ingest starts from this set and replaces observations for
     sources it actually revisits.  That keeps the new snapshot complete when,
     for example, Cursor alone is refreshed while Claude and Codex stores remain
     unchanged.
     """
-    pointer_path = project_root / ".codess" / "current.json"
-    if not pointer_path.exists():
+    resolved = resolve_current_snapshot(project_path / STORE_DIR)
+    if resolved is None:
         return []
+    snapshot_path, _pointer = resolved
     try:
-        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-        snapshot_path = Path(pointer["path"])
-        if not snapshot_path.is_absolute():
-            snapshot_path = pointer_path.parent / snapshot_path
-        manifest_path = snapshot_path / "manifest.json"
-        if _sha256(manifest_path) != pointer["manifest_sha256"]:
-            raise SnapshotError("current snapshot manifest hash mismatch")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        raw_manifest = snapshot_path / "raw-manifest.jsonl"
-        if _sha256(raw_manifest) != manifest["raw_manifest_sha256"]:
-            raise SnapshotError("current snapshot raw manifest hash mismatch")
+        raw_manifest = snapshot_path / RAW_MANIFEST_FILE
         records: list[dict[str, Any]] = []
         with raw_manifest.open(encoding="utf-8") as stream:
             for number, line in enumerate(stream, 1):
@@ -71,7 +109,7 @@ def current_raw_records(project_root: Path) -> list[dict[str, Any]]:
         return records
     except SnapshotError:
         raise
-    except (OSError, KeyError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         raise SnapshotError(f"cannot read current raw records: {exc}") from exc
 
 
@@ -201,11 +239,23 @@ def _store_package_identity(
 
 def _pointer_document(
     snapshot: Path,
+    manifest: dict[str, Any],
     *,
     local_base: Path,
     project_id: str | None,
 ) -> dict[str, Any]:
-    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+    """Build the new pointer document from an already-read manifest.
+
+    Takes `manifest` rather than reading `snapshot / MANIFEST_FILE` itself
+    -- the one caller (`publish_snapshot`) has already parsed it for its own
+    project_id check, and the file cannot change between the two calls
+    (snapshots are immutable once written). The hash still reads the file
+    directly: a checksum must cover the exact bytes as written, not a value
+    reconstructed by round-tripping through `json.loads`/`json.dumps`.
+    """
+    manifest_path = snapshot / MANIFEST_FILE
+    if not manifest_path.exists():
+        raise SnapshotError(f"cannot publish: manifest.json missing at {manifest_path}")
     return {
         "snapshot_id": manifest["snapshot_id"],
         "path": str(
@@ -218,7 +268,7 @@ def _pointer_document(
         "format_version": manifest["format_version"],
         "decoder_version": manifest["decoder_version"],
         "validator_version": manifest["validator_version"],
-        "manifest_sha256": _sha256(snapshot / "manifest.json"),
+        "manifest_sha256": _sha256(manifest_path),
     }
 
 
@@ -228,7 +278,7 @@ def _replace_pointer(source: Path, target: Path) -> None:
 
 
 def publish_snapshot(
-    project_root: Path,
+    project_path: Path,
     snapshot: Path,
     *,
     registry_root: Path | None = None,
@@ -240,9 +290,9 @@ def publish_snapshot(
     replacing either the central or Project-local pointer fails, every pointer
     is restored byte-for-byte to its prior state.
     """
-    project_root = project_root.expanduser().resolve()
+    project_path = project_path.expanduser().resolve()
     snapshot = snapshot.expanduser().resolve()
-    local_base = project_root / ".codess"
+    local_base = project_path / STORE_DIR
     expected_base = (
         durable_project_root(registry_root, project_id).resolve()
         if registry_root is not None and project_id is not None
@@ -258,14 +308,14 @@ def publish_snapshot(
     snapshot_store_paths_from_base(
         expected_base, snapshot.name, allow_package_mismatch=True
     )
-    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+    manifest = read_manifest(snapshot)
     if manifest.get("project_id") != project_id:
         raise SnapshotError("candidate snapshot Project identity mismatch")
     current = _pointer_document(
-        snapshot, local_base=local_base, project_id=project_id
+        snapshot, manifest, local_base=local_base, project_id=project_id
     )
-    targets = [expected_base / "current.json"]
-    local_target = local_base / "current.json"
+    targets = [expected_base / CURRENT_POINTER_FILE]
+    local_target = local_base / CURRENT_POINTER_FILE
     if local_target.resolve() != targets[0].resolve():
         targets.append(local_target)
 
@@ -301,8 +351,53 @@ def publish_snapshot(
     return current
 
 
+def recover_current_snapshot(
+    project_path: Path,
+    *,
+    registry_root: Path | None = None,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """Rebuild a lost or corrupted current.json from the newest retained
+    snapshot that still validates. Tries each snapshot under `snapshots/`,
+    newest first, and republishes the first one that passes
+    `snapshot_store_paths_from_base`. Raises SnapshotError only if none do.
+    """
+    project_path = project_path.expanduser().resolve()
+    local_base = project_path / STORE_DIR
+    expected_base = (
+        durable_project_root(registry_root, project_id).resolve()
+        if registry_root is not None and project_id is not None
+        else local_base.resolve()
+    )
+    snapshots_dir = expected_base / SNAPSHOTS_DIR
+    if not snapshots_dir.is_dir():
+        raise SnapshotError(f"no retained snapshots to recover from: {snapshots_dir}")
+    candidates = sorted(
+        (entry for entry in snapshots_dir.iterdir() if entry.is_dir()),
+        key=lambda entry: entry.name,
+        reverse=True,
+    )
+    errors: list[str] = []
+    for candidate in candidates:
+        try:
+            snapshot_store_paths_from_base(
+                expected_base, candidate.name, allow_package_mismatch=True
+            )
+        except SnapshotError as exc:
+            errors.append(f"{candidate.name}: {exc}")
+            continue
+        return publish_snapshot(
+            project_path, candidate,
+            registry_root=registry_root, project_id=project_id,
+        )
+    raise SnapshotError(
+        "no retained snapshot could be recovered; tried "
+        f"{len(candidates)} candidate(s): " + "; ".join(errors)
+    )
+
+
 def create_snapshot(
-    project_root: Path,
+    project_path: Path,
     store_paths: Iterable[Path],
     raw_records: list[dict[str, Any]],
     *,
@@ -314,13 +409,13 @@ def create_snapshot(
     publish: bool = True,
 ) -> Path:
     """Build an immutable snapshot and optionally publish it as current."""
-    local_base = project_root / ".codess"
+    local_base = project_path / STORE_DIR
     base = (
         durable_project_root(registry_root, project_id)
         if registry_root is not None and project_id is not None
         else local_base
     )
-    snapshots = base / "snapshots"
+    snapshots = base / SNAPSHOTS_DIR
     snapshots.mkdir(parents=True, exist_ok=True)
     store_format_version, package_digest, source_stores = _store_package_identity(
         store_paths
@@ -336,29 +431,17 @@ def create_snapshot(
         json.dumps(policy, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     identity = hashlib.sha256(
-        f"{project_root.resolve()}\0{created_at_text}\0{package_digest}\0{policy_digest}".encode("utf-8")
+        f"{project_path.resolve()}\0{created_at_text}\0{package_digest}\0{policy_digest}".encode("utf-8")
     ).hexdigest()[:12]
     snapshot_id = (
         f"{created_at.strftime('%Y%m%dT%H%M%S.%fZ')}-"
         f"coschema{store_format_version}-{identity}"
     )
     parent_snapshot_id = None
-    pointer = local_base / "current.json"
-    if pointer.exists():
-        try:
-            previous = json.loads(pointer.read_text(encoding="utf-8"))
-            previous_path = Path(previous["path"])
-            previous_snapshot = previous_path if previous_path.is_absolute() else local_base / previous_path
-            previous_manifest = previous_snapshot / "manifest.json"
-            if _sha256(previous_manifest) != previous["manifest_sha256"]:
-                raise SnapshotError("refusing to replace an invalid current snapshot pointer")
-            parent_snapshot_id = previous.get("snapshot_id")
-        except SnapshotError:
-            raise
-        except (OSError, KeyError, json.JSONDecodeError) as exc:
-            raise SnapshotError(
-                f"refusing to replace an unreadable current snapshot pointer: {exc}"
-            ) from exc
+    resolved_previous = resolve_current_snapshot(local_base)
+    if resolved_previous is not None:
+        _previous_snapshot, previous_pointer = resolved_previous
+        parent_snapshot_id = previous_pointer.get("snapshot_id")
     with tempfile.TemporaryDirectory(prefix=".snapshot-", dir=snapshots) as tmp_name:
         tmp = Path(tmp_name)
         stores: dict[str, Any] = {}
@@ -376,7 +459,7 @@ def create_snapshot(
         if not stores:
             raise SnapshotError("cannot create a snapshot without a CoSchema store")
 
-        raw_manifest = tmp / "raw-manifest.jsonl"
+        raw_manifest = tmp / RAW_MANIFEST_FILE
         with raw_manifest.open("w", encoding="utf-8") as stream:
             stream.write(json.dumps({"record_type": "header", "raw_format": RAW_FORMAT}, sort_keys=True) + "\n")
             for record in raw_records:
@@ -419,20 +502,100 @@ def create_snapshot(
             "raw_manifest_sha256": _sha256(raw_manifest),
             "stores": stores,
         }
-        (tmp / "manifest.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        manifest_text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+        (tmp / MANIFEST_FILE).write_text(manifest_text, encoding="utf-8")
+        # Written once, alongside the primary, so it promotes atomically with
+        # it and needs no separate staleness handling -- manifests are
+        # write-once (see read_manifest). Lets an operator recover the exact
+        # original manifest bytes by copying this file over a lost or
+        # corrupted manifest.json without needing rebuild_manifest's
+        # best-effort store_meta reconstruction at all.
+        (tmp / MANIFEST_BACKUP_FILE).write_text(manifest_text, encoding="utf-8")
         final = snapshots / snapshot_id
         os.replace(tmp, final)
 
     if publish:
         publish_snapshot(
-            project_root,
+            project_path,
             final,
             registry_root=registry_root,
             project_id=project_id,
         )
     return final
+
+
+def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
+    """Reconstruct manifest.json from surviving store DBs + raw-manifest.jsonl.
+
+    Most fields are recoverable from each store's own store_meta table or
+    recomputed from the files themselves. `parent_snapshot_id`,
+    `build_policy`, and `build_policy_sha256` are not recorded anywhere
+    else and come back as None. Result carries `"reconstructed": True`.
+    Raises SnapshotError if no store DB or raw-manifest.jsonl survives.
+    """
+    if not snapshot_dir.is_dir():
+        raise SnapshotError(f"not a snapshot directory: {snapshot_dir}")
+    raw_manifest = snapshot_dir / RAW_MANIFEST_FILE
+    if not raw_manifest.is_file():
+        raise SnapshotError(
+            f"cannot reconstruct manifest without raw-manifest.jsonl: {snapshot_dir}"
+        )
+    store_paths = sorted(
+        path for path in snapshot_dir.iterdir()
+        if path.is_file() and path.suffix == ".db"
+    )
+    if not store_paths:
+        raise SnapshotError(
+            f"cannot reconstruct manifest without a surviving store database: {snapshot_dir}"
+        )
+    stores: dict[str, Any] = {}
+    meta_by_key: dict[str, str] = {}
+    format_version: int | None = None
+    package_digest: str | None = None
+    project_id: str | None = None
+    for path in store_paths:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            version = require_store(conn, write=False)
+            format_version = format_version or version
+            meta = dict(conn.execute("SELECT key, value FROM store_meta"))
+            for key in (
+                "snapshot_id", "snapshot_created_at", "snapshot_software_version",
+                "decoder_version", "validator_version", "package_digest",
+            ):
+                meta_by_key.setdefault(key, meta.get(key))
+            package_digest = package_digest or meta.get("package_digest")
+            if project_id is None:
+                row = conn.execute("SELECT id FROM projects LIMIT 1").fetchone()
+                project_id = row[0] if row else None
+            stores[path.name] = {
+                "sha256": _sha256(path),
+                "size": path.stat().st_size,
+                "counts": _logical_counts(path),
+            }
+        finally:
+            conn.close()
+    return {
+        "snapshot_format": "codess.snapshot/1",
+        "snapshot_id": meta_by_key.get("snapshot_id") or snapshot_dir.name,
+        "parent_snapshot_id": None,
+        "created_at": meta_by_key.get("snapshot_created_at"),
+        "software_version": meta_by_key.get("snapshot_software_version"),
+        "software_revision": None,
+        "decoder_version": meta_by_key.get("decoder_version"),
+        "validator_version": meta_by_key.get("validator_version"),
+        "build_policy": None,
+        "build_policy_sha256": None,
+        "format_id": FORMAT_ID,
+        "format_version": format_version,
+        "package_digest": package_digest,
+        "project_id": project_id,
+        "raw_format": RAW_FORMAT,
+        "sealed": (snapshot_dir / "raw").is_dir(),
+        "raw_manifest_sha256": _sha256(raw_manifest),
+        "stores": stores,
+        "reconstructed": True,
+    }
 
 
 def snapshot_store_paths_from_base(
@@ -451,8 +614,8 @@ def snapshot_store_paths_from_base(
     base = base.expanduser().resolve()
     if not snapshot_id or snapshot_id in {".", ".."} or "/" in snapshot_id:
         raise SnapshotError(f"invalid snapshot identity: {snapshot_id!r}")
-    pointer = base / "current.json"
-    snapshot = base / "snapshots" / snapshot_id
+    pointer = base / CURRENT_POINTER_FILE
+    snapshot = base / SNAPSHOTS_DIR / snapshot_id
     if pointer.exists():
         try:
             current = json.loads(pointer.read_text(encoding="utf-8"))
@@ -464,8 +627,7 @@ def snapshot_store_paths_from_base(
     if not snapshot.is_dir():
         raise SnapshotError(f"retained snapshot not found: {snapshot_id}")
     try:
-        manifest_path = snapshot / "manifest.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = read_manifest(snapshot)
         if manifest.get("snapshot_id") != snapshot_id:
             raise SnapshotError("snapshot directory and manifest identity disagree")
         if (
@@ -476,7 +638,7 @@ def snapshot_store_paths_from_base(
         package_matches = manifest.get("package_digest") == verify_package()
         if not package_matches and not allow_package_mismatch:
             raise SnapshotError("retained snapshot exact CoSchema package digest mismatch")
-        raw_manifest = snapshot / "raw-manifest.jsonl"
+        raw_manifest = snapshot / RAW_MANIFEST_FILE
         if _sha256(raw_manifest) != manifest.get("raw_manifest_sha256"):
             raise SnapshotError("retained snapshot raw manifest hash mismatch")
         paths = []
@@ -510,41 +672,36 @@ def snapshot_store_paths_from_base(
 
 
 def snapshot_store_paths(
-    project_root: Path,
+    project_path: Path,
     snapshot_id: str,
     *,
     allow_package_mismatch: bool = False,
 ) -> list[Path]:
     """Resolve one retained snapshot from a Project's local snapshot base."""
     return snapshot_store_paths_from_base(
-        project_root / ".codess",
+        project_path / STORE_DIR,
         snapshot_id,
         allow_package_mismatch=allow_package_mismatch,
     )
 
 
 def current_store_paths_from_base(base: Path) -> list[Path]:
-    """Resolve validated current-snapshot DB paths under one snapshot base."""
+    """Resolve validated current-snapshot DB paths under one snapshot base.
+
+    The dropped `snapshot.name != current["snapshot_id"]` check this
+    function used to run is guaranteed by construction, not defense against
+    a live threat: `_pointer_document` always writes `path` as the exact
+    directory `create_snapshot` created, whose name is always `snapshot_id`
+    -- the two fields cannot diverge from any write path this module has.
+    """
     base = base.expanduser().resolve()
-    pointer = base / "current.json"
-    if not pointer.exists():
+    resolved = resolve_current_snapshot(base)
+    if resolved is None:
         return []
-    try:
-        current = json.loads(pointer.read_text(encoding="utf-8"))
-        current_path = Path(current["path"])
-        snapshot = current_path if current_path.is_absolute() else base / current_path
-        manifest_path = snapshot / "manifest.json"
-        if _sha256(manifest_path) != current["manifest_sha256"]:
-            raise SnapshotError("current snapshot manifest hash mismatch")
-        if snapshot.name != current["snapshot_id"]:
-            raise SnapshotError("current snapshot path and identity disagree")
-        return snapshot_store_paths_from_base(base, current["snapshot_id"])
-    except SnapshotError:
-        raise
-    except (OSError, KeyError, json.JSONDecodeError) as exc:
-        raise SnapshotError(f"invalid current snapshot pointer: {exc}") from exc
+    _snapshot_path, current = resolved
+    return snapshot_store_paths_from_base(base, current["snapshot_id"])
 
 
-def current_store_paths(project_root: Path) -> list[Path]:
+def current_store_paths(project_path: Path) -> list[Path]:
     """Resolve validated current-snapshot DB paths, or return an empty list."""
-    return current_store_paths_from_base(project_root / ".codess")
+    return current_store_paths_from_base(project_path / STORE_DIR)

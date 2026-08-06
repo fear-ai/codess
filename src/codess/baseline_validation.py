@@ -580,7 +580,7 @@ def _validate_raw(
 
 
 def _validate_policy(
-    project_root: Path,
+    project_path: Path,
     policy: dict[str, Any],
     report: dict[str, Any],
     counts_by_source: dict[str, dict[str, int]],
@@ -592,7 +592,7 @@ def _validate_policy(
     if configured_project:
         _add_check(
             report, "policy.project",
-            Path(configured_project).expanduser().resolve() == project_root,
+            Path(configured_project).expanduser().resolve() == project_path,
             configured_project,
         )
     for source in policy.get("required_sources", []):
@@ -618,7 +618,7 @@ def _validate_policy(
     if expected_workspace_ids is not None:
         from codess.cursor_source import get_workspace_ids
 
-        actual_workspace_ids = get_workspace_ids(project_root)
+        actual_workspace_ids = get_workspace_ids(project_path)
         _add_check(
             report, "policy.cursor_workspace_ids",
             sorted(expected_workspace_ids) == actual_workspace_ids,
@@ -675,7 +675,7 @@ def _validate_policy(
 
 
 def validate_project(
-    project_root: Path,
+    project_path: Path,
     *,
     policy: dict[str, Any] | None = None,
     raw_store_root: Path | None = None,
@@ -683,12 +683,12 @@ def validate_project(
     snapshot_path: Path | None = None,
 ) -> dict[str, Any]:
     """Validate an exact candidate or the current baseline without mutation."""
-    project_root = project_root.expanduser().resolve()
+    project_path = project_path.expanduser().resolve()
     policy = policy or {}
     report: dict[str, Any] = {
         "report_format": REPORT_FORMAT,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "project": str(project_root),
+        "project": str(project_path),
         "status": "rejected",
         "errors": [],
         "limitations": [],
@@ -704,17 +704,17 @@ def validate_project(
                 snapshot.parent.parent, snapshot.name
             )
         else:
-            paths = current_store_paths(project_root)
+            paths = current_store_paths(project_path)
             if not paths:
                 raise SnapshotError("no current snapshot")
             current = json.loads(
-                (project_root / ".codess" / "current.json").read_text()
+                (project_path / ".codess" / "current.json").read_text()
             )
             current_path = Path(current["path"])
             snapshot = (
                 current_path
                 if current_path.is_absolute()
-                else project_root / ".codess" / current_path
+                else project_path / ".codess" / current_path
             )
         manifest = json.loads((snapshot / "manifest.json").read_text())
     except (OSError, KeyError, json.JSONDecodeError, SnapshotError) as exc:
@@ -800,7 +800,7 @@ def validate_project(
         normalize_observations=True,
     )
     _validate_policy(
-        project_root, policy, report, counts_by_source, diagnostics,
+        project_path, policy, report, counts_by_source, diagnostics,
         report.get("raw_mode"), stores,
     )
     if report["errors"]:
@@ -813,7 +813,7 @@ def validate_project(
 
 
 def run_query_smoke(
-    project_root: Path,
+    project_path: Path,
     *,
     snapshot_id: str | None = None,
     snapshot_path: Path | None = None,
@@ -838,7 +838,7 @@ def run_query_smoke(
     with tempfile.TemporaryDirectory(prefix="codess-query-smoke-") as temp:
         temp_root = Path(temp)
         registry = temp_root / "registry"
-        query_root = project_root
+        query_root = project_path
         if snapshot_path is not None:
             query_root = temp_root / "candidate-view"
             pointer = query_root / ".codess" / "current.json"

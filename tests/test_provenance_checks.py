@@ -245,7 +245,7 @@ def test_core_exchange_retains_exact_vendor_evidence_through_query(
     opened = {
         "conn": connect(store, read_only=True),
         "path": store,
-        "project_root": project,
+        "project_path": project,
     }
     try:
         expanded = execute(

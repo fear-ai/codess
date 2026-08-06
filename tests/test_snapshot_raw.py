@@ -20,6 +20,9 @@ from codess.snapshot import (
     create_snapshot,
     current_raw_records,
     current_store_paths,
+    read_manifest,
+    rebuild_manifest,
+    recover_current_snapshot,
     snapshot_store_paths,
 )
 from codess.store import connect, ensure_source, init_db, replace_session_events
@@ -320,7 +323,7 @@ def test_snapshot_is_validated_promoted_and_sealable(tmp_path):
         current_store_paths(project)
 
 
-def test_partial_refresh_can_carry_verified_current_raw_records(tmp_path):
+def test_partial_refresh_carries_current_raw_records(tmp_path):
     project = tmp_path / "project"
     store = project / ".codess" / "sessions_cursor.db"
     init_db(store)
@@ -336,9 +339,31 @@ def test_partial_refresh_can_carry_verified_current_raw_records(tmp_path):
     create_snapshot(project, [store], [first], raw_store=raw)
     assert current_raw_records(project) == [first]
 
+
+def test_current_raw_records_rejects_unparseable_raw_manifest(tmp_path):
+    """Malformed content in an existing snapshot still errors, without a
+    per-read hash re-check: manifest.json and raw-manifest.jsonl are
+    write-once (see snapshot.py::read_manifest), so nothing in this module
+    re-verifies their content against a recorded hash on every read anymore
+    -- corruption is caught only if it also happens to make the content
+    unparseable, not detected as a distinct "tampered" condition."""
+    project = tmp_path / "project"
+    store = project / ".codess" / "sessions_cursor.db"
+    init_db(store)
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "session.jsonl"
+    source.write_bytes(b"one")
+    first = raw.observe(
+        source,
+        source_system_id="openai.codex",
+        storage_format="codex-jsonl",
+        mode="capture",
+    )
+    create_snapshot(project, [store], [first], raw_store=raw)
+
     raw_manifest = next((project / ".codess" / "snapshots").glob("*/raw-manifest.jsonl"))
-    raw_manifest.write_text("tampered\n", encoding="utf-8")
-    with pytest.raises(SnapshotError, match="raw manifest hash mismatch"):
+    raw_manifest.write_text("not valid json\n", encoding="utf-8")
+    with pytest.raises(SnapshotError, match="cannot read current raw records"):
         current_raw_records(project)
 
 
@@ -407,6 +432,123 @@ def test_snapshot_rejects_raw_manifest_tamper(tmp_path):
     (snapshot / "raw-manifest.jsonl").write_text("tamper\n", encoding="utf-8")
     with pytest.raises(SnapshotError, match="raw manifest hash mismatch"):
         current_store_paths(project)
+
+
+def _seed_one_snapshot(tmp_path, name="session.jsonl"):
+    project = tmp_path / "project"
+    store = project / ".codess" / "sessions_cursor.db"
+    init_db(store)
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / name
+    source.write_bytes(b"one")
+    record = raw.observe(
+        source,
+        source_system_id="openai.codex",
+        storage_format="codex-jsonl",
+        mode="capture",
+    )
+    create_snapshot(project, [store], [record], raw_store=raw)
+    return project
+
+
+def test_recover_current_snapshot_rebuilds_a_deleted_pointer(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    (project / ".codess" / "current.json").unlink()
+    assert current_store_paths(project) == []
+
+    result = recover_current_snapshot(project)
+    assert result["snapshot_id"]
+    assert len(current_store_paths(project)) == 1
+
+
+def test_recover_current_snapshot_rebuilds_a_corrupted_pointer(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    (project / ".codess" / "current.json").write_text("not json{{{", encoding="utf-8")
+    with pytest.raises(SnapshotError):
+        current_store_paths(project)
+
+    result = recover_current_snapshot(project)
+    assert result["snapshot_id"]
+    assert len(current_store_paths(project)) == 1
+
+
+def test_recover_current_snapshot_skips_a_tampered_newest_snapshot(tmp_path):
+    project = _seed_one_snapshot(tmp_path, name="first.jsonl")
+    assert len(current_store_paths(project)) == 1  # sanity: resolves before tamper
+
+    store = project / ".codess" / "sessions_cursor.db"
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "second.jsonl"
+    source.write_bytes(b"two")
+    record = raw.observe(
+        source, source_system_id="openai.codex", storage_format="codex-jsonl",
+        mode="capture",
+    )
+    newest = create_snapshot(project, [store], [record], raw_store=raw)
+    (newest / "raw-manifest.jsonl").write_text("tamper\n", encoding="utf-8")
+
+    result = recover_current_snapshot(project)
+    assert result["snapshot_id"] != newest.name
+    assert len(current_store_paths(project)) == 1
+
+
+def test_recover_current_snapshot_raises_when_nothing_is_retained(tmp_path):
+    project = tmp_path / "project"
+    (project / ".codess").mkdir(parents=True)
+    with pytest.raises(SnapshotError, match="no retained snapshots"):
+        recover_current_snapshot(project)
+
+
+def test_read_manifest_falls_back_to_backup_copy(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    snapshot_dir = next((project / ".codess" / "snapshots").iterdir())
+    original = read_manifest(snapshot_dir)
+    (snapshot_dir / "manifest.json").unlink()
+    assert read_manifest(snapshot_dir) == original
+
+
+def test_read_manifest_raises_when_both_copies_are_missing(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    snapshot_dir = next((project / ".codess" / "snapshots").iterdir())
+    (snapshot_dir / "manifest.json").unlink()
+    (snapshot_dir / "manifest.json.bak").unlink()
+    with pytest.raises(SnapshotError, match="manifest.json missing"):
+        read_manifest(snapshot_dir)
+
+
+def test_rebuild_manifest_reproduces_recoverable_fields(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    snapshot_dir = next((project / ".codess" / "snapshots").iterdir())
+    original = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    (snapshot_dir / "manifest.json").unlink()
+    (snapshot_dir / "manifest.json.bak").unlink()
+
+    rebuilt = rebuild_manifest(snapshot_dir)
+    assert rebuilt["reconstructed"] is True
+    assert rebuilt["snapshot_id"] == original["snapshot_id"]
+    assert rebuilt["format_version"] == original["format_version"]
+    assert rebuilt["package_digest"] == original["package_digest"]
+    assert rebuilt["raw_manifest_sha256"] == original["raw_manifest_sha256"]
+    assert rebuilt["stores"] == original["stores"]
+    assert rebuilt["parent_snapshot_id"] is None
+    assert rebuilt["build_policy"] is None
+
+
+def test_rebuild_manifest_requires_a_surviving_store_database(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    snapshot_dir = next((project / ".codess" / "snapshots").iterdir())
+    for db in snapshot_dir.glob("*.db"):
+        db.unlink()
+    with pytest.raises(SnapshotError, match="store database"):
+        rebuild_manifest(snapshot_dir)
+
+
+def test_rebuild_manifest_requires_raw_manifest_jsonl(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    snapshot_dir = next((project / ".codess" / "snapshots").iterdir())
+    (snapshot_dir / "raw-manifest.jsonl").unlink()
+    with pytest.raises(SnapshotError, match="raw-manifest.jsonl"):
+        rebuild_manifest(snapshot_dir)
 
 
 def test_retained_snapshot_requires_exact_package_unless_explicitly_compatible(

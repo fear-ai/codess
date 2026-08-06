@@ -224,7 +224,7 @@ def audit(
             configuration_default_occurrences += default_occurrences
             turns_with_occurrence_provenance += occurrence_provenance
             configurations.append({
-                "project_path": str(store["project_root"]),
+                "project_path": str(store["project_path"]),
                 "configuration_id": row["id"], **values,
                 "source_config": source_config,
                 "provenance_state": "recorded" if source_config else "normalized_only",

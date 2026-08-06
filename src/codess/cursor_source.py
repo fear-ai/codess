@@ -102,11 +102,11 @@ def get_global_db(cursor_data: Path | None = None) -> Path | None:
 
 
 def get_workspace_ids(
-    project_root: Path, cursor_data: Path | None = None,
+    project_path: Path, cursor_data: Path | None = None,
 ) -> list[str]:
-    """Return local Cursor workspace ids mapped under ``project_root``."""
-    project_root = project_root.resolve()
-    project_str = str(project_root)
+    """Return local Cursor workspace ids mapped under ``project_path``."""
+    project_path = project_path.resolve()
+    project_str = str(project_path)
     ws_dir = (cursor_data or CURSOR_DATA) / "workspaceStorage"
     workspace_ids: list[str] = []
     if ws_dir.exists():
@@ -127,7 +127,7 @@ def get_workspace_ids(
             except (json.JSONDecodeError, OSError):
                 continue
 
-    link_path = project_root / ".codess" / "source-links.json"
+    link_path = project_path / ".codess" / "source-links.json"
     if link_path.exists():
         try:
             links = json.loads(link_path.read_text(encoding="utf-8"))
@@ -153,13 +153,13 @@ def get_workspace_ids(
 
 
 def get_workspace_dbs(
-    project_root: Path, cursor_data: Path | None = None,
+    project_path: Path, cursor_data: Path | None = None,
 ) -> list[Path]:
     data_root = cursor_data or CURSOR_DATA
     ws_dir = data_root / "workspaceStorage"
     return [
         ws_dir / workspace_id / "state.vscdb"
-        for workspace_id in get_workspace_ids(project_root, data_root)
+        for workspace_id in get_workspace_ids(project_path, data_root)
         if (ws_dir / workspace_id / "state.vscdb").exists()
     ]
 
@@ -225,7 +225,7 @@ def get_composer_headers(
 
 
 def get_workspace_composer_headers(
-    project_root: Path, cursor_data: Path | None = None,
+    project_path: Path, cursor_data: Path | None = None,
     *,
     diagnostics: dict[str, int] | None = None,
 ) -> dict[str, dict]:
@@ -239,7 +239,7 @@ def get_workspace_composer_headers(
     data_root = cursor_data or CURSOR_DATA
     workspace_root = data_root / "workspaceStorage"
     recovered: dict[str, dict] = {}
-    for workspace_id in get_workspace_ids(project_root, data_root):
+    for workspace_id in get_workspace_ids(project_path, data_root):
         db_path = workspace_root / workspace_id / "state.vscdb"
         if not db_path.exists():
             continue
@@ -304,14 +304,14 @@ def get_workspace_composer_headers(
 
 
 def get_project_composer_headers(
-    global_db: Path, project_root: Path, cursor_data: Path | None = None,
+    global_db: Path, project_path: Path, cursor_data: Path | None = None,
     *,
     diagnostics: dict[str, int] | None = None,
 ) -> dict[str, dict]:
     """Combine current global headers with workspace-index fallbacks."""
-    workspace_ids = set(get_workspace_ids(project_root, cursor_data))
+    workspace_ids = set(get_workspace_ids(project_path, cursor_data))
     fallback = get_workspace_composer_headers(
-        project_root, cursor_data, diagnostics=diagnostics
+        project_path, cursor_data, diagnostics=diagnostics
     )
     current = get_composer_headers(global_db, workspace_ids)
     fallback.update(current)

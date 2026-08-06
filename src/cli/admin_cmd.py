@@ -592,9 +592,7 @@ def _baseline_validate(args) -> int:
         if failures:
             report["errors"].append("query_smoke: " + ", ".join(failures))
             report["status"] = "rejected"
-    if args.report:
-        write_json_atomic(args.report, report)
-    _json(report)
+    _write_optional(args.report, report)
     return 1 if report["status"] == "rejected" else 0
 
 
@@ -739,9 +737,7 @@ def _storage_report(args) -> int:
         codess_limit=int(args.codess_limit_gb * 1024**3),
         cursor_limit=int(args.cursor_limit_gb * 1024**3),
     )
-    if args.output:
-        write_json_atomic(args.output, report)
-    _json(report)
+    _write_optional(args.output, report)
     return 0
 
 
@@ -764,9 +760,7 @@ def _storage_prune(args) -> int:
             allow_large_comparison_revisions=args.keep_comparison_revisions,
         )
     )
-    if args.output:
-        write_json_atomic(args.output, result)
-    _json(result)
+    _write_optional(args.output, result)
     return 0 if args.apply or result["safe_to_apply"] else 1
 
 
@@ -774,9 +768,7 @@ def _storage_token_validate(args) -> int:
     stores, _ = current_store_paths(args.registry.expanduser().resolve())
     paths = source_paths(stores, "openai.codex")
     result = validate_codex_token_usage(paths)
-    if args.output:
-        write_json_atomic(args.output, result)
-    _json(result)
+    _write_optional(args.output, result)
     return 0
 
 

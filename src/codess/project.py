@@ -67,13 +67,13 @@ def get_cc_projects_dir() -> Path:
     return CC_PROJECTS
 
 
-def find_slug_for_project(project_root: Path) -> str | None:
+def find_slug_for_project(project_path: Path) -> str | None:
     """Find the current or explicitly linked historical Claude project slug."""
-    slug = path_to_slug(project_root.resolve())
+    slug = path_to_slug(project_path.resolve())
     projects_dir = get_cc_projects_dir()
     if (projects_dir / slug).is_dir():
         return slug
-    link_path = project_root.resolve() / ".codess" / "source-links.json"
+    link_path = project_path.resolve() / ".codess" / "source-links.json"
     if link_path.exists():
         try:
             value = json.loads(link_path.read_text(encoding="utf-8"))
@@ -97,9 +97,9 @@ def find_slug_for_project(project_root: Path) -> str | None:
     return None
 
 
-def get_cc_session_dir(project_root: Path) -> Path | None:
+def get_cc_session_dir(project_path: Path) -> Path | None:
     """Return CC session dir for project, or None if not found."""
-    slug = find_slug_for_project(project_root)
+    slug = find_slug_for_project(project_path)
     if slug:
         return get_cc_projects_dir() / slug
     return None
@@ -117,7 +117,7 @@ class RootsWhenEmpty(Enum):
     """Default work root when ``--dirs`` / ``--dir`` yield no paths after merge."""
 
     CWD = "cwd"
-    PROJECT_ROOT = "project_root"
+    PROJECT_ROOT = "project_path"
 
 
 def resolve_cli_roots(

@@ -42,16 +42,16 @@ def _raw_records(snapshot: Path) -> list[dict[str, Any]]:
 
 
 def _validate_current(
-    project_root: Path, pointer: dict[str, Any], raw_root: Path,
+    project_path: Path, pointer: dict[str, Any], raw_root: Path,
 ) -> tuple[Path, set[str], list[dict[str, Any]]]:
     snapshot_id = pointer.get("snapshot_id")
     path_value = pointer.get("path")
     if not isinstance(snapshot_id, str) or not isinstance(path_value, str):
-        raise RuntimeError(f"invalid current pointer: {project_root / 'current.json'}")
+        raise RuntimeError(f"invalid current pointer: {project_path / 'current.json'}")
     snapshot = Path(path_value)
     if not snapshot.is_absolute():
-        snapshot = project_root / snapshot
-    expected_root = project_root / "snapshots"
+        snapshot = project_path / snapshot
+    expected_root = project_path / "snapshots"
     if snapshot.name != snapshot_id or not _inside(snapshot, expected_root) or not snapshot.is_dir():
         raise RuntimeError(f"current snapshot escapes or is absent: {snapshot}")
     manifest_path = snapshot / "manifest.json"
@@ -233,18 +233,18 @@ def build_retention_plan(
     raw_keep: set[str] = set()
     current_raw_records: list[tuple[Path, dict[str, Any]]] = []
     errors: list[str] = []
-    for project_root in sorted(path for path in projects_root.iterdir() if path.is_dir()) if projects_root.exists() else []:
-        pointer_path = project_root / "current.json"
+    for project_path in sorted(path for path in projects_root.iterdir() if path.is_dir()) if projects_root.exists() else []:
+        pointer_path = project_path / "current.json"
         if not pointer_path.exists():
-            errors.append(f"project has no current pointer: {project_root}")
+            errors.append(f"project has no current pointer: {project_path}")
             continue
         try:
             pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
             snapshot, references, records = _validate_current(
-                project_root, pointer, raw_root
+                project_path, pointer, raw_root
             )
             current.append(snapshot)
-            current_by_project[project_root.name] = snapshot.name
+            current_by_project[project_path.name] = snapshot.name
             raw_keep.update(references)
             current_raw_records.extend((snapshot, record) for record in records)
         except (OSError, ValueError, KeyError, json.JSONDecodeError, sqlite3.Error, RuntimeError) as exc:

@@ -30,15 +30,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_write_json_atomic = write_json_atomic
-
-
 def _catalog_path(registry_root: Path) -> Path:
     return registry_root / "projects.json"
 
 
-def _binding_path(project_root: Path) -> Path:
-    return project_root / ".codess" / "project.json"
+def _binding_path(project_path: Path) -> Path:
+    return project_path / ".codess" / "project.json"
+
+
+def _save_catalog_entry(
+    registry_root: Path, catalog: dict[str, Any], entry: dict[str, Any],
+) -> None:
+    """Stamp `entry` and `catalog` as updated now, then persist `catalog`.
+
+    Four call sites shared this exact two-timestamp-then-write sequence
+    (mutate one project's entry, mutate the catalog it belongs to, write the
+    catalog back) with nothing else in common between them; extracted so a
+    future site can't stamp only one of the two by omission.
+    """
+    entry["updated_at"] = _now()
+    catalog["updated_at"] = _now()
+    write_json_atomic(_catalog_path(registry_root), catalog)
 
 
 def _machine_id(registry_root: Path) -> str:
@@ -67,8 +79,8 @@ def load_catalog(registry_root: Path) -> dict[str, Any]:
     return value
 
 
-def _source_links(project_root: Path) -> list[dict[str, Any]]:
-    path = project_root / ".codess" / "source-links.json"
+def _source_links(project_path: Path) -> list[dict[str, Any]]:
+    path = project_path / ".codess" / "source-links.json"
     if not path.exists():
         return []
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -77,22 +89,22 @@ def _source_links(project_root: Path) -> list[dict[str, Any]]:
     return [item for item in value.get("links", []) if isinstance(item, dict)]
 
 
-def ensure_project_binding(registry_root: Path, project_root: Path) -> dict[str, Any]:
+def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str, Any]:
     """Return and persist one stable project identity for an observed location."""
     registry_root = registry_root.expanduser().resolve()
-    project_root = project_root.expanduser().resolve()
+    project_path = project_path.expanduser().resolve()
     if registry_root == (Path.home() / ".codess").resolve():
-        reason = ephemeral_project_location_reason(project_root)
+        reason = ephemeral_project_location_reason(project_path)
         if reason:
             raise ValueError(reason)
-    binding_path = _binding_path(project_root)
+    binding_path = _binding_path(project_path)
     binding: dict[str, Any] | None = None
     if binding_path.exists():
         binding = json.loads(binding_path.read_text(encoding="utf-8"))
         if binding.get("binding_format") != PROJECT_BINDING_FORMAT:
             raise ValueError("unsupported project binding format")
     catalog = load_catalog(registry_root)
-    resolved = str(project_root)
+    resolved = str(project_path)
     by_id = {
         item.get("project_id"): item
         for item in catalog["projects"]
@@ -109,11 +121,11 @@ def ensure_project_binding(registry_root: Path, project_root: Path) -> dict[str,
     entry = dict(by_id.get(project_id) or {})
     entry.update({
         "project_id": project_id,
-        "logical_name": entry.get("logical_name") or project_root.name,
+        "logical_name": entry.get("logical_name") or project_path.name,
         "updated_at": _now(),
     })
     machine_id = _machine_id(registry_root)
-    observed_location_id = location_id(machine_id, project_root)
+    observed_location_id = location_id(machine_id, project_path)
     locations = {
         item.get("location_id"): dict(item)
         for item in entry.get("locations", [])
@@ -143,7 +155,7 @@ def ensure_project_binding(registry_root: Path, project_root: Path) -> dict[str,
     aliases = set(entry.get("path_aliases", []))
     aliases.add(resolved)
     obsolete_paths: set[str] = set()
-    for link in _source_links(project_root):
+    for link in _source_links(project_path):
         if link.get("selection_state") != "approved":
             continue
         source_system_id = link.get("source_system_id")
@@ -178,14 +190,14 @@ def ensure_project_binding(registry_root: Path, project_root: Path) -> dict[str,
     by_id[project_id] = entry
     catalog["projects"] = sorted(by_id.values(), key=lambda item: item["project_id"])
     catalog["updated_at"] = _now()
-    _write_json_atomic(_catalog_path(registry_root), catalog)
+    write_json_atomic(_catalog_path(registry_root), catalog)
     binding = {
         "binding_format": PROJECT_BINDING_FORMAT,
         "project_id": project_id,
         "location_id": observed_location_id,
         "registry_root": str(registry_root),
     }
-    _write_json_atomic(binding_path, binding)
+    write_json_atomic(binding_path, binding)
     return binding
 
 
@@ -247,9 +259,7 @@ def set_project_selection_state(
     if note:
         disposition["note"] = note
     entry["catalog_disposition"] = disposition
-    entry["updated_at"] = _now()
-    catalog["updated_at"] = _now()
-    _write_json_atomic(_catalog_path(registry_root), catalog)
+    _save_catalog_entry(registry_root, catalog, entry)
     return {
         "project_id": project_id,
         "selection_state": state,
@@ -560,7 +570,7 @@ def resolve_project_query_scopes(
             "project_id": project_id,
             "logical_name": entry.get("logical_name"),
             "snapshot_id": snapshot_id,
-            "project_root": (
+            "project_path": (
                 existing[0]
                 if existing
                 else (active[0].resolve() if active else central)
@@ -593,15 +603,15 @@ def resolve_project_query_scopes(
 
 
 def add_project_location(
-    registry_root: Path, project_id: str, project_root: Path,
+    registry_root: Path, project_id: str, project_path: Path,
 ) -> dict[str, Any]:
     """Explicitly bind an existing directory to a known Project identity."""
     registry_root = registry_root.expanduser().resolve()
-    project_root = project_root.expanduser().resolve()
-    if not project_root.is_dir():
-        raise ValueError(f"location is not a directory: {project_root}")
+    project_path = project_path.expanduser().resolve()
+    if not project_path.is_dir():
+        raise ValueError(f"location is not a directory: {project_path}")
     catalog = load_catalog(registry_root)
-    resolved = str(project_root)
+    resolved = str(project_path)
     entry = next(
         (item for item in catalog["projects"] if item.get("project_id") == project_id),
         None,
@@ -617,7 +627,7 @@ def add_project_location(
                 f"location is already bound to another Project: {resolved}"
             )
     machine = _machine_id(registry_root)
-    observed_location_id = location_id(machine, project_root)
+    observed_location_id = location_id(machine, project_path)
     locations = {
         item.get("location_id"): dict(item)
         for item in entry.get("locations", [])
@@ -640,29 +650,27 @@ def add_project_location(
         locations.values(), key=lambda item: item["location_id"]
     )
     entry["path_aliases"] = sorted(set(entry.get("path_aliases", [])) | {resolved})
-    entry["updated_at"] = _now()
-    catalog["updated_at"] = _now()
-    _write_json_atomic(_catalog_path(registry_root), catalog)
+    _save_catalog_entry(registry_root, catalog, entry)
     binding = {
         "binding_format": PROJECT_BINDING_FORMAT,
         "project_id": project_id,
         "location_id": observed_location_id,
         "registry_root": str(registry_root),
     }
-    _write_json_atomic(_binding_path(project_root), binding)
+    write_json_atomic(_binding_path(project_path), binding)
     return {**binding, "path": resolved, "state": "active"}
 
 
 def retire_project_location(
     registry_root: Path,
     project_id: str,
-    project_root: Path,
+    project_path: Path,
     *,
     allow_last_active: bool = False,
 ) -> dict[str, Any]:
     """Retire one known Project location without requiring a replacement."""
     registry_root = registry_root.expanduser().resolve()
-    resolved = str(project_root.expanduser().resolve())
+    resolved = str(project_path.expanduser().resolve())
     catalog = load_catalog(registry_root)
     entry = next(
         (item for item in catalog["projects"] if item.get("project_id") == project_id),
@@ -682,9 +690,7 @@ def retire_project_location(
     target["state"] = "retired"
     target["path_obsolete"] = True
     target["retired_at"] = _now()
-    entry["updated_at"] = _now()
-    catalog["updated_at"] = _now()
-    _write_json_atomic(_catalog_path(registry_root), catalog)
+    _save_catalog_entry(registry_root, catalog, entry)
     return {"project_id": project_id, "path": resolved, "state": "retired"}
 
 
@@ -724,9 +730,7 @@ def register_workspace_bindings(
     entry["workspace_bindings"] = sorted(
         bindings.values(), key=lambda item: (item["source_system_id"], item["workspace_id"])
     )
-    entry["updated_at"] = _now()
-    catalog["updated_at"] = _now()
-    _write_json_atomic(_catalog_path(registry_root), catalog)
+    _save_catalog_entry(registry_root, catalog, entry)
     return dict(entry)
 
 
@@ -751,12 +755,12 @@ def register_relocation(
             location["path_obsolete"] = True
             location["retired_at"] = _now()
     catalog["updated_at"] = _now()
-    _write_json_atomic(_catalog_path(registry_root), catalog)
+    write_json_atomic(_catalog_path(registry_root), catalog)
     if new_root is None:
         return {"project_id": project_id, "old_path": old_path, "new_path": None}
     new_root = new_root.expanduser().resolve()
     new_root.mkdir(parents=True, exist_ok=True)
-    _write_json_atomic(_binding_path(new_root), {
+    write_json_atomic(_binding_path(new_root), {
         "binding_format": PROJECT_BINDING_FORMAT,
         "project_id": project_id,
         "location_id": location_id(_machine_id(registry_root), new_root),

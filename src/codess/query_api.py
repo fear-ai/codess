@@ -605,7 +605,7 @@ def _store_provenance(store: dict[str, Any]) -> dict[str, Any]:
     project_ids = [row[0] for row in conn.execute("SELECT id FROM projects ORDER BY id")]
     return {
         "project_ids": project_ids,
-        "project_path": str(store["project_root"]),
+        "project_path": str(store["project_path"]),
         "store_path": str(store["path"]),
         "snapshot_id": meta.get("snapshot_id"),
         "snapshot_created_at": meta.get("snapshot_created_at"),
@@ -631,7 +631,7 @@ def selected_project_ids(stores: list[dict[str, Any]]) -> list[str]:
         if ids:
             selected.update(str(value) for value in ids)
         else:
-            digest = hashlib.sha256(str(store["project_root"]).encode("utf-8")).hexdigest()
+            digest = hashlib.sha256(str(store["project_path"]).encode("utf-8")).hexdigest()
             selected.add(f"codess:legacy-project-location:sha256:{digest}")
     return sorted(selected)
 
@@ -659,7 +659,7 @@ def selected_project_snapshots(
         ]
         if not project_ids:
             digest = hashlib.sha256(
-                str(store["project_root"]).encode("utf-8")
+                str(store["project_path"]).encode("utf-8")
             ).hexdigest()
             project_ids = [f"codess:legacy-project-location:sha256:{digest}"]
         snapshot_id = _store_snapshot_id(store)
@@ -705,7 +705,7 @@ def _event_heap_sort_key(record, store: dict[str, Any]) -> tuple:
         record["global_session_id"] or "",
         record["sequence_no"] if record["sequence_no"] is not None else -1,
         record["global_id"] or "",
-        str(store.get("project_id") or store["project_root"]),
+        str(store.get("project_id") or store["project_path"]),
         str(store["path"]),
     )
 
@@ -812,7 +812,7 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
             "session_id": record["session_id"],
             "project_id": record["project_id"] or store.get("project_id"),
             "snapshot_id": _store_snapshot_id(store),
-            "project_path": str(store["project_root"]),
+            "project_path": str(store["project_path"]),
             "source_project_path": record["project_path"],
             "source_system_id": record["source_system_id"],
             "sequence_no": record["sequence_no"],
@@ -1039,7 +1039,7 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
                     store, "session", item["global_id"]
                 ),
                 "snapshot_id": _store_snapshot_id(store),
-                "project_path": str(store["project_root"]),
+                "project_path": str(store["project_path"]),
                 "source_project_path": source_project_path,
             })
     rows.sort(key=lambda row: (-(row["ended_at"] or row["started_at"] or 0), row["global_id"]))

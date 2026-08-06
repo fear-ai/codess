@@ -87,14 +87,14 @@ def test_full_ingest_and_query():
     """Full ingest and query cycle with temp CC dir."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        project_root = tmp / "myproj"
-        project_root.mkdir()
-        (project_root / "main.py").write_text("print('hi')")
+        project_path = tmp / "myproj"
+        project_path.mkdir()
+        (project_path / "main.py").write_text("print('hi')")
 
         # CC layout: projects_dir / <slug> / *.jsonl
         projects_dir = tmp / "cc_projects"
         projects_dir.mkdir()
-        slug = path_to_slug(project_root.resolve())
+        slug = path_to_slug(project_path.resolve())
         session_dir = projects_dir / slug
         session_dir.mkdir(parents=True)
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
@@ -109,7 +109,7 @@ def test_full_ingest_and_query():
         # Run ingest
         import subprocess
         result = subprocess.run(
-            [sys.executable, "-m", "main", "ingest", "--dir", str(project_root), "--force", "--min-size", "0"],
+            [sys.executable, "-m", "main", "ingest", "--dir", str(project_path), "--force", "--min-size", "0"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -119,7 +119,7 @@ def test_full_ingest_and_query():
 
         # Run query --tool 0
         result = subprocess.run(
-            [sys.executable, "-m", "main", "query", "--dir", str(project_root), "--tool", "0"],
+            [sys.executable, "-m", "main", "query", "--dir", str(project_path), "--tool", "0"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -132,7 +132,7 @@ def test_full_ingest_and_query():
 
         # Run query --sessions
         result = subprocess.run(
-            [sys.executable, "-m", "main", "query", "--dir", str(project_root), "--sessions"],
+            [sys.executable, "-m", "main", "query", "--dir", str(project_path), "--sessions"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -146,10 +146,10 @@ def test_cc_ingest_includes_nested_subagent_with_parent_metadata():
     """Nested subagent transcripts become sessions linked to their main session."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        project_root = tmp / "myproj"
-        project_root.mkdir()
+        project_path = tmp / "myproj"
+        project_path.mkdir()
         projects_dir = tmp / "cc_projects"
-        slug_dir = projects_dir / path_to_slug(project_root.resolve())
+        slug_dir = projects_dir / path_to_slug(project_path.resolve())
         nested_dir = slug_dir / "parent-session" / "subagents"
         nested_dir.mkdir(parents=True)
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
@@ -166,7 +166,7 @@ def test_cc_ingest_includes_nested_subagent_with_parent_metadata():
                 "main",
                 "ingest",
                 "--dir",
-                str(project_root),
+                str(project_path),
                 "--source",
                 "cc",
                 "--force",
@@ -180,7 +180,7 @@ def test_cc_ingest_includes_nested_subagent_with_parent_metadata():
         )
         assert result.returncode == 0, result.stderr
 
-        conn = sqlite3.connect(project_root / ".codess" / "sessions_cc.db")
+        conn = sqlite3.connect(project_path / ".codess" / "sessions_cc.db")
         try:
             sessions = {
                 row[0]: row[1]
@@ -812,11 +812,11 @@ def test_incremental_skip_unchanged():
     """Re-ingest of unchanged file adds no new rows."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        project_root = tmp / "proj"
-        project_root.mkdir()
+        project_path = tmp / "proj"
+        project_path.mkdir()
         projects_dir = tmp / "cc"
         projects_dir.mkdir()
-        slug = path_to_slug(project_root.resolve())
+        slug = path_to_slug(project_path.resolve())
         (projects_dir / slug).mkdir(parents=True)
         fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
         shutil.copy(fixture, projects_dir / slug / "s1.jsonl")
@@ -829,7 +829,7 @@ def test_incremental_skip_unchanged():
 
         # First ingest
         r1 = subprocess.run(
-            [sys.executable, "-m", "main", "ingest", "--dir", str(project_root), "--min-size", "0"],
+            [sys.executable, "-m", "main", "ingest", "--dir", str(project_path), "--min-size", "0"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -839,7 +839,7 @@ def test_incremental_skip_unchanged():
 
         # Query count
         r2 = subprocess.run(
-            [sys.executable, "-m", "main", "query", "--dir", str(project_root), "--tool", "0"],
+            [sys.executable, "-m", "main", "query", "--dir", str(project_path), "--tool", "0"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,
@@ -848,7 +848,7 @@ def test_incremental_skip_unchanged():
         assert r2.returncode == 0
         # Second ingest (unchanged)
         r3 = subprocess.run(
-            [sys.executable, "-m", "main", "ingest", "--dir", str(project_root), "--min-size", "0"],
+            [sys.executable, "-m", "main", "ingest", "--dir", str(project_path), "--min-size", "0"],
             cwd=str(Path(__file__).parent.parent),
             env=env,
             capture_output=True,

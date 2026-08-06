@@ -457,7 +457,7 @@ def audit_orientation(
                     "path": path,
                     "project_id": project_id,
                     "snapshot_id": snapshot_id,
-                    "project_root": Path(
+                    "project_path": Path(
                         project.get("canonical_path") or base
                     ),
                 })

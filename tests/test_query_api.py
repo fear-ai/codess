@@ -44,7 +44,7 @@ def _store(tmp_path):
 
 
 def _scope(project, store):
-    return {"conn": connect(store, read_only=True), "path": store, "project_root": project}
+    return {"conn": connect(store, read_only=True), "path": store, "project_path": project}
 
 
 def _timed_store(tmp_path, name, session_id, timestamps):

@@ -100,7 +100,7 @@ def _open_query_scope(
                         conn.close()
                     raise
                 scope.stores.append(
-                    {"conn": conn, "path": path, "project_root": resolved_root}
+                    {"conn": conn, "path": path, "project_path": resolved_root}
                 )
         return scope, roots_without_stores
     except Exception:
@@ -160,7 +160,7 @@ def _open_project_id_query_scope(
                 scope.stores.append({
                     "conn": conn,
                     "path": path,
-                    "project_root": Path(selection["project_root"]),
+                    "project_path": Path(selection["project_path"]),
                     "project_id": selection["project_id"],
                     "snapshot_id": selected_snapshot_id,
                     "snapshot_base": base,
@@ -291,7 +291,7 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
                     "ended_at": row["ended_at"],
                     "project_path": row["project_path"],
                     "metadata": row["metadata"],
-                    "query_project": str(store["project_root"]),
+                    "query_project": str(store["project_path"]),
                     "conn": store["conn"],
                 }
             )
@@ -428,7 +428,7 @@ def run(args) -> int:
             print(f"codess: cannot resolve Project scope: {exc}", file=sys.stderr)
             return 1
         resolved_roots = [
-            Path(selection["project_root"]) for selection in project_scopes
+            Path(selection["project_path"]) for selection in project_scopes
         ]
     else:
         roots, err = resolve_cli_roots(
@@ -832,7 +832,7 @@ def _emit_jsonl(report: str, data: dict, *, project_path: str | None = None, row
 def _project_counts(scope: QueryScope, roots: list[Path]) -> dict[str, dict[str, int]]:
     counts = {str(root.resolve()): {"sessions": 0, "events": 0} for root in roots}
     for store in scope.stores:
-        project = str(store["project_root"])
+        project = str(store["project_path"])
         predicate, params = _source_predicate(scope)
         counts[project]["sessions"] += store["conn"].execute(
             f"SELECT COUNT(*) FROM sessions s WHERE {predicate}", params
@@ -847,8 +847,8 @@ def _project_counts(scope: QueryScope, roots: list[Path]) -> dict[str, dict[str,
 def _merge_stats_into_registry(
     counts: dict[str, dict[str, int]], roots: list[Path], registry_root: Path,
 ) -> None:
-    for project_root in roots:
-        project = str(project_root.resolve())
+    for project_path in roots:
+        project = str(project_path.resolve())
 
         def mut(e: dict, values: dict = counts[project]) -> None:
             merge_query_stats(e, values["sessions"], values["events"])
@@ -1017,7 +1017,7 @@ def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
             params,
         ):
             item = dict(row)
-            item["project_path"] = str(store["project_root"])
+            item["project_path"] = str(store["project_path"])
             item["store_index"] = store_index
             rows.append(item)
     rows.sort(key=lambda row: (
@@ -1070,7 +1070,7 @@ def _artifacts(scope: QueryScope, limit: int | None = None) -> int:
             """,
             params,
         )
-        project = str(store["project_root"])
+        project = str(store["project_path"])
         for row in rows:
             key = (project, row["artifact_kind"], row["locator"])
             item = grouped.setdefault(key, {"sources": set(), "operations": set(), "sessions": set(), "evidence": 0, "correlations": set()})
@@ -1399,7 +1399,7 @@ def _lineage(scope: QueryScope, limit: int | None = None) -> int:
                 result_len = result["content_len"] or 0
             rows.append({
                 "store_index": store_index,
-                "project_path": str(store["project_root"]),
+                "project_path": str(store["project_path"]),
                 "session_id": call["session_id"],
                 "timestamp": call["timestamp"],
                 "tool_name": call["tool_name"] or (
@@ -1416,7 +1416,7 @@ def _lineage(scope: QueryScope, limit: int | None = None) -> int:
         for result in unlinked_results:
             rows.append({
                 "store_index": store_index,
-                "project_path": str(store["project_root"]),
+                "project_path": str(store["project_path"]),
                 "session_id": result["session_id"],
                 "timestamp": result["timestamp"],
                 "tool_name": result["tool_name"] or "",
@@ -1583,7 +1583,7 @@ def _permissions(scope: QueryScope, limit: int | None = None) -> int:
         )
         for row in cur:
             item = dict(row)
-            item["project_path"] = str(store["project_root"])
+            item["project_path"] = str(store["project_path"])
             rows.append(item)
     rows.sort(
         key=lambda row: (
@@ -1631,7 +1631,7 @@ def _audit(scope: QueryScope, limit: int | None = None) -> int:
         )
         for row in cur:
             item = dict(row)
-            item["project_path"] = str(store["project_root"])
+            item["project_path"] = str(store["project_path"])
             item["store_index"] = store_index
             rows.append(item)
 

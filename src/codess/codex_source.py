@@ -140,13 +140,13 @@ def build_session_index(
 
 
 def get_session_files(
-    project_root: Path,
+    project_path: Path,
     *,
     index: list[dict[str, Any]] | None = None,
     cache_path: Path | None = None,
 ) -> list[Path]:
     """Return deduplicated transcripts whose indexed cwd is within Project."""
-    project_str = str(project_root.resolve())
+    project_str = str(project_path.resolve())
     selected: dict[str, tuple[tuple[int, float, str], Path]] = {}
     entries = index if index is not None else build_session_index(cache_path=cache_path)
     for item in entries:

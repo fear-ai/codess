@@ -132,7 +132,7 @@ def test_typed_query_streams_and_orders_beyond_sqlite_attach_limit(tmp_path):
         stores.append({
             "conn": connect(store, read_only=True),
             "path": store,
-            "project_root": project,
+            "project_path": project,
             "snapshot_id": f"snapshot-{index:03d}",
         })
     try:

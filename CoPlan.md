@@ -780,6 +780,25 @@ each call site:
 - a standard logging bridge for library call sites that cannot receive a
   reporter directly.
 
+The JSON renderer specifically has a small, working reference
+implementation worth citing rather than designing from prose alone:
+`spank-py`'s `core/logging.py` (`JSONFormatter`, ~114 lines) implements the
+same shape — one JSON object per line, a reserved-attribute exclusion list
+separating standard `logging.LogRecord` fields from caller-supplied extras
+(the same distinction this section's "Additional details are bounded JSON
+scalars... under a defined extension object" draws), and an encoding
+fallback that degrades a non-serializable value to `str()` and finally to a
+fixed placeholder rather than raising out of the logging call itself — a
+detail this section does not yet specify and should. Its
+`configure_logging(level, json_format)` is called once at process startup,
+matching the "standalone module with no dependency on vendor adapters,
+stores, or command parsers" requirement in the implementation order below.
+`spank-py` does not extend its config to error-code-to-exit-status mapping
+or a bounded event collector, so the remainder of W18's design (the
+envelope's `operation_id`/`elapsed_seconds` correlation fields, the
+collector, the command-boundary exception conversion) remains original
+work; only the JSON-line rendering mechanics transfer directly.
+
 Expected domain failures remain typed where boundaries need different
 behavior. The command boundary converts them into a stable event code, safe
 message, appropriate exit status, and optional debug exception detail. A deep

@@ -293,7 +293,7 @@ def test_exact_project_id_resolves_central_snapshot_without_mutation(tmp_path):
 
     assert len(scopes) == 1
     assert scopes[0]["project_id"] == project_id
-    assert scopes[0]["project_root"] == project.resolve()
+    assert scopes[0]["project_path"] == project.resolve()
     assert scopes[0]["snapshot_base"] == durable_project_root(
         registry, project_id
     )
