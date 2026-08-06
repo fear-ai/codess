@@ -1,4 +1,5 @@
-"""Typed, reusable read-only queries over one or more CoSchema stores."""
+"""Typed, reusable read-only queries over one or more CoSchema stores.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +7,7 @@ import hashlib
 import heapq
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +48,73 @@ REQUEST_FIELDS = frozenset({
 
 class QueryContractError(ValueError):
     """A request/result cannot be executed without silently changing meaning."""
+
+
+# Bound on filters.text / filters.artifact as received from a CLI argument,
+# file, or environment variable -- independent of whether the value is later
+# bound safely as a SQL parameter. An unbounded value is still a resource
+# concern (a very long LIKE pattern) and a legibility concern (control chars,
+# markup, or script-like content echoed back in results/errors).
+#
+# Searched content is bounded UTF-8 (CoPlan.md 7.3) and can legitimately
+# contain any Unicode text (non-English strings, emoji, symbols in code).
+# The charset bound therefore excludes only control/formatting characters,
+# matching sanitize.py's CONTROL_CHARS_RE precedent, not non-ASCII text.
+FREE_TEXT_FILTER_MAX_CHARS = 512
+_FREE_TEXT_ALLOWED_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]')
+_QUESTIONABLE_FREE_TEXT_RES = (
+    re.compile(r"<\s*script\b", re.IGNORECASE),
+    re.compile(r"<\s*/?\s*[a-z][a-z0-9]*[^>]*>", re.IGNORECASE),
+    re.compile(r"\bUNION\b\s+\bSELECT\b", re.IGNORECASE),
+    re.compile(r"--\s"),
+    re.compile(r";\s*(DROP|DELETE|UPDATE|INSERT)\b", re.IGNORECASE),
+)
+
+
+def sanitize_free_text_filter(
+    value: str, *, field: str, mode: str = "reject",
+) -> str:
+    """Bound and screen one user-supplied free-text filter value.
+
+    `value` is untrusted input reaching this boundary from a CLI argument,
+    a file the user pointed at, or an environment variable -- never from
+    stored session content, which has its own pipeline in
+    content_processing.py.  This function governs size, character set, and
+    a short list of patterns associated with injection or markup attempts;
+    it does not by itself make string-built SQL safe -- filters.text and
+    filters.artifact are always bound as SQL parameters downstream (see
+    the module SQL note), so this is a size/legibility/defense-in-depth
+    boundary, not the mechanism that prevents SQL injection.
+
+    `mode` selects disposition on a violation:
+      "reject" -- raise QueryContractError (the default; used by
+        validate_request so a bad filter fails the request explicitly).
+      "strip"  -- remove disallowed characters/patterns and return the
+        remainder, truncated to the size bound.
+      "blank"  -- return "" on any violation, dropping the filter value
+        rather than failing or attempting a partial edit.
+    """
+    if mode not in ("reject", "strip", "blank"):
+        raise ValueError(f"unsupported sanitize_free_text_filter mode: {mode!r}")
+    violations = []
+    if len(value) > FREE_TEXT_FILTER_MAX_CHARS:
+        violations.append("too long")
+    if _FREE_TEXT_ALLOWED_RE.search(value):
+        violations.append("disallowed characters")
+    if any(pattern.search(value) for pattern in _QUESTIONABLE_FREE_TEXT_RES):
+        violations.append("questionable expression")
+    if not violations:
+        return value
+    if mode == "reject":
+        raise QueryContractError(
+            f"filters.{field} rejected ({', '.join(violations)})"
+        )
+    if mode == "blank":
+        return ""
+    cleaned = _FREE_TEXT_ALLOWED_RE.sub("", value)
+    for pattern in _QUESTIONABLE_FREE_TEXT_RES:
+        cleaned = pattern.sub("", cleaned)
+    return cleaned[:FREE_TEXT_FILTER_MAX_CHARS]
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -206,6 +275,8 @@ def validate_request(request: dict[str, Any]) -> None:
     for key in ("artifact", "text"):
         if key in filters and not isinstance(filters[key], str):
             raise QueryContractError(f"filters.{key} must be a string")
+        if key in filters and filters[key]:
+            sanitize_free_text_filter(filters[key], field=key)
     for key in ("since", "until"):
         if key in filters and not isinstance(filters[key], (int, float)):
             raise QueryContractError(f"filters.{key} must be Unix milliseconds")
@@ -622,6 +693,23 @@ def _observation_id(
     return f"codess:observation:sha256:{digest}"
 
 
+def _event_heap_sort_key(record, store: dict[str, Any]) -> tuple:
+    timestamp = record["event_at"]
+    try:
+        ordered_time = float(timestamp) if timestamp is not None else 0.0
+    except (TypeError, ValueError):
+        ordered_time = 0.0
+    return (
+        timestamp is None,
+        ordered_time,
+        record["global_session_id"] or "",
+        record["sequence_no"] if record["sequence_no"] is not None else -1,
+        record["global_id"] or "",
+        str(store.get("project_id") or store["project_root"]),
+        str(store["path"]),
+    )
+
+
 def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[list[dict], dict]:
     if request.get("limit") == 0:
         return [], {
@@ -661,22 +749,6 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
         {limit_sql}
     """
 
-    def sort_key(record, store: dict[str, Any]) -> tuple:
-        timestamp = record["event_at"]
-        try:
-            ordered_time = float(timestamp) if timestamp is not None else 0.0
-        except (TypeError, ValueError):
-            ordered_time = 0.0
-        return (
-            timestamp is None,
-            ordered_time,
-            record["global_session_id"] or "",
-            record["sequence_no"] if record["sequence_no"] is not None else -1,
-            record["global_id"] or "",
-            str(store.get("project_id") or store["project_root"]),
-            str(store["path"]),
-        )
-
     heap: list[tuple[tuple, int, Any, Any, dict[str, Any]]] = []
     for store_index, store in enumerate(stores):
         predicate, params = _expanded_event_predicate(
@@ -695,7 +767,7 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
         if record is not None:
             heapq.heappush(
                 heap,
-                (sort_key(record, store), store_index, record, iterator, store),
+                (_event_heap_sort_key(record, store), store_index, record, iterator, store),
             )
 
     while heap:
@@ -786,7 +858,7 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
             heapq.heappush(
                 heap,
                 (
-                    sort_key(following, store),
+                    _event_heap_sort_key(following, store),
                     store_index,
                     following,
                     iterator,

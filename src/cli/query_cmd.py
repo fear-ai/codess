@@ -1,4 +1,5 @@
-"""Read-only, cross-store session query CLI command."""
+"""Read-only, cross-store session query CLI command.
+"""
 
 import csv
 import json
@@ -7,6 +8,7 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Any
 
 from codess.config import get_project_stores, validate_config
 from codess.identity import global_session_id
@@ -191,6 +193,23 @@ def _source_predicate(scope: QueryScope, alias: str = "s") -> tuple[str, tuple[s
     return "(" + " OR ".join(clauses) + ")", tuple(params)
 
 
+def _timestamp_last_sort_key(
+    timestamp: Any, project: str, store_index: int, session_id: str, tail: str,
+) -> tuple:
+    """Shared row-ordering key: malformed/missing timestamp sorts last.
+
+    `_lineage` and `_audit` build differently-shaped row dicts (their own
+    field names for `project` and the trailing tie-break field) but order
+    rows identically; this takes the already-extracted values so neither
+    caller needs to conform its dict shape to the other's.
+    """
+    try:
+        ordered_time = float(timestamp)
+    except (TypeError, ValueError):
+        ordered_time = float("inf")
+    return (ordered_time, project, store_index, session_id, tail)
+
+
 def _parse_source_tokens(value: str | None) -> tuple[set[str] | None, str | None]:
     if value is None or not value.strip() or value.strip().lower() == "all":
         return None, None
@@ -203,6 +222,22 @@ def _parse_source_tokens(value: str | None) -> tuple[set[str] | None, str | None
             + " (allowed: cc, codex, cursor, all; comma-separated)"
         )
     return tokens or None, None
+
+
+def _session_recency_sort_key(session: dict) -> tuple:
+    timestamp = session["ended_at"]
+    if timestamp is None:
+        timestamp = session["started_at"]
+    try:
+        recency = float(timestamp) if timestamp is not None else float("-inf")
+    except (TypeError, ValueError):
+        recency = float("-inf")
+    return (
+        -recency,
+        session["query_project"],
+        session["source"],
+        session["id"],
+    )
 
 
 def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[dict]:
@@ -261,22 +296,7 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
                 }
             )
 
-    def sort_key(session: dict) -> tuple:
-        timestamp = session["ended_at"]
-        if timestamp is None:
-            timestamp = session["started_at"]
-        try:
-            recency = float(timestamp) if timestamp is not None else float("-inf")
-        except (TypeError, ValueError):
-            recency = float("-inf")
-        return (
-            -recency,
-            session["query_project"],
-            session["source"],
-            session["id"],
-        )
-
-    sessions.sort(key=sort_key)
+    sessions.sort(key=_session_recency_sort_key)
     if limit is not None:
         return sessions[:limit]
     return sessions
@@ -997,11 +1017,11 @@ def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
             params,
         ):
             item = dict(row)
-            item["project"] = str(store["project_root"])
+            item["project_path"] = str(store["project_root"])
             item["store_index"] = store_index
             rows.append(item)
     rows.sort(key=lambda row: (
-        row["created_at"], row["project"], row["store_index"],
+        row["created_at"], row["project_path"], row["store_index"],
         row["session_id"] or "", row["event_id"] or "",
     ))
     rows = _limited(rows, limit)
@@ -1010,7 +1030,7 @@ def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
     print("project_path\tsession_id\tevent_id\tlevel\tseverity\treason_code\tsource_field\tsource_value\tmapping_rule\tdetail")
     for row in rows:
         print("\t".join(sanitize_tabular(row.get(key)) for key in (
-            "project", "session_id", "event_id", "level", "severity", "reason_code",
+            "project_path", "session_id", "event_id", "level", "severity", "reason_code",
             "source_field", "source_value", "mapping_rule", "detail",
         )))
     return 0
@@ -1062,7 +1082,7 @@ def _artifacts(scope: QueryScope, limit: int | None = None) -> int:
     rows = []
     for (project, kind, locator), item in grouped.items():
         rows.append({
-            "project": project, "kind": kind, "locator": locator,
+            "project_path": project, "kind": kind, "locator": locator,
             "sources": ",".join(sorted(item["sources"])),
             "source_count": len(item["sources"]),
             "operations": ",".join(sorted(item["operations"])),
@@ -1072,14 +1092,14 @@ def _artifacts(scope: QueryScope, limit: int | None = None) -> int:
                 for project_id, relation, confidence in sorted(item["correlations"])
             ),
         })
-    rows.sort(key=lambda row: (-row["source_count"], -row["evidence"], row["project"], row["locator"]))
+    rows.sort(key=lambda row: (-row["source_count"], -row["evidence"], row["project_path"], row["locator"]))
     rows = _limited(rows, limit)
     if not rows:
         return 0
     print("project_path\tartifact_kind\tlocator\tsources\tsource_count\toperations\tsession_count\tevidence_count\tproject_correlations")
     for row in rows:
         print(
-            f"{sanitize_tabular(row['project'])}\t{sanitize_tabular(row['kind'])}\t"
+            f"{sanitize_tabular(row['project_path'])}\t{sanitize_tabular(row['kind'])}\t"
             f"{sanitize_tabular(row['locator'])}\t{sanitize_tabular(row['sources'])}\t"
             f"{row['source_count']}\t{sanitize_tabular(row['operations'])}\t"
             f"{row['session_count']}\t{row['evidence']}\t{sanitize_tabular(row['correlations'])}"
@@ -1379,7 +1399,7 @@ def _lineage(scope: QueryScope, limit: int | None = None) -> int:
                 result_len = result["content_len"] or 0
             rows.append({
                 "store_index": store_index,
-                "project": str(store["project_root"]),
+                "project_path": str(store["project_root"]),
                 "session_id": call["session_id"],
                 "timestamp": call["timestamp"],
                 "tool_name": call["tool_name"] or (
@@ -1396,7 +1416,7 @@ def _lineage(scope: QueryScope, limit: int | None = None) -> int:
         for result in unlinked_results:
             rows.append({
                 "store_index": store_index,
-                "project": str(store["project_root"]),
+                "project_path": str(store["project_root"]),
                 "session_id": result["session_id"],
                 "timestamp": result["timestamp"],
                 "tool_name": result["tool_name"] or "",
@@ -1409,20 +1429,10 @@ def _lineage(scope: QueryScope, limit: int | None = None) -> int:
                 "result_len": result["content_len"] or 0,
             })
 
-    def sort_key(row: dict) -> tuple:
-        try:
-            timestamp = float(row["timestamp"])
-        except (TypeError, ValueError):
-            timestamp = float("inf")
-        return (
-            timestamp,
-            row["project"],
-            row["store_index"],
-            row["session_id"],
-            row["lineage_id"],
-        )
-
-    rows.sort(key=sort_key)
+    rows.sort(key=lambda row: _timestamp_last_sort_key(
+        row["timestamp"], row["project_path"], row["store_index"],
+        row["session_id"], row["lineage_id"],
+    ))
     rows = _limited(rows, limit)
     if not rows:
         return 0
@@ -1432,7 +1442,7 @@ def _lineage(scope: QueryScope, limit: int | None = None) -> int:
     )
     for row in rows:
         print(
-            f"{sanitize_tabular(row['project'])}\t"
+            f"{sanitize_tabular(row['project_path'])}\t"
             f"{sanitize_tabular(row['session_id'])}\t{row['timestamp']}\t"
             f"{sanitize_tabular(row['tool_name'])}\t"
             f"{sanitize_tabular(row['lineage_id'])}\t"
@@ -1625,20 +1635,10 @@ def _audit(scope: QueryScope, limit: int | None = None) -> int:
             item["store_index"] = store_index
             rows.append(item)
 
-    def sort_key(row: dict) -> tuple:
-        try:
-            timestamp = float(row["timestamp"])
-        except (TypeError, ValueError):
-            timestamp = float("inf")
-        return (
-            timestamp,
-            row["project_path"],
-            row["store_index"],
-            row["session_id"],
-            row["event_id"],
-        )
-
-    rows.sort(key=sort_key)
+    rows.sort(key=lambda row: _timestamp_last_sort_key(
+        row["timestamp"], row["project_path"], row["store_index"],
+        row["session_id"], row["event_id"],
+    ))
     rows = _limited(rows, limit)
     if not rows:
         return 0

@@ -1,4 +1,7 @@
-"""Refreshable, evidence-backed annotations for the Project catalog."""
+"""Refreshable, evidence-backed annotations for the Project catalog.
+
+# ruff S608 exemption: CoPlan.md 10.4.2.2
+"""
 
 from __future__ import annotations
 

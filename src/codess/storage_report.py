@@ -1,4 +1,5 @@
-"""Dated storage observations for CoSchema stores, snapshots, and Cursor."""
+"""Dated storage observations for CoSchema stores, snapshots, and Cursor.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +15,20 @@ from codess.token_usage import collect_token_usage
 from codess.resources import allocated_bytes, file_usage, storage_usage, tree_usage
 
 REPORT_FORMAT = "codess.storage-observation/1"
+
+_TABLE_COUNT_QUERIES = {
+    "projects": 'SELECT COUNT(*) FROM "projects"',
+    "sources": 'SELECT COUNT(*) FROM "sources"',
+    "sessions": 'SELECT COUNT(*) FROM "sessions"',
+    "interactions": 'SELECT COUNT(*) FROM "interactions"',
+    "model_turns": 'SELECT COUNT(*) FROM "model_turns"',
+    "events": 'SELECT COUNT(*) FROM "events"',
+    "source_records": 'SELECT COUNT(*) FROM "source_records"',
+    "content_objects": 'SELECT COUNT(*) FROM "content_objects"',
+    "tool_invocations": 'SELECT COUNT(*) FROM "tool_invocations"',
+    "tool_results": 'SELECT COUNT(*) FROM "tool_results"',
+    "artifacts": 'SELECT COUNT(*) FROM "artifacts"',
+}
 
 
 def _now() -> datetime:
@@ -51,15 +66,9 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
             }
             tables = _tables(conn)
             counts = {}
-            for table in (
-                "projects", "sources", "sessions", "interactions", "model_turns",
-                "events", "source_records", "content_objects", "tool_invocations",
-                "tool_results", "artifacts",
-            ):
+            for table, query in _TABLE_COUNT_QUERIES.items():
                 if table in tables:
-                    counts[table] = int(
-                        conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-                    )
+                    counts[table] = int(conn.execute(query).fetchone()[0])
             result["counts"] = counts
             if "events" in tables:
                 row = conn.execute(

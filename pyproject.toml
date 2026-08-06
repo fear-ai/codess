@@ -26,3 +26,18 @@ include = ["codess*", "cli*"]
 
 [tool.setuptools.dynamic]
 version = {attr = "codess.__version__"}
+
+[tool.ruff.lint.per-file-ignores]
+# S608 rationale and per-site pattern: CoPlan.md 10.4.
+"src/codess/baseline_validation.py" = ["S608"]
+"src/codess/configuration_audit.py" = ["S608"]
+"src/codess/cursor_feature_audit.py" = ["S608"]
+"src/codess/cursor_source.py" = ["S608"]
+"src/codess/orientation_audit.py" = ["S608"]
+"src/codess/project_annotations.py" = ["S608"]
+"src/codess/query_api.py" = ["S608"]
+"src/codess/session_names.py" = ["S608"]
+"src/codess/snapshot.py" = ["S608"]
+"src/codess/storage_report.py" = ["S608"]
+"src/codess/store.py" = ["S608"]
+"src/cli/query_cmd.py" = ["S608"]

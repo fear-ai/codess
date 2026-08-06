@@ -1,4 +1,7 @@
-"""Immutable CoSchema snapshot build, validation, and atomic promotion."""
+"""Immutable CoSchema snapshot build, validation, and atomic promotion.
+
+# ruff S608 exemption: CoPlan.md 10.4.2.2
+"""
 
 from __future__ import annotations
 

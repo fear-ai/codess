@@ -36,16 +36,41 @@ CodeSess/
 ├── main.py                     # source-tree development entry
 ├── pyproject.toml              # package and codess command
 ├── src/
-│   ├── cli/                    # command adaptation and rendering
+│   ├── cli/                    # command adaptation and rendering (flat)
 │   └── codess/                 # source, domain, store, query, operations
+│       ├── adapters/           # one vendor decoder per source system
+│       │   ├── cc.py
+│       │   ├── codex.py
+│       │   └── cursor.py
+│       ├── vendor_audits/      # bounded structure-only evidence audits
+│       │   ├── claude_features.py
+│       │   └── codex_features.py
+│       └── *.py                # ~50 flat modules: catalog, store, query,
+│                                # scan/ingest coordination, snapshot,
+│                                # retention, evidence, per-vendor source
+│                                # access, and shared utilities together
 ├── schema/
 │   ├── coschema/               # current common contract and SQLite DDL
 │   ├── mappings/               # vendor mapping profiles
 │   └── *.json                  # query, result, policy, and selection contracts
 ├── catalog/                    # reviewed Project policies and evidence
+├── experiments/                # bounded investigations and review notes
 ├── tests/                      # unit, contract, CLI, and integration tests
 └── tools/                      # thin focused maintenance wrappers
 ```
+
+`adapters/` and `vendor_audits/` are the only subpackages under `src/codess/`;
+every other module in that package -- catalog, store, query, scan/ingest
+coordination, snapshot, retention, evidence, per-vendor source access
+(`codex_source.py`, `cursor_source.py`), and shared utilities -- is a flat
+file at the same directory level, not grouped into further subdirectories.
+The Component Responsibilities table in 3.2 and the Dependency Rules in 3.3
+are the actual grouping and boundary authority; this diagram shows where
+files sit on disk, which is coarser than and does not substitute for either.
+A prior version of this diagram implied a directory split by concern (source
+access, domain, store, query, operations) that does not exist in the source
+tree; the dependency rules those directories would have encoded are enforced
+in code today (see 13.2, 13.4.1) independent of physical file placement.
 
 The installed entry point is `codess.project:console_main`. Normal users invoke
 `codess`; modules below `src/` are implementation surfaces rather than separate
@@ -971,6 +996,212 @@ The work-item ID is the traceability key. Code-review findings cite that ID,
 and completion evidence is recorded against the same item rather than in a
 separate chronology.
 
+### 10.4 Secure Coding
+
+Codess constructs SQL from selected filters, schema-adaptive column lists,
+and vendor-derived key ranges throughout the store, query, audit, and
+Cursor-access code. String-built SQL is therefore routine here, not
+exceptional, and the standing rule is one of construction discipline rather
+than an outright ban on string composition:
+
+- every bound value reaches SQLite through `execute(sql, params)`'s
+  parameter argument, never through interpolation into the SQL text;
+- SQL text may itself be built from an f-string or concatenation only when
+  the interpolated fragment is a `?`-placeholder skeleton (e.g.
+  `",".join("?" for _ in values)`), a column or table name drawn from a
+  fixed literal set (a Python tuple or dict key list in the surrounding
+  function, not derived from filter input), or a column name resolved by
+  schema introspection (`PRAGMA table_info`) and passed through
+  `cursor_source.quoted_column`/`table_columns`, which escape embedded `"`
+  characters before quoting; and
+- no other source of SQL-text interpolation is permitted; a new pattern
+  requires either a documented addition to this list or removal.
+
+This rule exists because a static scanner cannot itself decide which of
+these string-built statements are safe: it can only recognize the shape
+"SQL text built by string operation," not which values fed that operation.
+Distinguishing a `?`-skeleton or a schema-checked identifier from actual
+attacker-reachable data is a judgment call that requires reading the
+surrounding function, not a property the scanner can compute. Every
+`# noqa: S608` in the codebase is a recorded instance of that judgment call,
+not a blanket suppression.
+
+#### 10.4.1 Verification Method
+
+Ruff's `S608` (`flake8-bandit` possible-SQL-injection) rule flags any SQL
+string assembled with an f-string, `.format()`, `%`, or concatenation,
+independent of whether the interpolated fragment carries a value. The
+verification pass read every hit across `src/` at the source line, not
+accepted or dismissed from the rule name alone, and classified each into
+exactly one of the three permitted patterns above; none matched a fourth,
+unrecognized pattern, and no exploitable injection was found.
+
+Neither the count of currently-suppressed sites nor the list of files that
+carry them belongs in this document: both change as sites are read,
+rewritten (10.4.2 gives the rewrite criteria), or newly introduced and
+reviewed, and a number or file list written into prose goes stale the next
+time either happens without anyone updating the text. Run
+`tools/report_sql_suppressions.py` for the current figures instead of
+citing one here; it also flags any `S608` finding that is *not* currently
+suppressed, which is the signal that actually matters day to day -- a
+nonzero result there means a site was added since the last review pass, or
+an existing `# noqa` was removed without a rewrite, and needs the same
+read-and-classify treatment as every other site before it ships.
+
+Each remaining site carries `# noqa: S608`, added mechanically with
+`ruff check --select S608 --add-noqa` after manual verification (not
+before), and the module docstring of every affected file carries a short
+note naming which permitted pattern that file's sites use, so the
+suppression is locally justified rather than opaque at the point a reader
+encounters it.
+
+This is the model for any future rule where the scanner's finding rate and
+its true-positive rate diverge: run broad, read every hit once, classify
+against a small fixed set of named-safe shapes, suppress only the
+classified hits with a reason, and leave everything else flagged.
+
+#### 10.4.2 Rewrite Versus Suppress
+
+A verified-safe hit does not automatically mean `# noqa` (or, since the
+per-file exemption in `pyproject.toml`, no source annotation at all — see
+10.4.4) is the answer; some sites have a rewrite that clears the warning
+outright. Which applies depends on which pattern the site matches.
+
+##### 10.4.2.1 `?`-Placeholder Skeletons
+
+No rewrite avoids the underlying construction: SQLite's parameter binding
+has no variable-arity `IN (?, ?, ...)` form, so the placeholder-count
+string must be built dynamically regardless of which operator does it.
+Two mechanical options exist for the *operator* choice, not the underlying
+need:
+
+- Single-line query: `"".join((prefix, placeholders, suffix))` clears the
+  warning (ruff's pattern matches f-string/`.format()`/`%`/`+`, not
+  `.join()`) and reads acceptably in isolation — the split lands on the
+  natural `IN (` / `)` seam.
+- Multi-line query: the same `.join()` rewrite forces the SQL template
+  apart across separate triple-quoted blocks, splitting `IN (` from its
+  closing `)` across list items — a net readability loss, not a style
+  disagreement; the SQL's own structure is what gets fragmented. An
+  f-string with no source annotation (10.4.4) is the better response here
+  even though a mechanical rewrite exists.
+
+**Choose per function, not per query.** If one function contains both a
+single-line and a multi-line site of this pattern, use f-string for all of
+them, not `.join()` for the ones that happen to fit on one line — mixing
+both operators for the same construction within one function reads as if
+there is a functional difference between the sites, and there is not; a
+reader should not have to check whether the choice of operator means
+anything before concluding it doesn't. `orientation_audit.py::
+_sqlite_observations` mixed both during this review's first pass and was
+corrected to f-string throughout once the multi-line sites in the same
+function made an all-`.join()` rewrite impossible. The `.join()` form is
+only worth using in a function where every affected site is single-line.
+
+##### 10.4.2.2 Fixed-Literal Column/Table Names
+
+Rewritable, and should be rewritten, where a single-line query interpolates
+one identifier drawn from a short, statically enumerable set: replace the
+f-string with a literal dict mapping each key to a complete, pre-written
+query string. This removes all runtime string construction and ruff does
+not flag a bare dict-value lookup passed to `execute()` — a dict
+*comprehension* over the same literal keys still triggers the rule, because
+the f-string is still evaluated somewhere in the source regardless of when.
+
+Does not apply to a function accepting a caller-supplied identifier list
+outside a fixed set (e.g. `snapshot.py::_logical_counts`'s `only:`
+parameter) — a lookup-table rewrite there would either silently drop
+caller-supplied names the dict doesn't contain, or require anticipating
+every name in the schema, neither of which matches the function's
+contract. Also does not apply where the query set is combinatorial rather
+than a short enumeration (a per-column optional-projection loop, a
+per-filter predicate assembly) — a lookup table there would have as many
+entries as the current code has branches, trading a verified string-build
+pattern for a harder-to-audit literal table of equivalent size.
+
+##### 10.4.2.3 Schema-Introspected Identifiers
+
+Cannot be rewritten to avoid the warning under any tested form, including
+`.join()`. SQLite's DB-API binds values through `?` placeholders but has no
+equivalent for identifiers; a dynamically resolved column name must enter
+the SQL text through some string operation regardless of operator, and
+every form tested triggers `S608` identically.
+
+Run `tools/report_sql_suppressions.py` for which files currently rely on
+each response above and to confirm no site has gone unreviewed since the
+last pass — not a count or file list fixed in this document, which would
+go stale the next time a site is rewritten or added.
+
+#### 10.4.3 Automating the Judgment Call
+
+A scanner cannot certify a "safe pattern" match by itself, but a
+purpose-built check can verify the narrower, mechanical half of the
+judgment once a human has named the patterns:
+
+1. **Params-argument presence.** For every `S608` hit, confirm the same
+   `execute(...)` call also passes a second (params) argument, or, if it
+   passes none, confirm the SQL text contains no `?` placeholder either
+   (a query with no bound values and no placeholders is categorically
+   different from one quietly missing its params argument). This is a
+   syntactic AST check: walk `ast.Call` nodes for `.execute(`, inspect
+   argument count, and cross-reference placeholder count in the string
+   literal or f-string fragments. It would have caught, by construction,
+   any future site where a value is interpolated directly into SQL text
+   instead of passed as a parameter — the exact failure mode S608 exists to
+   catch, but confirmed here rather than merely suspected.
+2. **Fixed-literal-set provenance for interpolated identifiers.** For the
+   "column/table name from a fixed literal set" pattern, a check can verify
+   that the interpolated name traces to a `tuple`/`list`/`dict` literal
+   assigned in the same function or module (not a function parameter, not a
+   filter/request field) by walking the name's binding back through the
+   AST. This distinguishes `for key in ("tool_invocations", ...)` from a
+   hypothetical `for key in filters["fields"]`, which would not qualify.
+3. **Introspection-and-quoting pairing.** For the `quoted_column`/
+   `table_columns` pattern, a check can confirm that every value flowing
+   into an f-string SQL fragment from those two functions only, never a
+   bare `columns[...]` lookup or a raw `PRAGMA` result — i.e., that the
+   quoting call is actually on the path, not merely present somewhere in
+   the same function.
+4. **New-pattern detection.** Any `S608` hit that does not match one of
+   items 1-3 above is a genuinely new pattern and must fail the check
+   pending a human read and, if accepted, an addition to the permitted-
+   pattern list in 10.4 and this section's mechanical rules.
+
+None of this replaces the initial human read that produced the three named
+patterns; it prevents the verified conclusion from silently going stale as
+the codebase changes. It belongs with the mechanical-enforcement checks in
+13.5 once implemented, as a Secure Coding-specific companion to the
+import-boundary and SQL-ownership checks already listed there: those check
+*where* SQL may be constructed, this checks *how* the SQL that is
+constructed there stays safe.
+
+#### 10.4.4 Suppression Mechanism and Source Annotation
+
+`S608` suppression is a file-level `pyproject.toml`
+`[tool.ruff.lint.per-file-ignores]` entry, not a per-line `# noqa: S608`
+comment — a file with several sites matching the patterns in 10.4.2 needs
+one `pyproject.toml` line, not one comment per site. The rationale for
+*why* a file is exempted belongs once, here in 10.4, not repeated in the
+file's docstring or in the `pyproject.toml` comment; a source file carries
+at most a single-line pointer at its first S608 site or in its module
+docstring, e.g. `# ruff S608 exemption: 10.4.2.3 [CoPlan.md]`, naming the
+specific subsection so a reader lands on the exact scenario rather than the
+whole of 10.4. Three explanations of the same reasoning (source file,
+`pyproject.toml`, this document) is the failure mode this convention
+exists to prevent.
+
+#### 10.4.5 Scope Note
+
+`S608` is the only rule in this category that received the full read-every-
+hit verification in 10.4.1. Ruff's full `--select ALL` run also flags
+`S603`/`S607` (subprocess call and partial-executable-path warnings) and
+`S105` (hardcoded-password-string) at a number of sites; a narrower spot
+check during this review (confirming `subprocess.run` calls pass argument
+lists rather than `shell=True`) did not surface a concern, but that check
+was not the same site-by-site read applied to `S608` and does not license
+treating `S603`/`S607`/`S105` as cleared. They have no documented pattern
+list here and remain open review scope, not a known-clean result.
+
 ## 11. Test Structure and Coverage
 
 Testing has two distinct purposes: demonstrate expected behavior and reveal
@@ -1170,10 +1401,91 @@ post-decode stage must provide diagnostic and strict modes over partial,
 malformed, unsupported, and hazard records.
 
 Query-contract parity is part of **W13**. Checked-in JSON schemas and the
-hand-written runtime validator can change independently. Schema-derived valid
-and invalid cases should exercise the runtime contract, or one validator
-surface should be generated from the other while retaining Codess canonical
-ordering rules.
+hand-written runtime validator do not merely risk drifting independently —
+verified during a later review pass that every `schema/*-v1.json` and
+`schema/*-contract.json` file declaring `"$schema":
+"https://json-schema.org/draft/2020-12/schema"` (`query-request-v1.json`,
+`query-result-v1.json`, `query-row-v1.json`, `investigation-v1.json`,
+`project-set-v1.json`, `candidate-policy-v1.json`,
+`resource-policy-contract.json`, `baseline-selection-v1.json`) has zero
+references anywhere in `src/` or `tools/`; none is ever loaded or validated
+against at runtime. `query_api.py::validate_request` hand-checks the same
+contract `query-request-v1.json` already declares in structured form,
+independently and without reference to it.
+
+The `jsonschema` package (a mature, actively released, widely adopted
+implementation of the spec) is already an installed dependency but is
+likewise never imported. Tested directly against `query-request-v1.json`
+and representative request shapes: it correctly validates the structural
+half of the contract (types, enums, required fields, `uniqueItems`), but
+one of `validate_request`'s rules has no JSON Schema equivalent under any
+draft (checked every published draft the library implements, draft3
+through 2020-12; none has a "sorted" keyword) — canonical array
+*sortedness* (`project_ids`, `filters.session_ids`, and others must be
+unique **and sorted**) would remain hand-written under any jsonschema
+adoption. The `since <= until` cross-field comparison is expressible
+through `if`/`then` combinators, confirmed working, but reads less
+directly than the current one-line check.
+
+Action-dependent filter validity (`ACTION_FILTERS[request["action"]]`) is a
+different kind of rule than the other two, not merely a harder one:
+`ACTION_FILTERS` encodes which query dimensions each action's SQL
+generation can actually join against (`sessions` queries never touch the
+`events` table, so `event_kinds`/`tool_names` are not merely disallowed by
+convention, they are inexpressible for that action) — this is a fact about
+`query_api.py`'s own query-construction code, not a constraint on the
+request document's grammar. It is technically expressible via JSON Schema
+`if`/`then` (confirmed working against a proof-of-concept) but doing so
+would duplicate business logic about query capabilities into a document
+meant to describe syntax; it does not belong in a schema regardless of
+which validation library is chosen.
+
+**Pydantic is a materially different candidate, not a variant of the same
+choice.** Tested directly: `pydantic` (also already an installed but unused
+dependency) expresses all three gaps — sortedness, `since <= until`, and
+`ACTION_FILTERS` — as ordinary Python methods (`@field_validator`,
+`@model_validator`) within the same class as the structural checks, so
+there is no bifurcation between "schema handles this, hand-written code
+handles that." The published, standard path from an existing JSON Schema
+file to a pydantic model is `datamodel-code-generator` (a real, actively
+maintained, separately published tool, recommended in pydantic's own
+documentation for this exact scenario; not installed in this environment).
+It is a **one-time code-generation step**, not a live bridge: after
+generation, the produced Python class is the authoritative definition
+going forward, and the source `.json` file is no longer necessarily kept
+in sync. Whether that is acceptable depends on whether any of the eight
+checked-in schema files are meant to remain independently consumable by
+something other than this codebase (an external tool, another service,
+documentation generation) — that has not been established and is a
+precondition for choosing between "adopt pydantic, retire the JSON files"
+and "keep the JSON files load-bearing, accept jsonschema's two permanent
+gaps, or keep hand-writing all of it."
+
+`tests/fixtures/validate_request_vectors.json` and
+`tests/test_validate_request_vectors.py` (51 vectors covering every
+`raise QueryContractError` path in `validate_request`, each tagged where
+it exercises `sortedness`, `cross_field`, or `action_dependent`) now supply
+the before/after correctness baseline either migration path needs. The
+fixture is tool-agnostic by construction — request/outcome pairs with no
+reference to `validate_request`'s internals — so it can validate a future
+pydantic model or jsonschema-based validator without being rewritten
+first; a migration is complete only when every vector still passes against
+the replacement.
+
+W13's resolution is therefore bounded, not open-ended: full replacement of
+`validate_request` with jsonschema alone is not available, since sortedness
+cannot move to a declarative schema under any draft and `ACTION_FILTERS`
+should not move to one regardless of expressibility. Pydantic does not have
+either limitation. The honest completions are (a) adopt pydantic, using
+`datamodel-code-generator` against the existing schema files as the
+starting point if and only if those files do not need to remain
+independently authoritative outside this codebase, verified against the
+vector suite; (b) adopt jsonschema for the structural checks only, with
+sortedness and `ACTION_FILTERS` permanently hand-written and a contract
+test asserting the two stay in agreement; or (c) remove the eight currently
+dead schema files if no adoption is wanted, since an unused file declaring
+itself a validation contract is a worse state than no file: it invites a
+future reader to assume it is load-bearing when it is not.
 
 #### 13.4.3 Bounded Processing
 

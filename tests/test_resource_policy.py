@@ -116,11 +116,11 @@ def test_precedence_is_file_then_environment_then_command_line(
         max_source_bytes=500,
     ))
 
-    assert options.max_source_bytes == 500
-    assert options.max_events_per_source == 400
-    assert options.resource_policy["origins"]["transcript_bytes"] == "command-line"
-    assert options.resource_policy["origins"]["events_per_source"] == "environment"
-    assert options.resource_policy["origins"]["events_per_session"] == "built-in"
+    assert options["max_source_bytes"] == 500
+    assert options["max_events_per_source"] == 400
+    assert options["resource_policy"]["origins"]["transcript_bytes"] == "command-line"
+    assert options["resource_policy"]["origins"]["events_per_source"] == "environment"
+    assert options["resource_policy"]["origins"]["events_per_session"] == "built-in"
 
 
 def test_new_transcript_environment_name_wins_over_compatibility_name(
@@ -129,7 +129,7 @@ def test_new_transcript_environment_name_wins_over_compatibility_name(
     monkeypatch.setenv("CODESS_MAX_SOURCE_BYTES", "300")
     monkeypatch.setenv("CODESS_MAX_TRANSCRIPT_BYTES", "400")
     options = build_ingest_run_options(_args())
-    assert options.max_source_bytes == 400
+    assert options["max_source_bytes"] == 400
 
 
 def test_no_resource_limits_disables_every_maximum(tmp_path):
@@ -142,12 +142,12 @@ def test_no_resource_limits_disables_every_maximum(tmp_path):
         resource_policy=str(path),
         no_resource_limits=True,
     ))
-    assert options.max_source_bytes is None
-    assert options.max_cursor_container_bytes is None
-    assert options.max_events_per_source is None
-    assert options.max_events_per_session is None
-    assert options.max_context_content_chars is None
-    assert set(options.resource_policy["origins"].values()) == {
+    assert options["max_source_bytes"] is None
+    assert options["max_cursor_container_bytes"] is None
+    assert options["max_events_per_source"] is None
+    assert options["max_events_per_session"] is None
+    assert options["max_context_content_chars"] is None
+    assert set(options["resource_policy"]["origins"].values()) == {
         "--no-resource-limits"
     }
 

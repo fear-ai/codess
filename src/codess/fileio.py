@@ -105,6 +105,52 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_versioned_policy(path: Path, *, document_name: str) -> dict[str, Any]:
+    """Load one versioned JSON policy document from `path`.
+
+    Callers own the "no policy file selected" case (see
+    baseline_validation.load_policy) and must not call this with `path=None`.
+    Wraps read/parse failures as ValueError so every policy caller raises
+    the same error type as its own field-specific checks, rather than
+    letting OSError/JSONDecodeError escape with unrelated exception types.
+    Does not check policy_format or field names -- see
+    check_policy_format(), applied separately once the caller knows its own
+    expected format and allowed-fields set.
+    """
+    try:
+        policy = read_json(path)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot load {document_name} {path}: {exc}") from exc
+    if not isinstance(policy, dict):
+        raise ValueError(f"{document_name} must be a JSON object")
+    return policy
+
+
+def check_policy_format(
+    policy: dict[str, Any],
+    *,
+    expected_format: str,
+    allowed_fields: frozenset[str] | set[str],
+    document_name: str,
+) -> None:
+    """Check the shape two independent policy validators shared verbatim.
+
+    candidate_review.validate_policy and baseline_validation.load_policy
+    each hand-rolled this exact format-marker-then-unknown-fields sequence
+    for their own differently-shaped policy documents; every field beyond
+    this is genuinely specific to each document and stays in its own
+    module -- see CoPlan.md 13.4.2 for why this is a narrow, not a
+    5-function, consolidation.
+    """
+    if policy.get("policy_format") != expected_format:
+        raise ValueError(f"{document_name} must declare {expected_format}")
+    unknown = sorted(set(policy) - allowed_fields)
+    if unknown:
+        raise ValueError(
+            f"{document_name} has unknown fields: " + ", ".join(unknown)
+        )
+
+
 def write_json_atomic(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")

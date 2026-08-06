@@ -1,4 +1,5 @@
-"""Structure-only inventory of Cursor tool and model evidence."""
+"""Structure-only inventory of Cursor tool and model evidence.
+"""
 
 from __future__ import annotations
 

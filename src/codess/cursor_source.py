@@ -3,6 +3,8 @@
 This module owns vendor storage layout and selective SQL.  The Cursor adapter
 owns decoding and normalization; project/scan code should not contain Cursor
 paths, table names, or key-range details.
+
+# ruff S608 exemption: CoPlan.md 10.4.2.3
 """
 
 from __future__ import annotations

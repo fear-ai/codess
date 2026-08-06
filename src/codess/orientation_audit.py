@@ -1,4 +1,5 @@
-"""Independent reconciliation of typed orientation results against SQLite."""
+"""Independent reconciliation of typed orientation results against SQLite.
+"""
 
 from __future__ import annotations
 
@@ -92,11 +93,11 @@ def _sqlite_observations(
             ids = sorted(session_ids)
             totals["interactions"] += int(conn.execute(
                 f"SELECT COUNT(*) FROM interactions "
-                f"WHERE session_id IN ({placeholders})", ids
+                f"WHERE session_id IN ({placeholders})", ids,
             ).fetchone()[0])
             totals["model_turns"] += int(conn.execute(
                 f"SELECT COUNT(*) FROM model_turns "
-                f"WHERE session_id IN ({placeholders})", ids
+                f"WHERE session_id IN ({placeholders})", ids,
             ).fetchone()[0])
             relations.update({
                 str(relation): int(count)
