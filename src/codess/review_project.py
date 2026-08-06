@@ -1,34 +1,113 @@
-"""Candidate catalog refresh using production scan and bounded Git observations."""
+"""Candidate Project review: refresh the candidate list from session-walk and
+bounded Git observations, seed it from an external CSV, and record decisions.
+"""
 
 from __future__ import annotations
 
+import csv
 import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from codess.catalog import (
-    CATALOG_FORMAT,
-    candidate_key_for_path,
-    classify_project_path,
-    load_candidate_csv,
-)
+from codess.path_label import classify_project_path, key_for_path
 from codess.fileio import check_policy_format, read_json, write_json_atomic
 from codess.helpers import should_prune_directory, unsafe_traversal_root_reason
 from codess.codex_source import build_session_index as build_codex_session_index
-from codess.scan import run_scan
+from codess.walk_sessions import walk_sessions
 
 
-REVIEW_FORMAT = "codess.candidate-review/1"
+# The shared shape of one candidate-project list, produced by both
+# load_candidate_csv (below) and refresh_candidates -- distinct from
+# REVIEW_FORMAT, which identifies the outer refresh-run envelope
+# (roots/diagnostics/generated_at) that only refresh_candidates emits.
+CANDIDATE_LIST_FORMAT = "codess.catalog/1"
+REVIEW_FORMAT = "codess.review-project/1"
 DECISIONS = frozenset({"approved", "deferred", "excluded"})
 POLICY_FIELDS = frozenset({
     "policy_format", "min_sessions", "consider_active_git_without_sessions",
 })
+REQUIRED_CSV_FIELDS = frozenset({"title", "directory_path", "repo_url"})
+
+
+class CandidateReviewError(ValueError):
+    """Candidate input cannot be interpreted without unsafe assumptions."""
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_file_count(value: Any, line: int) -> int | None:
+    """Parse the CSV `doc_and_code_file_count` column into a validated int."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        result = int(text)
+    except ValueError as exc:
+        raise CandidateReviewError(
+            f"candidate CSV line {line} has invalid file count {text!r}"
+        ) from exc
+    if result < 0:
+        raise CandidateReviewError(f"candidate CSV line {line} has negative file count")
+    return result
+
+
+def load_candidate_csv(path: Path, *, work_root: Path | None = None) -> dict[str, Any]:
+    """Create a review artifact; CSV/remote claims remain observations, not truth."""
+    try:
+        stream = path.open(newline="", encoding="utf-8-sig")
+    except OSError as exc:
+        raise CandidateReviewError(f"cannot read candidate CSV {path}: {exc}") from exc
+    with stream:
+        reader = csv.DictReader(stream)
+        missing = REQUIRED_CSV_FIELDS - set(reader.fieldnames or ())
+        if missing:
+            raise CandidateReviewError(
+                f"candidate CSV missing columns: {', '.join(sorted(missing))}"
+            )
+        projects = []
+        seen: set[str] = set()
+        for line, row in enumerate(reader, 2):
+            raw_path = (row.get("directory_path") or "").strip()
+            if not raw_path:
+                raise CandidateReviewError(f"candidate CSV line {line} has no directory_path")
+            local = Path(raw_path).expanduser().resolve()
+            key = str(local)
+            if key in seen:
+                raise CandidateReviewError(f"candidate CSV repeats local path: {key}")
+            seen.add(key)
+            remote = (row.get("repo_url") or "").strip() or None
+            projects.append({
+                "candidate_key": key_for_path(local),
+                "path": key,
+                "logical_name": (row.get("title") or local.name).strip(),
+                "curation": classify_project_path(local, work_root=work_root),
+                "observations": {
+                    "candidate_source": str(path.resolve()),
+                    "local_availability": "present" if local.exists() else "missing",
+                    "reported_last_commit_date": (row.get("last_commit_date") or "").strip() or None,
+                    "reported_doc_and_code_file_count": _parse_file_count(row.get("doc_and_code_file_count"), line),
+                    "notes": (row.get("notes") or "").strip() or None,
+                    "remote": {
+                        "configured_url": remote,
+                        "status": "unchecked" if remote else "unconfigured",
+                        "checked_at": None,
+                        "canonical_url": None,
+                    },
+                    "vendors": {},
+                },
+                "review": {"decision": None, "notes": None, "reviewed_at": None},
+            })
+    projects.sort(key=lambda item: (item["curation"]["topic"], item["logical_name"].lower(), item["path"]))
+    return {
+        "catalog_format": CANDIDATE_LIST_FORMAT,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "candidate_source": str(path.resolve()),
+        "projects": projects,
+    }
 
 
 def validate_policy(policy: dict[str, Any]) -> dict[str, Any]:
@@ -203,17 +282,17 @@ def refresh_candidates(
     since: str | None = None,
     policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    existing: dict[str, Any] = {"catalog_format": CATALOG_FORMAT, "projects": []}
+    existing: dict[str, Any] = {"catalog_format": CANDIDATE_LIST_FORMAT, "projects": []}
     if candidate_csv:
         existing = load_candidate_csv(candidate_csv, work_root=roots[0] if len(roots) == 1 else None)
     if catalog_path and catalog_path.exists():
         loaded = read_json(catalog_path)
-        if loaded.get("catalog_format") != CATALOG_FORMAT:
+        if loaded.get("catalog_format") != CANDIDATE_LIST_FORMAT:
             raise ValueError("unsupported candidate catalog format")
         for item in loaded.get("projects", []):
             if str(item.get("project_id") or "").startswith("project:path:"):
                 item.pop("project_id", None)
-                item["candidate_key"] = candidate_key_for_path(
+                item["candidate_key"] = key_for_path(
                     Path(item["path"])
                 )
         existing_by_path = {item["path"]: item for item in existing.get("projects", [])}
@@ -230,7 +309,7 @@ def refresh_candidates(
         else None
     )
     for root in roots:
-        for row in run_scan(
+        for row in walk_sessions(
             root, vendor_filter=vendor_filter, recent_days=recent_days,
             diagnostics=diagnostics, codex_index=codex_index,
         ):
@@ -239,7 +318,7 @@ def refresh_candidates(
             path = Path(row.get("dir_path") or (root / row["path"])).resolve()
             key = str(path)
             item = projects.get(key, {
-                "candidate_key": candidate_key_for_path(path), "path": key,
+                "candidate_key": key_for_path(path), "path": key,
                 "logical_name": path.name,
                 "curation": classify_project_path(path, work_root=root),
                 "observations": {},
@@ -259,7 +338,7 @@ def refresh_candidates(
         for path in discover_git_roots(roots, max_depth=max_depth):
             key = str(path)
             projects.setdefault(key, {
-                "candidate_key": candidate_key_for_path(path), "path": key,
+                "candidate_key": key_for_path(path), "path": key,
                 "logical_name": path.name,
                 "curation": classify_project_path(path, work_root=roots[0] if len(roots) == 1 else None),
                 "observations": {"vendors": {}},
@@ -272,7 +351,7 @@ def refresh_candidates(
             )
         item["recommendation"] = recommend(item, policy)
     return {
-        "catalog_format": CATALOG_FORMAT,
+        "catalog_format": CANDIDATE_LIST_FORMAT,
         "review_format": REVIEW_FORMAT,
         "generated_at": _now(),
         "roots": [str(root.resolve()) for root in roots],

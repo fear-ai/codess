@@ -9,7 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from codess.config import MAX_CODESS_DB_BYTES, MAX_CURSOR_DB_BYTES
+from codess.config import (
+    LARGE_RAW_OBJECT_BYTES, MAX_CODESS_DB_BYTES, MAX_CURSOR_DB_BYTES,
+    RAW_MANIFEST_FILE,
+)
 from codess.fileio import write_json_atomic
 from codess.token_usage import collect_token_usage
 from codess.resources import allocated_bytes, file_usage, storage_usage, tree_usage
@@ -132,7 +135,7 @@ def _load_pointer(path: Path) -> Path | None:
         return None
 
 
-def current_store_paths(registry: Path) -> tuple[list[Path], set[Path]]:
+def all_store_paths(registry: Path) -> tuple[list[Path], set[Path]]:
     stores: list[Path] = []
     current_snapshots: set[Path] = set()
     projects_root = registry / "projects"
@@ -177,7 +180,7 @@ def _raw_inventory(registry: Path, current_snapshots: set[Path]) -> dict[str, An
     # The retention policy keeps only current snapshots. Reading historical
     # manifests here made every routine observation scale with all prior runs
     # and disguised objects that become reclaimable under that policy.
-    for manifest in sorted(path / "raw-manifest.jsonl" for path in current_snapshots):
+    for manifest in sorted(path / RAW_MANIFEST_FILE for path in current_snapshots):
         try:
             with manifest.open(encoding="utf-8") as stream:
                 for line in stream:
@@ -193,7 +196,7 @@ def _raw_inventory(registry: Path, current_snapshots: set[Path]) -> dict[str, An
             continue
     referenced_paths = [by_relpath[key] for key in referenced if key in by_relpath]
     orphan_paths = [path for key, path in by_relpath.items() if key not in referenced]
-    large = [path for path in objects if path.stat().st_size > 300 * 1024**2]
+    large = [path for path in objects if path.stat().st_size > LARGE_RAW_OBJECT_BYTES]
     return {
         "root": str(raw_root),
         # `objects` is already the complete content-addressed inventory; do not
@@ -257,7 +260,7 @@ def build_storage_report(
     history_dir = history_dir or registry / "observations" / "storage"
     observed = _now()
     previous = _previous(history_dir)
-    stores, current = current_store_paths(registry)
+    stores, current = all_store_paths(registry)
     report: dict[str, Any] = {
         "report_format": REPORT_FORMAT,
         "observed_at": observed.isoformat(),

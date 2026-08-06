@@ -15,9 +15,12 @@ from codess.baseline_catalog import (
 )
 from codess.baseline_operations import apply_project
 from codess.baseline_validation import load_policy, run_query_smoke, validate_project
-from codess.candidate_review import record_decision, refresh_candidates, validate_policy
+from codess.review_project import record_decision, refresh_candidates, validate_policy
 from codess.catalog_operations import onboard_catalog, relocate_project, retire_location
-from codess.config import CC_PROJECTS
+from codess.config import (
+    CC_PROJECTS, CODEX_ARCHIVED_SESSIONS, CODEX_SESSIONS, CURSOR_DATA, GB,
+    LARGE_EVENT_COUNT, LARGE_STORE_BYTES, MAX_RECORD_BYTES, REGISTRY,
+)
 from codess.codex_parent_audit import audit_parentage
 from codess.cursor_feature_audit import audit_cursor_features
 from codess.evidence import build_evidence_inventory
@@ -38,7 +41,7 @@ from codess.schema_evolution import RANK, compare, required
 from codess.session_names import (
     load_session_names, remove_session_name, set_session_name,
 )
-from codess.storage_report import build_storage_report, current_store_paths
+from codess.storage_report import all_store_paths, build_storage_report
 from codess.token_usage import source_paths, validate_codex_token_usage
 from codess.retention import apply_retention_plan, build_retention_plan
 from codess.vendor_audits.claude_features import audit_claude_features
@@ -131,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="plan is read-only; apply first preflights every selected Project",
     )
     refresh.add_argument(
-        "--registry", type=Path, default=Path.home() / ".codess"
+        "--registry", type=Path, default=REGISTRY
     )
     refresh.add_argument(
         "--source", choices=("all", "cc", "codex", "cursor"), default="all"
@@ -149,9 +152,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--reviewed", type=Path,
         default=REPO_ROOT / "catalog/reviewed-baselines.json",
     )
-    refresh.add_argument("--large-events", type=int, default=25_000)
+    refresh.add_argument("--large-events", type=int, default=LARGE_EVENT_COUNT)
     refresh.add_argument(
-        "--large-bytes", type=int, default=128 * 1024 * 1024
+        "--large-bytes", type=int, default=LARGE_STORE_BYTES
     )
     refresh.add_argument("--min-size", type=int, default=0)
     refresh.add_argument("--force", action="store_true")
@@ -168,12 +171,12 @@ def build_parser() -> argparse.ArgumentParser:
     _candidate_parser(catalog_commands)
     status = catalog_commands.add_parser("status")
     status.add_argument(
-        "--registry", type=Path, default=Path.home() / ".codess"
+        "--registry", type=Path, default=REGISTRY
     )
     status.set_defaults(handler=_catalog_status)
     annotations = catalog_commands.add_parser("annotations")
     annotations.add_argument(
-        "--registry", type=Path, default=Path.home() / ".codess"
+        "--registry", type=Path, default=REGISTRY
     )
     annotations.add_argument(
         "--baseline-selection", type=Path,
@@ -184,10 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=REPO_ROOT / "catalog/reviewed-baselines.json",
     )
     annotations.add_argument(
-        "--large-events", type=int, default=25_000
+        "--large-events", type=int, default=LARGE_EVENT_COUNT
     )
     annotations.add_argument(
-        "--large-bytes", type=int, default=128 * 1024 * 1024
+        "--large-bytes", type=int, default=LARGE_STORE_BYTES
     )
     annotations.add_argument("--label", action="append", default=[])
     annotations.add_argument(
@@ -196,7 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
     annotations.add_argument("--output", type=Path)
     annotations.set_defaults(handler=_catalog_annotations)
     state = catalog_commands.add_parser("state")
-    state.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    state.add_argument("--registry", type=Path, default=REGISTRY)
     state.add_argument("--project-id", required=True)
     state.add_argument(
         "--state",
@@ -218,7 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     decide.set_defaults(handler=_catalog_decide)
     onboard = catalog_commands.add_parser("onboard")
     onboard.add_argument("--catalog", type=Path, required=True)
-    onboard.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    onboard.add_argument("--registry", type=Path, default=REGISTRY)
     onboard.add_argument("--review-decision", default="approved")
     onboard.add_argument("--source", choices=("cc", "codex", "cursor", "all"), default="all")
     onboard.add_argument("--raw-mode", choices=("none", "reference", "capture", "seal"), default="reference")
@@ -237,12 +240,12 @@ def build_parser() -> argparse.ArgumentParser:
     location_commands = location.add_subparsers(dest="location_command", required=True)
     for name, handler in (("add", _location_add), ("retire", _location_retire)):
         command = location_commands.add_parser(name)
-        command.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+        command.add_argument("--registry", type=Path, default=REGISTRY)
         command.add_argument("--project-id", required=True)
         command.add_argument("--path", type=Path, required=True)
         command.set_defaults(handler=handler)
     relocate = catalog_commands.add_parser("relocate")
-    relocate.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    relocate.add_argument("--registry", type=Path, default=REGISTRY)
     relocate.add_argument("--project-id", required=True)
     relocate.add_argument("--from", dest="old_path", type=Path, required=True)
     relocate.add_argument("--to", dest="new_path", type=Path, required=True)
@@ -272,8 +275,8 @@ def build_parser() -> argparse.ArgumentParser:
     evidence = families.add_parser("evidence")
     evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
     gather = evidence_commands.add_parser("gather")
-    gather.add_argument("--registry", type=Path, default=Path.home() / ".codess")
-    gather.add_argument("--cursor-db", type=Path, default=Path.home() / "Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+    gather.add_argument("--registry", type=Path, default=REGISTRY)
+    gather.add_argument("--cursor-db", type=Path, default=CURSOR_DATA / "globalStorage" / "state.vscdb")
     gather.add_argument("--claude-root", type=Path, default=CC_PROJECTS)
     gather.add_argument("--claude-max-files", type=int, default=200)
     gather.add_argument("--component-dir", type=Path)
@@ -284,29 +287,29 @@ def build_parser() -> argparse.ArgumentParser:
     claude = audits.add_parser("claude-features")
     claude.add_argument("--root", type=Path, default=CC_PROJECTS)
     claude.add_argument("--max-files", type=int, default=200)
-    claude.add_argument("--max-record-bytes", type=int, default=2 * 1024 * 1024)
+    claude.add_argument("--max-record-bytes", type=int, default=MAX_RECORD_BYTES)
     claude.add_argument("--output", type=Path)
     claude.set_defaults(handler=_audit_claude)
     codex = audits.add_parser("codex-parentage")
-    codex.add_argument("--active", type=Path, default=Path.home() / ".codex/sessions")
-    codex.add_argument("--archive", type=Path, default=Path.home() / ".codex/archived_sessions")
+    codex.add_argument("--active", type=Path, default=CODEX_SESSIONS)
+    codex.add_argument("--archive", type=Path, default=CODEX_ARCHIVED_SESSIONS)
     codex.add_argument("--output", type=Path)
     codex.set_defaults(handler=_audit_codex)
     codex_features = audits.add_parser("codex-features")
-    codex_features.add_argument("--active", type=Path, default=Path.home() / ".codex/sessions")
-    codex_features.add_argument("--archive", type=Path, default=Path.home() / ".codex/archived_sessions")
+    codex_features.add_argument("--active", type=Path, default=CODEX_SESSIONS)
+    codex_features.add_argument("--archive", type=Path, default=CODEX_ARCHIVED_SESSIONS)
     codex_features.add_argument("--max-files", type=int, default=200)
-    codex_features.add_argument("--max-record-bytes", type=int, default=2 * 1024 * 1024)
+    codex_features.add_argument("--max-record-bytes", type=int, default=MAX_RECORD_BYTES)
     codex_features.add_argument("--output", type=Path)
     codex_features.set_defaults(handler=_audit_codex_features)
     cursor = audits.add_parser("cursor-features")
-    cursor.add_argument("--db", type=Path, default=Path.home() / "Library/Application Support/Cursor/User/globalStorage/state.vscdb")
-    cursor.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    cursor.add_argument("--db", type=Path, default=CURSOR_DATA / "globalStorage" / "state.vscdb")
+    cursor.add_argument("--registry", type=Path, default=REGISTRY)
     cursor.add_argument("--output", type=Path)
     cursor.set_defaults(handler=_audit_cursor)
     mcp = audits.add_parser("mcp-interactions")
     mcp.add_argument(
-        "--registry", type=Path, default=Path.home() / ".codess"
+        "--registry", type=Path, default=REGISTRY
     )
     mcp.add_argument("--codex-rollout", type=Path, action="append", default=[])
     mcp.add_argument("--include-excerpts", action="store_true")
@@ -314,7 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp.set_defaults(handler=_audit_mcp)
     orientation = audits.add_parser("orientation")
     orientation.add_argument(
-        "--registry", type=Path, default=Path.home() / ".codess"
+        "--registry", type=Path, default=REGISTRY
     )
     orientation.add_argument(
         "--project-id", action="append", default=[]
@@ -335,28 +338,28 @@ def build_parser() -> argparse.ArgumentParser:
         dest="session_command", required=True
     )
     name = session_commands.add_parser("name")
-    name.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    name.add_argument("--registry", type=Path, default=REGISTRY)
     name.add_argument("--project-id", required=True)
     name.add_argument("--session-id", required=True)
     name.add_argument("--name", required=True)
     name.set_defaults(handler=_session_name)
     unname = session_commands.add_parser("unname")
-    unname.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    unname.add_argument("--registry", type=Path, default=REGISTRY)
     unname.add_argument("--project-id", required=True)
     unname.add_argument("--session-id", required=True)
     unname.set_defaults(handler=_session_unname)
     names = session_commands.add_parser("names")
-    names.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    names.add_argument("--registry", type=Path, default=REGISTRY)
     names.add_argument("--project-id")
     names.set_defaults(handler=_session_names)
 
     storage = families.add_parser("storage")
     storage_commands = storage.add_subparsers(dest="storage_command", required=True)
     report = storage_commands.add_parser("report")
-    report.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    report.add_argument("--registry", type=Path, default=REGISTRY)
     report.add_argument(
         "--cursor-db", type=Path,
-        default=Path.home() / "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+        default=CURSOR_DATA / "globalStorage" / "state.vscdb",
     )
     report.add_argument("--history-dir", type=Path)
     report.add_argument("--no-record", action="store_true")
@@ -365,7 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--output", type=Path)
     report.set_defaults(handler=_storage_report)
     prune = storage_commands.add_parser("prune")
-    prune.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    prune.add_argument("--registry", type=Path, default=REGISTRY)
     prune.add_argument("--reference-catalog", type=Path, action="append", default=[])
     prune.add_argument("--apply", action="store_true")
     prune.add_argument("--working-archives", action="store_true")
@@ -377,7 +380,7 @@ def build_parser() -> argparse.ArgumentParser:
     prune.add_argument("--output", type=Path)
     prune.set_defaults(handler=_storage_prune)
     token_validate = storage_commands.add_parser("token-validate")
-    token_validate.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    token_validate.add_argument("--registry", type=Path, default=REGISTRY)
     token_validate.add_argument("--output", type=Path)
     token_validate.set_defaults(handler=_storage_token_validate)
     return parser
@@ -734,8 +737,8 @@ def _storage_report(args) -> int:
         cursor_db=args.cursor_db,
         history_dir=args.history_dir,
         record=not args.no_record,
-        codess_limit=int(args.codess_limit_gb * 1024**3),
-        cursor_limit=int(args.cursor_limit_gb * 1024**3),
+        codess_limit=GB(args.codess_limit_gb),
+        cursor_limit=GB(args.cursor_limit_gb),
     )
     _write_optional(args.output, report)
     return 0
@@ -765,7 +768,7 @@ def _storage_prune(args) -> int:
 
 
 def _storage_token_validate(args) -> int:
-    stores, _ = current_store_paths(args.registry.expanduser().resolve())
+    stores, _ = all_store_paths(args.registry.expanduser().resolve())
     paths = source_paths(stores, "openai.codex")
     result = validate_codex_token_usage(paths)
     _write_optional(args.output, result)

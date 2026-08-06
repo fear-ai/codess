@@ -3,8 +3,6 @@
 This module owns vendor storage layout and selective SQL.  The Cursor adapter
 owns decoding and normalization; project/scan code should not contain Cursor
 paths, table names, or key-range details.
-
-# ruff S608 exemption: CoPlan.md 10.4.2.3
 """
 
 from __future__ import annotations
@@ -18,7 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from codess.config import CURSOR_DATA
+from codess.config import (
+    CURSOR_DATA, SOURCE_LINKS_FILE, SOURCE_LINKS_FORMAT, STORE_DIR,
+)
 from codess.helpers import local_path_from_uri
 
 log = logging.getLogger(__name__)
@@ -127,11 +127,11 @@ def get_workspace_ids(
             except (json.JSONDecodeError, OSError):
                 continue
 
-    link_path = project_path / ".codess" / "source-links.json"
+    link_path = project_path / STORE_DIR / SOURCE_LINKS_FILE
     if link_path.exists():
         try:
             links = json.loads(link_path.read_text(encoding="utf-8"))
-            if links.get("format") != "codess.source-links/1":
+            if links.get("format") != SOURCE_LINKS_FORMAT:
                 raise ValueError("unsupported source-link format")
             for link in links.get("links") or []:
                 if not isinstance(link, dict):

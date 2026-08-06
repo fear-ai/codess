@@ -8,12 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from codess.config import MAX_TOKEN_LINE_BYTES
 from codess.fileio import read_json, write_json_atomic
 
 TOKEN_OBSERVATION_FORMAT = "codess.token-observation/1"
 TOKEN_CACHE_FORMAT = "codess.token-source-set-cache/1"
 TOKEN_VALIDATION_FORMAT = "codess.codex-token-validation/1"
-MAX_TOKEN_LINE_BYTES = 8 * 1024**2
 
 
 def _month(value: Any) -> str:

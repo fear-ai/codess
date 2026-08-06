@@ -19,7 +19,7 @@ from codess.snapshot import (
     SnapshotError,
     create_snapshot,
     current_raw_records,
-    current_store_paths,
+    current_stores,
     read_manifest,
     rebuild_manifest,
     recover_current_snapshot,
@@ -301,7 +301,7 @@ def test_snapshot_is_validated_promoted_and_sealable(tmp_path):
     assert manifest["runtime"]["sqlite"]
     assert len(manifest["build_policy_sha256"]) == 64
     assert (snapshot / "raw" / record["object_relpath"]).exists()
-    resolved = current_store_paths(project)
+    resolved = current_stores(project)
     assert len(resolved) == 1
     check = sqlite3.connect(resolved[0])
     assert check.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
@@ -320,7 +320,7 @@ def test_snapshot_is_validated_promoted_and_sealable(tmp_path):
     current["manifest_sha256"] = "0" * 64
     pointer.write_text(json.dumps(current), encoding="utf-8")
     with pytest.raises(SnapshotError):
-        current_store_paths(project)
+        current_stores(project)
 
 
 def test_partial_refresh_carries_current_raw_records(tmp_path):
@@ -431,7 +431,7 @@ def test_snapshot_rejects_raw_manifest_tamper(tmp_path):
     snapshot = create_snapshot(project, [store], [record], raw_store=raw)
     (snapshot / "raw-manifest.jsonl").write_text("tamper\n", encoding="utf-8")
     with pytest.raises(SnapshotError, match="raw manifest hash mismatch"):
-        current_store_paths(project)
+        current_stores(project)
 
 
 def _seed_one_snapshot(tmp_path, name="session.jsonl"):
@@ -454,27 +454,27 @@ def _seed_one_snapshot(tmp_path, name="session.jsonl"):
 def test_recover_current_snapshot_rebuilds_a_deleted_pointer(tmp_path):
     project = _seed_one_snapshot(tmp_path)
     (project / ".codess" / "current.json").unlink()
-    assert current_store_paths(project) == []
+    assert current_stores(project) == []
 
     result = recover_current_snapshot(project)
     assert result["snapshot_id"]
-    assert len(current_store_paths(project)) == 1
+    assert len(current_stores(project)) == 1
 
 
 def test_recover_current_snapshot_rebuilds_a_corrupted_pointer(tmp_path):
     project = _seed_one_snapshot(tmp_path)
     (project / ".codess" / "current.json").write_text("not json{{{", encoding="utf-8")
     with pytest.raises(SnapshotError):
-        current_store_paths(project)
+        current_stores(project)
 
     result = recover_current_snapshot(project)
     assert result["snapshot_id"]
-    assert len(current_store_paths(project)) == 1
+    assert len(current_stores(project)) == 1
 
 
 def test_recover_current_snapshot_skips_a_tampered_newest_snapshot(tmp_path):
     project = _seed_one_snapshot(tmp_path, name="first.jsonl")
-    assert len(current_store_paths(project)) == 1  # sanity: resolves before tamper
+    assert len(current_stores(project)) == 1  # sanity: resolves before tamper
 
     store = project / ".codess" / "sessions_cursor.db"
     raw = RawStore(tmp_path / "raw")
@@ -489,7 +489,7 @@ def test_recover_current_snapshot_skips_a_tampered_newest_snapshot(tmp_path):
 
     result = recover_current_snapshot(project)
     assert result["snapshot_id"] != newest.name
-    assert len(current_store_paths(project)) == 1
+    assert len(current_stores(project)) == 1
 
 
 def test_recover_current_snapshot_raises_when_nothing_is_retained(tmp_path):

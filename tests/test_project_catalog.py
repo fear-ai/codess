@@ -23,9 +23,11 @@ from codess.project_catalog import (
     resolve_project_query_scopes,
     set_project_selection_state,
 )
+from codess.config import REGISTRY
+from codess.fileio import hash_file
 from codess.raw_store import RawStore
 from codess.session_names import set_session_name
-from codess.snapshot import create_snapshot, current_store_paths
+from codess.snapshot import create_snapshot, current_stores
 from codess.store import connect, init_db, replace_session_events, sync_project_catalog
 
 
@@ -115,15 +117,16 @@ def test_project_annotations_reserve_suspect_for_direct_evidence(tmp_path):
     assert "included" not in item["labels"]
 
 
-def test_personal_registry_rejects_ephemeral_project_location(
-    tmp_path, monkeypatch,
-):
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+def test_personal_registry_rejects_ephemeral_project_location(tmp_path):
+    # REGISTRY is resolved once at import time from CODESS_REGISTRY / the
+    # real home directory, so this check (identity against the personal
+    # registry) is exercised by passing REGISTRY itself, not by faking
+    # Path.home() after codess.config has already computed it.
     project = tmp_path / "temporary-project"
     project.mkdir()
 
     with pytest.raises(ValueError, match="ephemeral system location"):
-        ensure_project_binding(tmp_path / ".codess", project)
+        ensure_project_binding(REGISTRY, project)
 
 
 def test_project_id_survives_a_new_location(tmp_path):
@@ -260,7 +263,7 @@ def test_snapshot_is_central_and_relocation_preserves_query_access(tmp_path):
     pointer = json.loads((project / ".codess/current.json").read_text())
     assert Path(pointer["path"]).is_absolute()
     assert Path(pointer["path"]).is_relative_to(durable_project_root(registry, project_id))
-    assert current_store_paths(project)
+    assert current_stores(project)
 
     replacement = tmp_path / "new"
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
@@ -273,7 +276,7 @@ def test_snapshot_is_central_and_relocation_preserves_query_access(tmp_path):
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert current_store_paths(replacement)
+    assert current_stores(replacement)
     entry = get_project_entry(registry, project_id)
     states = {item["path"]: item["state"] for item in entry["locations"]}
     obsolete = {
@@ -505,6 +508,15 @@ def test_catalog_query_names_project_and_snapshot_on_incompatibility(tmp_path):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["package_digest"] = "sha256:" + ("0" * 64)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    # Isolate the package-digest incompatibility this test targets: recompute
+    # the pointer's manifest_sha256 to match the edited bytes above, so
+    # current_snapshot's hash check does not fire first and mask it
+    # behind a generic "manifest hash mismatch" before the package-digest
+    # comparison in snapshot_store_paths_from_base ever runs.
+    pointer_path = Path(scope["snapshot_base"]) / "current.json"
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    pointer["manifest_sha256"] = hash_file(manifest_path)
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
 
     result = subprocess.run(
         [
@@ -558,6 +570,15 @@ def test_catalog_status_distinguishes_package_mismatch(tmp_path):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["package_digest"] = "sha256:" + ("0" * 64)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    # Isolate the package-digest check this test targets: recompute the
+    # pointer's manifest_sha256 to match the edited bytes above, so
+    # current_snapshot's hash check does not fire first and mask it
+    # behind a generic "manifest hash mismatch" before the package-digest
+    # comparison in snapshot_store_paths_from_base ever runs.
+    pointer_path = Path(scope["snapshot_base"]) / "current.json"
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    pointer["manifest_sha256"] = hash_file(manifest_path)
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
 
     row = next(
         item for item in catalog_readiness(registry)["projects"]

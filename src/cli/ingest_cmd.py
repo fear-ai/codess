@@ -13,7 +13,10 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 
-from codess.config import get_state_path, get_store_path, validate_config
+from codess.config import (
+    LAST_INGEST_REPORT_FILE, STORE_DIR, get_state_path, get_store_path,
+    validate_config,
+)
 from codess.content_processing import ContentPolicy, ContentProcessor
 from codess.fileio import write_json_atomic
 from codess.adapters.cc import process_file as process_cc_file
@@ -67,7 +70,9 @@ from codess.raw_store import RawStore
 from codess.project_catalog import ensure_project_binding, get_project_entry
 from codess.project_catalog import load_catalog, register_workspace_bindings
 from codess.artifact_correlation import correlate_external_artifacts
-from codess.snapshot import create_snapshot, current_raw_records
+from codess.snapshot import (
+    create_snapshot, current_raw_records, read_manifest, current_snapshot,
+)
 from codess.store import record_processing_run, sync_project_catalog
 from codess.resources import (
     ResourceLimitError, check_events, check_source, peak_rss_bytes,
@@ -961,12 +966,12 @@ def _save_stats(project_path: Path, registry_root: Path, source_stats: dict) -> 
 
 
 def _write_runtime_report(project_path: Path, report: dict) -> None:
-    path = project_path / ".codess" / "last-ingest-report.json"
+    path = project_path / STORE_DIR / LAST_INGEST_REPORT_FILE
     write_json_atomic(path, report)
 
 
 def _load_runtime_report(project_path: Path) -> dict:
-    path = project_path / ".codess" / "last-ingest-report.json"
+    path = project_path / STORE_DIR / LAST_INGEST_REPORT_FILE
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {}
@@ -975,16 +980,12 @@ def _load_runtime_report(project_path: Path) -> dict:
 
 
 def _current_snapshot_id(project_path: Path) -> str | None:
-    try:
-        value = json.loads(
-            (project_path / ".codess" / "current.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        snapshot_id = value.get("snapshot_id")
-        return str(snapshot_id) if snapshot_id else None
-    except (OSError, json.JSONDecodeError, AttributeError):
+    resolved = current_snapshot(project_path / STORE_DIR)
+    if resolved is None:
         return None
+    _snapshot_path, pointer = resolved
+    snapshot_id = pointer.get("snapshot_id")
+    return str(snapshot_id) if snapshot_id else None
 
 
 def _evidence_summary(paths: list[Path]) -> dict:
@@ -993,20 +994,11 @@ def _evidence_summary(paths: list[Path]) -> dict:
 
 def _current_snapshot_is_sealed(project_path: Path) -> bool:
     """Return whether the verified current snapshot already embeds raw objects."""
-    pointer_path = project_path / ".codess" / "current.json"
-    if not pointer_path.exists():
+    resolved = current_snapshot(project_path / STORE_DIR)
+    if resolved is None:
         return False
-    try:
-        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-        snapshot_path = Path(pointer["path"])
-        if not snapshot_path.is_absolute():
-            snapshot_path = pointer_path.parent / snapshot_path
-        manifest = json.loads(
-            (snapshot_path / "manifest.json").read_text(encoding="utf-8")
-        )
-        return manifest.get("sealed") is True
-    except (OSError, KeyError, TypeError, json.JSONDecodeError):
-        return False
+    snapshot_path, _pointer = resolved
+    return read_manifest(snapshot_path).get("sealed") is True
 
 
 def run(args) -> int:
@@ -1385,7 +1377,7 @@ def run(args) -> int:
             diagnostic_start = dict(diagnostics)
             project_path = project_path.resolve()
             if force and not iopt["validate_only"]:
-                rebuild_parent = project_path / ".codess"
+                rebuild_parent = project_path / STORE_DIR
                 rebuild_parent.mkdir(parents=True, exist_ok=True)
                 rebuild_temporary = tempfile.TemporaryDirectory(
                     prefix=".rebuild-", dir=rebuild_parent

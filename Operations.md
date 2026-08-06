@@ -255,6 +255,28 @@ SQLite connections. Confirm that the selected workspace mapping is narrow and
 that the live database is not continuously changing. Do not copy, vacuum,
 rewrite, or fully decode the Cursor database merely to diagnose one Project.
 
+### 9.5 Current Snapshot Manifest Hash Mismatch
+
+`scan`, `ingest`, and `query` verify the current snapshot's `manifest.json`
+against the hash recorded in its `current.json` pointer before trusting it.
+A mismatch produces an explicit error naming the affected Project and
+snapshot rather than silently accepting stale or tampered content; see
+[Publication and Integrity](CoPlan.md#84-publication-and-integrity) for what
+the check does and does not protect against.
+
+Investigate before bypassing: compare `current.json`'s recorded
+`manifest_sha256` against a fresh hash of the retained `manifest.json`, and
+confirm whether the snapshot directory was touched outside normal Codess
+operation (an interrupted publish, manual editing, or a restored backup are
+the ordinary causes). `codess baseline` commands can rebuild or verify a
+snapshot from its retained stores.
+
+`--no-hash` (or `CODESS_NO_HASH=1`) skips this verification and trusts the
+retained manifest as-is. It is a recovery and debugging option, not a
+routine flag: every bypassed check is logged as a warning, and using it
+does not repair the underlying inconsistency. Prefer identifying and fixing
+the cause of the mismatch over routinely suppressing the check.
+
 ## 10. Schema Maintenance
 
 Normal ingest verifies the installed schema package before it writes a store.

@@ -28,6 +28,36 @@ def env_bool(key: str, default: str = "0") -> bool:
     return os.environ.get(key, default).lower() in ("1", "true", "yes")
 
 
+def KB(count: float) -> int:
+    """`count` kibibytes as bytes (`count * 1024`)."""
+    return int(count * 1024)
+
+
+def MB(count: float) -> int:
+    """`count` mebibytes as bytes (`count * 1024**2`)."""
+    return int(count * 1024**2)
+
+
+def GB(count: float) -> int:
+    """`count` gibibytes as bytes (`count * 1024**3`)."""
+    return int(count * 1024**3)
+
+
+def BKB(count: float) -> float:
+    """`count` bytes as kibibytes (`count / 1024`); inverse of `KB`."""
+    return count / 1024
+
+
+def BMB(count: float) -> float:
+    """`count` bytes as mebibytes (`count / 1024**2`); inverse of `MB`."""
+    return count / 1024**2
+
+
+def BGB(count: float) -> float:
+    """`count` bytes as gibibytes (`count / 1024**3`); inverse of `GB`."""
+    return count / 1024**3
+
+
 def env_str(key: str, default: str | None) -> str | None:
     """Read a string env value, or ``default`` (including ``None``) if unset."""
     return os.environ.get(key, default)
@@ -63,7 +93,7 @@ _IS_ENV_TABLE = (
     ("CODESS_DAYS", env_int, 90),
     ("CODESS_VERBOSE", env_bool, "0"),
     ("CODESS_DEBUG", env_bool, "0"),
-    ("CODESS_MIN_SIZE", env_int, 20 * 1024),  # 20 KB
+    ("CODESS_MIN_SIZE", env_int, KB(20)),
     ("CODESS_FORCE", env_bool, "0"),
     ("CODESS_SUBAGENT", env_bool, "0"),
     ("CODESS_REDACT", env_bool, "0"),
@@ -85,14 +115,15 @@ _IS_ENV_TABLE = (
         "CODESS_MAX_CONTEXT_CONTENT_CHARS", env_int,
         BUILTIN_MAXIMUMS["context_content_chars"],
     ),
-    ("CODESS_MAX_CODESS_DB_BYTES", env_int, 2 * 1024**3),
-    ("CODESS_MAX_CURSOR_DB_BYTES", env_int, 10 * 1024**3),
+    ("CODESS_MAX_CODESS_DB_BYTES", env_int, GB(2)),
+    ("CODESS_MAX_CURSOR_DB_BYTES", env_int, GB(10)),
     ("CODESS_CC_PROJECTS", env_path, str(Path.home() / ".claude" / "projects")),
     ("CODESS_RAW_MODE", env_raw_mode, "reference"),
     ("CODESS_CONTENT_POLICY", env_str, None),
     ("CODESS_RESOURCE_POLICY", env_str, None),
     ("CODESS_REGISTRY", env_expanded_path, str(Path.home() / ".codess")),
     ("CODESS_STOP", env_bool, "0"),
+    ("CODESS_NO_HASH", env_bool, "0"),
 )
 _IS_ENV_VALUES = {key: reader(key, default) for key, reader, default in _IS_ENV_TABLE}
 
@@ -160,6 +191,18 @@ STORE_DB_CODEX = "sessions_codex.db"
 STORE_DB_CURSOR = "sessions_cursor.db"
 STATE_FILE = "ingest_state.json"
 STATS_FILE = "ingested_projects.json"
+LAST_INGEST_REPORT_FILE = "last-ingest-report.json"
+PROJECT_FILE = "project.json"
+SOURCE_LINKS_FILE = "source-links.json"
+SOURCE_LINKS_FORMAT = "codess.source-links/1"
+WORKING_ARCHIVES_DIR = "working-archives"
+
+# --- Snapshot layout (under STORE_DIR or a durable registry project root) ---
+SNAPSHOTS_DIR = "snapshots"
+MANIFEST_FILE = "manifest.json"
+MANIFEST_BACKUP_FILE = "manifest.json.bak"
+CURRENT_POINTER_FILE = "current.json"
+RAW_MANIFEST_FILE = "raw-manifest.jsonl"
 
 # --- Registry (central ingested_projects.json, default ~/.codess) ---
 REGISTRY = _IS_ENV_VALUES["CODESS_REGISTRY"]
@@ -172,6 +215,10 @@ DEBUG = _IS_ENV_VALUES["CODESS_DEBUG"]
 
 # --- Ingest ---
 MIN_SIZE = _IS_ENV_VALUES["CODESS_MIN_SIZE"]
+
+# --- Vendor feature audits: cap on files scanned per run (evidence.py,
+# vendor_audits.claude_features, vendor_audits.codex_features) ---
+DEFAULT_AUDIT_MAX_FILES = 200
 FORCE = _IS_ENV_VALUES["CODESS_FORCE"]
 
 # --- Subagent (CC scan) ---
@@ -184,10 +231,6 @@ STRICT_MAPPING = _IS_ENV_VALUES["CODESS_STRICT_MAPPING"]
 CONTENT_POLICY = _IS_ENV_VALUES["CODESS_CONTENT_POLICY"]
 RESOURCE_POLICY = _IS_ENV_VALUES["CODESS_RESOURCE_POLICY"]
 MAX_TRANSCRIPT_BYTES = _IS_ENV_VALUES["CODESS_MAX_TRANSCRIPT_BYTES"]
-# Compatibility alias. New configuration should use MAX_TRANSCRIPT_BYTES.
-# Not table-driven: its default is MAX_TRANSCRIPT_BYTES itself (another
-# env-derived value), so it must resolve after the table, not as a row in it.
-MAX_SOURCE_BYTES = env_int("CODESS_MAX_SOURCE_BYTES", MAX_TRANSCRIPT_BYTES)
 MAX_CURSOR_CONTAINER_BYTES = _IS_ENV_VALUES["CODESS_MAX_CURSOR_CONTAINER_BYTES"]
 MAX_EVENTS_PER_SOURCE = _IS_ENV_VALUES["CODESS_MAX_EVENTS_PER_SOURCE"]
 MAX_EVENTS_PER_SESSION = _IS_ENV_VALUES["CODESS_MAX_EVENTS_PER_SESSION"]
@@ -195,8 +238,45 @@ MAX_CONTEXT_CONTENT_CHARS = _IS_ENV_VALUES["CODESS_MAX_CONTEXT_CONTENT_CHARS"]
 MAX_CODESS_DB_BYTES = _IS_ENV_VALUES["CODESS_MAX_CODESS_DB_BYTES"]
 MAX_CURSOR_DB_BYTES = _IS_ENV_VALUES["CODESS_MAX_CURSOR_DB_BYTES"]
 
+# --- Reporting and CLI-default thresholds (not env-overridable ingest limits;
+# see resource_policy.BUILTIN_MAXIMUMS for those) ---
+# A Project at or above this many events is labelled "large" in refresh
+# annotations and the admin --large-events report default.
+LARGE_EVENT_COUNT = 25_000
+# A normalized store at or above this size is labelled "large" in refresh
+# annotations and the admin --large-bytes report default.
+LARGE_STORE_BYTES = MB(128)
+# A single-line source record above this size is rejected during bounded
+# JSONL reads (bounded_jsonl) and is the CLI --max-record-bytes default.
+MAX_RECORD_BYTES = MB(2)
+# A distinct captured raw revision at or above this size is flagged in
+# retention planning as worth explicit --keep-comparison-revisions review.
+LARGE_RAW_REVISION_BYTES = GB(1)
+# A single JSONL line above this size during token-usage scanning is
+# treated as implausible and skipped rather than parsed.
+MAX_TOKEN_LINE_BYTES = MB(8)
+# Above this size, source fingerprinting samples bounded windows instead of
+# hashing the complete file (see fileio.source_fingerprint).
+SOURCE_FULL_HASH_MAX = MB(64)
+# A raw-capture object above this size is called out individually in a
+# storage report rather than only contributing to the aggregate total.
+LARGE_RAW_OBJECT_BYTES = MB(300)
+# Default maximum inline content bytes for one typed query result
+# (query --byte-limit); explicit --byte-limit overrides this default.
+DEFAULT_QUERY_BYTE_LIMIT = MB(16)
+
+# --- I/O chunk sizes (streaming buffer tuning, not a policy limit or
+# threshold; grouped here for one place to look, not because these values
+# are duplicated anywhere) ---
+DEFAULT_HASH_CHUNK_BYTES = MB(1)
+SOURCE_SAMPLE_CHUNK_BYTES = MB(1)
+RAW_CAPTURE_CHUNK_BYTES = MB(1)
+
 # --- Batch / resilience: stop entire command on first error (otherwise log and continue) ---
 STOP = _IS_ENV_VALUES["CODESS_STOP"]
+
+# --- Snapshot/manifest hash verification bypass (recovery/debugging; see fileio.read_hash) ---
+NO_HASH = _IS_ENV_VALUES["CODESS_NO_HASH"]
 
 # --- Truncation (display / stored excerpt limits) ---
 TRUNCATE_RESPONSE = 2000
@@ -258,10 +338,6 @@ def validate_config() -> list[str]:
     ):
         if value <= 0:
             errs.append(f"{name}={value} must be > 0")
-    if "CODESS_MAX_SOURCE_BYTES" in os.environ and MAX_SOURCE_BYTES <= 0:
-        errs.append(
-            f"CODESS_MAX_SOURCE_BYTES={MAX_SOURCE_BYTES} must be > 0"
-        )
     if RAW_MODE not in {"none", "reference", "capture", "seal"}:
         errs.append(
             f"CODESS_RAW_MODE={RAW_MODE!r} must be none, reference, capture, or seal"
@@ -282,9 +358,9 @@ def validate_config() -> list[str]:
 
 def get_project_stores(project_path: Path) -> list[Path]:
     """Return current snapshot stores, falling back to legacy working paths."""
-    from codess.snapshot import current_store_paths
+    from codess.snapshot import current_stores
 
-    current = current_store_paths(project_path)
+    current = current_stores(project_path)
     if current:
         return current
     base = project_path / STORE_DIR

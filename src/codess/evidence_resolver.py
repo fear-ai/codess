@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from codess.config import MANIFEST_FILE, RAW_MANIFEST_FILE
 from codess.fileio import hash_file, source_fingerprint
 from codess.raw_store import RawCaptureError, verify_captured_object
 
@@ -15,7 +16,7 @@ EVIDENCE_FORMAT = "codess.evidence-resolution/1"
 
 def _snapshot_root(store_path: Path) -> Path | None:
     for parent in store_path.parents:
-        if (parent / "manifest.json").is_file() and (parent / "raw-manifest.jsonl").is_file():
+        if (parent / MANIFEST_FILE).is_file() and (parent / RAW_MANIFEST_FILE).is_file():
             return parent
     return None
 
@@ -25,7 +26,7 @@ def _raw_records(snapshot: Path | None) -> list[dict[str, Any]]:
         return []
     records = []
     try:
-        with (snapshot / "raw-manifest.jsonl").open(encoding="utf-8") as stream:
+        with (snapshot / RAW_MANIFEST_FILE).open(encoding="utf-8") as stream:
             for line in stream:
                 value = json.loads(line)
                 if isinstance(value, dict):

@@ -15,6 +15,9 @@ from typing import Any
 from codess import __version__
 from codess.config import (
     CC_PROJECTS,
+    SOURCE_LINKS_FILE,
+    SOURCE_LINKS_FORMAT,
+    STORE_DIR,
     VERBOSE,
 )
 
@@ -73,11 +76,11 @@ def find_slug_for_project(project_path: Path) -> str | None:
     projects_dir = get_cc_projects_dir()
     if (projects_dir / slug).is_dir():
         return slug
-    link_path = project_path.resolve() / ".codess" / "source-links.json"
+    link_path = project_path.resolve() / STORE_DIR / SOURCE_LINKS_FILE
     if link_path.exists():
         try:
             value = json.loads(link_path.read_text(encoding="utf-8"))
-            if value.get("format") != "codess.source-links/1":
+            if value.get("format") != SOURCE_LINKS_FORMAT:
                 raise ValueError("unsupported source-link format")
             for link in value.get("links") or []:
                 if not isinstance(link, dict):
@@ -259,7 +262,6 @@ def build_ingest_run_options(args: Any) -> dict[str, Any]:
     policy = load_resource_policy(policy_path)
     env_overrides: dict[str, int] = {}
     for env_name, key in (
-        ("CODESS_MAX_SOURCE_BYTES", "transcript_bytes"),
         ("CODESS_MAX_TRANSCRIPT_BYTES", "transcript_bytes"),
         ("CODESS_MAX_CURSOR_CONTAINER_BYTES", "cursor_container_bytes"),
         ("CODESS_MAX_EVENTS_PER_SOURCE", "events_per_source"),
@@ -430,6 +432,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--redact",
         action="store_true",
         help="ingest: redact secrets (patterns in config) [CODESS_REDACT]",
+    )
+    p.add_argument(
+        "--no-hash",
+        action="store_true",
+        help=(
+            "skip snapshot/manifest hash verification on read; trusts file "
+            "content as-is instead of raising on a mismatch [CODESS_NO_HASH]. "
+            "For recovery/debugging only -- every read this bypasses is "
+            "logged as a warning."
+        ),
     )
     p.add_argument(
         "--force",
@@ -696,6 +708,13 @@ def parse_and_run(argv: list[str] | None = None) -> int:
 
     if args.verbose or VERBOSE:
         logging.basicConfig(level=logging.DEBUG)
+
+    from codess.config import NO_HASH
+    if flag_or_env(args, "no_hash", NO_HASH):
+        # fileio.read_hash/rewrite_hash read CODESS_NO_HASH directly (a leaf
+        # module cannot import config), so the CLI flag's only effect is
+        # setting the same env var those calls already observe.
+        os.environ["CODESS_NO_HASH"] = "1"
 
     from cli.ingest_cmd import run as run_ingest
     from cli.query_cmd import run as run_query

@@ -13,7 +13,7 @@ from codess.baseline_operations import (
     apply_project, reset_rebuildable_working_stores, run_ingest,
 )
 from codess.baseline_validation import validate_project
-from codess.candidate_review import (
+from codess.review_project import (
     discover_git_roots, observe_git, recommend, record_decision,
     refresh_candidates, validate_policy,
 )
@@ -181,7 +181,7 @@ def test_candidate_refresh_uses_scan_and_preserves_review(tmp_path, monkeypatch)
         }],
     })
     monkeypatch.setattr(
-        "codess.candidate_review.run_scan",
+        "codess.review_project.walk_sessions",
         lambda *args, **kwargs: [{
             "path": "project", "dir_path": str(project), "vendor": "Claude|Codex",
             "sess": 3, "mb": 2.5, "span_weeks": 1.0,
@@ -557,7 +557,7 @@ def test_relocation_rolls_back_catalog_and_pointer_on_verification_failure(
     project, registry, project_id = _captured_project(tmp_path)
     before = (registry / "projects.json").read_bytes()
     replacement = tmp_path / "replacement"
-    monkeypatch.setattr("codess.catalog_operations.current_store_paths", lambda path: [])
+    monkeypatch.setattr("codess.catalog_operations.current_stores", lambda path: [])
     with pytest.raises(RuntimeError, match="cannot read"):
         relocate_project(registry, project_id, project, replacement)
     assert (registry / "projects.json").read_bytes() == before

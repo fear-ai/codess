@@ -10,7 +10,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from codess.config import get_project_stores, validate_config
+from codess.config import (
+    DEFAULT_QUERY_BYTE_LIMIT, get_project_stores, validate_config,
+)
 from codess.identity import global_session_id
 from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
 from codess.project_catalog import resolve_project_query_scopes
@@ -424,7 +426,7 @@ def run(args) -> int:
                 all_current=all_current,
                 allow_package_mismatch=package_policy == "read-compatible",
             )
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, json.JSONDecodeError, SnapshotError) as exc:
             print(f"codess: cannot resolve Project scope: {exc}", file=sys.stderr)
             return 1
         resolved_roots = [
@@ -764,7 +766,7 @@ def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
                 filters=filters,
                 limit=getattr(args, "limit", None),
                 byte_limit=(
-                    (getattr(args, "byte_limit", None) if getattr(args, "byte_limit", None) is not None else 16 * 1024 * 1024)
+                    (getattr(args, "byte_limit", None) if getattr(args, "byte_limit", None) is not None else DEFAULT_QUERY_BYTE_LIMIT)
                     if action in {"events", "search"} else None
                 ),
                 snapshot_id=snapshot_id,

@@ -1,7 +1,4 @@
-"""Refreshable, evidence-backed annotations for the Project catalog.
-
-# ruff S608 exemption: CoPlan.md 10.4.2.2
-"""
+"""Refreshable, evidence-backed annotations for the Project catalog."""
 
 from __future__ import annotations
 
@@ -12,16 +9,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from codess.config import LARGE_EVENT_COUNT, LARGE_STORE_BYTES
 from codess.project_catalog import (
     catalog_readiness,
     durable_project_root,
     load_catalog,
 )
+from codess.snapshot import SnapshotError, read_manifest, current_snapshot
 
 
 ANNOTATION_REPORT_FORMAT = "codess.project-annotations/1"
-DEFAULT_LARGE_EVENT_COUNT = 25_000
-DEFAULT_LARGE_STORE_BYTES = 128 * 1024 * 1024
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -35,15 +32,15 @@ def _read_json(path: Path | None) -> dict[str, Any]:
 
 
 def _current_snapshot(base: Path) -> tuple[str | None, Path | None]:
-    pointer = _read_json(base / "current.json")
-    snapshot_id = pointer.get("snapshot_id")
-    target = pointer.get("path")
-    if not isinstance(snapshot_id, str) or not snapshot_id:
+    try:
+        resolved = current_snapshot(base)
+    except SnapshotError:
         return None, None
-    if isinstance(target, str) and target:
-        path = Path(target)
-        return snapshot_id, path if path.is_absolute() else base / path
-    return snapshot_id, base / "snapshots" / snapshot_id
+    if resolved is None:
+        return None, None
+    snapshot, pointer = resolved
+    snapshot_id = pointer.get("snapshot_id")
+    return (snapshot_id if isinstance(snapshot_id, str) and snapshot_id else None), snapshot
 
 
 def _snapshot_facts(snapshot: Path | None) -> dict[str, Any]:
@@ -57,7 +54,11 @@ def _snapshot_facts(snapshot: Path | None) -> dict[str, Any]:
     }
     if snapshot is None or not snapshot.is_dir():
         return facts
-    manifest = _read_json(snapshot / "manifest.json")
+    try:
+        manifest = read_manifest(snapshot)
+    except SnapshotError as exc:
+        facts["snapshot_read_error"] = str(exc)
+        manifest = {}
     build_policy = manifest.get("build_policy")
     if isinstance(build_policy, dict):
         facts["raw_mode"] = build_policy.get("raw_mode")
@@ -114,8 +115,8 @@ def build_project_annotations(
     *,
     baseline_selection: Path | None = None,
     reviewed_catalog: Path | None = None,
-    large_event_count: int = DEFAULT_LARGE_EVENT_COUNT,
-    large_store_bytes: int = DEFAULT_LARGE_STORE_BYTES,
+    large_event_count: int = LARGE_EVENT_COUNT,
+    large_store_bytes: int = LARGE_STORE_BYTES,
 ) -> dict[str, Any]:
     """Build annotations from catalog, snapshot, and reviewed-set evidence."""
     if large_event_count <= 0 or large_store_bytes <= 0:

@@ -13,15 +13,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from codess.raw_store import RawCaptureError, RawStore, verify_captured_object
+from codess.raw_store import (
+    RAW_FORMAT, RawCaptureError, RawStore, verify_captured_object,
+)
 from codess.fileio import (
     check_policy_format, hash_file, load_versioned_policy, source_fingerprint,
     write_json_atomic,
 )
+from codess.config import (
+    CURRENT_POINTER_FILE, MANIFEST_FILE, RAW_MANIFEST_FILE, STORE_DIR,
+)
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import FORMAT_VERSION, require_store, verify_package
 from codess.snapshot import (
-    SnapshotError, current_store_paths, snapshot_store_paths_from_base,
+    SnapshotError, current_stores, read_manifest, current_snapshot,
+    snapshot_store_paths_from_base,
 )
 
 
@@ -495,9 +501,9 @@ def _validate_raw(
     records: list[dict[str, Any]] = []
     revisions: list[str] = []
     try:
-        lines = (snapshot / "raw-manifest.jsonl").read_text(encoding="utf-8").splitlines()
+        lines = (snapshot / RAW_MANIFEST_FILE).read_text(encoding="utf-8").splitlines()
         header = json.loads(lines[0])
-        _add_check(report, "raw.header", header.get("raw_format") == "codess.raw/1", header)
+        _add_check(report, "raw.header", header.get("raw_format") == RAW_FORMAT, header)
         records = [json.loads(line) for line in lines[1:] if line.strip()]
     except (OSError, IndexError, json.JSONDecodeError) as exc:
         _add_check(report, "raw.manifest", False, str(exc))
@@ -704,19 +710,14 @@ def validate_project(
                 snapshot.parent.parent, snapshot.name
             )
         else:
-            paths = current_store_paths(project_path)
+            paths = current_stores(project_path)
             if not paths:
                 raise SnapshotError("no current snapshot")
-            current = json.loads(
-                (project_path / ".codess" / "current.json").read_text()
-            )
-            current_path = Path(current["path"])
-            snapshot = (
-                current_path
-                if current_path.is_absolute()
-                else project_path / ".codess" / current_path
-            )
-        manifest = json.loads((snapshot / "manifest.json").read_text())
+            resolved = current_snapshot(project_path / STORE_DIR)
+            if resolved is None:
+                raise SnapshotError("no current snapshot")
+            snapshot, _pointer = resolved
+        manifest = read_manifest(snapshot)
     except (OSError, KeyError, json.JSONDecodeError, SnapshotError) as exc:
         report["errors"].append(f"snapshot: {exc}")
         return report
@@ -841,11 +842,11 @@ def run_query_smoke(
         query_root = project_path
         if snapshot_path is not None:
             query_root = temp_root / "candidate-view"
-            pointer = query_root / ".codess" / "current.json"
+            pointer = query_root / STORE_DIR / CURRENT_POINTER_FILE
             write_json_atomic(pointer, {
                 "snapshot_id": snapshot_id,
                 "path": str(snapshot_path),
-                "manifest_sha256": hash_file(snapshot_path / "manifest.json"),
+                "manifest_sha256": hash_file(snapshot_path / MANIFEST_FILE),
             })
         env = os.environ.copy()
         env["PYTHONPATH"] = str(repo_root / "src")

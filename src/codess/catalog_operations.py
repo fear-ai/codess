@@ -12,13 +12,14 @@ from pathlib import Path
 from typing import Any
 
 from codess.baseline_validation import validate_project
+from codess.config import CURRENT_POINTER_FILE, RAW_MANIFEST_FILE, SNAPSHOTS_DIR
 from codess.fileio import read_json, write_json_atomic
 from codess.project_catalog import (
     add_project_location, durable_project_root, get_project_entry,
     retire_project_location,
 )
 from codess.schema_contract import verify_package
-from codess.snapshot import current_store_paths
+from codess.snapshot import current_stores
 
 
 ONBOARD_RECEIPT_FORMAT = "codess.catalog-onboard/1"
@@ -153,12 +154,12 @@ def onboard_catalog(
 
 def _captured_current(registry: Path, project_id: str) -> bool:
     durable = durable_project_root(registry, project_id)
-    pointer = durable / "current.json"
+    pointer = durable / CURRENT_POINTER_FILE
     if not pointer.exists():
         return False
     value = read_json(pointer)
-    snapshot = durable / "snapshots" / value["snapshot_id"]
-    raw_manifest = snapshot / "raw-manifest.jsonl"
+    snapshot = durable / SNAPSHOTS_DIR / value["snapshot_id"]
+    raw_manifest = snapshot / RAW_MANIFEST_FILE
     if not raw_manifest.exists():
         return False
     records = [
@@ -205,7 +206,7 @@ def relocate_project(
     try:
         binding = add_project_location(registry, project_id, new_path)
         write_json_atomic(pointer_path, read_json(source_pointer))
-        if not current_store_paths(new_path):
+        if not current_stores(new_path):
             raise RuntimeError("new location cannot read the durable snapshot")
         retired = retire_project_location(
             registry, project_id, old_path, allow_last_active=False

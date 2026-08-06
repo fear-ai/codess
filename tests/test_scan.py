@@ -1,4 +1,4 @@
-"""Tests for codess scan CLI and run_scan."""
+"""Tests for the codess scan CLI command (backed by codess.walk_sessions)."""
 
 import json
 import sqlite3

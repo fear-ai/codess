@@ -4,6 +4,41 @@ CoPlan explains how Codess is implemented, how components relate, how behavior
 is tested, what is operational now, and what engineering work remains. It is
 the sole current implementation-status and work registry.
 
+## Work Registry at a Glance
+
+Every numbered work item (full detail in
+[14.1 Immediate Core Work](#141-immediate-core-work) and
+[14.2 Next Functional Work](#142-next-functional-work)), in one place for
+immediate review. Status follows 14's own vocabulary -- **WIP** active,
+**Planned** accepted and ordered, **TODO** accepted but unscheduled,
+**Under review** an established problem with no accepted resolution yet
+(distinct from merely unscheduled), **Postponed** intentionally outside the
+current phase. Unnumbered Postponed directions (mapping expression
+language, remote schema registries, and the rest of
+[14.4 Deferred Directions](#144-deferred-directions)) are not individually
+tracked work items and are not repeated in this table.
+
+| ID | Priority | Status | Work |
+|---|---|---|---|
+| W01 | Critical | WIP | Audit source-type and Actor classification across CC/Codex/Cursor. |
+| W02 | Critical | WIP | Strengthen tool, context, compaction, model-setting, and agent/subagent decode. |
+| W03 | Critical | **Under review** | Separate exact package integrity from SQLite layout, logical schema, decoder, mapping, and fixture identity -- a single digest over the complete packaged file set means a non-semantic packaging edit can make an unchanged store layout unwritable. Blocked on deciding which identities the digest should and should not cover. |
+| W04 | High | Planned | Shared candidate-record contract and runtime mapping-profile enforcement. |
+| W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. |
+| W06 | High | Planned | Move domain SQL and workflows out of command modules. |
+| W07 | High | Planned | Bound ancillary reads that can encounter large source or repository content. |
+| W08 | High | Planned | Establish repeatable query and ingest performance workloads. |
+| W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. |
+| W10 | High | Planned | Complete the Cursor source-access boundary. |
+| W11 | Normal | TODO | Improve search reports and structured-query examples. |
+| W12 | Normal | TODO | Report source-to-common coverage, loss, and unknown shapes. |
+| W13 | Normal | TODO | Mechanically enforce architecture/contract paths; observe child-process coverage. |
+| W14 | Normal | TODO | Require or explicitly mark Project identity for direct library writes. |
+| W15 | Normal | **Under review** | Resolve the meaning and name of raw mode `none` -- it retains no raw bytes but still creates a raw-manifest observation. Blocked on deciding whether `none` means no bytes or no raw observation. |
+| W16 | Normal | TODO | Evaluate/plan external investigation interfaces (9.7); does not authorize implementation. |
+| W17 | Normal | **Under review** | Expand cross-Project analysis inputs. Blocked on a consumer specifying entities, fields, selection, transformation, and output checks. |
+| W18 | Normal | Planned | Structured operational-reporting subsystem (9.6.1). |
+
 ## 1. Implementation Scope
 
 By this point, the reader has already seen how to start Codess, why the product
@@ -45,7 +80,7 @@ CodeSess/
 │       ├── vendor_audits/      # bounded structure-only evidence audits
 │       │   ├── claude_features.py
 │       │   └── codex_features.py
-│       └── *.py                # ~50 flat modules: catalog, store, query,
+│       └── *.py                # flat modules: catalog, store, query,
 │                                # scan/ingest coordination, snapshot,
 │                                # retention, evidence, per-vendor source
 │                                # access, and shared utilities together
@@ -171,6 +206,215 @@ Cross-cutting utilities remain content-neutral unless their stated purpose is
 content processing. Logging, progress, resource observation, and catalog code
 must not become hidden vendor parsers.
 
+### 3.4 Snapshot File-Access Case Study
+
+Section 3.2 assigns `snapshot` sole behavioral authority over "publication
+and retained evidence." Before the consolidation described here, that
+assignment was true in intent but not in the code: the physical layout it
+governs -- `.codess/`, `current.json`, `manifest.json`,
+`raw-manifest.jsonl`, and related filenames -- was independently
+constructed and, in several cases, independently *read and hash-verified*
+by twelve modules with no shared implementation. This section records what
+was found, because the specific shape of the duplication is the evidence
+for the dependency rules in 3.3, not merely a historical note.
+
+#### 3.4.1 What Was Duplicated
+
+Every module below had its own literal `".codess"`, `"current.json"`,
+`"manifest.json"`, or `"raw-manifest.jsonl"` string, constructing the same
+paths `snapshot.py` already constructed, for a reason specific to that
+module's own stated purpose:
+
+| Module | Stated purpose | What it needed from snapshot files |
+|---|---|---|
+| `baseline_operations` | Baseline preservation, apply, fixed-point workflow | Legacy-store archival, working-store reset gated on a readable current snapshot |
+| `baseline_validation` | Read-only snapshot verification | An independent pointer/manifest read-and-hash-verify, parallel to `snapshot.py`'s own |
+| `catalog_operations` | Batch onboarding, Project-location lifecycle | Whether a Project's current snapshot has fully captured raw records |
+| `retention` | Retention planning, validated pruning | The strictest read: pointer, manifest, raw manifest, and every store hash, plus containment and identity checks before permitting deletion |
+| `project_annotations` | Catalog annotations for reporting | Best-effort snapshot facts (session/event counts, raw mode) for a report row |
+| `refresh_operations` | Staged refresh orchestration | Best-effort raw-mode inference to pick a sensible default for the next refresh |
+| `project_catalog` | Project identity, locations, durable roots | A verified current `snapshot_id`, consumed by three internal call sites with three different fault-tolerance needs |
+| `evidence_resolver` | Resolve one Event to exact source evidence | Locating which ancestor directory of a store path is a snapshot root |
+| `storage_report` | Dated storage observations | A whole-registry, unverified scan of every Project's current snapshot for size/inventory reporting |
+| `cli.ingest_cmd` | Ingest CLI command | Runtime-report path, current-snapshot-id lookup, and a sealed-snapshot check gating raw capture upgrade |
+| `cursor_source` | Cursor discovery and read-only SQLite access | An unrelated file, `source-links.json`, under the same `.codess/` directory |
+| `project` | Project/Git roots, CLI dispatch | The same `source-links.json`, for Claude slug resolution |
+
+Three of the twelve (`project_catalog`, `cli.ingest_cmd`'s
+`_current_snapshot_id`/`_current_snapshot_is_sealed`, and
+`catalog_operations`) read `current.json` and used its `snapshot_id`
+**without verifying `manifest_sha256` at all** -- not a weaker version of
+`snapshot.py`'s check, an absent one. A tampered or stale pointer in any of
+these paths would have been trusted silently.
+
+#### 3.4.2 Why It Duplicated Rather Than Reused
+
+No module above imported `.codess`/`current.json` from a broken build --
+each added its own literal because the module already existing at the time
+needed one fact from the snapshot layout, `snapshot.py` did not yet expose
+a function returning exactly that fact, and adding one inline string was
+smaller than extending the shared module. Repeated across twelve additions
+over time, this produced the file-literal duplication without any single
+change being the wrong call in isolation -- the structural gap was the
+absence of a rule requiring the *next* need to route through `snapshot.py`
+rather than repeat the pattern that had worked eleven times already.
+
+The two verified-vs-unverified variants split along a further-avoidable
+axis: `current_snapshot()` (formerly `resolve_current_snapshot`) already
+existed and performed the correct check when several of the unverified call
+sites were written; they did not fail to find it because it was hard to
+find, they constructed their own read because a three-line inline read
+looked equivalent to a function call and the missing hash comparison was
+not visible without deliberately comparing the two.
+
+#### 3.4.3 What Changed
+
+- Every filename and directory-name literal above moved to `config.py`
+  (`STORE_DIR`, `CURRENT_POINTER_FILE`, `MANIFEST_FILE`, `MANIFEST_BACKUP_FILE`,
+  `RAW_MANIFEST_FILE`, `SNAPSHOTS_DIR`, `LAST_INGEST_REPORT_FILE`,
+  `PROJECT_FILE`, `SOURCE_LINKS_FILE`, `WORKING_ARCHIVES_DIR`), which
+  `snapshot.py` itself now imports rather than defining locally -- a single
+  source for a name any module may cite, independent of whether that module
+  also uses `snapshot.py`'s functions.
+- The three unverified `current.json` reads (`project_catalog`,
+  `cli.ingest_cmd`, and the read/verify logic in `retention` and
+  `baseline_validation`) were redirected to call `current_snapshot()`
+  instead of re-reading the pointer file, closing the missing-hash-check
+  gap as a side effect of removing the duplication, not as a separate
+  change.
+- `retention._validate_current` keeps genuinely additional checks
+  `current_snapshot()` does not perform (containment inside the Project's
+  own `snapshots/` directory, snapshot-name-equals-snapshot-id identity,
+  raw-manifest hash, per-store hash, SQLite `quick_check`, raw-object
+  presence and size) -- these remain local to `retention.py` because they
+  exist specifically to gate a destructive pruning decision, not because
+  the consolidation was incomplete. A function that already performs a
+  stricter check than the shared primitive is not evidence of remaining
+  duplication; only an *independent, weaker* reimplementation is.
+- `refresh_operations` and `project_annotations`'s best-effort reads (raw
+  mode inference, annotation facts) were also redirected to
+  `current_snapshot()`, even though their prior unverified behavior was
+  low-risk by design (both already degrade gracefully on any read failure)
+  -- consistency of "one function reads the pointer" was judged more
+  valuable than preserving each site's slightly different historical
+  tolerance for a stale pointer.
+- The raw `hash_file`/comparison calls this consolidation exposed (nine
+  sites in `snapshot.py` alone) were themselves collapsed into four shared
+  `fileio` primitives -- `read_hash` and `write_hash` for small JSON
+  documents whose content a caller needs afterward, `verify_hash` for
+  pass/fail checks on files that may be large (a raw-capture object, a
+  SQLite store) and must stream rather than be held in memory, and
+  `rewrite_hash` for a verified read-modify-write. `CODESS_NO_HASH` /
+  `--no-hash` (Operations.md 9.5) is a recovery/debugging bypass built on
+  the same primitives, not a separate mechanism -- every module that calls
+  `read_hash`/`verify_hash`/`rewrite_hash` observes the bypass identically,
+  rather than each needing its own opt-out check.
+- Two functions with unrelated implementations shared the name
+  `current_store_paths` (`snapshot.py`'s single-Project verified accessor
+  and `storage_report.py`'s unverified whole-registry scanner). Renamed to
+  `current_stores` and `all_store_paths` respectively so the name no longer
+  implies they are interchangeable.
+
+#### 3.4.4 What This Predicts Elsewhere
+
+The mechanism observed here -- a module needs one fact from a file another
+module already owns, a three-line inline read is smaller than a shared-code
+change, the inline read silently drops a check the canonical path performs
+-- is not specific to snapshot files. Section 14 (Current Work Registry)
+already tracks the Cursor SQL boundary (W10) as a comparable case: a second
+module reimplementing access to state its owning module already exposes.
+Any future audit for the same pattern should look for the same three
+preconditions -- a shared physical format, more than one module reading it
+for a locally justified reason, and no runtime or lint check requiring the
+canonical accessor -- rather than searching for the specific filenames
+already fixed here.
+
+### 3.5 Numeric-Constant Duplication and Centralization
+
+The same "a module needs one fact, an inline literal is smaller than a
+shared-code change" mechanism from 3.4 was checked against numeric
+constants, focused on byte-size thresholds after `1024`-scale arithmetic
+was found scattered well beyond `config.py`'s already-centralized
+`resource_policy`-derived maximums. Unlike the file-literal case, most of
+what was found was not duplicated -- the audit therefore had to
+distinguish the two before centralizing anything, since collapsing
+genuinely independent constants into a false shared value would be a worse
+outcome than leaving them alone.
+
+#### 3.5.1 Two Confirmed Duplication Clusters
+
+| Value | Meaning | Independent declarations found |
+|---|---|---|
+| 128 MiB | A normalized store at or above this size is labelled "large" | `cli.admin_cmd` (`--large-bytes` default, two subcommands), `refresh_operations` (two function parameter defaults), `project_annotations` (`DEFAULT_LARGE_STORE_BYTES`) |
+| 2 MiB | A single-line source record above this size is rejected | `cli.admin_cmd` (`--max-record-bytes` default, two subcommands), `bounded_jsonl` (`DEFAULT_MAX_RECORD_BYTES`) |
+
+Both clusters shared the same origin as 3.4's file-literal case: the value
+was correct everywhere it appeared, nothing was functionally broken, and
+each independent declaration was individually reasonable at the moment it
+was written. The risk was latent, not active -- a future change to either
+threshold would need to be found and applied at every site by hand, with
+no mechanism forcing that to happen. Both are now defined once in
+`config.py` (`LARGE_STORE_BYTES`, `MAX_RECORD_BYTES`) and imported
+everywhere they were previously re-declared.
+
+#### 3.5.2 Genuinely Independent Constants, Centralized on Request
+
+The remaining `1024`-scale constants found were each a distinct, correctly
+scoped decision with no duplication:
+
+| Constant | Prior location | What it actually governs |
+|---|---|---|
+| `LARGE_RAW_REVISION_BYTES` (1 GiB) | `retention.py` | A raw-capture revision this large triggers explicit `--keep-comparison-revisions` review during retention planning |
+| `MAX_TOKEN_LINE_BYTES` (8 MiB) | `token_usage.py` | A single JSONL line above this size during token-usage scanning is treated as implausible and skipped |
+| `SOURCE_FULL_HASH_MAX` (64 MiB) | `fileio.py` | Above this size, `source_fingerprint` samples bounded windows instead of hashing the complete file |
+| `LARGE_RAW_OBJECT_BYTES` (300 MiB) | `storage_report.py` | A raw-capture object above this size is called out individually in a storage report |
+| `DEFAULT_QUERY_BYTE_LIMIT` (16 MiB) | `cli.query_cmd` | Default maximum inline content bytes for one typed query result, overridden by explicit `--byte-limit` |
+
+None of these were wrong or duplicated -- each was the single place its own
+governing decision lived, which is the outcome 3.4's consolidation was
+working toward for file literals. They were moved to `config.py` on an
+explicit decision to optimize for one discoverable location over literal
+proximity to the one function that uses each value, not because leaving
+them local was a defect. `config.py` records why each one exists inline
+(a short comment naming the governed behavior) so a reader scanning the
+module does not need to chase the constant back to its sole call site to
+learn what it is for.
+
+Three further constants (`DEFAULT_HASH_CHUNK_BYTES`, `SOURCE_SAMPLE_CHUNK_BYTES`,
+`RAW_CAPTURE_CHUNK_BYTES`) were centralized on the same basis but are a
+different kind of value: streaming I/O buffer sizes, not policy thresholds.
+Changing one does not change what Codess accepts, rejects, or flags --
+only how much memory one read call buffers at a time. They are grouped
+under a separate heading in `config.py` for this reason; a future reader
+should not infer a governance meaning from their presence next to the
+threshold constants above.
+
+#### 3.5.3 What Was Deliberately Left Alone
+
+Several other `1024`-shaped expressions were checked and are not
+duplicated, not policy thresholds, and were left as local arithmetic:
+
+- `resource_policy.BUILTIN_MAXIMUMS` (`transcript_bytes`, `cursor_container_bytes`)
+  is the source `config.py` itself already reads from via the table-driven
+  env-var defaults (12.1); moving it would invert that ownership rather
+  than fix a duplication.
+- `bounded_jsonl`'s `1024`-byte floor on `max_record_bytes` is a sanity
+  minimum on a caller-supplied value, not a default or a threshold shared
+  with anything else.
+- `scan.py`'s four `/ (1024 * 1024)` divisors and `admin_cmd.py`'s
+  `* 1024**3` are unit-conversion arithmetic (bytes to MB for display,
+  GB to bytes for a CLI argument), not limit values -- the same category
+  as a Celsius/Fahrenheit conversion constant, not a configuration
+  decision.
+- `resources.py`'s platform-conditional `* 1024` converts a
+  platform-reported unit (KB on non-Darwin, bytes on Darwin) to a common
+  unit; the multiplier is a fact about the operating system's reporting
+  convention, not a Codess policy value.
+
+Centralizing these would have added indirection without removing any real
+duplication -- the same failure mode 3.4.4 warns against for file literals,
+applied to numbers instead of names.
+
 ## 4. CoSchema Read and Write Path
 
 This section concerns the physical and code realization of the store, not the
@@ -282,6 +526,57 @@ selected database observation in one transaction.
 facets, expansion, comparison, and byte/row limits. `cli.query_cmd` owns command
 adaptation and human or structured rendering. Direct report modes remain
 separate renderers over the same stores.
+
+### 5.4 Subprocess Invocation
+
+Several domain operations do not call `scan`/`ingest`/`query` in-process;
+they launch a second `codess` invocation as a child process and read its
+exit status, stdout, and stderr. This section describes that boundary --
+what data crosses it, and what happens to the child on completion, timeout,
+or failure -- since it is easy to miss when reading only the in-process call
+graph in 5.1-5.3.
+
+```mermaid
+flowchart TB
+    Parent["Parent codess process\n(baseline_operations, refresh_operations,\ncatalog_operations, baseline_validation)"]
+    Build["Build argv + env\n(python -m main ingest/query ...,\nCODESS_REGISTRY, PYTHONPATH, vendor dirs)"]
+    Child["Child process\npython -m main ...\n(full scan/ingest/query lifecycle)"]
+    Wait["subprocess.run(..., timeout=N)\nblocks until exit or timeout"]
+    Exit["Child exits\n(normal or killed on timeout)"]
+    Collect["CompletedProcess\nreturncode, stdout, stderr"]
+    Parse["Parent parses stdout as JSON\n(when the child ran --validate\nor another structured mode)\nor treats output as diagnostic text"]
+
+    Parent --> Build --> Child
+    Child --> Wait --> Exit --> Collect --> Parse
+```
+
+Every launch site (`baseline_operations.run_ingest`,
+`refresh_operations`'s ingest/query calls, `catalog_operations.
+_run_ingest_stage`, `baseline_validation.run_query_smoke`) follows the same
+shape:
+
+| Concern | Behavior |
+|---|---|
+| Launch | `subprocess.run([sys.executable, "-m", "main", ...], cwd=repo_root, env=env, capture_output=True, text=True, timeout=N)` |
+| Environment | `env = os.environ.copy()` plus explicit overrides -- always `PYTHONPATH` (so the child resolves the same `src/` checkout without an install step) and usually `CODESS_REGISTRY`; vendor-directory env vars (`CODESS_CC_PROJECTS`, `CODESS_CURSOR_DATA`, and similar) are forwarded only by call sites that need a non-default vendor source location, not universally |
+| IPC | Two channels: **exit status** (`0` accepted, nonzero rejected) and **stdout**, which is either free-form diagnostic text or one JSON document when the child ran in a structured mode (`ingest --validate`, `query` with `--output-format jsonl`); stderr is diagnostic/progress text only, never parsed |
+| Timeout | An explicit `timeout=` is required at every site (3600s for ingest, 120s for the baseline query smoke test, a configurable value for refresh); `subprocess.run` enforces it |
+| Termination and reap | `subprocess.run` is synchronous: it calls `Popen.wait()` internally and does not return control to the caller until the child has exited, so there is no separate reap step and no zombie-process risk from this code. A `timeout` expiring raises `subprocess.TimeoutExpired` -- the Python standard library kills the child (`Popen.kill()`) and waits for it before raising, so the child is not left running or orphaned; only `refresh_operations` catches this exception explicitly (to report a timeout as a structured failure rather than letting it propagate), the other three sites let an uncaught `TimeoutExpired` surface to their own caller |
+| Working directory | Always the parent's `repo_root` (the Codess checkout), not the target Project -- the child's own `--dir`/`--registry` arguments select the Project and registry, not `cwd` |
+
+A structurally identical but separate category launches `git` rather than
+`codess` itself: `project.get_project_root` (`git rev-parse
+--show-toplevel`) and `candidate_review._git_run` (arbitrary read-only `git`
+subcommands for repository and worktree discovery). These use the same
+`subprocess.run(..., capture_output=True, text=True, timeout=N)` shape with
+a short timeout (5-10s) and treat a nonzero exit or `FileNotFoundError` as
+"no Git information available" rather than a fatal error.
+
+No launch site in this codebase uses `subprocess.Popen` directly, threads a
+long-lived child, or manages a process pool; every child is a single
+bounded request-response invocation. A future streaming or long-running
+subprocess use case would need its own lifecycle design -- this section
+describes only the pattern actually implemented.
 
 ## 6. Vendor Record Processing
 
@@ -1064,15 +1359,15 @@ time either happens without anyone updating the text. Run
 citing one here; it also flags any `S608` finding that is *not* currently
 suppressed, which is the signal that actually matters day to day -- a
 nonzero result there means a site was added since the last review pass, or
-an existing `# noqa` was removed without a rewrite, and needs the same
+an existing exemption was removed without a rewrite, and needs the same
 read-and-classify treatment as every other site before it ships.
 
-Each remaining site carries `# noqa: S608`, added mechanically with
-`ruff check --select S608 --add-noqa` after manual verification (not
-before), and the module docstring of every affected file carries a short
-note naming which permitted pattern that file's sites use, so the
-suppression is locally justified rather than opaque at the point a reader
-encounters it.
+Each remaining site is covered by a file-level
+`[tool.ruff.lint.per-file-ignores]` entry in `pyproject.toml` (10.4.4), added
+only after manual verification (not before). A source file carries at most a
+single-line pointer at its first S608 site or in its module docstring naming
+the permitted pattern its sites use, so the suppression is locally traceable
+rather than opaque at the point a reader encounters it.
 
 This is the model for any future rule where the scanner's finding rate and
 its true-positive rate diverge: run broad, read every hit once, classify
@@ -1199,15 +1494,13 @@ constructed there stays safe.
 `S608` suppression is a file-level `pyproject.toml`
 `[tool.ruff.lint.per-file-ignores]` entry, not a per-line `# noqa: S608`
 comment — a file with several sites matching the patterns in 10.4.2 needs
-one `pyproject.toml` line, not one comment per site. The rationale for
-*why* a file is exempted belongs once, here in 10.4, not repeated in the
-file's docstring or in the `pyproject.toml` comment; a source file carries
-at most a single-line pointer at its first S608 site or in its module
-docstring, e.g. `# ruff S608 exemption: 10.4.2.3 [CoPlan.md]`, naming the
-specific subsection so a reader lands on the exact scenario rather than the
-whole of 10.4. Three explanations of the same reasoning (source file,
-`pyproject.toml`, this document) is the failure mode this convention
-exists to prevent.
+one `pyproject.toml` line, not one comment per site. This document is the
+sole place the rationale for an exemption is written down: `pyproject.toml`
+carries only the mechanical ignore list, and no source file carries a
+docstring note, a pointer comment, or any other reference to this section.
+A reader auditing why a file is exempted starts and ends here in 10.4,
+against the current `pyproject.toml` list, rather than piecing the reasoning
+together from a comment that can drift from the file it was written for.
 
 #### 10.4.5 Scope Note
 
@@ -1396,11 +1689,8 @@ developer's live harness data.
 
 #### 13.4.1 Source and Command Boundaries
 
-Completing the Cursor source-access boundary is tracked by **W10**.
-`adapters.cursor` still opens and queries `cursorDiskKV`, coupling selection to
-interpretation. `cursor_source` must return bounded selected records and
-metadata, after which the adapter can lose its SQLite dependency. Direct
-vendor SQL remains acceptable only in the bounded audit exception.
+The Cursor source-access boundary violation and its **W10** resolution are
+described in 6.4.
 
 Command-layer separation is tracked by **W06**. `cli.ingest_cmd` contains
 source workflows, transactions, raw-record handling, and publication
@@ -1481,7 +1771,7 @@ and "keep the JSON files load-bearing, accept jsonschema's two permanent
 gaps, or keep hand-writing all of it."
 
 `tests/fixtures/validate_request_vectors.json` and
-`tests/test_validate_request_vectors.py` (51 vectors covering every
+`tests/test_validate_request_vectors.py` (covering every
 `raise QueryContractError` path in `validate_request`, each tagged where
 it exercises `sortedness`, `cross_field`, or `action_dependent`) now supply
 the before/after correctness baseline either migration path needs. The
@@ -1624,7 +1914,7 @@ work intentionally outside the current phase.
 |---|---|---|---|---|
 | W01 | Critical | WIP | Audit source-type and Actor classification across representative Claude Code, Codex, and Cursor Sessions. | Fixtures and real-source checks agree on Actors, roles, origins, relations, and source-accounting totals. |
 | W02 | Critical | WIP | Strengthen tool, context, compaction, model-setting, and agent/subagent decode. | Each supported family has exact source evidence, mapping, partial/malformed coverage, diagnostics, and an explicit validation basis. |
-| W03 | Critical | Under review | Separate exact package integrity from SQLite layout, logical schema, decoder, mapping, and fixture identity. | A non-semantic package-file change cannot make an unchanged store layout unwritable; each identity has a defined consumer and test. |
+| W03 | Critical | Under review | Separate exact package integrity from SQLite layout, logical schema, decoder, mapping, and fixture identity. A single digest currently covers the complete packaged file set (`schema_contract`), so a non-semantic packaging edit -- a comment, a file not itself loaded at runtime -- changes that digest and makes every already-published current-format store fail its write-compatibility check even though schema, decoder, and data are unchanged; see [Blocked for Immediate Review](#blocked-for-immediate-review) and 13.4.4. | A non-semantic package-file change cannot make an unchanged store layout unwritable; each identity has a defined consumer and test. |
 | W04 | High | Planned | Define the shared candidate-record contract and enforce released mapping profiles at the runtime decode boundary. | All three adapters satisfy the typed and runtime candidate contract, pass the same post-decode conformance check, and share strict/diagnostic semantics. |
 | W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. | Bounded deterministic results and complete requested expansions agree with focused direct queries. |
 | W06 | High | Planned | Move domain SQL and workflows out of command modules. | Commands adapt arguments and render results; ingest operations live in domain modules; repeated reports use the typed executor or an explicit read-only analysis component. |
@@ -1653,6 +1943,51 @@ work intentionally outside the current phase.
 - Add resource controls for observed accidental or pathological input.
 - Maintain Session names and utilization observations without displacing
   source decode, mapping, or search work.
+- Investigate and consolidate five independently truncated SHA-256 hash
+  implementations (`path_label.key_for_path` at 24 hex chars, two sites in
+  `cli.ingest_cmd` at 16 and 24, `snapshot.py`'s snapshot-id derivation at
+  12, `tool_identity.py`'s named `_DIGEST_HEX_CHARS`), evaluating whether
+  each should route through `identity.py`'s existing `_qualified()` pattern
+  and what truncation length is defensible per site's actual collision
+  tolerance -- do not consolidate blindly; some sites may have genuinely
+  different requirements. Findings so far in
+  `experiments/hash-truncation-audit.md`.
+- Following that investigation, segregate all hash operations (including
+  any truncation) into one bounded module with no `hashlib`/SHA references
+  permitted elsewhere in the codebase -- enforces the consolidation
+  structurally rather than by convention.
+- Fix the ambiguous and overloaded terms this document's own controlled
+  vocabulary was found to contain on audit -- Registry (3 senses), Catalog
+  (4+ senses), Source (formal CoSchema entity diluted by lowercase
+  compositional use), Investigation, Pointer, Store ("legacy"/"working"
+  compounds), Contract (5 scoped meanings never enumerated), Snapshot (one
+  vendor-product-state false-friend). `Audit` is the already-correct model
+  case (disambiguated in-text from a security/compliance audit at its point
+  of use). Full findings, exact line numbers, and suggested precise
+  definitions per sense in
+  `experiments/vocabulary-audit-findings.md`.
+- Investigate and consolidate time/duration arithmetic: no dedicated
+  time/duration module exists; roughly fifteen call sites independently
+  define their own `_now()` wrapping `datetime.now(timezone.utc)
+  .isoformat()`, and `walk_sessions.py` alone uses three different
+  time-unit conventions in one file (days via `/(24*3600*1000)`, weeks via
+  `/(7*24*3600*1000)`, a cutoff via `*86400` then separate ms conversion).
+  Evaluate whether one shared `_now()` and named day/week/second-to-ms
+  converters belong in `config.py` alongside the existing `GB`/`MB`/`KB`
+  byte converters, or a separate module, and whether every site genuinely
+  needs the same unit convention before unifying.
+- Decompose `walk_sessions()` (`src/codess/walk_sessions.py`), a single
+  306-line function that is more than half its 553-line file. Concrete
+  extraction boundaries already identified: per-vendor path discovery
+  (CC/Codex/Cursor, currently interleaved in one function body), path
+  canonicalization (Git-root attribution and leaf-path selection -- the
+  best candidate for a pure, independently unit-testable extraction, since
+  it currently cannot be tested without also exercising real vendor
+  filesystem discovery), and per-project row assembly. Open questions on
+  whether extraction is also the right moment to route inline `debug`
+  print statements through the module's existing diagnostic-recording
+  functions, and on closure-capture variables becoming explicit parameters
+  once extracted.
 
 ### 14.4 Deferred Directions
 
@@ -1667,3 +2002,110 @@ limitation justifies reopening them:
 - automatic narrative or assessment generation;
 - cost, quota, or billing analysis; and
 - broad raw-source search.
+
+## 15. Prompt Ideas
+
+This section records specific misses observed during real review and
+implementation sessions -- in evaluation, in documentation, and in code --
+together with the instruction or prompt phrasing that would have caught
+each one earlier. It is not a style guide; every entry below traces to an
+actual incident, not a hypothetical. New entries append; existing entries
+are not softened or removed when the underlying miss is later fixed, since
+the record of the mistake is what has future value, not the current state
+it produced.
+
+### 15.1 Duplication Findings Not Propagated to Siblings
+
+**Miss:** `LARGE_STORE_BYTES` was centralized from `project_annotations.py`
+into `config.py` as part of a fix for a confirmed 128 MiB duplication
+cluster. `DEFAULT_LARGE_EVENT_COUNT`, its immediate sibling constant in the
+same file, same function signature, same "large" semantics, was never
+checked against the same criterion and was left behind -- an inconsistency
+that persisted across several further edits to the same file before being
+caught, on direct question, much later in the same session.
+
+**Prompt that would have caught it:** "When centralizing one constant out
+of a module because it duplicates elsewhere, also check every other
+constant defined in the same few lines for the same criterion, not just the
+one already flagged. A sibling constant left behind is a new inconsistency,
+not a smaller version of the one just fixed."
+
+### 15.2 A Requested Follow-Up Section Not Actually Created
+
+**Miss:** A request to "add a Prompt Ideas subsection" was acknowledged in
+conversation but not translated into an actual document edit or tracked
+task -- the acknowledgment was mistaken for the deliverable. The gap was
+only caught when the requester asked directly why the earlier "revisit"
+comment had not resulted in a task.
+
+**Prompt that would have caught it:** "Before ending a turn that included a
+request to add, create, or track something, grep the actual target
+document or task list for the artifact just claimed to exist. A sentence
+describing an intention is not the same event as the edit that fulfills it,
+and only the edit is verifiable."
+
+### 15.3 A Documentation Diagram's Layout Silently Corrupted an Unrelated Paragraph
+
+**Miss:** Inserting a new subsection (3.4) into CoPlan.md by appending
+after a chosen anchor point placed it before a closing paragraph that
+belonged to the *previous* section (3.3), silently detaching that paragraph
+from its own section and reattaching it to the end of the new one. The
+error was only caught later, incidentally, while re-reading the document
+for an unrelated addition.
+
+**Prompt that would have caught it:** "After inserting a new section
+between two existing ones, re-read several paragraphs on both sides of the
+insertion point, not just the immediate anchor line -- a numbered-heading
+insertion can silently reassign a trailing paragraph's section by moving
+the heading boundary without moving the paragraph."
+
+### 15.4 One Confirmed Fix Pattern Not Swept Across All Structurally Identical Sites
+
+**Miss:** A CLI-argument-default-vs-owning-constant mismatch was found and
+fixed at one site (`--large-bytes`/`--max-record-bytes` in `admin_cmd.py`),
+closed as resolved, and then found again independently three more times in
+the same file (vendor-path defaults, `--large-events`, `--max-files`)
+across later turns, each requiring its own separate discovery rather than
+being caught by one exhaustive sweep after the first instance.
+
+**Prompt that would have caught it:** "When a fix corrects one instance of
+a named pattern (e.g. 'CLI default duplicates a constant defined
+elsewhere'), immediately grep the same file, then the same layer
+codebase-wide, for every other instance of that exact pattern shape before
+considering the finding closed. Fixing one occurrence and moving on treats
+a systemic fault as a local one."
+
+### 15.5 Naming Decisions Made From the Function in Isolation, Not Its Call Site
+
+**Miss:** Early proposals for renaming `catalog.py`'s functions (`scan_`,
+`verify_`, `review_`-prefixed candidates) were generated by inspecting the
+function bodies alone; each was independently rejected only after the
+actual caller (`candidate_review.py`, later `review_project.py`) was read
+in full and its real usage pattern -- call frequency, which fields the
+return value populated, what the caller's own docstring already claimed --
+was checked against the proposed name.
+
+**Prompt that would have caught it, applied earlier:** "Before proposing a
+name for a function or module, read every caller's actual invocation
+first, not just the function's own signature and docstring -- a name is a
+claim about the relationship between a function and its consumers, and
+that relationship is only visible from the consumer side."
+
+### 15.6 Format-String Value Changes Conflated With Python-Name Changes
+
+**Miss:** Early in the `catalog.py`/`candidate_review.py` rename, module
+and function renames were applied without a separate, explicit decision
+about the `_FORMAT` constants' *string values* -- which are written into
+real saved documents and are a compatibility surface distinct from Python
+identifier names (established earlier, independently, for `RAW_FORMAT` and
+`SOURCE_LINKS_FORMAT` in 3.4). The distinction had to be re-raised as an
+explicit question rather than being applied automatically from the
+already-established precedent.
+
+**Prompt that would have caught it:** "A module or function rename and a
+`_FORMAT`/wire-value rename are two different decisions with different
+blast radii -- one is free, internal, and reversible; the other changes
+what a previously saved document will validate against. State which one is
+being changed, explicitly, every time either changes, even when a
+precedent for the distinction already exists elsewhere in the same
+document."

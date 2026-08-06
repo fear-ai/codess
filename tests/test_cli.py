@@ -79,6 +79,41 @@ def test_query_reports_invalid_snapshot_without_traceback():
         assert "Traceback" not in result.stderr
 
 
+def test_no_hash_flag_bypasses_tampered_manifest_hash(durable_tmp_path):
+    """--no-hash lets query proceed past a tampered current.json pointer
+    that would otherwise fail hash verification; without the flag, the
+    same tampered pointer is rejected."""
+    tmp = durable_tmp_path
+    proj = tmp / "proj"
+    proj.mkdir()
+    cc_dir = tmp / "cc"
+    cc_dir.mkdir()
+    slug = path_to_slug(proj.resolve())
+    (cc_dir / slug).mkdir(parents=True)
+    fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
+    shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
+    env = os.environ.copy()
+    env["CODESS_CC_PROJECTS"] = str(cc_dir)
+    ingest = _run(
+        ["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"],
+        env=env,
+    )
+    assert ingest.returncode == 0, ingest.stderr
+
+    pointer_path = proj / ".codess" / "current.json"
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    pointer["manifest_sha256"] = "0" * 64
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    rejected = _run(["query", "--dir", str(proj), "--sessions"], env=env)
+    assert rejected.returncode == 1
+    assert "hash mismatch" in rejected.stderr
+
+    bypassed = _run(["query", "--dir", str(proj), "--sessions", "--no-hash"], env=env)
+    assert bypassed.returncode == 0, bypassed.stderr
+    assert "s1" in bypassed.stdout
+
+
 def test_query_aggregates_multiple_project_roots():
     """Query totals span roots while registry counts remain project-local."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -490,112 +525,106 @@ def test_query_no_mode_exit_1():
         assert "Specify" in r.stderr
 
 
-def test_ingest_no_cc_dir_exit_1():
+def test_ingest_no_cc_dir_exit_1(durable_tmp_path):
     """Ingest --source cc when no CC project dir exits 1."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "orphan"
-        proj.mkdir()
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(tmp)
-        r = _run(["ingest", "--source", "cc", "--dir", str(proj), "--min-size", "0"], env=env)
-        assert r.returncode == 1
-        assert "No CC project" in r.stderr
+    tmp = durable_tmp_path
+    proj = tmp / "orphan"
+    proj.mkdir()
+    env = os.environ.copy()
+    env["CODESS_CC_PROJECTS"] = str(tmp)
+    r = _run(["ingest", "--source", "cc", "--dir", str(proj), "--min-size", "0"], env=env)
+    assert r.returncode == 1
+    assert "No CC project" in r.stderr
 
 
-def test_ingest_empty_jsonl_dir_success():
+def test_ingest_empty_jsonl_dir_success(durable_tmp_path):
     """Ingest when CC dir exists but no jsonl files: success, 0 ingested."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "myproj"
-        proj.mkdir()
-        cc_dir = tmp / "cc"
-        cc_dir.mkdir()
-        slug = path_to_slug(proj.resolve())
-        (cc_dir / slug).mkdir(parents=True)
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(cc_dir)
-        r = _run(["ingest", "--source", "cc", "--dir", str(proj), "--min-size", "0"], env=env)
-        assert r.returncode == 0
-        assert "0 file" in r.stdout or "0 event" in r.stdout
+    tmp = durable_tmp_path
+    proj = tmp / "myproj"
+    proj.mkdir()
+    cc_dir = tmp / "cc"
+    cc_dir.mkdir()
+    slug = path_to_slug(proj.resolve())
+    (cc_dir / slug).mkdir(parents=True)
+    env = os.environ.copy()
+    env["CODESS_CC_PROJECTS"] = str(cc_dir)
+    r = _run(["ingest", "--source", "cc", "--dir", str(proj), "--min-size", "0"], env=env)
+    assert r.returncode == 0
+    assert "0 file" in r.stdout or "0 event" in r.stdout
 
 
-def test_ingest_empty_jsonl_file():
+def test_ingest_empty_jsonl_file(durable_tmp_path):
     """Ingest file with no valid records."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "proj"
-        proj.mkdir()
-        cc_dir = tmp / "cc"
-        cc_dir.mkdir()
-        slug = path_to_slug(proj.resolve())
-        (cc_dir / slug).mkdir(parents=True)
-        (cc_dir / slug / "empty.jsonl").write_text("")
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(cc_dir)
-        r = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
-        assert r.returncode == 0
+    tmp = durable_tmp_path
+    proj = tmp / "proj"
+    proj.mkdir()
+    cc_dir = tmp / "cc"
+    cc_dir.mkdir()
+    slug = path_to_slug(proj.resolve())
+    (cc_dir / slug).mkdir(parents=True)
+    (cc_dir / slug / "empty.jsonl").write_text("")
+    env = os.environ.copy()
+    env["CODESS_CC_PROJECTS"] = str(cc_dir)
+    r = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+    assert r.returncode == 0
 
 
-def test_query_empty_store():
+def test_query_empty_store(durable_tmp_path):
     """Query --tool 0 on empty store: empty output, exit 0."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "proj"
-        proj.mkdir()
-        cc_dir = tmp / "cc"
-        cc_dir.mkdir()
-        slug = path_to_slug(proj.resolve())
-        (cc_dir / slug).mkdir(parents=True)
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(cc_dir)
-        _run(["ingest", "--dir", str(proj), "--source", "cc", "--min-size", "0"], env=env)
-        r = _run(["query", "--dir", str(proj), "--tool", "0"], env=env)
-        assert r.returncode == 0
-        assert r.stdout.strip() == "" or "Bash" not in r.stdout
+    tmp = durable_tmp_path
+    proj = tmp / "proj"
+    proj.mkdir()
+    cc_dir = tmp / "cc"
+    cc_dir.mkdir()
+    slug = path_to_slug(proj.resolve())
+    (cc_dir / slug).mkdir(parents=True)
+    env = os.environ.copy()
+    env["CODESS_CC_PROJECTS"] = str(cc_dir)
+    _run(["ingest", "--dir", str(proj), "--source", "cc", "--min-size", "0"], env=env)
+    r = _run(["query", "--dir", str(proj), "--tool", "0"], env=env)
+    assert r.returncode == 0
+    assert r.stdout.strip() == "" or "Bash" not in r.stdout
 
 
-def test_idempotent_same_data():
+def test_idempotent_same_data(durable_tmp_path):
     """Re-ingest same file produces identical event count."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "proj"
-        proj.mkdir()
-        cc_dir = tmp / "cc"
-        cc_dir.mkdir()
-        slug = path_to_slug(proj.resolve())
-        (cc_dir / slug).mkdir(parents=True)
-        fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
-        shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(cc_dir)
-        r1 = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
-        assert r1.returncode == 0
-        r2 = _run(["query", "--dir", str(proj), "--tool", "0"], env=env)
-        lines1 = r2.stdout.strip().split("\n")
-        _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
-        r4 = _run(["query", "--dir", str(proj), "--tool", "0"], env=env)
-        lines2 = r4.stdout.strip().split("\n")
-        assert sorted(lines1) == sorted(lines2)
+    tmp = durable_tmp_path
+    proj = tmp / "proj"
+    proj.mkdir()
+    cc_dir = tmp / "cc"
+    cc_dir.mkdir()
+    slug = path_to_slug(proj.resolve())
+    (cc_dir / slug).mkdir(parents=True)
+    fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
+    shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
+    env = os.environ.copy()
+    env["CODESS_CC_PROJECTS"] = str(cc_dir)
+    r1 = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+    assert r1.returncode == 0
+    r2 = _run(["query", "--dir", str(proj), "--tool", "0"], env=env)
+    lines1 = r2.stdout.strip().split("\n")
+    _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+    r4 = _run(["query", "--dir", str(proj), "--tool", "0"], env=env)
+    lines2 = r4.stdout.strip().split("\n")
+    assert sorted(lines1) == sorted(lines2)
 
 
-def test_ingest_shows_stats():
+def test_ingest_shows_stats(durable_tmp_path):
     """Ingest distinguishes processed work from stored totals."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "proj"
-        proj.mkdir()
-        cc_dir = tmp / "cc"
-        cc_dir.mkdir()
-        slug = path_to_slug(proj.resolve())
-        (cc_dir / slug).mkdir(parents=True)
-        fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
-        shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(cc_dir)
-        r = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
-        assert r.returncode == 0
-        assert "Processed:" in r.stdout and "Stored:" in r.stdout
+    tmp = durable_tmp_path
+    proj = tmp / "proj"
+    proj.mkdir()
+    cc_dir = tmp / "cc"
+    cc_dir.mkdir()
+    slug = path_to_slug(proj.resolve())
+    (cc_dir / slug).mkdir(parents=True)
+    fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
+    shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
+    env = os.environ.copy()
+    env["CODESS_CC_PROJECTS"] = str(cc_dir)
+    r = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+    assert r.returncode == 0
+    assert "Processed:" in r.stdout and "Stored:" in r.stdout
 
 
 def test_query_stats():
@@ -647,72 +676,69 @@ def test_query_taxonomy():
         assert "tool_call" in r.stdout and "user_message" in r.stdout
 
 
-def test_query_sessions_with_id():
+def test_query_sessions_with_id(durable_tmp_path):
     """Query --sessions --id includes global and display identities."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "proj"
-        proj.mkdir()
-        cc_dir = tmp / "cc"
-        cc_dir.mkdir()
-        slug = path_to_slug(proj.resolve())
-        (cc_dir / slug).mkdir(parents=True)
-        fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
-        shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(cc_dir)
-        _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
-        r = _run(["query", "--dir", str(proj), "--sessions", "--id"], env=env)
-        assert r.returncode == 0
-        assert "global_id" in r.stdout and "num" in r.stdout and "\t1\t" in r.stdout
+    tmp = durable_tmp_path
+    proj = tmp / "proj"
+    proj.mkdir()
+    cc_dir = tmp / "cc"
+    cc_dir.mkdir()
+    slug = path_to_slug(proj.resolve())
+    (cc_dir / slug).mkdir(parents=True)
+    fixture = Path(__file__).parent / "fixtures" / "sample.jsonl"
+    shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
+    env = os.environ.copy()
+    env["CODESS_CC_PROJECTS"] = str(cc_dir)
+    _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+    r = _run(["query", "--dir", str(proj), "--sessions", "--id"], env=env)
+    assert r.returncode == 0
+    assert "global_id" in r.stdout and "num" in r.stdout and "\t1\t" in r.stdout
 
 
-def test_ingest_source_codex_only():
+def test_ingest_source_codex_only(durable_tmp_path):
     """Ingest --source codex with no Codex data: success, 0 ingested."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "proj"
-        proj.mkdir()
-        codex_empty = tmp / "codex_empty" / "sessions"
-        codex_empty.mkdir(parents=True)
-        env = os.environ.copy()
-        env["CODESS_CODEX_SESSIONS"] = str(codex_empty)
-        r = _run(["ingest", "--dir", str(proj), "--source", "codex", "--min-size", "0"], env=env)
-        assert r.returncode == 0
-        assert "0 session" in r.stdout or "0 event" in r.stdout
+    tmp = durable_tmp_path
+    proj = tmp / "proj"
+    proj.mkdir()
+    codex_empty = tmp / "codex_empty" / "sessions"
+    codex_empty.mkdir(parents=True)
+    env = os.environ.copy()
+    env["CODESS_CODEX_SESSIONS"] = str(codex_empty)
+    r = _run(["ingest", "--dir", str(proj), "--source", "codex", "--min-size", "0"], env=env)
+    assert r.returncode == 0
+    assert "0 session" in r.stdout or "0 event" in r.stdout
 
 
-def test_ingest_cursor_global():
+def test_ingest_cursor_global(durable_tmp_path):
     """Ingest --source cursor uses global storage when present."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "proj"
-        proj.mkdir()
-        cursor_base = tmp / "cursor" / "User"
-        global_dir = cursor_base / "globalStorage"
-        global_dir.mkdir(parents=True)
-        db = global_dir / "state.vscdb"
-        conn = sqlite3.connect(db)
-        conn.execute("CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
-        conn.execute(
-            "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
-            ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "hi", "timingInfo": {}})),
-        )
-        conn.commit()
-        conn.close()
-        env = os.environ.copy()
-        env["CODESS_CURSOR_DATA"] = str(cursor_base)
-        r = _run(["ingest", "--dir", str(proj), "--source", "cursor", "--force"], env=env)
-        assert r.returncode == 0
-        assert "1 session" in r.stdout or "1 event" in r.stdout or "session" in r.stdout.lower()
-        preflight = _run([
-            "ingest", "--validate", "--no-progress", "--force", "--dir", str(proj),
-            "--source", "cursor",
-        ], env=env)
-        assert preflight.returncode == 0, preflight.stderr
-        report = json.loads(preflight.stdout)
-        assert report["session_kinds"] == {}
-        assert "retained_searchable_characters" in report["resource_summary"]
+    tmp = durable_tmp_path
+    proj = tmp / "proj"
+    proj.mkdir()
+    cursor_base = tmp / "cursor" / "User"
+    global_dir = cursor_base / "globalStorage"
+    global_dir.mkdir(parents=True)
+    db = global_dir / "state.vscdb"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute(
+        "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+        ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "hi", "timingInfo": {}})),
+    )
+    conn.commit()
+    conn.close()
+    env = os.environ.copy()
+    env["CODESS_CURSOR_DATA"] = str(cursor_base)
+    r = _run(["ingest", "--dir", str(proj), "--source", "cursor", "--force"], env=env)
+    assert r.returncode == 0
+    assert "1 session" in r.stdout or "1 event" in r.stdout or "session" in r.stdout.lower()
+    preflight = _run([
+        "ingest", "--validate", "--no-progress", "--force", "--dir", str(proj),
+        "--source", "cursor",
+    ], env=env)
+    assert preflight.returncode == 0, preflight.stderr
+    report = json.loads(preflight.stdout)
+    assert report["session_kinds"] == {}
+    assert "retained_searchable_characters" in report["resource_summary"]
 
 
 def test_cursor_container_limit_is_distinct_from_transcript_limit():
@@ -780,178 +806,173 @@ def test_invalid_resource_policy_is_reported_without_traceback():
         assert "Traceback" not in result.stderr
 
 
-def test_only_skipped_records():
+def test_only_skipped_records(durable_tmp_path):
     """File with only progress/system: no events, session still created? Or not."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "proj"
-        proj.mkdir()
-        cc_dir = tmp / "cc"
-        cc_dir.mkdir()
-        slug = path_to_slug(proj.resolve())
-        (cc_dir / slug).mkdir(parents=True)
-        (cc_dir / slug / "only_skipped.jsonl").write_text(
-            '{"type":"progress","message":{}}\n{"type":"system","message":{}}\n'
-        )
-        env = os.environ.copy()
-        env["CODESS_CC_PROJECTS"] = str(cc_dir)
-        r = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
-        assert r.returncode == 0
-        assert "ignored=2" in r.stderr
-        r2 = _run(["query", "--dir", str(proj), "--sessions"], env=env)
-        # May or may not have session row (we don't upsert session if 0 events)
-        assert r2.returncode == 0
+    tmp = durable_tmp_path
+    proj = tmp / "proj"
+    proj.mkdir()
+    cc_dir = tmp / "cc"
+    cc_dir.mkdir()
+    slug = path_to_slug(proj.resolve())
+    (cc_dir / slug).mkdir(parents=True)
+    (cc_dir / slug / "only_skipped.jsonl").write_text(
+        '{"type":"progress","message":{}}\n{"type":"system","message":{}}\n'
+    )
+    env = os.environ.copy()
+    env["CODESS_CC_PROJECTS"] = str(cc_dir)
+    r = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
+    assert r.returncode == 0
+    assert "ignored=2" in r.stderr
+    r2 = _run(["query", "--dir", str(proj), "--sessions"], env=env)
+    # May or may not have session row (we don't upsert session if 0 events)
+    assert r2.returncode == 0
 
 
-def test_ingest_malformed_record_reports_aggregate_and_continues():
+def test_ingest_malformed_record_reports_aggregate_and_continues(durable_tmp_path):
     """Malformed JSON is tolerated but represented in the final diagnostics."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "proj"
-        proj.mkdir()
-        cc_projects = tmp / "cc"
-        slug_dir = cc_projects / path_to_slug(proj.resolve())
-        slug_dir.mkdir(parents=True)
-        shutil.copy(
-            Path(__file__).parent / "fixtures" / "malformed.jsonl",
-            slug_dir / "mixed.jsonl",
-        )
-        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc_projects)}
+    tmp = durable_tmp_path
+    proj = tmp / "proj"
+    proj.mkdir()
+    cc_projects = tmp / "cc"
+    slug_dir = cc_projects / path_to_slug(proj.resolve())
+    slug_dir.mkdir(parents=True)
+    shutil.copy(
+        Path(__file__).parent / "fixtures" / "malformed.jsonl",
+        slug_dir / "mixed.jsonl",
+    )
+    env = {**os.environ, "CODESS_CC_PROJECTS": str(cc_projects)}
 
-        r = _run(
-            ["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"],
-            env=env,
-        )
+    r = _run(
+        ["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"],
+        env=env,
+    )
 
-        assert r.returncode == 0
-        assert "malformed=1" in r.stderr
-        assert "failed_sources=0" in r.stderr
+    assert r.returncode == 0
+    assert "malformed=1" in r.stderr
+    assert "failed_sources=0" in r.stderr
 
 
-def test_ingest_partial_source_failure_continues_and_exits_1():
+def test_ingest_partial_source_failure_continues_and_exits_1(durable_tmp_path):
     """A failed source is counted while later valid sources still commit."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        proj = tmp / "proj"
-        proj.mkdir()
-        cc_projects = tmp / "cc"
-        slug_dir = cc_projects / path_to_slug(proj.resolve())
-        slug_dir.mkdir(parents=True)
-        (slug_dir / "broken.jsonl").mkdir()
-        shutil.copy(
-            Path(__file__).parent / "fixtures" / "sample.jsonl",
-            slug_dir / "good.jsonl",
-        )
-        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc_projects)}
+    tmp = durable_tmp_path
+    proj = tmp / "proj"
+    proj.mkdir()
+    cc_projects = tmp / "cc"
+    slug_dir = cc_projects / path_to_slug(proj.resolve())
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "broken.jsonl").mkdir()
+    shutil.copy(
+        Path(__file__).parent / "fixtures" / "sample.jsonl",
+        slug_dir / "good.jsonl",
+    )
+    env = {**os.environ, "CODESS_CC_PROJECTS": str(cc_projects)}
 
-        r = _run(
-            ["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"],
-            env=env,
-        )
+    r = _run(
+        ["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"],
+        env=env,
+    )
 
-        assert r.returncode == 1
-        assert "Processed: 1 session" in r.stdout
-        assert "failed_sources=1" in r.stderr
-        report = json.loads(
-            (proj / ".codess/last-ingest-report.json").read_text(encoding="utf-8")
-        )
-        assert report["status"] == "completed_with_errors"
-        assert report["diagnostics"]["failed_sources"] == 1
+    assert r.returncode == 1
+    assert "Processed: 1 session" in r.stdout
+    assert "failed_sources=1" in r.stderr
+    report = json.loads(
+        (proj / ".codess/last-ingest-report.json").read_text(encoding="utf-8")
+    )
+    assert report["status"] == "completed_with_errors"
+    assert report["diagnostics"]["failed_sources"] == 1
 
 
-def test_force_ingest_rebuilds_existing_store_from_fresh_database():
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        project = root / "project"
-        project.mkdir()
-        store = project / ".codess" / "sessions_cc.db"
-        init_db(store)
-        conn = sqlite3.connect(store)
-        conn.execute("CREATE TABLE stale_rebuild_sentinel(value TEXT)")
-        conn.execute(
-            "INSERT INTO stale_rebuild_sentinel(value) VALUES ('old')"
-        )
-        conn.commit()
+def test_force_ingest_rebuilds_existing_store_from_fresh_database(durable_tmp_path):
+    root = durable_tmp_path
+    project = root / "project"
+    project.mkdir()
+    store = project / ".codess" / "sessions_cc.db"
+    init_db(store)
+    conn = sqlite3.connect(store)
+    conn.execute("CREATE TABLE stale_rebuild_sentinel(value TEXT)")
+    conn.execute(
+        "INSERT INTO stale_rebuild_sentinel(value) VALUES ('old')"
+    )
+    conn.commit()
+    conn.close()
+    cc_projects = root / "cc"
+    source_dir = cc_projects / path_to_slug(project.resolve())
+    source_dir.mkdir(parents=True)
+    shutil.copy(
+        Path(__file__).parent / "fixtures" / "sample.jsonl",
+        source_dir / "session.jsonl",
+    )
+
+    result = _run(
+        [
+            "ingest", "--dir", str(project), "--source", "cc",
+            "--force", "--min-size", "0",
+        ],
+        env={
+            **os.environ,
+            "CODESS_CC_PROJECTS": str(cc_projects),
+            "CODESS_REGISTRY": str(root / "registry"),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    conn = sqlite3.connect(store)
+    try:
+        assert conn.execute(
+            """
+            SELECT COUNT(*) FROM sqlite_master
+            WHERE type='table' AND name='stale_rebuild_sentinel'
+            """
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sessions"
+        ).fetchone()[0] == 1
+    finally:
         conn.close()
-        cc_projects = root / "cc"
-        source_dir = cc_projects / path_to_slug(project.resolve())
-        source_dir.mkdir(parents=True)
-        shutil.copy(
-            Path(__file__).parent / "fixtures" / "sample.jsonl",
-            source_dir / "session.jsonl",
-        )
-
-        result = _run(
-            [
-                "ingest", "--dir", str(project), "--source", "cc",
-                "--force", "--min-size", "0",
-            ],
-            env={
-                **os.environ,
-                "CODESS_CC_PROJECTS": str(cc_projects),
-                "CODESS_REGISTRY": str(root / "registry"),
-            },
-        )
-
-        assert result.returncode == 0, result.stderr
-        conn = sqlite3.connect(store)
-        try:
-            assert conn.execute(
-                """
-                SELECT COUNT(*) FROM sqlite_master
-                WHERE type='table' AND name='stale_rebuild_sentinel'
-                """
-            ).fetchone()[0] == 0
-            assert conn.execute(
-                "SELECT COUNT(*) FROM sessions"
-            ).fetchone()[0] == 1
-        finally:
-            conn.close()
-        assert not list((project / ".codess").glob(".rebuild-*"))
+    assert not list((project / ".codess").glob(".rebuild-*"))
 
 
-def test_multi_project_reports_isolate_status_and_diagnostics():
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        failed_project = root / "failed"
-        accepted_project = root / "accepted"
-        failed_project.mkdir()
-        accepted_project.mkdir()
-        cc_projects = root / "cc"
-        failed_sources = cc_projects / path_to_slug(failed_project.resolve())
-        accepted_sources = cc_projects / path_to_slug(accepted_project.resolve())
-        failed_sources.mkdir(parents=True)
-        accepted_sources.mkdir(parents=True)
-        (failed_sources / "broken.jsonl").mkdir()
-        shutil.copy(
-            Path(__file__).parent / "fixtures" / "sample.jsonl",
-            accepted_sources / "good.jsonl",
-        )
+def test_multi_project_reports_isolate_status_and_diagnostics(durable_tmp_path):
+    root = durable_tmp_path
+    failed_project = root / "failed"
+    accepted_project = root / "accepted"
+    failed_project.mkdir()
+    accepted_project.mkdir()
+    cc_projects = root / "cc"
+    failed_sources = cc_projects / path_to_slug(failed_project.resolve())
+    accepted_sources = cc_projects / path_to_slug(accepted_project.resolve())
+    failed_sources.mkdir(parents=True)
+    accepted_sources.mkdir(parents=True)
+    (failed_sources / "broken.jsonl").mkdir()
+    shutil.copy(
+        Path(__file__).parent / "fixtures" / "sample.jsonl",
+        accepted_sources / "good.jsonl",
+    )
 
-        result = _run(
-            [
-                "ingest", "--dir", str(failed_project),
-                "--dir", str(accepted_project), "--source", "cc",
-                "--force", "--min-size", "0",
-            ],
-            env={
-                **os.environ,
-                "CODESS_CC_PROJECTS": str(cc_projects),
-                "CODESS_REGISTRY": str(root / "registry"),
-            },
-        )
+    result = _run(
+        [
+            "ingest", "--dir", str(failed_project),
+            "--dir", str(accepted_project), "--source", "cc",
+            "--force", "--min-size", "0",
+        ],
+        env={
+            **os.environ,
+            "CODESS_CC_PROJECTS": str(cc_projects),
+            "CODESS_REGISTRY": str(root / "registry"),
+        },
+    )
 
-        assert result.returncode == 1
-        failed_report = json.loads(
-            (failed_project / ".codess/last-ingest-report.json").read_text()
-        )
-        accepted_report = json.loads(
-            (accepted_project / ".codess/last-ingest-report.json").read_text()
-        )
-        assert failed_report["status"] == "completed_with_errors"
-        assert failed_report["diagnostics"]["failed_sources"] == 1
-        assert accepted_report["status"] == "accepted"
-        assert "failed_sources" not in accepted_report["diagnostics"]
+    assert result.returncode == 1
+    failed_report = json.loads(
+        (failed_project / ".codess/last-ingest-report.json").read_text()
+    )
+    accepted_report = json.loads(
+        (accepted_project / ".codess/last-ingest-report.json").read_text()
+    )
+    assert failed_report["status"] == "completed_with_errors"
+    assert failed_report["diagnostics"]["failed_sources"] == 1
+    assert accepted_report["status"] == "accepted"
+    assert "failed_sources" not in accepted_report["diagnostics"]
 
 
 def test_ingest_stop_aborts_before_later_sources():
@@ -1162,205 +1183,201 @@ def test_ingest_validate_content_policy_does_not_touch_live_store():
             conn.close()
 
 
-def test_routine_ingest_writes_resource_and_evidence_report():
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        project = root / "project"
-        project.mkdir()
-        cc = root / "cc"
-        source_dir = cc / path_to_slug(project.resolve())
-        source_dir.mkdir(parents=True)
-        source = source_dir / "s1.jsonl"
-        shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source)
-        env = {
-            **os.environ,
-            "CODESS_CC_PROJECTS": str(cc),
-            "CODESS_REGISTRY": str(root / "registry"),
-        }
-        result = _run(
-            ["ingest", "--dir", str(project), "--source", "cc", "--min-size", "0"],
-            env=env,
-        )
-        assert result.returncode == 0, result.stderr
-        report = json.loads(
-            (project / ".codess/last-ingest-report.json").read_text(encoding="utf-8")
-        )
-        assert report["report_format"] == "codess.ingest-runtime/1"
-        assert report["progress_format"] == "codess.progress/1"
-        assert report["progress_live"] is True
-        assert report["resource_observations"][0]["source_bytes"] == source.stat().st_size
-        assert report["resource_observations"][0]["events"] > 0
-        assert report["resource_summary"]["unique_source_containers"] == 1
-        assert (
-            report["resource_summary"]["unique_source_container_bytes"]
-            == source.stat().st_size
-        )
-        assert (
-            report["resource_summary"]["emitted_events"]
-            == report["resource_observations"][0]["events"]
-        )
-        assert report["resource_summary"]["measurement_format"] == (
-            "codess.ingest-resource-summary/1"
-        )
-        assert report["resource_summary"]["selected_input_complete"] is True
-        assert (
-            report["resource_summary"]["selected_input_bytes"]
-            == source.stat().st_size
-        )
-        assert (
-            report["resource_summary"]["normalized_store_usage"]["files"]
-            >= 1
-        )
-        assert report["resource_summary"]["raw_object_usage"]["files"] == 0
-        assert report["resource_summary"]["retained_searchable_characters"] > 0
-        assert report["resource_summary"]["retained_searchable_utf8_bytes"] >= (
-            report["resource_summary"]["retained_searchable_characters"]
-        )
-        assert (
-            report["resource_summary"]["retained_searchable_characters"]
-            == report["resource_observations"][0][
-                "retained_searchable_characters"
-            ]
-        )
-        assert report["evidence_summary"]["tool_invocations"] >= 0
-        assert report["limits"]["max_source_bytes"] > 0
-        assert (
-            report["limits"]["max_transcript_bytes"]
-            < report["limits"]["max_cursor_container_bytes"]
-        )
-        assert report["resource_policy"]["format"] == "codess.resource-policy/1"
-        assert report["resource_policy"]["origins"]["transcript_bytes"] == "built-in"
-        assert "codess: progress " in result.stderr
-        assert [event["event"] for event in report["progress_events"]] == [
-            "ingest.start", "project.start", "vendor.start", "source.start",
-            "source.done", "vendor.done", "artifact_correlation.start",
-            "artifact_correlation.done", "snapshot.start", "snapshot.done",
-            "evidence_summary.start", "evidence_summary.done", "project.done",
+def test_routine_ingest_writes_resource_and_evidence_report(durable_tmp_path):
+    root = durable_tmp_path
+    project = root / "project"
+    project.mkdir()
+    cc = root / "cc"
+    source_dir = cc / path_to_slug(project.resolve())
+    source_dir.mkdir(parents=True)
+    source = source_dir / "s1.jsonl"
+    shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source)
+    env = {
+        **os.environ,
+        "CODESS_CC_PROJECTS": str(cc),
+        "CODESS_REGISTRY": str(root / "registry"),
+    }
+    result = _run(
+        ["ingest", "--dir", str(project), "--source", "cc", "--min-size", "0"],
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(
+        (project / ".codess/last-ingest-report.json").read_text(encoding="utf-8")
+    )
+    assert report["report_format"] == "codess.ingest-runtime/1"
+    assert report["progress_format"] == "codess.progress/1"
+    assert report["progress_live"] is True
+    assert report["resource_observations"][0]["source_bytes"] == source.stat().st_size
+    assert report["resource_observations"][0]["events"] > 0
+    assert report["resource_summary"]["unique_source_containers"] == 1
+    assert (
+        report["resource_summary"]["unique_source_container_bytes"]
+        == source.stat().st_size
+    )
+    assert (
+        report["resource_summary"]["emitted_events"]
+        == report["resource_observations"][0]["events"]
+    )
+    assert report["resource_summary"]["measurement_format"] == (
+        "codess.ingest-resource-summary/1"
+    )
+    assert report["resource_summary"]["selected_input_complete"] is True
+    assert (
+        report["resource_summary"]["selected_input_bytes"]
+        == source.stat().st_size
+    )
+    assert (
+        report["resource_summary"]["normalized_store_usage"]["files"]
+        >= 1
+    )
+    assert report["resource_summary"]["raw_object_usage"]["files"] == 0
+    assert report["resource_summary"]["retained_searchable_characters"] > 0
+    assert report["resource_summary"]["retained_searchable_utf8_bytes"] >= (
+        report["resource_summary"]["retained_searchable_characters"]
+    )
+    assert (
+        report["resource_summary"]["retained_searchable_characters"]
+        == report["resource_observations"][0][
+            "retained_searchable_characters"
         ]
+    )
+    assert report["evidence_summary"]["tool_invocations"] >= 0
+    assert report["limits"]["max_source_bytes"] > 0
+    assert (
+        report["limits"]["max_transcript_bytes"]
+        < report["limits"]["max_cursor_container_bytes"]
+    )
+    assert report["resource_policy"]["format"] == "codess.resource-policy/1"
+    assert report["resource_policy"]["origins"]["transcript_bytes"] == "built-in"
+    assert "codess: progress " in result.stderr
+    assert [event["event"] for event in report["progress_events"]] == [
+        "ingest.start", "project.start", "vendor.start", "source.start",
+        "source.done", "vendor.done", "artifact_correlation.start",
+        "artifact_correlation.done", "snapshot.start", "snapshot.done",
+        "evidence_summary.start", "evidence_summary.done", "project.done",
+    ]
 
 
-def test_unchanged_ingest_reuses_snapshot_evidence_summary():
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        project = root / "project"
-        project.mkdir()
-        cc = root / "cc"
-        source_dir = cc / path_to_slug(project.resolve())
-        source_dir.mkdir(parents=True)
-        shutil.copy(
-            Path(__file__).parent / "fixtures/sample.jsonl",
-            source_dir / "s1.jsonl",
+def test_unchanged_ingest_reuses_snapshot_evidence_summary(durable_tmp_path):
+    root = durable_tmp_path
+    project = root / "project"
+    project.mkdir()
+    cc = root / "cc"
+    source_dir = cc / path_to_slug(project.resolve())
+    source_dir.mkdir(parents=True)
+    shutil.copy(
+        Path(__file__).parent / "fixtures/sample.jsonl",
+        source_dir / "s1.jsonl",
+    )
+    command = [
+        "ingest", "--dir", str(project), "--source", "cc", "--min-size", "0",
+    ]
+    env = {
+        **os.environ,
+        "CODESS_CC_PROJECTS": str(cc),
+        "CODESS_REGISTRY": str(root / "registry"),
+    }
+    first = _run(command, env=env)
+    assert first.returncode == 0, first.stderr
+    pointer_before = (project / ".codess/current.json").read_bytes()
+    first_report = json.loads(
+        (project / ".codess/last-ingest-report.json").read_text()
+    )
+
+    second = _run(command, env=env)
+
+    assert second.returncode == 0, second.stderr
+    assert "evidence_summary.reused" in second.stderr
+    assert (project / ".codess/current.json").read_bytes() == pointer_before
+    second_report = json.loads(
+        (project / ".codess/last-ingest-report.json").read_text()
+    )
+    assert second_report["snapshot_id"] == first_report["snapshot_id"]
+    assert second_report["evidence_summary_reused"] is True
+    assert second_report["evidence_summary"] == first_report["evidence_summary"]
+
+
+def test_candidate_ingest_builds_snapshot_without_publishing_pointers(durable_tmp_path):
+    root = durable_tmp_path
+    project = root / "project"
+    project.mkdir()
+    cc = root / "cc"
+    source_dir = cc / path_to_slug(project.resolve())
+    source_dir.mkdir(parents=True)
+    source = source_dir / "s1.jsonl"
+    shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source)
+    env = {
+        **os.environ,
+        "CODESS_CC_PROJECTS": str(cc),
+        "CODESS_REGISTRY": str(root / "registry"),
+    }
+    command = [
+        "ingest", "--dir", str(project), "--source", "cc",
+        "--min-size", "0",
+    ]
+    first = _run(command, env=env)
+    assert first.returncode == 0, first.stderr
+    local_pointer = project / ".codess/current.json"
+    pointer = json.loads(local_pointer.read_text(encoding="utf-8"))
+    central_pointer = Path(pointer["path"]).parent.parent / "current.json"
+    prior_local = local_pointer.read_bytes()
+    prior_central = central_pointer.read_bytes()
+    source.write_text(
+        source.read_text(encoding="utf-8") + "\n", encoding="utf-8"
+    )
+
+    candidate = _run(
+        [*command, "--force", "--candidate-snapshot"], env=env
+    )
+
+    assert candidate.returncode == 0, candidate.stderr
+    report = json.loads(
+        (project / ".codess/last-ingest-report.json").read_text(
+            encoding="utf-8"
         )
-        command = [
-            "ingest", "--dir", str(project), "--source", "cc", "--min-size", "0",
-        ]
-        env = {
-            **os.environ,
-            "CODESS_CC_PROJECTS": str(cc),
-            "CODESS_REGISTRY": str(root / "registry"),
-        }
-        first = _run(command, env=env)
-        assert first.returncode == 0, first.stderr
-        pointer_before = (project / ".codess/current.json").read_bytes()
-        first_report = json.loads(
-            (project / ".codess/last-ingest-report.json").read_text()
-        )
-
-        second = _run(command, env=env)
-
-        assert second.returncode == 0, second.stderr
-        assert "evidence_summary.reused" in second.stderr
-        assert (project / ".codess/current.json").read_bytes() == pointer_before
-        second_report = json.loads(
-            (project / ".codess/last-ingest-report.json").read_text()
-        )
-        assert second_report["snapshot_id"] == first_report["snapshot_id"]
-        assert second_report["evidence_summary_reused"] is True
-        assert second_report["evidence_summary"] == first_report["evidence_summary"]
+    )
+    candidate_path = Path(report["candidate_snapshot_path"])
+    assert report["snapshot_publication"] == "candidate"
+    assert candidate_path.is_dir()
+    assert candidate_path.name == report["snapshot_id"]
+    assert local_pointer.read_bytes() == prior_local
+    assert central_pointer.read_bytes() == prior_central
 
 
-def test_candidate_ingest_builds_snapshot_without_publishing_pointers():
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        project = root / "project"
-        project.mkdir()
-        cc = root / "cc"
-        source_dir = cc / path_to_slug(project.resolve())
-        source_dir.mkdir(parents=True)
-        source = source_dir / "s1.jsonl"
-        shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source)
-        env = {
-            **os.environ,
-            "CODESS_CC_PROJECTS": str(cc),
-            "CODESS_REGISTRY": str(root / "registry"),
-        }
-        command = [
+def test_no_progress_suppresses_live_lines_but_retains_trace(durable_tmp_path):
+    root = durable_tmp_path
+    project = root / "project"
+    project.mkdir()
+    cc = root / "cc"
+    source_dir = cc / path_to_slug(project.resolve())
+    source_dir.mkdir(parents=True)
+    shutil.copy(
+        Path(__file__).parent / "fixtures/sample.jsonl",
+        source_dir / "s1.jsonl",
+    )
+    result = _run(
+        [
             "ingest", "--dir", str(project), "--source", "cc",
-            "--min-size", "0",
-        ]
-        first = _run(command, env=env)
-        assert first.returncode == 0, first.stderr
-        local_pointer = project / ".codess/current.json"
-        pointer = json.loads(local_pointer.read_text(encoding="utf-8"))
-        central_pointer = Path(pointer["path"]).parent.parent / "current.json"
-        prior_local = local_pointer.read_bytes()
-        prior_central = central_pointer.read_bytes()
-        source.write_text(
-            source.read_text(encoding="utf-8") + "\n", encoding="utf-8"
-        )
+            "--min-size", "0", "--no-progress",
+        ],
+        env={
+            **os.environ,
+            "CODESS_CC_PROJECTS": str(cc),
+            "CODESS_REGISTRY": str(root / "registry"),
+        },
+    )
 
-        candidate = _run(
-            [*command, "--force", "--candidate-snapshot"], env=env
+    assert result.returncode == 0
+    assert "codess: progress " not in result.stderr
+    report = json.loads(
+        (project / ".codess/last-ingest-report.json").read_text(
+            encoding="utf-8"
         )
-
-        assert candidate.returncode == 0, candidate.stderr
-        report = json.loads(
-            (project / ".codess/last-ingest-report.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        candidate_path = Path(report["candidate_snapshot_path"])
-        assert report["snapshot_publication"] == "candidate"
-        assert candidate_path.is_dir()
-        assert candidate_path.name == report["snapshot_id"]
-        assert local_pointer.read_bytes() == prior_local
-        assert central_pointer.read_bytes() == prior_central
-
-
-def test_no_progress_suppresses_live_lines_but_retains_trace():
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        project = root / "project"
-        project.mkdir()
-        cc = root / "cc"
-        source_dir = cc / path_to_slug(project.resolve())
-        source_dir.mkdir(parents=True)
-        shutil.copy(
-            Path(__file__).parent / "fixtures/sample.jsonl",
-            source_dir / "s1.jsonl",
-        )
-        result = _run(
-            [
-                "ingest", "--dir", str(project), "--source", "cc",
-                "--min-size", "0", "--no-progress",
-            ],
-            env={
-                **os.environ,
-                "CODESS_CC_PROJECTS": str(cc),
-                "CODESS_REGISTRY": str(root / "registry"),
-            },
-        )
-
-        assert result.returncode == 0
-        assert "codess: progress " not in result.stderr
-        report = json.loads(
-            (project / ".codess/last-ingest-report.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        assert report["progress_live"] is False
-        assert report["progress_events"][0]["event"] == "ingest.start"
-        assert report["progress_events"][-1]["event"] == "project.done"
+    )
+    assert report["progress_live"] is False
+    assert report["progress_events"][0]["event"] == "ingest.start"
+    assert report["progress_events"][-1]["event"] == "project.done"
 
 
 def test_query_jsonl_sessions_and_stats_are_typed():

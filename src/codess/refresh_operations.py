@@ -13,11 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from codess.config import LARGE_STORE_BYTES, LAST_INGEST_REPORT_FILE, STORE_DIR
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.project_annotations import build_project_annotations
 from codess.project_catalog import durable_project_root, load_catalog
 from codess.refresh_receipts import REFRESH_RECEIPT_FORMAT
 from codess.schema_contract import verify_package
+from codess.snapshot import SnapshotError, read_manifest, current_snapshot
 
 
 REFRESH_DESIGNATORS = frozenset({
@@ -133,15 +135,15 @@ def _resolve_reference(
 def _automatic_raw_mode(registry: Path, project_id: str) -> str:
     base = durable_project_root(registry, project_id)
     try:
-        pointer = read_json(base / "current.json")
-        snapshot = Path(str(pointer["path"]))
-        if not snapshot.is_absolute():
-            snapshot = base / snapshot
-        manifest = read_json(snapshot / "manifest.json")
+        resolved = current_snapshot(base)
+        if resolved is None:
+            return "reference"
+        snapshot, _pointer = resolved
+        manifest = read_manifest(snapshot)
         mode = manifest.get("build_policy", {}).get("raw_mode")
         if mode in {"none", "reference", "capture", "seal"}:
             return str(mode)
-    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+    except (SnapshotError, OSError, KeyError, TypeError, json.JSONDecodeError):
         pass
     return "reference"
 
@@ -157,7 +159,7 @@ def resolve_refresh_selection(
     baseline_selection: Path | None = None,
     reviewed_catalog: Path | None = None,
     large_event_count: int = 25_000,
-    large_store_bytes: int = 128 * 1024 * 1024,
+    large_store_bytes: int = LARGE_STORE_BYTES,
 ) -> dict[str, Any]:
     """Resolve an immutable refresh plan without parsing vendor sources."""
     registry = registry.expanduser().resolve()
@@ -332,7 +334,7 @@ def _result_summary(
             summary = {}
         if summary:
             return summary
-    path = Path(project["path"]) / ".codess" / "last-ingest-report.json"
+    path = Path(project["path"]) / STORE_DIR / LAST_INGEST_REPORT_FILE
     try:
         return _bounded_ingest_summary(read_json(path))
     except (OSError, json.JSONDecodeError):
@@ -430,7 +432,7 @@ def refresh_projects(
     baseline_selection: Path | None = None,
     reviewed_catalog: Path | None = None,
     large_event_count: int = 25_000,
-    large_store_bytes: int = 128 * 1024 * 1024,
+    large_store_bytes: int = LARGE_STORE_BYTES,
     min_size: int = 0,
     force: bool = False,
     resource_policy: Path | None = None,

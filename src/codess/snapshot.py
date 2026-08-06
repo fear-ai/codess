@@ -1,7 +1,4 @@
-"""Immutable CoSchema snapshot build, validation, and atomic promotion.
-
-# ruff S608 exemption: CoPlan.md 10.4.2.2
-"""
+"""Immutable CoSchema snapshot build, validation, and atomic promotion."""
 
 from __future__ import annotations
 
@@ -18,8 +15,13 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from codess import __version__
-from codess.config import STORE_DIR
-from codess.fileio import hash_file
+from codess.config import (
+    CURRENT_POINTER_FILE, MANIFEST_BACKUP_FILE, MANIFEST_FILE,
+    RAW_MANIFEST_FILE, SNAPSHOTS_DIR, STORE_DIR,
+)
+from codess.fileio import (
+    HashMismatchError, hash_file, read_hash, verify_hash, write_hash,
+)
 from codess.raw_store import RAW_FORMAT, RawStore
 from codess.project_catalog import durable_project_root
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
@@ -33,18 +35,9 @@ class SnapshotError(RuntimeError):
     """Snapshot construction or verification failed."""
 
 
-_sha256 = hash_file
-
-MANIFEST_FILE = "manifest.json"
-MANIFEST_BACKUP_FILE = "manifest.json.bak"
-CURRENT_POINTER_FILE = "current.json"
-RAW_MANIFEST_FILE = "raw-manifest.jsonl"
-SNAPSHOTS_DIR = "snapshots"
-
-
 def read_manifest(snapshot_dir: Path) -> dict[str, Any]:
     """Read manifest.json. Plain read: manifest.json is write-once, so no
-    hash check is needed here (see resolve_current_snapshot for the one
+    hash check is needed here (see current_snapshot for the one
     file that does need one). Falls back to manifest.json.bak if the
     primary is missing, not if it exists but fails to parse."""
     primary = snapshot_dir / MANIFEST_FILE
@@ -58,10 +51,10 @@ def read_manifest(snapshot_dir: Path) -> dict[str, Any]:
     return json.loads(primary.read_text(encoding="utf-8"))
 
 
-def resolve_current_snapshot(base: Path) -> tuple[Path, dict[str, Any]] | None:
+def current_snapshot(base: Path) -> tuple[Path, dict[str, Any]] | None:
     """Resolve the snapshot base/current.json points to, verifying its
-    manifest_sha256 claim. Returns (snapshot_dir, pointer_document), or
-    None if no pointer exists yet."""
+    manifest_sha256 claim via `read_hash`. Returns (snapshot_dir,
+    pointer_document), or None if no pointer exists yet."""
     pointer = base / CURRENT_POINTER_FILE
     if not pointer.exists():
         return None
@@ -73,11 +66,12 @@ def resolve_current_snapshot(base: Path) -> tuple[Path, dict[str, Any]] | None:
         manifest_path = snapshot_path / MANIFEST_FILE
         if not manifest_path.exists():
             raise SnapshotError(f"current snapshot manifest missing at {manifest_path}")
-        if _sha256(manifest_path) != current["manifest_sha256"]:
-            raise SnapshotError("current snapshot manifest hash mismatch")
+        read_hash(manifest_path, expected_hash=current["manifest_sha256"])
         return snapshot_path, current
     except SnapshotError:
         raise
+    except HashMismatchError as exc:
+        raise SnapshotError("current snapshot manifest hash mismatch") from exc
     except (OSError, KeyError, json.JSONDecodeError) as exc:
         raise SnapshotError(f"invalid current snapshot pointer: {exc}") from exc
 
@@ -90,7 +84,7 @@ def current_raw_records(project_path: Path) -> list[dict[str, Any]]:
     for example, Cursor alone is refreshed while Claude and Codex stores remain
     unchanged.
     """
-    resolved = resolve_current_snapshot(project_path / STORE_DIR)
+    resolved = current_snapshot(project_path / STORE_DIR)
     if resolved is None:
         return []
     snapshot_path, _pointer = resolved
@@ -268,7 +262,7 @@ def _pointer_document(
         "format_version": manifest["format_version"],
         "decoder_version": manifest["decoder_version"],
         "validator_version": manifest["validator_version"],
-        "manifest_sha256": _sha256(manifest_path),
+        "manifest_sha256": hash_file(manifest_path),
     }
 
 
@@ -438,7 +432,7 @@ def create_snapshot(
         f"coschema{store_format_version}-{identity}"
     )
     parent_snapshot_id = None
-    resolved_previous = resolve_current_snapshot(local_base)
+    resolved_previous = current_snapshot(local_base)
     if resolved_previous is not None:
         _previous_snapshot, previous_pointer = resolved_previous
         parent_snapshot_id = previous_pointer.get("snapshot_id")
@@ -452,7 +446,7 @@ def create_snapshot(
                 snapshot_created_at=created_at_text,
             )
             stores[source_path.name] = {
-                "sha256": _sha256(target),
+                "sha256": hash_file(target),
                 "size": target.stat().st_size,
                 "counts": _logical_counts(target),
             }
@@ -474,8 +468,12 @@ def create_snapshot(
                         os.link(source_object, target_object)
                     except OSError:
                         shutil.copy2(source_object, target_object)
-                    if _sha256(target_object) != record["stored_sha256"]:
-                        raise SnapshotError(f"sealed raw hash mismatch: {record.get('object_id')}")
+                    try:
+                        verify_hash(target_object, record["stored_sha256"])
+                    except HashMismatchError as exc:
+                        raise SnapshotError(
+                            f"sealed raw hash mismatch: {record.get('object_id')}"
+                        ) from exc
 
         manifest: dict[str, Any] = {
             "snapshot_format": "codess.snapshot/1",
@@ -499,7 +497,7 @@ def create_snapshot(
             "project_id": project_id,
             "raw_format": RAW_FORMAT,
             "sealed": seal,
-            "raw_manifest_sha256": _sha256(raw_manifest),
+            "raw_manifest_sha256": hash_file(raw_manifest),
             "stores": stores,
         }
         manifest_text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -569,7 +567,7 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
                 row = conn.execute("SELECT id FROM projects LIMIT 1").fetchone()
                 project_id = row[0] if row else None
             stores[path.name] = {
-                "sha256": _sha256(path),
+                "sha256": hash_file(path),
                 "size": path.stat().st_size,
                 "counts": _logical_counts(path),
             }
@@ -592,7 +590,7 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
         "project_id": project_id,
         "raw_format": RAW_FORMAT,
         "sealed": (snapshot_dir / "raw").is_dir(),
-        "raw_manifest_sha256": _sha256(raw_manifest),
+        "raw_manifest_sha256": hash_file(raw_manifest),
         "stores": stores,
         "reconstructed": True,
     }
@@ -639,13 +637,17 @@ def snapshot_store_paths_from_base(
         if not package_matches and not allow_package_mismatch:
             raise SnapshotError("retained snapshot exact CoSchema package digest mismatch")
         raw_manifest = snapshot / RAW_MANIFEST_FILE
-        if _sha256(raw_manifest) != manifest.get("raw_manifest_sha256"):
-            raise SnapshotError("retained snapshot raw manifest hash mismatch")
+        try:
+            verify_hash(raw_manifest, manifest.get("raw_manifest_sha256"))
+        except HashMismatchError as exc:
+            raise SnapshotError("retained snapshot raw manifest hash mismatch") from exc
         paths = []
         for name, entry in manifest["stores"].items():
             path = snapshot / name
-            if _sha256(path) != entry["sha256"]:
-                raise SnapshotError(f"retained store hash mismatch: {name}")
+            try:
+                verify_hash(path, entry["sha256"])
+            except HashMismatchError as exc:
+                raise SnapshotError(f"retained store hash mismatch: {name}") from exc
             conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
             try:
                 if package_matches:
@@ -695,13 +697,13 @@ def current_store_paths_from_base(base: Path) -> list[Path]:
     -- the two fields cannot diverge from any write path this module has.
     """
     base = base.expanduser().resolve()
-    resolved = resolve_current_snapshot(base)
+    resolved = current_snapshot(base)
     if resolved is None:
         return []
     _snapshot_path, current = resolved
     return snapshot_store_paths_from_base(base, current["snapshot_id"])
 
 
-def current_store_paths(project_path: Path) -> list[Path]:
+def current_stores(project_path: Path) -> list[Path]:
     """Resolve validated current-snapshot DB paths, or return an empty list."""
     return current_store_paths_from_base(project_path / STORE_DIR)

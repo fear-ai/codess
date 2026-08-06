@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from codess.config import AGGREGATORS, CC_PROJECTS, CURSOR_WS
+from codess.config import AGGREGATORS, BMB, CC_PROJECTS, CURSOR_WS
 from codess.cursor_source import (
     get_db_metrics,
     get_global_db as get_cursor_global_db,
@@ -142,7 +142,7 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool 
     span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
     if cc_dir is not None and not subagent_sessions:
         subagent_sessions = len(list(cc_dir.glob("*/subagents/**/*.jsonl")))
-    return {"count": count, "events": events, "size_mb": round(total_bytes / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "stale_index_entries": stale_index_entries, "main_sessions": main_sessions, "subagent_sessions_available": subagent_sessions, "subagents_included": subagent}
+    return {"count": count, "events": events, "size_mb": round(BMB(total_bytes), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "stale_index_entries": stale_index_entries, "main_sessions": main_sessions, "subagent_sessions_available": subagent_sessions, "subagents_included": subagent}
 
 
 def _session_metrics_codex(
@@ -188,7 +188,7 @@ def _session_metrics_codex(
         except (StopIteration, json.JSONDecodeError, OSError, KeyError):
             pass
     span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
-    return {"count": count, "events": events, "size_mb": round(total_bytes / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts)}
+    return {"count": count, "events": events, "size_mb": round(BMB(total_bytes), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts)}
 
 
 def _session_metrics_cursor(p: Path) -> dict:
@@ -231,7 +231,7 @@ def _session_metrics_cursor(p: Path) -> dict:
             if m.get("error"):
                 errors.append(f"{global_db}: {m['error']}")
     span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
-    return {"count": count, "events": events, "size_mb": round(total_bytes / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts or None, "days_ago": _days_ago(max_ts), "invalid_keys": invalid_keys, "header_count": header_count, "timed_header_count": timed_header_count, "errors": errors}
+    return {"count": count, "events": events, "size_mb": round(BMB(total_bytes), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts or None, "days_ago": _days_ago(max_ts), "invalid_keys": invalid_keys, "header_count": header_count, "timed_header_count": timed_header_count, "errors": errors}
 
 
 def _session_metrics_cursor_global() -> dict:
@@ -242,10 +242,10 @@ def _session_metrics_cursor_global() -> dict:
     m = get_db_metrics(db)
     min_ts, max_ts = m.get("min_ts"), m.get("max_ts")
     span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if min_ts is not None and max_ts is not None and max_ts > min_ts else None
-    return {"count": m["count"], "events": m["events"], "size_mb": round(m["size_bytes"] / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "invalid_keys": m.get("invalid_keys", 0), "header_count": m.get("header_count", 0), "timed_header_count": m.get("timed_header_count", 0), "errors": [m["error"]] if m.get("error") else []}
+    return {"count": m["count"], "events": m["events"], "size_mb": round(BMB(m["size_bytes"]), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "invalid_keys": m.get("invalid_keys", 0), "header_count": m.get("header_count", 0), "timed_header_count": m.get("timed_header_count", 0), "errors": [m["error"]] if m.get("error") else []}
 
 
-def run_scan(
+def walk_sessions(
     work_root: Path,
     vendor_filter: list[str] | None = None,
     recent_days: int | None = None,

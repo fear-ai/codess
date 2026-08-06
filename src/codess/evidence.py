@@ -10,7 +10,7 @@ from codess.codex_parent_audit import audit_parentage
 from codess.config import CC_PROJECTS
 from codess.cursor_feature_audit import audit_cursor_features
 from codess.project_catalog import load_catalog
-from codess.snapshot import current_store_paths
+from codess.snapshot import current_stores
 from codess.store import connect
 from codess.vendor_audits.claude_features import audit_claude_features
 from codess.vendor_audits.codex_features import audit_codex_features
@@ -105,7 +105,7 @@ def build_evidence_inventory(
         )
         if not active:
             continue
-        paths = current_store_paths(Path(active))
+        paths = current_stores(Path(active))
         stores += len(paths)
         project_summaries.append(
             (project["project_id"], summarize_store_evidence(paths))

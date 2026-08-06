@@ -10,6 +10,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from codess.config import (
+    PROJECT_FILE, REGISTRY, SOURCE_LINKS_FILE, SOURCE_LINKS_FORMAT, STORE_DIR,
+)
 from codess.identity import location_id
 from codess.fileio import write_json_atomic
 from codess.helpers import ephemeral_project_location_reason
@@ -35,7 +38,7 @@ def _catalog_path(registry_root: Path) -> Path:
 
 
 def _binding_path(project_path: Path) -> Path:
-    return project_path / ".codess" / "project.json"
+    return project_path / STORE_DIR / PROJECT_FILE
 
 
 def _save_catalog_entry(
@@ -80,11 +83,11 @@ def load_catalog(registry_root: Path) -> dict[str, Any]:
 
 
 def _source_links(project_path: Path) -> list[dict[str, Any]]:
-    path = project_path / ".codess" / "source-links.json"
+    path = project_path / STORE_DIR / SOURCE_LINKS_FILE
     if not path.exists():
         return []
     value = json.loads(path.read_text(encoding="utf-8"))
-    if value.get("format") != "codess.source-links/1":
+    if value.get("format") != SOURCE_LINKS_FORMAT:
         raise ValueError("unsupported source-link format")
     return [item for item in value.get("links", []) if isinstance(item, dict)]
 
@@ -93,7 +96,7 @@ def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str,
     """Return and persist one stable project identity for an observed location."""
     registry_root = registry_root.expanduser().resolve()
     project_path = project_path.expanduser().resolve()
-    if registry_root == (Path.home() / ".codess").resolve():
+    if registry_root == REGISTRY.resolve():
         reason = ephemeral_project_location_reason(project_path)
         if reason:
             raise ValueError(reason)
@@ -334,16 +337,22 @@ def load_project_set(path: Path) -> dict[str, Any]:
 
 
 def _current_snapshot_id(snapshot_base: Path) -> str | None:
-    pointer = snapshot_base / "current.json"
-    if not pointer.is_file():
+    """Return the current snapshot's verified snapshot_id, or None if unset.
+
+    Delegates to `snapshot.current_snapshot` for the pointer read and
+    manifest_sha256 check rather than re-reading current.json directly, so a
+    tampered or stale pointer raises SnapshotError here exactly as it would
+    anywhere else in the module that consumes the current snapshot.
+    """
+    from codess.snapshot import current_snapshot
+
+    resolved = current_snapshot(snapshot_base)
+    if resolved is None:
         return None
-    try:
-        value = json.loads(pointer.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"cannot read current snapshot pointer {pointer}: {exc}") from exc
-    snapshot_id = value.get("snapshot_id")
+    _snapshot_path, pointer = resolved
+    snapshot_id = pointer.get("snapshot_id")
     if not isinstance(snapshot_id, str) or not snapshot_id:
-        raise ValueError(f"current snapshot pointer lacks snapshot_id: {pointer}")
+        raise ValueError(f"current snapshot pointer lacks snapshot_id: {snapshot_base}")
     return snapshot_id
 
 
@@ -507,10 +516,10 @@ def resolve_project_query_scopes(
             if not _entry_is_query_eligible(entry):
                 return None
             base = durable_project_root(registry_root, project_id)
-            snapshot_id = _current_snapshot_id(base)
-            if snapshot_id is None:
-                return None
             try:
+                snapshot_id = _current_snapshot_id(base)
+                if snapshot_id is None:
+                    return None
                 snapshot_store_paths_from_base(
                     base,
                     snapshot_id,

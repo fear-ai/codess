@@ -16,10 +16,14 @@ from codess.baseline_catalog import update_approved_catalog
 from codess.baseline_validation import (
     load_policy, run_query_smoke, validate_project,
 )
+from codess.config import (
+    CURRENT_POINTER_FILE, LAST_INGEST_REPORT_FILE, STATE_FILE, STORE_DIR,
+    WORKING_ARCHIVES_DIR,
+)
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.schema_contract import FORMAT_VERSION, has_legacy_schema, verify_package
 from codess.snapshot import (
-    current_store_paths, publish_snapshot, snapshot_store_paths,
+    current_stores, publish_snapshot, snapshot_store_paths,
     snapshot_store_paths_from_base,
 )
 
@@ -30,7 +34,7 @@ _LEGACY_TABLE_COUNT_QUERIES = {
 
 
 def preserve_legacy(project: Path, enabled: bool) -> Path | None:
-    base = project / ".codess"
+    base = project / STORE_DIR
     legacy: list[Path] = []
     for path in sorted(base.glob("*.db")):
         conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
@@ -41,7 +45,7 @@ def preserve_legacy(project: Path, enabled: bool) -> Path | None:
             conn.close()
     if not legacy:
         return None
-    if (base / "current.json").exists():
+    if (base / CURRENT_POINTER_FILE).exists():
         raise RuntimeError("legacy working databases coexist with current.json; review manually")
     if not enabled:
         raise RuntimeError("legacy stores found; rerun with --preserve-legacy")
@@ -72,7 +76,7 @@ def preserve_legacy(project: Path, enabled: bool) -> Path | None:
             "integrity_check": integrity, **counts,
         }
         shutil.move(str(source), destination / source.name)
-    state = base / "ingest_state.json"
+    state = base / STATE_FILE
     if state.exists():
         manifest["files"][state.name] = {
             "sha256": hash_file(state), "size": state.stat().st_size,
@@ -83,7 +87,7 @@ def preserve_legacy(project: Path, enabled: bool) -> Path | None:
 
 
 def archive_stale_working_stores(project: Path) -> Path | None:
-    base = project / ".codess"
+    base = project / STORE_DIR
     databases = sorted(base.glob("*.db"))
     if not databases:
         return None
@@ -102,7 +106,7 @@ def archive_stale_working_stores(project: Path) -> Path | None:
             conn.close()
     if package_digests == {current_digest} or not package_digests:
         return None
-    pointer_path = base / "current.json"
+    pointer_path = base / CURRENT_POINTER_FILE
     if not pointer_path.exists():
         raise RuntimeError(
             "working stores use another package and no retained current snapshot exists"
@@ -111,7 +115,7 @@ def archive_stale_working_stores(project: Path) -> Path | None:
     snapshot_store_paths(project, pointer["snapshot_id"], allow_package_mismatch=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     old_label = "-".join(sorted((value or "unknown")[:12] for value in package_digests))
-    destination = base / "working-archives" / f"pre-package-{old_label}-{stamp}"
+    destination = base / WORKING_ARCHIVES_DIR / f"pre-package-{old_label}-{stamp}"
     destination.mkdir(parents=True, exist_ok=False)
     manifest: dict[str, Any] = {
         "archive_format": "codess.working-archive/1",
@@ -135,7 +139,7 @@ def archive_stale_working_stores(project: Path) -> Path | None:
             "integrity_check": integrity,
         }
         shutil.move(str(source), destination / source.name)
-    state = base / "ingest_state.json"
+    state = base / STATE_FILE
     if state.exists():
         manifest["files"][state.name] = {
             "sha256": hash_file(state), "size": state.stat().st_size,
@@ -147,11 +151,11 @@ def archive_stale_working_stores(project: Path) -> Path | None:
 
 def reset_rebuildable_working_stores(project: Path) -> list[str]:
     """Discard derived working stores only after verifying a retained snapshot."""
-    base = project / ".codess"
+    base = project / STORE_DIR
     databases = sorted(base.glob("*.db"))
     if not databases:
         return []
-    if not (base / "current.json").exists() or not current_store_paths(project):
+    if not (base / CURRENT_POINTER_FILE).exists() or not current_stores(project):
         raise RuntimeError(
             "refusing to rebuild working stores without a readable retained snapshot"
         )
@@ -165,7 +169,7 @@ def reset_rebuildable_working_stores(project: Path) -> list[str]:
             Path(str(database) + "-shm"),
         ):
             path.unlink(missing_ok=True)
-    (base / "ingest_state.json").unlink(missing_ok=True)
+    (base / STATE_FILE).unlink(missing_ok=True)
     return removed
 
 
@@ -196,7 +200,7 @@ def run_ingest(
         text=True, timeout=3600,
     )
     runtime_report = {}
-    runtime_path = project / ".codess" / "last-ingest-report.json"
+    runtime_path = project / STORE_DIR / LAST_INGEST_REPORT_FILE
     if result.returncode == 0 and runtime_path.exists():
         runtime_report = read_json(runtime_path)
     return {

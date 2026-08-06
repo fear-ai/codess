@@ -108,7 +108,7 @@ def test_precedence_is_file_then_environment_then_command_line(
             "events_per_source": 200,
         },
     }), encoding="utf-8")
-    monkeypatch.setenv("CODESS_MAX_SOURCE_BYTES", "300")
+    monkeypatch.setenv("CODESS_MAX_TRANSCRIPT_BYTES", "300")
     monkeypatch.setenv("CODESS_MAX_EVENTS_PER_SOURCE", "400")
 
     options = build_ingest_run_options(_args(
@@ -121,15 +121,6 @@ def test_precedence_is_file_then_environment_then_command_line(
     assert options["resource_policy"]["origins"]["transcript_bytes"] == "command-line"
     assert options["resource_policy"]["origins"]["events_per_source"] == "environment"
     assert options["resource_policy"]["origins"]["events_per_session"] == "built-in"
-
-
-def test_new_transcript_environment_name_wins_over_compatibility_name(
-    monkeypatch,
-):
-    monkeypatch.setenv("CODESS_MAX_SOURCE_BYTES", "300")
-    monkeypatch.setenv("CODESS_MAX_TRANSCRIPT_BYTES", "400")
-    options = build_ingest_run_options(_args())
-    assert options["max_source_bytes"] == 400
 
 
 def test_no_resource_limits_disables_every_maximum(tmp_path):

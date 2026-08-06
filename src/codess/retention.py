@@ -11,13 +11,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from codess.config import (
+    CURRENT_POINTER_FILE, LARGE_RAW_REVISION_BYTES, RAW_MANIFEST_FILE,
+    SNAPSHOTS_DIR, STORE_DIR, WORKING_ARCHIVES_DIR,
+)
 from codess.fileio import hash_file, write_json_atomic
 from codess.resources import storage_usage
+from codess.snapshot import SnapshotError, read_manifest, current_snapshot
 
 
 PLAN_FORMAT = "codess.retention-plan/1"
 RECEIPT_FORMAT = "codess.retention-receipt/1"
-LARGE_RAW_REVISION_BYTES = 1024**3
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -30,7 +34,7 @@ def _inside(path: Path, root: Path) -> bool:
 
 def _raw_records(snapshot: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    with (snapshot / "raw-manifest.jsonl").open(encoding="utf-8") as stream:
+    with (snapshot / RAW_MANIFEST_FILE).open(encoding="utf-8") as stream:
         for number, line in enumerate(stream, 1):
             try:
                 value = json.loads(line)
@@ -42,25 +46,36 @@ def _raw_records(snapshot: Path) -> list[dict[str, Any]]:
 
 
 def _validate_current(
-    project_path: Path, pointer: dict[str, Any], raw_root: Path,
+    project_path: Path, raw_root: Path,
 ) -> tuple[Path, set[str], list[dict[str, Any]]]:
-    snapshot_id = pointer.get("snapshot_id")
-    path_value = pointer.get("path")
-    if not isinstance(snapshot_id, str) or not isinstance(path_value, str):
-        raise RuntimeError(f"invalid current pointer: {project_path / 'current.json'}")
-    snapshot = Path(path_value)
-    if not snapshot.is_absolute():
-        snapshot = project_path / snapshot
-    expected_root = project_path / "snapshots"
+    """Validate the current snapshot is safe to keep before planning deletion
+    of everything else. Delegates the pointer-read and manifest_sha256 check
+    to `snapshot.current_snapshot` -- the same check every other
+    current-snapshot consumer relies on -- then applies retention-specific
+    checks that function does not perform: the snapshot must be contained
+    inside this project's own `snapshots/` directory (not an unrelated path
+    the pointer happens to name), its directory name must equal its claimed
+    snapshot_id, its raw manifest and every store file must hash-match the
+    manifest, every store must pass a SQLite quick_check, and every raw
+    object the snapshot references must exist at its recorded size.
+    """
+    try:
+        resolved = current_snapshot(project_path)
+    except SnapshotError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if resolved is None:
+        raise RuntimeError(f"invalid current pointer: {project_path / CURRENT_POINTER_FILE}")
+    snapshot, resolved_pointer = resolved
+    snapshot_id = resolved_pointer.get("snapshot_id")
+    if not isinstance(snapshot_id, str):
+        raise RuntimeError(f"invalid current pointer: {project_path / CURRENT_POINTER_FILE}")
+    expected_root = project_path / SNAPSHOTS_DIR
     if snapshot.name != snapshot_id or not _inside(snapshot, expected_root) or not snapshot.is_dir():
         raise RuntimeError(f"current snapshot escapes or is absent: {snapshot}")
-    manifest_path = snapshot / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = read_manifest(snapshot)
     if manifest.get("snapshot_id") != snapshot_id:
         raise RuntimeError(f"manifest identity mismatch: {snapshot}")
-    if hash_file(manifest_path) != pointer.get("manifest_sha256"):
-        raise RuntimeError(f"current manifest hash mismatch: {snapshot}")
-    raw_manifest = snapshot / "raw-manifest.jsonl"
+    raw_manifest = snapshot / RAW_MANIFEST_FILE
     if hash_file(raw_manifest) != manifest.get("raw_manifest_sha256"):
         raise RuntimeError(f"raw manifest hash mismatch: {snapshot}")
     for name, entry in manifest.get("stores", {}).items():
@@ -175,7 +190,7 @@ def _local_pointer_references(registry: Path, current_by_project: dict[str, str]
         for location in project.get("locations", []):
             if not isinstance(location, dict) or location.get("state") != "active":
                 continue
-            pointer_path = Path(str(location.get("path") or "")) / ".codess" / "current.json"
+            pointer_path = Path(str(location.get("path") or "")) / STORE_DIR / CURRENT_POINTER_FILE
             result["checked"] += 1
             if not pointer_path.exists():
                 result["missing"] += 1
@@ -213,8 +228,8 @@ def _working_archives(
             if not isinstance(location, dict) or location.get("state") != "active":
                 continue
             root = Path(str(location.get("path") or ""))
-            archive = root / ".codess" / "working-archives"
-            if archive.is_dir() and _inside(archive, root / ".codess"):
+            archive = root / STORE_DIR / WORKING_ARCHIVES_DIR
+            if archive.is_dir() and _inside(archive, root / STORE_DIR):
                 archives.add(archive.resolve())
     return sorted(archives)
 
@@ -234,15 +249,12 @@ def build_retention_plan(
     current_raw_records: list[tuple[Path, dict[str, Any]]] = []
     errors: list[str] = []
     for project_path in sorted(path for path in projects_root.iterdir() if path.is_dir()) if projects_root.exists() else []:
-        pointer_path = project_path / "current.json"
+        pointer_path = project_path / CURRENT_POINTER_FILE
         if not pointer_path.exists():
             errors.append(f"project has no current pointer: {project_path}")
             continue
         try:
-            pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-            snapshot, references, records = _validate_current(
-                project_path, pointer, raw_root
-            )
+            snapshot, references, records = _validate_current(project_path, raw_root)
             current.append(snapshot)
             current_by_project[project_path.name] = snapshot.name
             raw_keep.update(references)

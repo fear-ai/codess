@@ -21,7 +21,7 @@ from codess.codex_source import build_session_index as build_codex_session_index
 from codess.registry_store import (
     merge_scan_rows, prune_legacy_cursor_global_entries, update_project_entry,
 )
-from codess.scan import run_scan
+from codess.walk_sessions import walk_sessions
 
 log = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def run(args) -> int:
     for root_index, work_root in enumerate(roots):
         failures_before = diagnostics.get("failed_sources", 0)
         try:
-            rows = run_scan(
+            rows = walk_sessions(
                 work_root,
                 vendor_filter=opts["vendors"],
                 recent_days=opts["recent_days"],

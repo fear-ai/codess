@@ -6,8 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterator
 
-
-DEFAULT_MAX_RECORD_BYTES = 2 * 1024 * 1024
+from codess.config import MAX_RECORD_BYTES as DEFAULT_MAX_RECORD_BYTES
 
 
 def iter_bounded_jsonl(

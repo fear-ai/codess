@@ -14,7 +14,7 @@ from codess.baseline_validation import (
 )
 from codess.fileio import source_fingerprint
 from codess.raw_store import RawStore
-from codess.snapshot import create_snapshot, current_store_paths
+from codess.snapshot import create_snapshot, current_stores
 from codess.store import connect, init_db, replace_session_events
 
 
@@ -110,18 +110,18 @@ def test_validate_snapshot_and_semantic_fixed_point(tmp_path):
     assert not first["limitations"]
     assert len(first["semantic_digest"]) == 64
 
-    before = semantic_digest(current_store_paths(project))
+    before = semantic_digest(current_stores(project))
     pointer = json.loads((project / ".codess/current.json").read_text())
     snapshot = project / ".codess" / pointer["path"]
     raw_record = json.loads((snapshot / "raw-manifest.jsonl").read_text().splitlines()[1])
     create_snapshot(
         project,
-        current_store_paths(project),
+        current_stores(project),
         [raw_record],
         raw_store=RawStore(raw_root),
         build_policy={"raw_mode": "capture"},
     )
-    assert semantic_digest(current_store_paths(project)) == before
+    assert semantic_digest(current_stores(project)) == before
 
 
 def test_policy_rejects_unapproved_mapping_diagnostic(tmp_path):
@@ -235,7 +235,7 @@ def test_ci_fixture_policy_covers_three_vendors_without_home_data(tmp_path):
     first = validate_project(project, policy=policy, raw_store_root=raw_root)
     assert first["status"] == "accepted", first["errors"]
     create_snapshot(
-        project, current_store_paths(project), raw_records, raw_store=raw_store,
+        project, current_stores(project), raw_records, raw_store=raw_store,
         build_policy={"raw_mode": "capture"},
     )
     second = validate_project(project, policy=policy, raw_store_root=raw_root)
@@ -266,7 +266,7 @@ def test_query_smoke_targets_unpublished_candidate_snapshot(tmp_path):
     )
     candidate = create_snapshot(
         project,
-        current_store_paths(project),
+        current_stores(project),
         [raw_record],
         raw_store=RawStore(raw_root),
         build_policy={"raw_mode": "capture"},

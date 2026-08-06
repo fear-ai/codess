@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from codess.config import RAW_CAPTURE_CHUNK_BYTES
 from codess.fileio import hash_file, source_fingerprint
 
 try:
@@ -21,7 +22,7 @@ except ImportError:  # pragma: no cover - exercised as a user-facing error
 
 RAW_FORMAT = "codess.raw/1"
 RAW_MODES = frozenset({"none", "reference", "capture", "seal"})
-CAPTURE_CHUNK_SIZE = 1024 * 1024
+CAPTURE_CHUNK_SIZE = RAW_CAPTURE_CHUNK_BYTES
 CAPTURE_ZSTD_LEVEL = 3
 
 
