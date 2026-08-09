@@ -18,11 +18,16 @@ language, remote schema registries, and the rest of
 [14.4 Deferred Directions](#144-deferred-directions)) are not individually
 tracked work items and are not repeated in this table.
 
+Rows are ordered by priority, not by identifier. Identifiers are assigned
+once and never reused or renumbered, so a later item can carry a higher
+priority than an earlier one -- W20 and W22 sit with the High group above
+the Normal items that precede them numerically.
+
 | ID | Priority | Status | Work |
 |---|---|---|---|
 | W01 | Critical | WIP | Audit source-type and Actor classification across CC/Codex/Cursor. |
 | W02 | Critical | WIP | Strengthen tool, context, compaction, model-setting, and agent/subagent decode. |
-| W03 | Critical | **Under review** | Separate exact package integrity from SQLite layout, logical schema, decoder, mapping, and fixture identity -- a single digest over the complete packaged file set means a non-semantic packaging edit can make an unchanged store layout unwritable. Blocked on deciding which identities the digest should and should not cover. |
+| W03 | Critical | **Under review** | Separate exact package integrity from store write compatibility, and reduce runtime integrity checking to what a local development environment needs -- one digest spans the executable contract and the validation fixtures alike, so a fixture edit can make an unchanged store layout unwritable. Blocked on confirming which runtime checks survive and whether they become optional. |
 | W04 | High | Planned | Shared candidate-record contract and runtime mapping-profile enforcement. |
 | W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. |
 | W06 | High | Planned | Move domain SQL and workflows out of command modules. |
@@ -30,14 +35,18 @@ tracked work items and are not repeated in this table.
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. |
 | W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. |
 | W10 | High | Planned | Complete the Cursor source-access boundary. |
+| W20 | High | WIP | Establish lifetime and resilience requirements for the five derived values. `codess/hashing.py` and `path_key` naming are done; migrating call sites is not. Two decisions remain open: `path_key`'s move/cross-machine behavior, and creation-versus-content snapshot identity. |
+| W22 | High | Planned | Route every JSON digest through one canonical encoder with `ensure_ascii=False` and `surrogatepass`. 16 modules serialize independently and disagree, so equal documents can produce different digests. |
 | W11 | Normal | TODO | Improve search reports and structured-query examples. |
 | W12 | Normal | TODO | Report source-to-common coverage, loss, and unknown shapes. |
-| W13 | Normal | TODO | Mechanically enforce architecture/contract paths; observe child-process coverage. |
+| W13 | Normal | TODO | Mechanically enforce architecture/contract paths; observe child-process coverage. Query-request validation-library adoption is Postponed (13.4.2). |
 | W14 | Normal | TODO | Require or explicitly mark Project identity for direct library writes. |
 | W15 | Normal | **Under review** | Resolve the meaning and name of raw mode `none` -- it retains no raw bytes but still creates a raw-manifest observation. Blocked on deciding whether `none` means no bytes or no raw observation. |
 | W16 | Normal | TODO | Evaluate/plan external investigation interfaces (9.7); does not authorize implementation. |
 | W17 | Normal | **Under review** | Expand cross-Project analysis inputs. Blocked on a consumer specifying entities, fields, selection, transformation, and output checks. |
 | W18 | Normal | Planned | Structured operational-reporting subsystem (9.6.1). |
+| W19 | Normal | Planned | Decompose `walk_sessions()` so Project canonicalization is testable apart from vendor discovery. |
+| W21 | Normal | Planned | Route `walk_sessions` inline `debug` prints through W18's reporting contract, after W19's extraction. |
 
 ## 1. Implementation Scope
 
@@ -329,7 +338,7 @@ for a locally justified reason, and no runtime or lint check requiring the
 canonical accessor -- rather than searching for the specific filenames
 already fixed here.
 
-### 3.5 Numeric-Constant Duplication and Centralization
+### 3.5 Duplication and Centralization of Constants and Low-Level Calls
 
 The same "a module needs one fact, an inline literal is smaller than a
 shared-code change" mechanism from 3.4 was checked against numeric
@@ -340,6 +349,12 @@ what was found was not duplicated -- the audit therefore had to
 distinguish the two before centralizing anything, since collapsing
 genuinely independent constants into a false shared value would be a worse
 outcome than leaving them alone.
+
+3.5.1 through 3.5.3 record that constant audit and its outcome. 3.5.4
+applies the same criterion to repeated standard-library calls, where the
+mechanism is identical but the duplication conceals a decision rather than
+a value, and is therefore harder to see and more consequential when it
+diverges.
 
 #### 3.5.1 Two Confirmed Duplication Clusters
 
@@ -414,6 +429,60 @@ duplicated, not policy thresholds, and were left as local arithmetic:
 Centralizing these would have added indirection without removing any real
 duplication -- the same failure mode 3.4.4 warns against for file literals,
 applied to numbers instead of names.
+
+#### 3.5.4 The Same Audit Applied to Low-Level Calls
+
+The constant audit above asks one question -- *is this literal a shared
+decision or an independent one?* -- and the answer decides whether
+centralizing helps or adds indirection. Repeating a standard-library call
+is the same mechanism with a different surface: an inline
+`datetime.now(...)` or `hashlib.sha256(...)` is smaller than importing a
+shared helper, so each site writes its own, and the shared decision inside
+it never acquires an owner. Three clusters were found by applying the
+constant criterion to calls rather than literals.
+
+| Cluster | Independent sites | Shared decision with no owner | Divergence found |
+|---|---|---|---|
+| Current UTC time | 9 private `_now` helpers | Which representation is persisted | Yes: 7 return ISO text, `registry_store` renames it `_now_iso`, `storage_report` returns a `datetime` |
+| SHA-256 derivation | 40 calls across 21 modules | Algorithm, encoding, truncation width and end | Yes: widths of 48, 64, 96, and 256 bits chosen per site with no stated basis |
+| Canonical JSON for digesting | 16 modules | Serialization form that makes equal content give equal digests | Yes: 4 sites pass `ensure_ascii=False`, 29 take the default |
+
+The pattern is uniform. Each site was individually reasonable, nothing was
+visibly broken, and the duplication was accumulated rather than chosen --
+the same origin 3.5.1 records for the byte-size clusters. What differs is
+the consequence. A duplicated constant risks a *future* inconsistency when
+one site is updated and others are missed; a duplicated call already
+carries an *embedded decision*, so the sites can diverge without anyone
+editing them in relation to each other. All three clusters had in fact
+already diverged.
+
+The severity ranking follows from what the divergence produces, and it is
+not the ranking the site counts suggest:
+
+- **Silently wrong results.** The `ensure_ascii` split makes two equal
+  documents digest differently, with no error and no failing test. This is
+  the only cluster that produces a wrong answer rather than a maintenance
+  hazard, which is why it became W22 at High priority despite being the
+  smallest cluster.
+- **Unreviewed values.** The SHA-256 widths were selected per site; two of
+  the five key sites turned out not to need a hash at all (13.4.8). Tracked
+  as W20.
+- **Reader confusion.** The `_now` return-type split means a name does not
+  predict its own type. No incorrect behavior, but every reader must check.
+
+Two conclusions carry back to the constant method. First, applying it to
+calls is worthwhile precisely because a call hides a decision that a
+literal exposes -- `1024 * 1024` is visibly a number to agree on, while
+`hashlib.sha256(x.encode())` looks like an implementation detail until two
+sites encode differently. Second, 3.5.3's warning still governs: a shared
+helper is justified by a shared decision, not by syntactic similarity. That
+is why `codess/hashing.py` offers four modes rather than one function --
+streaming, canonical-document, in-memory, and component derivation are
+genuinely different operations, and collapsing them would repeat the false
+consolidation 3.5.3 rejects. It is also why the 12 incremental digest
+constructions keep their read policy in `fileio`: only the digest
+construction was a shared decision, not the bounded-window sampling around
+it.
 
 ## 4. CoSchema Read and Write Path
 
@@ -1075,24 +1144,18 @@ each call site:
 - a standard logging bridge for library call sites that cannot receive a
   reporter directly.
 
-The JSON renderer specifically has a small, working reference
-implementation worth citing rather than designing from prose alone:
-`spank-py`'s `core/logging.py` (`JSONFormatter`, ~114 lines) implements the
-same shape — one JSON object per line, a reserved-attribute exclusion list
-separating standard `logging.LogRecord` fields from caller-supplied extras
-(the same distinction this section's "Additional details are bounded JSON
-scalars... under a defined extension object" draws), and an encoding
-fallback that degrades a non-serializable value to `str()` and finally to a
-fixed placeholder rather than raising out of the logging call itself — a
-detail this section does not yet specify and should. Its
-`configure_logging(level, json_format)` is called once at process startup,
-matching the "standalone module with no dependency on vendor adapters,
-stores, or command parsers" requirement in the implementation order below.
-`spank-py` does not extend its config to error-code-to-exit-status mapping
-or a bounded event collector, so the remainder of W18's design (the
-envelope's `operation_id`/`elapsed_seconds` correlation fields, the
-collector, the command-boundary exception conversion) remains original
-work; only the JSON-line rendering mechanics transfer directly.
+The JSON renderer's mechanics are specified here rather than left to
+implementation. It emits one JSON object per line. It maintains a
+reserved-attribute exclusion list separating standard `logging.LogRecord`
+fields from caller-supplied extras, which is the same distinction this
+section's "Additional details are bounded JSON scalars... under a defined
+extension object" draws. It applies an encoding fallback that degrades a
+non-serializable value to `str()` and then to a fixed placeholder, so a
+value that cannot be encoded never raises out of the logging call itself --
+a reporting subsystem must not become a source of failures in the operation
+it reports on. Configuration is applied once at process startup, matching
+the "standalone module with no dependency on vendor adapters, stores, or
+command parsers" requirement in the implementation order below.
 
 Expected domain failures remain typed where boundaries need different
 behavior. The command boundary converts them into a stable event code, safe
@@ -1684,6 +1747,9 @@ developer's live harness data.
 | Package identity coupling | Non-semantic package changes can affect current-layout write compatibility | W03 |
 | Test observability | Child-process scan and ingest paths are not attributed by ordinary coverage | W13 |
 | Operational reporting fragmentation | Status, progress, logger calls, exceptions, and exit results lack one event and rendering contract | W18 |
+| Session discovery coupling | Project canonicalization is reachable only through vendor filesystem discovery, so its rules cannot be tested directly | W19 |
+| Derived key requirements | The five SHA-256 sites do not state what they identify, how long the value lives, or what must recompute it; two are transient hashes that may not be needed | W20, W03 |
+| Canonical serialization divergence | 16 modules serialize JSON for digesting independently and disagree on `ensure_ascii`, so equal documents with non-ASCII content can produce different digests without any error | W22 |
 
 ### 13.4 Deviations and Defects
 
@@ -1722,19 +1788,94 @@ against at runtime. `query_api.py::validate_request` hand-checks the same
 contract `query-request-v1.json` already declares in structured form,
 independently and without reference to it.
 
+**The problem being solved.** A query request is not only executed, it is
+saved, compared, and re-selected later. Two requests that select exactly the
+same thing must therefore be the same document, byte for byte. A JSON array
+is an ordered sequence, but the request uses arrays to carry *sets* --
+`project_ids` names which Projects to search, and asking for A and B is the
+same query as asking for B and A. Without a rule, the same selection has
+many valid encodings, so equality comparison and any identity derived from
+the serialized request become unreliable.
+
+The fix is to admit exactly one encoding per set. In database terms the
+array must be a **distinct, ordered set**: duplicates removed, elements in
+a defined collation. The collation here is the codepoint ordering of
+Python's default string comparison, which corresponds to SQLite `BINARY` --
+not a locale- or case-sensitive collation, so ordering does not vary by
+environment. Requests are normalized to this form on construction
+(`sorted(set(...))`) and rejected if supplied otherwise, so a
+non-canonical request is a caller error rather than something silently
+rewritten.
+
+Beyond ordinary structural checks, `validate_request` enforces three rule
+classes. They recur below and tag the test vectors, so they are named once
+here:
+
+| Rule class | What it constrains | Example |
+|---|---|---|
+| Structural | One field at a time: presence, type, enumerated value, element uniqueness | `action` must be a supported action name |
+| Canonical form | An array must be a distinct, ordered set under `BINARY` collation | `project_ids` must be deduplicated and ordered |
+| Related fields | A constraint relating two fields whose values are individually valid | `filters.since` must be at or before `filters.until` |
+| Action-dependent | Which filters an action admits, determined by the tables that action's SQL actually joins | A `sessions` query never reads the `events` table, so `event_kinds` cannot apply to it |
+
+The vector fixture tags these `canonical_form`, `related_fields`, and
+`action_dependent`. The names describe *what a rule must look at* to be
+decided, which is what separates the classes and what determines whether a
+declarative schema can express them.
+
+Structural rules look at one field. **Related-field** rules look at two
+fields that are individually valid but constrained with respect to each
+other; `since` and `until` are each a valid timestamp, and only their
+relationship can be wrong. The name says the fields are related, which is
+the fact a reader needs -- the previous "cross-field" phrasing described
+the check crossing a boundary rather than the fields being connected.
+**Action-dependent** rules look at one field's value to decide whether
+another field is admissible at all, and additionally depend on knowledge
+outside the document: which tables that action's SQL joins. That external
+dependency is why it is a different kind of rule, not merely a harder one.
+
+Ordering the three by what they must look at -- one field, two related
+fields, another field's value plus external knowledge -- is also the order
+of increasing difficulty for any declarative schema, which is why the
+distinction is worth naming.
+
+"Unique and canonically sorted" is the wording the runtime error messages
+already use, and it is accurate and readable; prefer it in user-facing
+documentation over the internal tag names, which exist to classify test
+vectors rather than to explain the requirement.
+
+**The two-field comparison could be represented differently.**
+`since <= until` is the only related-field rule, and it exists because the
+time window is expressed as two independent fields that happen to be
+related. Representing the window as one value would eliminate the rule
+class rather than validate it:
+
+| Representation | Effect on validation | Cost |
+|---|---|---|
+| Two fields, compared (current) | Needs a hand-written related-field check; each field is individually valid, so no per-field keyword catches the inversion | None beyond the check itself |
+| One `interval` array `[since, until]` | Ordering becomes the array's own canonical-form rule, folding this into a class already enforced | Changes the request wire format; a two-element array is a weaker self-description than two named fields |
+| One object with a required ordering invariant | Same comparison, only relocated | No gain; the check moves without disappearing |
+| Start plus duration | Inversion becomes unrepresentable, since a duration is validated as non-negative by a per-field bound | Changes user-facing semantics; callers naturally express windows as two instants, and a negative duration is merely a different spelling of the same error |
+
+None is clearly better than the present form. The comparison is one line,
+the failure mode is a clear message, and the alternatives trade a
+hand-written check for a wire-format change and a less obvious request
+document. The rule class is worth *naming* because it constrains validator
+choice, not because the representation is wrong. Retain two fields; revisit
+only if the request format changes for other reasons.
+
 The `jsonschema` package (a mature, actively released, widely adopted
 implementation of the spec) is already an installed dependency but is
 likewise never imported. Tested directly against `query-request-v1.json`
 and representative request shapes: it correctly validates the structural
 half of the contract (types, enums, required fields, `uniqueItems`), but
-one of `validate_request`'s rules has no JSON Schema equivalent under any
-draft (checked every published draft the library implements, draft3
-through 2020-12; none has a "sorted" keyword) — canonical array
-*sortedness* (`project_ids`, `filters.session_ids`, and others must be
-unique **and sorted**) would remain hand-written under any jsonschema
-adoption. The `since <= until` cross-field comparison is expressible
-through `if`/`then` combinators, confirmed working, but reads less
-directly than the current one-line check.
+canonical ordering has no JSON Schema equivalent under any draft (checked
+every published draft the library implements, draft3 through 2020-12; none
+has a "sorted" keyword -- `uniqueItems` gives distinctness but not order)
+and would remain hand-written under any jsonschema adoption. The
+related-field `since <= until` comparison is expressible through `if`/`then`
+combinators, confirmed working, but reads less directly than the current
+one-line check.
 
 Action-dependent filter validity (`ACTION_FILTERS[request["action"]]`) is a
 different kind of rule than the other two, not merely a harder one:
@@ -1749,52 +1890,44 @@ would duplicate business logic about query capabilities into a document
 meant to describe syntax; it does not belong in a schema regardless of
 which validation library is chosen.
 
-**Pydantic is a materially different candidate, not a variant of the same
-choice.** Tested directly: `pydantic` (also already an installed but unused
-dependency) expresses all three gaps — sortedness, `since <= until`, and
-`ACTION_FILTERS` — as ordinary Python methods (`@field_validator`,
-`@model_validator`) within the same class as the structural checks, so
-there is no bifurcation between "schema handles this, hand-written code
-handles that." The published, standard path from an existing JSON Schema
-file to a pydantic model is `datamodel-code-generator` (a real, actively
-maintained, separately published tool, recommended in pydantic's own
-documentation for this exact scenario; not installed in this environment).
-It is a **one-time code-generation step**, not a live bridge: after
-generation, the produced Python class is the authoritative definition
-going forward, and the source `.json` file is no longer necessarily kept
-in sync. Whether that is acceptable depends on whether any of the eight
-checked-in schema files are meant to remain independently consumable by
-something other than this codebase (an external tool, another service,
-documentation generation) — that has not been established and is a
-precondition for choosing between "adopt pydantic, retire the JSON files"
-and "keep the JSON files load-bearing, accept jsonschema's two permanent
-gaps, or keep hand-writing all of it."
+Pydantic (also installed and unused) was tested as a materially different
+candidate rather than a variant of the same choice: it expresses all three
+rule classes as ordinary methods (`@field_validator`, `@model_validator`)
+alongside the structural checks, so no rule has to live outside the model.
+Its cost is that the standard path from an existing JSON Schema file, the
+separately published `datamodel-code-generator`, is a one-time generation
+step rather than a live bridge -- the generated class becomes authoritative
+and the source `.json` is no longer necessarily kept in sync.
+
+**Decision: the schema files are retained as-is and the migration is
+Postponed.** Replacing `validate_request` with jsonschema alone is not
+available, since canonical ordering cannot move to a declarative schema and
+action-dependent validity should not. Pydantic has neither limitation but
+would let the JSON files drift from a generated class. Neither trade is
+worth making while the runtime validator is correct and covered by vectors.
+The architecture and coverage portions of W13 remain open.
 
 `tests/fixtures/validate_request_vectors.json` and
-`tests/test_validate_request_vectors.py` (covering every
-`raise QueryContractError` path in `validate_request`, each tagged where
-it exercises `sortedness`, `cross_field`, or `action_dependent`) now supply
-the before/after correctness baseline either migration path needs. The
-fixture is tool-agnostic by construction — request/outcome pairs with no
-reference to `validate_request`'s internals — so it can validate a future
-pydantic model or jsonschema-based validator without being rewritten
-first; a migration is complete only when every vector still passes against
-the replacement.
+`tests/test_validate_request_vectors.py` supply the correctness baseline any
+future migration would need. Vectors exercising the three named rule classes
+carry a `capability` tag; untagged vectors cover the structural rules. The
+fixture is tool-agnostic by construction -- request and outcome pairs with
+no reference to `validate_request`'s internals -- so a migration would be
+complete when every vector still passes against the replacement. The
+vectors were written to cover each rejection path, but nothing asserts they
+still do, so that completeness claim decays silently as paths are added.
 
-W13's resolution is therefore bounded, not open-ended: full replacement of
-`validate_request` with jsonschema alone is not available, since sortedness
-cannot move to a declarative schema under any draft and `ACTION_FILTERS`
-should not move to one regardless of expressibility. Pydantic does not have
-either limitation. The honest completions are (a) adopt pydantic, using
-`datamodel-code-generator` against the existing schema files as the
-starting point if and only if those files do not need to remain
-independently authoritative outside this codebase, verified against the
-vector suite; (b) adopt jsonschema for the structural checks only, with
-sortedness and `ACTION_FILTERS` permanently hand-written and a contract
-test asserting the two stay in agreement; or (c) remove the eight currently
-dead schema files if no adoption is wanted, since an unused file declaring
-itself a validation contract is a worse state than no file: it invites a
-future reader to assume it is load-bearing when it is not.
+The eight files are the published, language-independent statement of the
+request, result, row, investigation, Project-set, candidate-policy,
+resource-policy, and baseline-selection document shapes. This paragraph is
+the single place recording that they are not consulted at runtime; the
+files themselves are not annotated, since a status that may change does not
+belong duplicated across eight documents where it would have to be revised
+in eight places and could disagree with this section. Their value is as a
+portable contract for the interfaces in 9.7, for documenting document
+shapes from one source, for validating investigation, Project-set, and
+baseline-selection documents produced outside Codess, and as the starting
+point if the trade-offs above change.
 
 #### 13.4.3 Bounded Processing
 
@@ -1821,11 +1954,86 @@ state whether `none` means no bytes or no raw observation and then align the
 mode name, manifest, documentation, and tests. Normalized Source provenance is
 required either way.
 
-Package identity separation is tracked by **W03** because it can
-block current-format writes. Snapshot identity currently uses one digest over exact package files;
-a non-semantic packaged-file edit therefore changes write compatibility. Exact
-package integrity must remain available without equating it to logical schema,
-physical layout, decoder, mapping, or fixture compatibility.
+Package identity separation is tracked by **W03** because it can block
+current-format writes.
+
+**What the digest covers.** `schema_contract.verify_package()` walks the
+released manifest, verifies each listed file against its recorded SHA-256,
+and folds every one of those per-file hashes into a single digest over the
+whole set. That one value is the *package digest*. Its members fall into
+two groups that serve unrelated purposes:
+
+| Group | Members | Runtime role |
+|---|---|---|
+| Executable contract | The SQLite DDL, the logical contract, the mapping contract, and the three vendor mapping profiles | Loaded by `src/` at runtime; determines the layout a store is written into and the mapping evidence attached to decoded records |
+| Validation fixtures | Representative minimal, maximal, golden, edge, negative, hazard, and version-compatibility documents | Read only by the test suite; never loaded by `src/` |
+
+The split is the reason W03 exists. The first group defines what a store
+*is*; the second only defines what the tests exercise. The digest does not
+distinguish them.
+
+**Why that blocks writes.** Every store records the package digest current
+when it was written into its `store_meta`. `require_store(write=True)`
+refuses to open a store whose recorded digest differs from the digest
+computed now. The intent is sound — a store must not be extended by
+software whose schema or mapping has moved underneath it — but because
+fixtures are inside the digest, editing a fixture, or any packaged file
+not loaded at runtime, changes the digest and makes every already-published
+store fail that check. The store's layout, decoder, and data are unchanged;
+only a test document moved. Rebuilding from source is then the only way
+back, which is disproportionate to a change that provably cannot affect
+stored data.
+
+**Fixture identity is a development-lifecycle concern, not a runtime one.**
+Fixtures establish that the decoders behave correctly; that is settled by
+running the test suite before a release, not by a check inside the shipped
+program. Their digest answers "is this working tree the reviewed one," a
+question the test suite already answers more directly and more completely.
+Carrying that question into a runtime admission check gives the program an
+opinion about its own test data, which it has no use for. Removing fixtures
+from the write gate is therefore not a weakening -- the guarantee moves to
+where it was already being established.
+
+**One digest must be justified, not assumed.** A shared digest is a claim
+that its members change together and mean one thing. That holds within the
+executable contract: the DDL, the logical and mapping contracts, and the
+vendor profiles jointly determine how a store is written and read, and a
+store built under one combination cannot be assumed compatible with
+another. It does not hold between that group and the fixtures, which have
+an unrelated lifecycle. Grouping by shared lifecycle is the rule; a single
+digest spanning groups needs proof that coordinated state across all
+members is actually required, and no such proof exists here.
+
+**Checking cost must be proportionate in a development environment.** The
+existing integrity machinery is not free: `verify_package()` hashes every
+manifest file, and it is reached from the store write gate, snapshot
+creation, refresh, baseline catalog operations, and query metadata. Codess
+runs locally against a developer's own data, so the threat this guards
+against is accidental mismatch, not tampering. That justifies a cheap
+check, not a pervasive one. Verification that exists to protect a release
+should run at release time; runtime should retain only what prevents a
+specific, demonstrated failure. Where a runtime check survives on those
+grounds, it should be skippable, so ordinary local work is not paying for
+a guarantee it does not need.
+
+**Mismatch means regenerate, which bounds the whole problem.** Codess does
+not migrate stores in place; the established approach is to detect that a
+store disagrees with current processing and rebuild it from vendor sources,
+which remain the authority. That makes the write gate's job narrow. It does
+not need to identify precisely which release produced a store or to support
+compatibility across versions. It needs to answer one question -- *would
+extending this store mix records written under different rules?* -- and on
+disagreement, direct the operator to regenerate. Schema evolution is handled
+by regeneration rather than by digest precision, so precision beyond that
+question buys nothing.
+
+**What separation requires.** The write gate should consult only the
+executable contract, and the resulting check should be explicit about
+prescribing regeneration. Exact package verification remains available as a
+release and diagnostic operation, where its cost is appropriate and its
+question is the right one. Each identity needs a named consumer and a test
+fixing which question it answers, so adding a file to the manifest cannot
+silently reintroduce the coupling.
 
 #### 13.4.5 Test Observability
 
@@ -1876,24 +2084,635 @@ are evidence about decoded Source records and must remain queryable beside the
 data. W18 consolidates only application operation reporting under the contract
 in Section 9.6.1.
 
+#### 13.4.7 Session Discovery Decomposition
+
+`walk_sessions()` is tracked by **W19**. It is the entry point for Project
+discovery: given a work root, it returns one row per discovered Project with
+its contributing vendors, Session counts, size, and activity span.
+
+**The problem.** Three responsibilities are interleaved in one body rather
+than sequenced. Vendor path discovery reads Claude Code, Codex, and Cursor
+storage, each with its own index format and fallback traversal. Path
+canonicalization then reduces the discovered paths to Project locations:
+attributing a nested path to its enclosing Git root, dropping a parent when
+a more specific child is present, and excluding aggregator directories.
+Row assembly finally gathers per-Project metrics. The middle stage is pure
+path algebra with no I/O beyond existence checks, but it is reachable only
+by running the first stage, so its rules cannot be tested without a
+populated vendor filesystem. That is the practical cost: the logic most
+likely to be wrong -- which directory *is* the Project -- is the logic
+hardest to test.
+
+**Why the nesting is not load-bearing.** Four helpers are defined inside
+the function. Nesting is justified when a helper closes over derived local
+state, but none does. `in_work_root`, `_is_agg`, and `canonicalize` capture
+only `work_root`, itself a parameter; `project_boundary` captures
+`work_root` and one derived set of existing paths. No helper captures
+accumulating or loop-local state. Each becomes a module-level function by
+adding one or two explicit parameters, which is why the extraction is
+mechanical rather than a redesign.
+
+**Candidate designs.** Three options, in increasing scope:
+
+| Design | Change | Gains | Costs |
+|---|---|---|---|
+| A. Lift helpers only | Move the four helpers to module level with explicit parameters; leave the body otherwise intact | Canonicalization rules become directly testable; smallest possible diff; behavior-preserving by inspection | The function remains long; discovery and assembly stay interleaved |
+| B. Lift helpers and separate the three stages | A. plus splitting the body into vendor discovery, canonicalization, and row assembly, passing path sets between them | Each stage independently testable; the pipeline becomes readable as three named steps | Larger diff; requires deciding the intermediate representation passed between stages |
+| C. Per-vendor discovery modules | B. plus one discovery function per vendor behind a common signature | Vendor-specific traversal isolated, matching the adapter-layer separation elsewhere | Largest scope; overlaps W10's Cursor boundary work and should not proceed independently of it |
+
+Design A is the recommended first step: it removes the testability blocker
+at near-zero risk and is a strict prefix of B. B should follow once A's
+extracted functions have tests, since the intermediate representation is
+easier to choose when the canonicalization contract is pinned by tests.
+C should wait for W10 to avoid two overlapping changes to Cursor discovery.
+
+**Validation.** The extraction is behavior-preserving, so the existing
+discovery tests must pass unchanged -- that is the primary evidence, and a
+change to their expectations indicates a defect in the extraction rather
+than a needed update. Beyond that, A is complete when canonicalization has
+direct unit tests that construct path sets in a temporary tree and assert
+Git-root attribution, parent-versus-child selection, and aggregator
+exclusion without invoking vendor discovery. These cases are currently
+unreachable, so they are new coverage rather than relocated coverage.
+
+**Excluded from W19: the inline `debug` prints.** These are tracked
+separately as **W21** and must not be folded into the extraction.
+
+The two changes differ in kind. Extraction is behavior-preserving: it moves
+code without altering what the program does, so its correctness is
+established by the existing tests passing unchanged. Rerouting the `debug`
+statements is a behavior change. They currently write to stderr immediately
+via `print(..., file=sys.stderr)` and only when `debug` is set, whereas
+`_record_diagnostic` and its siblings accumulate structured entries into the
+`diagnostics` dictionary the caller supplies. Converting them changes where
+the information goes, when it appears, whether it survives the call, and
+whether it is emitted at all when `diagnostics` is `None`. No existing test
+asserts that difference, so a defect introduced here would be silent.
+
+Combining them destroys the extraction's safety argument. If the tests are
+expected to pass unchanged and one fails, that failure must mean the
+extraction was wrong; once a behavior change rides along, a failure is
+ambiguous and the reviewer must decide which change caused it. Keeping them
+separate preserves a clean signal in both directions.
+
+W21 belongs with W18, not with W19. `walk_sessions` is one instance of the
+reporting fragmentation described in 13.4.6 -- direct `print` calls
+carrying operational status that no shared contract governs -- so the
+destination for these statements is whatever W18's event contract defines,
+not the module-local diagnostics dictionary. Converting them to
+`_record_diagnostic` first would move them into a structure W18 may then
+replace. W21 therefore waits on W18's contract and applies it here, using
+the extraction as the occasion rather than the justification. Extraction
+makes the call sites obvious, which is why the two look related; that is an
+argument for sequencing, not for merging.
+
+#### 13.4.8 Derived Key Requirements
+
+Independently derived SHA-256 keys are tracked by **W20**.
+
+**The identity system, in layers.** Codess derives identifiers in three
+distinct groups, and only the third is under review. Confusing them is the
+main hazard, since they share a hash function and nothing else.
+
+*Entity identities* (`identity.py`) name logical CoSchema entities across
+stores and machines. All use one `_qualified()` construction -- a format
+tag, an entity kind, and NUL-separated components -- and all retain the
+full 32-byte digest, rendered as
+`codess:<kind>:sha256:<64 hex>`. They derive from vendor-supplied
+identifiers rather than local state, which is what makes them portable:
+
+| Identity | Derived from | Purpose |
+|---|---|---|
+| `global_session_id` | Source system ID, vendor session ID | Names one vendor Session independently of any database or path |
+| `global_event_id` | Session identity, vendor event ID | Names one Event within a globally qualified Session |
+| `global_source_revision_id` | Source system, URI, revision | Names one immutable observation of an upstream Source |
+| `global_source_record_id` | Source revision identity, locator | Names one record position within that revision |
+| `source_observation_id` | Entity identity, source system, URI, revision, Project | Names one extraction observation of a logical entity |
+| `location_id` | Machine ID, normalized real path | Names a machine-local observed location, explicitly never a Project |
+| `artifact_uri_id` | Artifact URI | Names an Artifact locator consistently across Project databases |
+
+These compose deliberately: `global_event_id` takes a `session_id` that is
+itself a qualified identity, so an Event's name is only meaningful relative
+to a Session's. That is layering, not the violation described below -- the
+Session identity is an *input* to the Event identity, not a field inside the
+structure the Event identity digests.
+
+*Vendor identifiers* are the raw values a harness recorded, retained
+unchanged as evidence. `tool_use_id` is Claude Code's field naming a tool
+invocation; `call_id` is Codex's equivalent. Adapters read whichever the
+vendor supplies and place it in Event metadata. These are not Codess
+constructs and are never invented.
+
+`source_call_id` is the CoSchema column that stores that vendor value after
+bounding (item 5 below). The distinction matters: `call_id`/`tool_use_id`
+are *vendor field names* appearing in source records and metadata, while
+`source_call_id` is the *common column* holding whichever one applied, so a
+cross-vendor query does not need to know which harness produced the row.
+The `source_` prefix marks it as a retained vendor value rather than a
+Codess-derived identity -- it is not qualified, not hashed except when
+over-long, and not comparable across Sessions, which is why the schema
+constrains it as `UNIQUE(session_id, source_call_id)` rather than globally.
+
+**Naming rule: name the use, not the algorithm.** A name should say what a
+value is *for*, since that is what a reader must know to use it correctly
+and what stays true if the implementation changes. Three suffixes carry
+distinct meanings and should be applied by actual use:
+
+| Suffix | Meaning | Consequence if the algorithm changes |
+|---|---|---|
+| `_id` | Names an entity; expected to be stable and to appear in references | The value changes, so this is a breaking change requiring migration |
+| `_key` | A derived lookup or grouping value; equality is all that is promised | Values change together; anything holding old ones must be regenerated |
+| `_hash` or `_digest` | An integrity claim to be recomputed and compared | The verifier must know the algorithm, so naming it is correct here |
+
+Only the third case should mention the algorithm, because a verifier must
+know what to recompute. Everywhere else, naming the algorithm publishes a
+choice that callers should not depend on, and makes a future change look
+like a rename.
+
+By this rule `candidate:path-sha256:` was wrong, and the earlier
+`candidate:path:` was wrong differently -- one advertised the algorithm, the
+other implied a path followed. It is now `candidate:path-key:`, which states
+the input domain and the class of value.
+
+**Related finding: the algorithm name is pervasive.** `hashlib.sha256` is
+called directly in 21 modules, and `sha256` appears in about
+eighteen distinct field names (`selection_sha256`, `catalog_sha256`,
+`manifest_sha256`, `plan_sha256`, and others) plus a dozen stored value
+prefixes (`codess:workspace:sha256:`, `codess:processing:sha256:`,
+`rawrel:sha256:`, `full-sha256-fingerprint`, and more). Two groups need
+separating:
+
+- *Integrity fields* -- `stored_sha256`, `content_sha256`, `manifest_sha256`
+  and their kin are verification claims that a reader recomputes. Naming the
+  algorithm is correct and should stay.
+- *Identity and key prefixes* -- `codess:<kind>:sha256:<digest>` and similar
+  embed the algorithm in values that are stored, compared, and quoted by
+  operators. These are the ones that would make an algorithm change a
+  wire-format change.
+
+This is scoped into W20 rather than treated as a separate cleanup, because
+the decision is the same one: what each value is for. Note that changing any
+stored prefix alters values already written, so each is a wire-format
+decision distinct from the Python identifier beside it.
+
+**Why the algorithm is called so many times.** `hashlib.sha256` appears 40
+times across 21 modules. The count is not one duplicated operation; it is
+three operations that were never named, plus genuine sprawl:
+
+| Group | Calls | What it does | Mode that serves it |
+|---|---|---|---|
+| Streaming digests | 12 incremental constructions in `fileio`, `snapshot`, `raw_store`, `schema_contract`, `cursor_source`, `baseline_validation` | Feed a file or object in bounded chunks, so an arbitrarily large input never materializes in memory | `codess_stream_hash`, or `codess_digest()` where the read pattern is itself the policy |
+| Canonical-document digests | `query_api`, `project_catalog`, `catalog_operations`, `retention`, `refresh_operations` | Serialize a structure to canonical JSON, then digest the bytes | `codess_canonical_hash`, which also fixes the serialization form |
+| Key and identity derivation | `identity`, `path_label`, `tool_identity`, `store`, `cli.ingest_cmd`, `content_processing` | Combine a few short values into a stable name or key | `codess_hash` |
+
+Every group is now served, but not by one function: the modes exist because
+these operations differ in what they consume and in whether their output
+must match an external tool's.
+
+The justification for so many direct calls is therefore partial. Streaming
+sites are legitimately distinct in their *read policy*, which stays in
+`fileio`; their digest construction does not need to be.
+The key-derivation sites had no shared function to call until now, which is
+the accidental duplication `codess_hash` removes. The canonical-document
+sites reveal a different missing abstraction -- a canonical-JSON encoder.
+
+##### JSON Serialization: `ensure_ascii=False` Universally
+
+`json.dumps(..., sort_keys=True, separators=(",", ":"))` is written out in
+16 modules, and they do **not** agree: 4 pass `ensure_ascii=False` while 29
+take the default `True`. The two produce different bytes for any non-ASCII
+content, and therefore different digests for equal content:
+
+```text
+input:  {"n": "café"}
+
+ensure_ascii=True (default)  ->  {"n":"caf\u00e9"}   19 bytes
+ensure_ascii=False           ->  {"n":"café"}        17 bytes
+```
+
+Both are valid JSON and both parse back to the same object, so nothing
+errors and no test fails; two equal documents simply appear to differ. That
+makes this a sharper finding than the hashing sprawl, because a digest
+comparison is exactly where the difference surfaces as a wrong answer rather
+than a crash.
+
+**Recommendation: `ensure_ascii=False` everywhere, applied through one
+encoder.** The reasoning, with each claim tested rather than assumed:
+
+| Consideration | Finding |
+|---|---|
+| Storage compatibility | Both forms satisfy SQLite `json_valid()`, round-trip through `TEXT` unchanged, and give equal `json_extract` results. No storage reason to prefer either |
+| Size | UTF-8 is smaller for non-ASCII content -- 43 bytes against 61 for a mixed Latin/CJK/emoji document, and the gap widens as non-ASCII density rises |
+| Readability | `{"n":"café"}` is legible in query output, a database browser, and a diff; `{"n":"café"}` is not. Codess stores prompts, paths, and tool output, where non-ASCII is ordinary rather than exotic |
+| Output-stream safety | The historical argument for escaping -- a non-UTF-8 stdout -- does not apply. Python forces UTF-8 for stdout from 3.7, confirmed here even under `LC_ALL=C` |
+| Interoperability | UTF-8 is the JSON interchange default under RFC 8259, so the unescaped form is what other tools expect to read |
+
+**One real hazard, and its resolution.** Codess digests filesystem paths,
+and a path whose bytes are not valid UTF-8 reaches Python as *lone
+surrogates* through `os.fsdecode` -- the byte `0xE9` in a Latin-1 filename
+becomes `\udce9`. Encoding that strictly raises `UnicodeEncodeError`, so a
+single undecodable filename anywhere in a scan would abort the operation.
+The escaped form sidesteps this only by accident, since `\udce9` is
+representable as an escape sequence.
+
+The resolution is not to prefer escaping but to encode with
+`errors="surrogatepass"`, which renders surrogates deterministically instead
+of raising. `codess/hashing.py` applies this in both `canonical_bytes` and
+component encoding, so an undecodable path yields a stable digest rather
+than a failure. This was the substantive risk in the recommendation and is
+the reason the choice belongs in one encoder rather than being repeated as
+a keyword argument at 16 call sites -- the `surrogatepass` decision would
+otherwise have to be remembered independently at each of them.
+
+Every digest over a structure should route through `canonical_bytes`. The
+29 sites currently taking the default are the ones that change; because they
+produce different bytes today, any digest already stored from a non-ASCII
+document will differ after migration, so this is a value-changing change for
+that subset rather than a pure refactor. Digests over ASCII-only content are
+unaffected, which is the majority.
+
+**`codess/hashing.py` as the single derivation point.** Four modes cover the
+operations above. They differ in what they consume, not in the digest they
+compute, and each has a matching `..._check` so verification never re-derives
+a construction by hand:
+
+| Function | Consumes | Replaces |
+|---|---|---|
+| `codess_hash(generated, truncated, inputs)` | A list of short values, NUL-separated behind a `codess.hash/1` tag | `identity._qualified` and the ad-hoc key sites |
+| `codess_canonical_hash(generated, truncated, value)` | One JSON-serializable structure via `canonical_bytes`, which fixes `sort_keys`, separators, `ensure_ascii=False`, and `surrogatepass` | `query_api.content_hash` and the document-digest sites |
+| `codess_bytes_hash(generated, truncated, content)` | One in-memory buffer, untagged | `fileio.write_hash` and content digests already in memory |
+| `codess_stream_hash(generated, truncated, chunks)` | An iterable of chunks | `fileio.hash_file` and other bounded reads |
+
+`codess_digest()` additionally returns the incremental object for callers
+whose *read pattern is itself the policy* -- the bounded window sampling in
+`fileio.source_fingerprint`, which interleaves seeks and stat checks. That
+policy stays in `fileio`; only the digest construction moves.
+
+Supported widths are 256 generated, and 256, 128, or 64 retained; anything
+else raises rather than silently truncating to an unreviewed length.
+Truncation keeps *leading* bits, matching every existing site, so adoption
+does not change any value already stored -- which is what makes migration a
+refactor rather than a data change. Which end is retained does not affect
+collision resistance; fixing it does, because a value that changed ends
+would invalidate every key derived from it.
+
+Two mode distinctions matter when migrating. The component mode is *tagged*
+and separated, so it deliberately does not reproduce today's untagged
+`sha256(str(x))` key sites; those map to `codess_bytes_hash` if their values
+must be preserved, or to `codess_hash` if they are regenerated. Content
+modes are untagged precisely so their output matches what an external tool
+computes over the same bytes, which is required for any value a reader
+verifies independently. Reproduction of the existing `hash_file`,
+`content_hash`, and staging-key constructions was confirmed against all
+three.
+
+Callers pass widths and never name the algorithm, so replacing SHA-256
+becomes a change to one module rather than to 21. The three widths at 64,
+128, and 256 bits replace the current ad-hoc 48, 64, 96, and 256; the sites
+using 48 and 96 bits are under review above and will move to a supported
+width when their requirements are settled.
+
+**Codess-specific naming is spelled out, not abbreviated.** The function is
+`codess_hash` rather than `cs_hash` because every existing product-scoped
+name in the codebase spells the product out:
+
+| Surface | Convention | Count |
+|---|---|---|
+| Environment variables | `CODESS_*` -- `CODESS_REGISTRY`, `CODESS_RAW_MODE`, `CODESS_MAX_EVENTS_PER_SOURCE` | 29 distinct |
+| Stored value namespaces | `codess:<kind>:...` -- `codess:session`, `codess:observation`, `codess:workspace` | 10 kinds |
+| Format tags | `codess.<subsystem>/<version>` -- `codess.coschema`, `codess.id/1`, `codess.snapshot/1` | Several |
+| Filesystem | `.codess/` store directory, `~/.codess` registry | Two |
+| Package and command | `codess` | One |
+
+Introducing `cs_` would create a second abbreviation for the same product
+with no rule for choosing between them, and `cs` is not distinctive -- it
+reads as an initialism a newcomer must be told. The cost of spelling it out
+is a few characters at each call site; the benefit is that every
+Codess-specific name in the project follows one rule. The new module's
+format tag `codess.hash/1` matches the existing tag convention for the same
+reason.
+
+Two related observations from the same survey. `CODESS_MAX_CODESS_DB_BYTES`
+repeats the prefix inside the name and should be `CODESS_MAX_DB_BYTES`, and
+`CODESS_DAYS`, `CODESS_FORCE`, and `CODESS_STOP` name a value without
+naming what it governs. Neither blocks anything; both belong with the
+vocabulary work already listed in this section.
+
+*Locally derived values* are the five sites this section reviews. Four
+truncate the digest and one retains it in full. Length is an implementation
+detail downstream of three questions that are not answered anywhere: how
+long the value must live, what must be able to recompute it, and whether
+anything retrieves data by it.
+**No site uses a hash for content-addressed retrieval** -- nothing looks up
+a dataset by digest. Every use is either equality comparison or a name for
+a location. That bounds the whole problem: these are naming and comparison
+values, not an addressing scheme, so collision tolerance is governed by how
+many values coexist in one namespace, not by any global uniqueness claim.
+
+**Sizes.** SHA-256 produces a 32-byte (256-bit) digest, rendered as 64
+hexadecimal characters. Every truncation in this codebase is expressed in
+hex characters, so a length in bytes is half the stated figure:
+
+| Truncation | Bytes retained | Bits | Discarded |
+|---|---|---|---|
+| 12 hex | 6 bytes | 48 | 26 of 32 bytes |
+| 16 hex | 8 bytes | 64 | 24 of 32 bytes |
+| 24 hex | 12 bytes | 96 | 20 of 32 bytes |
+| 64 hex | 32 bytes | 256 | none |
+
+**Portability.** Byte order, struct packing, and word size do not arise:
+SHA-256 is defined over byte sequences, and every site hashes UTF-8 encoded
+text, so the digest of given input text is identical on any machine and
+platform. The exposure is entirely in *what is fed in*. Path text is the
+problem case: case sensitivity differs (Linux sensitive, macOS usually
+not), separators differ on Windows, the same repository sits at different
+absolute paths on different machines, and Unicode normalization differs.
+
+Normalization is the least obvious of these. Unicode can represent the same
+visible character in more than one way: `é` is either one code point
+(U+00E9) or two (U+0065, the letter `e`, followed by U+0301, a combining
+acute accent). The Unicode standard defines normalization forms that convert
+between these representations, and two are relevant here:
+
+| Abbreviation | Full name | Effect |
+|---|---|---|
+| NFC | Normalization Form C, for *Composition* | Combines a base character and its combining marks into one code point where one exists, giving the shorter encoding |
+| NFD | Normalization Form D, for *Decomposition* | Separates a composed character into its base and combining marks, giving the longer encoding |
+
+macOS stores filenames decomposed (NFD), while Linux stores whatever bytes
+it was given, in practice usually composed (NFC). A directory named `café`
+therefore encodes as 4 UTF-8 bytes on one platform and 5 on the other, and
+the two forms produce entirely different digests even though the path looks
+identical and refers to the same directory. Any key derived from
+unnormalized path text is thus platform-dependent whenever a non-ASCII
+character appears in the path. Applying
+`unicodedata.normalize("NFC", ...)` before hashing removes this specific
+difference, though not the case, separator, or location differences above.
+
+Paths are therefore not persistent across computers, and any value derived
+from one is machine-local. Two sites are affected and must be documented as
+such rather than treated as portable identities:
+
+| Value | Path-derived | Consequence |
+|---|---|---|
+| `path_label.path_key` | Yes, resolved path text | A review catalog is machine-local; the same checkout elsewhere yields a different key |
+| `identity.location_id` | Yes, but deliberately | Already correct: its docstring says "never a logical project," it is qualified by `machine_id`, and it applies `normcase`/`realpath`, so machine-locality is explicit in the design rather than incidental |
+| `snapshot.py` snapshot identity | Yes, Project path is one input | Compounds the creation-identity question in item 4; a snapshot moved or rebuilt elsewhere cannot reproduce its own name |
+
+`location_id` is the model to follow: when a value must be path-derived,
+qualify it with the machine and say so in the name and docstring.
+`identity.py`'s other identities avoid the problem entirely by deriving
+from vendor-supplied identifiers rather than from local paths.
+
+**A derived value must never be inside the structure that produces it.**
+Two current layouts violate this and should change:
+
+- `_backup_store` writes `snapshot_id` into each store's `store_meta`, and
+  the store file is then hashed into the manifest. The recorded content
+  digest therefore covers a value derived from that same content, so the
+  digest cannot be recomputed from the data alone without first knowing the
+  identity it is supposed to help establish.
+- The manifest contains `snapshot_id` and is itself hashed as
+  `manifest_sha256` in the current-snapshot pointer, repeating the pattern
+  one level up.
+
+The rule is that identity and integrity live in a layer above the data they
+describe: the payload is hashed, and the resulting digest plus any name is
+recorded in a separate document that is not itself an input. Applying it
+here means removing `snapshot_id` from `store_meta` and letting the
+manifest hold the association, which also removes the circularity noted in
+item 4. `identity.py` already follows the rule -- a `sessions` row's
+`global_id` is computed from vendor fields and stored beside them, never
+folded back into a digest of the row.
+
+**1. `path_label.path_key` -- review key, 24 hex (12 bytes). Persisted and
+used for retrieval.** This is not a transient comparison value, and an
+earlier reading of it as one was wrong. `review_project.py` writes it into
+the review catalog beside the path, and `record_review_decision` accepts it
+as a `project_ref` an operator supplies to attach a review decision to a
+Project. It must therefore stay equal across separate command invocations
+and remain valid as long as the catalog does. Lifetime: the review
+catalog's. Resilience required: stable across runs, process restarts, and
+unrelated Projects being added or removed -- all satisfied, since it derives
+from the resolved path alone.
+
+*What is hashed:* one string, the resolved absolute path
+(`expanduser().resolve()`), UTF-8 encoded. Input size is one filesystem
+path, typically well under 200 bytes and bounded by the platform path
+limit; output is 24 hex characters.
+
+*Naming.* The value prefix is `candidate:path-key:`, changed from
+`candidate:path:` because what follows is a derived value, not a path. The
+old form read as though the path itself followed -- the damaging misreading
+for a value an operator copies from a catalog and passes back on a command
+line, since a reader could expect to recognize or edit the path portion.
+`path-key` states the input domain and that this is a lookup key whose only
+promise is equality. It deliberately does not name the algorithm: nothing
+recomputes this value to verify it, so `sha256` would publish an
+implementation choice callers must not depend on. The prefix is a stored
+wire value and a separate decision from the Python function name and the
+catalog field name; all three changed here, each for its own reason.
+
+Two requirements remain unstated. First, behavior when a reviewed directory
+*moves*: the key changes, which is right if a location is being named and
+wrong if a Project is, and the catalog would then hold a decision no
+reference resolves to. Second, cross-machine use: the same repository
+checked out at a different path, or on a different platform, yields a
+different key, so a review catalog is machine-specific in practice though
+nothing says so. Both must be settled before the derivation changes; they
+decide whether a path is the right input at all.
+
+**2. `cli.ingest_cmd` staging directory name -- 16 hex (8 bytes).
+Transient equality, not an identity.** Correctly characterized as a hash
+rather than a key. It exists only to give each Project a distinct directory
+name under one preflight `TemporaryDirectory`, which is deleted when the run
+exits. Lifetime: one process. Resilience required: none -- it need not
+survive the run, be reproducible later, or be portable anywhere.
+
+*What is hashed:* one string, `str(proj)` -- the Project path as supplied,
+without resolution, UTF-8 encoded. Same input class and size as item 1, and
+the same path-portability exposure, which does not matter here because the
+value never leaves the run. Its only obligation is distinguishing the
+handful of Projects in a single invocation, and the sibling call site
+already meets that obligation with a plain sequential `project_index`. This
+site should lose its hash entirely rather than be consolidated with
+anything.
+
+**3. `cli.ingest_cmd` preflight Project identity -- 24 hex (12 bytes). Transient
+equality, not an identity.** Also a hash rather than a key, despite being
+formatted as `codess:preflight-project:<digest>`. It stands in for a
+Project identity while validate-only mode runs and is discarded with the
+run; nothing published ever contains it. Lifetime: one process. Resilience
+required: none. It exists because surrounding code expects an identity-
+shaped string, so the question is not its length but whether preflight
+should construct a value that resembles a real Project identity at all --
+which is W14's question about marking provisional identities explicitly.
+
+**4. `snapshot.py` snapshot identity -- 12 hex (6 bytes). Requires a decision.**
+Persisted indefinitely and used for retrieval, though by path join rather
+than by content lookup. `snapshot_id` is the *directory name*: creation
+does `snapshots / snapshot_id`, and `baseline_catalog` resolves a reviewed
+snapshot as `durable_project_root(...) / "snapshots" / snapshot_id`. It is
+also the `parent_snapshot_id` link between successive snapshots. Lifetime:
+as long as the snapshot is retained. Resilience required: it must remain
+resolvable from a catalog written earlier, which means it must not change
+after creation.
+
+**What a snapshot is, on the evidence.** It is a directory location and its
+contents at a moment, not a content-addressed dataset. It has a parent
+link, a `created_at`, a build policy, and runtime provenance; catalogs
+reference it by name to find a directory. Nothing dereferences a content
+digest to obtain it, and successive snapshots of identical content are
+intended to be distinct retained artifacts, not one deduplicated object.
+
+That resolves the tension in the current derivation, which mixes both
+models. Because it folds in `created_at` at microsecond precision, the
+identity is unique per creation and the content-derived portion of the
+digest is decorative -- the timestamp alone already guarantees uniqueness.
+The honest options are:
+
+- **Creation identity (recommended).** Accept what a snapshot already is.
+  The identity names an event, not a value. Then the digest should be
+  dropped or reduced to a short disambiguator, since the timestamp does the
+  work; per-store content hashes remain in the manifest, where they already
+  are, for verifying that a snapshot's contents are intact.
+- **Content identity.** Only worth adopting if a use case appears that
+  requires equal content to yield an equal name -- deduplicating identical
+  snapshots, or checking a rebuild against its predecessor by name. No
+  such consumer exists today.
+
+**Proposed redesign.** Adopt the creation identity and separate it cleanly
+from content verification, which the manifest already performs.
+
+*Current derivation.* `sha256(project_path, created_at, package_digest,
+policy_digest)[:12 hex]`, embedded in a name of the form
+`<UTC timestamp>-coschema<version>-<12 hex>`, then written into every
+store's `store_meta` and into the manifest, both of which are subsequently
+hashed.
+
+*Proposed derivation.* Keep the timestamp-plus-format name and derive the
+suffix only from inputs that distinguish two snapshots created in the same
+microsecond:
+
+| Element | Current | Proposed | Reason |
+|---|---|---|---|
+| UTC timestamp in name | Yes | Yes | Already guarantees uniqueness and sorts chronologically as a directory listing |
+| Format version in name | Yes | Yes | Lets an operator see store compatibility without opening the manifest |
+| `project_path` in suffix | Yes | Yes | Distinguishes concurrent snapshots of different Projects |
+| `policy_digest` in suffix | Yes | Yes | Distinguishes two builds differing only by build policy |
+| `package_digest` in suffix | Yes | **No** | Couples snapshot naming to package identity; removed under W03 |
+| `created_at` in suffix | Yes | **No** | Redundant with the timestamp already in the name |
+| Suffix length | 12 hex | 12 hex | Adequate: it disambiguates within one microsecond, not across a corpus |
+| `snapshot_id` in `store_meta` | Yes | **No** | A name must not sit inside a structure whose digest records it |
+| `snapshot_id` in manifest | Yes | Yes | Correct location: the manifest is the layer above the stores |
+
+*Layering after the change.* Stores hold data only. The manifest holds each
+store's content digest, the raw-manifest digest, the snapshot name, and the
+parent link. The pointer holds the manifest digest. Each layer names and
+verifies the one below it and is never an input to it, so every digest is
+recomputable from the bytes it covers.
+
+*What this gives up.* Nothing that exists. Equal content still does not
+yield an equal name, but no consumer needs that, and per-store digests in
+the manifest already answer "are these two snapshots' contents identical"
+without an identity scheme. If a deduplication or rebuild-comparison
+consumer appears later, a content digest can be added to the manifest as a
+separate field without renaming anything -- which is the advantage of not
+overloading the name.
+
+*Migration.* Existing snapshot directories keep their names; nothing
+recomputes an identity after creation. Removing `snapshot_id` from
+`store_meta` affects only stores written after the change, and the reader at
+`_reconstruct_manifest` already falls back to the directory name when the
+key is absent, so older stores remain readable.
+
+Timestamps recorded inside the manifest are the snapshot's own record of
+when it was built and are unaffected by file mtimes, so archive and
+filesystem moves do not alter the identity -- provided nothing recomputes it
+after creation or derives it from filesystem metadata.
+
+**5. `tool_identity.bounded_source_call_id` -- full 64 hex (32 bytes). Persisted, and
+the only genuine relational key here.** It carries the vendor's own call
+identifier into `tool_invocations.source_call_id`, which the schema
+constrains with `UNIQUE(session_id, source_call_id)` and which links an
+invocation to its result. Lifetime: the store's. Resilience required:
+identical for the same invocation whenever it is decoded again, so
+re-ingesting a Session reproduces the same rows rather than duplicating
+them; distinct for every distinct invocation, since a collision would merge
+separate tool evidence under one unique constraint and lose a record.
+
+**Two identical calls are two invocations, and remain so.** This is a
+property of the input, not of the hash. The function does not digest the
+tool's inputs or outputs; it digests the vendor-supplied `call_id` or
+`tool_use_id` from Event metadata. Two calls to the same tool with
+identical arguments and identical results carry different vendor
+identifiers, so they produce different keys and occupy two rows. Identity
+here means "the same recorded invocation," never "an invocation that looks
+the same." Any future change must preserve that: deriving the key from
+tool name and arguments would silently collapse legitimate repeat calls --
+a plausible-looking change that would destroy evidence, since repeated
+identical calls are ordinary in a Session.
+
+The function is also bounded rather than merely hashed: short identifiers
+pass through byte-for-byte and only over-long ones are replaced by a
+readable prefix plus the full digest, so most stored values remain the
+vendor's own string. The full digest is deliberate, the docstring says so,
+and it must not be shortened.
+
+**Conclusions.** The five sites do not form a group. Two are transient
+equality hashes with no stability requirement (2 and 3), two are persisted
+retrieval keys with different inputs and different portability exposure
+(1 and 4), and one is a relational key that must preserve record
+distinctness (5). What they share is only calling SHA-256, so there is no
+shared abstraction to extract beyond one helper deriving a hex key from a
+string with the caller supplying the length. Two sites should lose their
+hash rather than gain a shared one: the staging key has a working
+sequential alternative in the same file, and the snapshot identity's digest
+is decorative under the creation-identity reading recommended above.
+
+**Supported truncation lengths.** A shared helper must retain 16 and 32 hex
+characters (8 and 16 bytes) as available lengths alongside the full 64. Both
+are held open deliberately -- 32 hex in particular has no current site, and
+neither has a fixed application yet -- so the helper's contract must not
+narrow to whatever the present five sites happen to use. Exact application
+remains to be decided per site as the requirements above are settled.
+
+| Length | Bytes | Bits | Status |
+|---|---|---|---|
+| 12 hex | 6 | 48 | In use (snapshot identity, under review) |
+| 16 hex | 8 | 64 | In use, and retained as a supported length |
+| 24 hex | 12 | 96 | In use (`path_key`, preflight identity) |
+| 32 hex | 16 | 128 | Retained as a supported length; no current site |
+| 64 hex | 32 | 256 | Full digest; required for entity identities and item 5 |
+
+Collision likelihood follows the birthday bound -- roughly the square root
+of the space -- so 48 bits reaches even odds near twenty million keys, and
+each additional 16 bits multiplies that threshold by 256. Every truncating
+site here has a population many orders of magnitude below its bound, which
+is why none is currently a defect. This is accidental-collision arithmetic
+over locally generated values; no adversarial analysis applies, since the
+inputs are a developer's own paths and runs.
+
 ### 13.5 Mechanical Enforcement
 
-The test layout matches the intended validation layers, but file names alone do
-not prove architectural compliance. The following checks should become
-mechanical:
+**Status: Postponed.** The test layout matches the intended validation
+layers, but file names alone do not prove architectural compliance. Every
+check below is nonetheless a consequence of work that is itself incomplete,
+so building the enforcement first would fix the current structure in place
+and require rework as those items land. Each is therefore recorded against
+its owning item and revisited when that item completes, rather than tracked
+as separate work:
 
-- an import-boundary test for adapter, source, store, query, and CLI layers;
-- an SQL-ownership check that recognizes the narrow focused-audit exception;
-- mapping-profile conformance over every emitted adapter fixture;
-- runtime-versus-JSON query contract parity cases;
-- transaction-failure tests at each source replacement and publication edge;
-- subprocess-aware coverage for scan and ingest, without replacing installed
-  CLI integration tests;
-- operational-event contract, channel-separation, privacy, and error-boundary
-  tests for scan, ingest, query, and administrative commands; and
-- small real-Source validation for each changed vendor decoder, followed by a
-  multi-vendor Project only when common classification or query behavior
-  changes.
+| Mechanical check | Owning item |
+|---|---|
+| Import-boundary test for adapter, source, store, query, and CLI layers | W13 |
+| SQL-ownership check recognizing the narrow focused-audit exception | W13, with W06 and W10 supplying the boundaries |
+| Mapping-profile conformance over every emitted adapter fixture | W04 |
+| Query-request vectors covering every rejection path, with a check that no path lacks a vector | W13 (13.4.2) |
+| Transaction-failure tests at each source replacement and publication edge | W03, since publication identity is under review |
+| Subprocess-aware coverage for scan and ingest, keeping installed CLI integration tests | W13 |
+| Operational-event contract, channel-separation, privacy, and error-boundary tests | W18 |
+| Small real-Source validation per changed vendor decoder, extended to a multi-vendor Project only when common classification or query behavior changes | W01, W02 |
 
 Coverage percentage is supporting evidence, not an acceptance criterion by
 itself. Completion depends on the named failure, boundary, and use case being
@@ -1914,7 +2733,7 @@ work intentionally outside the current phase.
 |---|---|---|---|---|
 | W01 | Critical | WIP | Audit source-type and Actor classification across representative Claude Code, Codex, and Cursor Sessions. | Fixtures and real-source checks agree on Actors, roles, origins, relations, and source-accounting totals. |
 | W02 | Critical | WIP | Strengthen tool, context, compaction, model-setting, and agent/subagent decode. | Each supported family has exact source evidence, mapping, partial/malformed coverage, diagnostics, and an explicit validation basis. |
-| W03 | Critical | Under review | Separate exact package integrity from SQLite layout, logical schema, decoder, mapping, and fixture identity. A single digest currently covers the complete packaged file set (`schema_contract`), so a non-semantic packaging edit -- a comment, a file not itself loaded at runtime -- changes that digest and makes every already-published current-format store fail its write-compatibility check even though schema, decoder, and data are unchanged; see [Blocked for Immediate Review](#blocked-for-immediate-review) and 13.4.4. | A non-semantic package-file change cannot make an unchanged store layout unwritable; each identity has a defined consumer and test. |
+| W03 | Critical | Under review | Separate exact package integrity from store write compatibility, and reduce runtime integrity checking to what a local development environment demonstrably needs. One digest spans the executable contract and the validation fixtures alike; the fixtures are a development-lifecycle concern that the test suite already settles. The write gate and snapshot creation both consult the combined value, so a fixture edit makes published stores unwritable although layout, decoder, and data are unchanged. Because mismatch is resolved by regenerating the store from vendor sources, the gate needs only to prevent mixing records written under different rules. Blocked on confirming which runtime checks survive that standard and whether they become optional; see 13.4.4. | The write gate consults only the executable contract and directs regeneration on mismatch; retained runtime checks each cite a demonstrated failure they prevent; exact package verification remains available as a release and diagnostic operation. |
 | W04 | High | Planned | Define the shared candidate-record contract and enforce released mapping profiles at the runtime decode boundary. | All three adapters satisfy the typed and runtime candidate contract, pass the same post-decode conformance check, and share strict/diagnostic semantics. |
 | W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. | Bounded deterministic results and complete requested expansions agree with focused direct queries. |
 | W06 | High | Planned | Move domain SQL and workflows out of command modules. | Commands adapt arguments and render results; ingest operations live in domain modules; repeated reports use the typed executor or an explicit read-only analysis component. |
@@ -1922,6 +2741,8 @@ work intentionally outside the current phase.
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. | Small correctness and representative scale cases report timing, query plans, rows, memory, and stable result identities. |
 | W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. | Selection, fingerprinting, decode, and query remain bounded as unrelated Cursor content grows. |
 | W10 | High | Planned | Complete the Cursor source-access boundary. | `cursor_source` owns vendor SQL and returns bounded selected records and metadata; the adapter has no SQLite dependency. |
+| W20 | High | WIP | Establish what each derived value identifies, how long it must live, and what must be able to recompute it (13.4.8). No site uses content-addressed retrieval, so these are naming and comparison values. Delivered: `codess/hashing.py` with four modes and declared widths, and the `path_key` naming correction. Remaining: migrate the call sites, and correct two defects -- `snapshot_id` is written into `store_meta` and the manifest, both of which are then hashed, so a derived name sits inside the structure whose digest it depends on; and `sha256` is embedded in stored identity and key prefixes that no reader recomputes, making an algorithm change a wire-format change. Blocked on two decisions: whether `path_key` names a location or a Project when a reviewed directory moves or is used from another machine, and whether snapshot identity stays a creation identity (recommended) or becomes a content identity. | Each site states its lifetime and resilience requirement; key derivation routes through `codess_hash` with a declared width; no derived identity is an input to a digest recorded over the structure containing it; the two transient hashes are removed or justified; path-derived values are documented as machine-local; the relational key retains the full digest and keeps repeat invocations distinct. |
+| W22 | High | Planned | Route every digest over a JSON structure through one canonical encoder. `json.dumps(..., sort_keys=True, separators=(",", ":"))` is written out in 16 modules and they disagree: 4 pass `ensure_ascii=False`, 29 take the default, so equal documents with non-ASCII content produce different digests with no error and no failing test. `canonical_bytes` in `codess/hashing.py` fixes the form and encodes with `surrogatepass`, without which an undecodable filesystem path raises and aborts the operation (13.4.8). | Every structure digest routes through the shared encoder; no module calls `json.dumps` for a value that is hashed; a test covers non-ASCII and lone-surrogate content; digests over non-ASCII documents that change are identified and accepted before migration. |
 
 ### 14.2 Next Functional Work
 
@@ -1929,12 +2750,14 @@ work intentionally outside the current phase.
 |---|---|---|---|---|
 | W11 | Normal | TODO | Improve search reports and structured-query examples. | Core predicate and reconstruction checks are stable. |
 | W12 | Normal | TODO | Report source-to-common coverage, loss, and unknown shapes. | The report derives from profiles, diagnostics, and selected source observations. |
-| W13 | Normal | TODO | Mechanically enforce architecture and contract paths and make coverage observe child-process execution. | Import and SQL ownership checks enforce declared layers; query schemas exercise runtime validation; scan and ingest execution contributes usable coverage evidence. |
+| W13 | Normal | TODO | Mechanically enforce architecture and contract paths and make coverage observe child-process execution. Adopting a validation library for query requests is Postponed under 13.4.2, which also records the retained schema files' status in one place. | Import and SQL ownership checks enforce declared layers; scan and ingest execution contributes usable coverage evidence. |
 | W14 | Normal | TODO | Require or explicitly mark Project identity for direct library writes. | Separate vendor stores cannot silently create unrelated Project identities for one repository. |
 | W15 | Normal | Under review | Resolve the meaning and name of raw mode `none`. | Mode semantics, manifest behavior, documentation, and tests agree while normalized Source provenance remains intact. |
 | W16 | Normal | TODO | Evaluate, design, and plan the external investigation interfaces described in Section 9.7; this backlog item does not authorize implementation. | A written decision maps existing capabilities and gaps, selects or rejects data and code integration paths, specifies any proposed contracts, and defines staged work with licensing, privacy, security, and validation criteria. |
 | W17 | Normal | Under review | Expand cross-Project analysis inputs. | A consumer identifies entities, fields, selection, transformation, and output checks. |
 | W18 | Normal | Planned | Implement and transition to the structured operational-reporting subsystem defined in Section 9.6.1. | One event contract and its renderers govern status, progress, warnings, and command-boundary errors; stdout results remain clean, retained events remain bounded, and all command families pass channel, privacy, and failure-path tests. |
+| W19 | Normal | Planned | Decompose `walk_sessions()` so Project canonicalization is testable independently of vendor filesystem discovery. Designs A/B/C and their sequencing are in 13.4.7; A is the recommended first step and C should follow W10. | Existing discovery tests pass unchanged, and Git-root attribution, parent-versus-child selection, and aggregator exclusion have direct unit tests that do not invoke vendor discovery. |
+| W21 | Normal | Planned | Route the `walk_sessions` inline `debug` print statements through the reporting contract W18 defines, rather than the module-local diagnostics dictionary. Starts after W19's extraction and W18's contract; excluded from W19 so the extraction stays behavior-preserving (13.4.7). | The statements emit through the shared contract with tests asserting channel and content; no direct `print` for operational status remains in the module. |
 
 ### 14.3 Secondary Maintenance
 
@@ -1943,19 +2766,71 @@ work intentionally outside the current phase.
 - Add resource controls for observed accidental or pathological input.
 - Maintain Session names and utilization observations without displacing
   source decode, mapping, or search work.
-- Investigate and consolidate five independently truncated SHA-256 hash
-  implementations (`path_label.key_for_path` at 24 hex chars, two sites in
-  `cli.ingest_cmd` at 16 and 24, `snapshot.py`'s snapshot-id derivation at
-  12, `tool_identity.py`'s named `_DIGEST_HEX_CHARS`), evaluating whether
-  each should route through `identity.py`'s existing `_qualified()` pattern
-  and what truncation length is defensible per site's actual collision
-  tolerance -- do not consolidate blindly; some sites may have genuinely
-  different requirements. Findings so far in
-  `experiments/hash-truncation-audit.md`.
-- Following that investigation, segregate all hash operations (including
-  any truncation) into one bounded module with no `hashlib`/SHA references
-  permitted elsewhere in the codebase -- enforces the consolidation
-  structurally rather than by convention.
+- Establish what the independently derived SHA-256 keys are each *for*
+  before deciding whether they consolidate. Tracked as **W20**; the
+  per-site requirements and the snapshot-identity decision are in 13.4.8.
+
+- Consolidate UTC timestamp derivation. Nine modules each define a private
+  helper returning the current UTC time for record stamping. Seven are
+  byte-identical (`store`, `artifact_correlation`, `refresh_operations`,
+  `project_catalog`, `catalog_operations`, `review_project`, `raw_store`);
+  `registry_store` names it `_now_iso`; and `storage_report` returns a
+  `datetime` rather than an ISO string. There is no justification for this:
+  the body is a single expression wrapping a standard-library call, no site
+  needs different behavior, and the duplication was accumulated rather than
+  chosen. The divergence in name and return type is the sharper defect,
+  since a reader cannot rely on `_now` predicting its own type.
+
+  **Use `datetime.UTC`.** `datetime.now(datetime.UTC)` is the current
+  canonical idiom; `timezone.utc` is the older spelling and should be
+  replaced throughout. The declared floor in `pyproject.toml`, `README.md`,
+  and `Operations.md` still says 3.10 and is simply stale -- correct it to
+  3.11 as part of this work.
+
+  Two further cleanups follow from the same version. Five sites parse
+  vendor timestamps as `fromisoformat(value.replace("Z", "+00:00"))` --
+  `walk_sessions`, `token_usage`, `refresh_receipts`, `cursor_source`,
+  `adapters/codex` -- where the `replace` exists only because
+  `fromisoformat` once rejected a `Z` suffix. It now parses `Z` natively,
+  so the workaround is removable duplication. A sixth site, `adapters/cc`,
+  already omits it, so removing the others also resolves an inconsistency.
+
+  **Create a local timestamp module.** One module owns the representation
+  and callers never construct timestamps themselves. It should provide two
+  current-time accessors -- an aware `datetime` for arithmetic and ISO 8601
+  text for persistence -- named so the return type is evident, one
+  formatter fixed to the ISO 8601 form CoSchema stores, and the named
+  duration converters described below. CoSchema persists ISO 8601 text
+  because lexical ordering matches chronological ordering and values stay
+  readable in SQL output; that choice is made once, in this module, rather
+  than at each call site.
+
+  Two things are deliberately out of scope. Multi-format timestamp parsing
+  is unnecessary -- Codess reads ISO 8601 from vendor JSON, not free-text
+  logs -- and relative time specifications are unnecessary while
+  `--since`/`--until` accept absolute values only.
+- Following that investigation, decide whether hash derivation is worth
+  segregating into one module with no `hashlib` references permitted
+  elsewhere. This was previously stated as a conclusion; it is a question.
+  A single module enforces consistency structurally rather than by
+  convention, but the five key sites have little in common beyond calling
+  SHA-256, and the file-content hashing in `fileio`, `snapshot`, and
+  `schema_contract` is a different operation again. Scope the decision to
+  key derivation, and only if a shared helper survives the analysis above.
+
+  The direct-call count is the argument in favour: `hashlib.sha256` is
+  invoked in 21 modules, so `identity.py`, `fileio.py`, and
+  `content_processing.py` each independently decide encoding, chunking,
+  truncation, and output prefix. That is not one abstraction waiting to be
+  extracted, but it does mean no single place states which algorithm Codess
+  uses, and an algorithm change would currently be a twenty-file edit whose
+  wire-format consequences are spread across as many field names and value
+  prefixes (see the naming rule in 13.4.8). Three groupings are candidates
+  and should be judged separately: file and stream digests (`fileio`,
+  `snapshot`, `raw_store`, `schema_contract`), canonical-document digests
+  over serialized JSON (`query_api`, `project_catalog`, `catalog_operations`,
+  `retention`), and identity or key derivation (`identity`, `path_label`,
+  `tool_identity`, `store`). Only the last is clearly one concern.
 - Fix the ambiguous and overloaded terms this document's own controlled
   vocabulary was found to contain on audit -- Registry (3 senses), Catalog
   (4+ senses), Source (formal CoSchema entity diluted by lowercase
@@ -1966,28 +2841,29 @@ work intentionally outside the current phase.
   of use). Full findings, exact line numbers, and suggested precise
   definitions per sense in
   `experiments/vocabulary-audit-findings.md`.
-- Investigate and consolidate time/duration arithmetic: no dedicated
-  time/duration module exists; roughly fifteen call sites independently
-  define their own `_now()` wrapping `datetime.now(timezone.utc)
-  .isoformat()`, and `walk_sessions.py` alone uses three different
-  time-unit conventions in one file (days via `/(24*3600*1000)`, weeks via
-  `/(7*24*3600*1000)`, a cutoff via `*86400` then separate ms conversion).
-  Evaluate whether one shared `_now()` and named day/week/second-to-ms
-  converters belong in `config.py` alongside the existing `GB`/`MB`/`KB`
-  byte converters, or a separate module, and whether every site genuinely
-  needs the same unit convention before unifying.
-- Decompose `walk_sessions()` (`src/codess/walk_sessions.py`), a single
-  306-line function that is more than half its 553-line file. Concrete
-  extraction boundaries already identified: per-vendor path discovery
-  (CC/Codex/Cursor, currently interleaved in one function body), path
-  canonicalization (Git-root attribution and leaf-path selection -- the
-  best candidate for a pure, independently unit-testable extraction, since
-  it currently cannot be tested without also exercising real vendor
-  filesystem discovery), and per-project row assembly. Open questions on
-  whether extraction is also the right moment to route inline `debug`
-  print statements through the module's existing diagnostic-recording
-  functions, and on closure-capture variables becoming explicit parameters
-  once extracted.
+- Consolidate duration arithmetic. No dedicated time module exists, and
+  unit conversion is written inline at each use. `walk_sessions.py` alone
+  mixes three conventions: days as `/(24 * 3600 * 1000)`, weeks as
+  `/(7 * 24 * 3600 * 1000)` repeated at every span calculation, and a
+  cutoff computed in seconds via `* 86400` before a separate conversion to
+  milliseconds. The hazard is that these are unlabeled numeric literals
+  whose unit is inferable only from the arithmetic around them, so a
+  milliseconds-versus-seconds error reads as plausible code. The named
+  converters belong in the timestamp module above rather than in
+  `config.py`: they are representation, not configuration, and the
+  `GB`/`MB`/`KB` byte converters are a size-formatting concern that shares
+  only a superficial resemblance. Provide named second, minute, hour, day,
+  and week values plus an explicit seconds-to-milliseconds converter, since
+  vendor timestamps are milliseconds and that boundary is where the current
+  sites are most confusing.
+
+  One convention should be stated explicitly while this work is done:
+  `time.monotonic()` for elapsed-time and deadline arithmetic, wall-clock
+  time only for recorded timestamps, since monotonic time cannot move
+  backwards across a clock adjustment. Codess already follows this in
+  `ProgressTrace` and ingest timing but has never written it down.
+- Decompose `walk_sessions()`. Tracked as **W19**; the review, candidate
+  designs, and validation approach are in 13.4.7.
 
 ### 14.4 Deferred Directions
 

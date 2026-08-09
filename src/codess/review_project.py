@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from codess.path_label import classify_project_path, key_for_path
+from codess.path_label import classify_project_path, path_key
 from codess.fileio import check_policy_format, read_json, write_json_atomic
 from codess.helpers import should_prune_directory, unsafe_traversal_root_reason
 from codess.codex_source import build_session_index as build_codex_session_index
@@ -81,7 +81,7 @@ def load_candidate_csv(path: Path, *, work_root: Path | None = None) -> dict[str
             seen.add(key)
             remote = (row.get("repo_url") or "").strip() or None
             projects.append({
-                "candidate_key": key_for_path(local),
+                "path_key": path_key(local),
                 "path": key,
                 "logical_name": (row.get("title") or local.name).strip(),
                 "curation": classify_project_path(local, work_root=work_root),
@@ -292,7 +292,7 @@ def refresh_candidates(
         for item in loaded.get("projects", []):
             if str(item.get("project_id") or "").startswith("project:path:"):
                 item.pop("project_id", None)
-                item["candidate_key"] = key_for_path(
+                item["path_key"] = path_key(
                     Path(item["path"])
                 )
         existing_by_path = {item["path"]: item for item in existing.get("projects", [])}
@@ -318,7 +318,7 @@ def refresh_candidates(
             path = Path(row.get("dir_path") or (root / row["path"])).resolve()
             key = str(path)
             item = projects.get(key, {
-                "candidate_key": key_for_path(path), "path": key,
+                "path_key": path_key(path), "path": key,
                 "logical_name": path.name,
                 "curation": classify_project_path(path, work_root=root),
                 "observations": {},
@@ -338,7 +338,7 @@ def refresh_candidates(
         for path in discover_git_roots(roots, max_depth=max_depth):
             key = str(path)
             projects.setdefault(key, {
-                "candidate_key": key_for_path(path), "path": key,
+                "path_key": path_key(path), "path": key,
                 "logical_name": path.name,
                 "curation": classify_project_path(path, work_root=roots[0] if len(roots) == 1 else None),
                 "observations": {"vendors": {}},
@@ -373,7 +373,7 @@ def record_decision(
     catalog = read_json(catalog_path)
     matches = [
         item for item in catalog.get("projects", [])
-        if item.get("candidate_key") == project_ref
+        if item.get("path_key") == project_ref
         or item.get("project_id") == project_ref
         or item.get("path") == str(Path(project_ref).expanduser().resolve())
     ]

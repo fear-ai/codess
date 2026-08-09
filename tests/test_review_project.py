@@ -2,7 +2,7 @@
 
 import pytest
 
-from codess.path_label import key_for_path
+from codess.path_label import path_key
 from codess.review_project import CandidateReviewError, load_candidate_csv
 
 
@@ -22,8 +22,8 @@ def test_candidate_csv_does_not_assume_remote_availability(tmp_path):
     assert item["observations"]["remote"]["status"] == "unchecked"
     assert item["observations"]["local_availability"] == "present"
     assert item["review"]["decision"] is None
-    assert item["candidate_key"] == key_for_path(local)
-    assert item["candidate_key"].startswith("candidate:path:")
+    assert item["path_key"] == path_key(local)
+    assert item["path_key"].startswith("candidate:path-key:")
     assert "project_id" not in item
 
 

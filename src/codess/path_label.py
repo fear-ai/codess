@@ -38,9 +38,16 @@ def classify_project_path(path: Path, *, work_root: Path | None = None) -> dict[
     return {"topic": topic, "ownership": "own" if parts else "unknown", "activity_state": "active", "selection_state": "candidate"}
 
 
-def key_for_path(path: Path) -> str:
-    """Return a reproducible review key, never a logical Project identity."""
+def path_key(path: Path) -> str:
+    """Return a reproducible review key, never a logical Project identity.
+
+    Derived from the resolved path text alone, so the same checkout at a
+    different location -- or on a different machine, where case sensitivity
+    and Unicode normalization of path components differ -- yields a
+    different key. Review catalogs holding this key are therefore
+    machine-local.
+    """
     normalized = str(path.expanduser().resolve())
-    return "candidate:path:" + hashlib.sha256(
+    return "candidate:path-key:" + hashlib.sha256(
         normalized.encode("utf-8")
     ).hexdigest()[:24]

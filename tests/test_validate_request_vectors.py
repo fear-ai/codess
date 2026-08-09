@@ -5,8 +5,9 @@ hand-written validator's behavior matches it exactly. The fixture is
 tool-agnostic by design (plain request/outcome pairs, no reference to
 validate_request's internals) so it can also validate any future
 replacement -- pydantic, jsonschema, or otherwise -- without being rewritten
-first. See CoPlan.md 13.4.2 for the capability gaps (sortedness, cross-field
-comparison, action-dependent filters) this fixture specifically covers.
+first. See CoPlan.md 13.4.2 for the capability gaps (canonical form,
+related-field comparison, action-dependent filters) this fixture specifically
+covers.
 """
 
 from __future__ import annotations
@@ -52,7 +53,7 @@ def test_vectors_cover_every_capability_gap():
     capabilities = {
         v.get("capability") for v in VECTORS["vectors"] if v.get("capability")
     }
-    assert capabilities == {"sortedness", "cross_field", "action_dependent"}
+    assert capabilities == {"canonical_form", "related_fields", "action_dependent"}
 
 
 def test_vectors_file_is_self_consistent():
