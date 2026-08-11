@@ -7,7 +7,7 @@ from __future__ import annotations
 import csv
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -33,10 +33,6 @@ REQUIRED_CSV_FIELDS = frozenset({"title", "directory_path", "repo_url"})
 
 class CandidateReviewError(ValueError):
     """Candidate input cannot be interpreted without unsafe assumptions."""
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _parse_file_count(value: Any, line: int) -> int | None:
@@ -104,7 +100,7 @@ def load_candidate_csv(path: Path, *, work_root: Path | None = None) -> dict[str
     projects.sort(key=lambda item: (item["curation"]["topic"], item["logical_name"].lower(), item["path"]))
     return {
         "catalog_format": CANDIDATE_LIST_FORMAT,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "candidate_source": str(path.resolve()),
         "projects": projects,
     }
@@ -138,7 +134,7 @@ def _git_run(path: Path, arguments: list[str], timeout: int = 10) -> subprocess.
 def observe_git(
     path: Path, *, check_remote: bool = False, since: str | None = None,
 ) -> dict[str, Any]:
-    observed = {"observed_at": _now(), "is_repository": False}
+    observed = {"observed_at": datetime.now(UTC).isoformat(), "is_repository": False}
     if not path.exists():
         observed["error"] = "path_missing"
         return observed
@@ -189,7 +185,7 @@ def observe_git(
         if check_remote and configured:
             checked = _git_run(root, ["ls-remote", "--exit-code", "origin", "HEAD"], timeout=30)
             observed["remote"].update({
-                "checked_at": _now(),
+                "checked_at": datetime.now(UTC).isoformat(),
                 "status": "available" if checked.returncode == 0 else "unavailable",
                 "canonical_url": configured if checked.returncode == 0 else None,
             })
@@ -328,7 +324,7 @@ def refresh_candidates(
             observations.update({
                 "local_availability": "present" if path.exists() else "missing",
                 "session_count": row["sess"], "session_mb": row["mb"],
-                "session_span_weeks": row["span_weeks"], "scan_observed_at": _now(),
+                "session_span_weeks": row["span_weeks"], "scan_observed_at": datetime.now(UTC).isoformat(),
                 "vendors": row.get("source_metrics") or {
                     name: True for name in row["vendor"].split("|") if name
                 },
@@ -353,7 +349,7 @@ def refresh_candidates(
     return {
         "catalog_format": CANDIDATE_LIST_FORMAT,
         "review_format": REVIEW_FORMAT,
-        "generated_at": _now(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "roots": [str(root.resolve()) for root in roots],
         "diagnostics": {key: value for key, value in diagnostics.items() if not key.startswith("_")},
         "projects": sorted(projects.values(), key=lambda item: item["path"]),
@@ -381,7 +377,7 @@ def record_decision(
         raise ValueError(f"candidate reference resolves to {len(matches)} projects")
     matches[0]["review"] = {
         "decision": decision, "reviewer": reviewer,
-        "notes": notes, "reviewed_at": _now(),
+        "notes": notes, "reviewed_at": datetime.now(UTC).isoformat(),
     }
     write_json_atomic(catalog_path, catalog)
     return matches[0]

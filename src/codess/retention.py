@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -11,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from codess.hashing import codess_canonical_hash
 from codess.config import (
     CURRENT_POINTER_FILE, LARGE_RAW_REVISION_BYTES, RAW_MANIFEST_FILE,
     SNAPSHOTS_DIR, STORE_DIR, WORKING_ARCHIVES_DIR,
@@ -302,9 +302,7 @@ def build_retention_plan(
         "large_shared_revisions": large_shared_revisions,
         "allow_large_comparison_revisions": allow_large_comparison_revisions,
     }
-    plan_sha256 = hashlib.sha256(
-        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    plan_sha256 = codess_canonical_hash(256, 256, identity)
     return {
         "format": PLAN_FORMAT,
         "policy": "latest-current-per-project; one-large-revision-per-logical-source",

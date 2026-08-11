@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,10 +32,6 @@ _TABLE_COUNT_QUERIES = {
     "tool_results": 'SELECT COUNT(*) FROM "tool_results"',
     "artifacts": 'SELECT COUNT(*) FROM "artifacts"',
 }
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:
@@ -258,7 +254,7 @@ def build_storage_report(
 ) -> dict[str, Any]:
     registry = registry.expanduser().resolve()
     history_dir = history_dir or registry / "observations" / "storage"
-    observed = _now()
+    observed = datetime.now(UTC)
     previous = _previous(history_dir)
     stores, current = all_store_paths(registry)
     report: dict[str, Any] = {

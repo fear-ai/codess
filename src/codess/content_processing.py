@@ -9,12 +9,12 @@ apply first, followed by every matching scope in declaration order.
 from __future__ import annotations
 
 import fnmatch
-import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from codess.hashing import codess_text_hash
 from codess.sanitize import apply_sanitization, sanitize_text
 
 
@@ -264,9 +264,9 @@ def apply_processing(
             "actions": list(result.actions),
             "original_length": result.original_length,
             "output_length": len(output_text),
-            "input_sha256": hashlib.sha256(input_text.encode("utf-8")).hexdigest(),
+            "input_sha256": codess_text_hash(256, 256, input_text),
             "output_sha256": (
-                hashlib.sha256(output_text.encode("utf-8")).hexdigest()
+                codess_text_hash(256, 256, output_text)
                 if result.accepted else None
             ),
         })

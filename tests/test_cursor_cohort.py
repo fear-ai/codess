@@ -83,7 +83,7 @@ def test_cursor_cohort_cache_restores_without_recapturing(tmp_path, monkeypatch)
         source,
         raw_store=raw_store,
         cache_path=cache,
-        materialized_path=first_target,
+        working_path=first_target,
         source_system_id="cursor.composer",
         storage_format="cursor-sqlite",
         marker=marker,
@@ -105,7 +105,7 @@ def test_cursor_cohort_cache_restores_without_recapturing(tmp_path, monkeypatch)
         source,
         raw_store=raw_store,
         cache_path=cache,
-        materialized_path=second_target,
+        working_path=second_target,
         source_system_id="cursor.composer",
         storage_format="cursor-sqlite",
         marker=marker,
@@ -118,7 +118,7 @@ def test_cursor_cohort_cache_restores_without_recapturing(tmp_path, monkeypatch)
     assert [event for event, _fields in progress] == [
         "cursor.cohort.restore.start", "cursor.cohort.restore.done",
     ]
-    assert progress[-1][1]["materialized_bytes"] == second["uncompressed_size"]
+    assert progress[-1][1]["working_bytes"] == second["uncompressed_size"]
     assert progress[-1][1]["phase_seconds"] >= 0
     with sqlite3.connect(second_target.resolve().as_uri() + "?mode=ro", uri=True) as conn:
         assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
@@ -148,7 +148,7 @@ def test_cursor_cohort_source_change_creates_a_new_cached_revision(tmp_path):
         source,
         raw_store=raw_store,
         cache_path=cache,
-        materialized_path=tmp_path / "first.db",
+        working_path=tmp_path / "first.db",
         source_system_id="cursor.composer",
         storage_format="cursor-sqlite",
         marker=first_marker,
@@ -163,7 +163,7 @@ def test_cursor_cohort_source_change_creates_a_new_cached_revision(tmp_path):
         source,
         raw_store=raw_store,
         cache_path=cache,
-        materialized_path=tmp_path / "second.db",
+        working_path=tmp_path / "second.db",
         source_system_id="cursor.composer",
         storage_format="cursor-sqlite",
         marker=second_marker,
@@ -183,7 +183,7 @@ def test_capture_records_stable_when_source_quiescent(tmp_path):
         source,
         raw_store=raw_store,
         cache_path=tmp_path / "cache.json",
-        materialized_path=tmp_path / "cap.db",
+        working_path=tmp_path / "cap.db",
         source_system_id="cursor.composer",
         storage_format="cursor-sqlite",
         marker=marker,
@@ -217,7 +217,7 @@ def test_capture_records_source_advanced_when_revision_moves(tmp_path):
         source,
         raw_store=raw_store,
         cache_path=tmp_path / "cache.json",
-        materialized_path=tmp_path / "cap.db",
+        working_path=tmp_path / "cap.db",
         source_system_id="cursor.composer",
         storage_format="cursor-sqlite",
         marker=stale_marker,

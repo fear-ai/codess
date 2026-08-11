@@ -8,7 +8,7 @@ from typing import Any
 
 from codess.config import MANIFEST_FILE, RAW_MANIFEST_FILE
 from codess.fileio import hash_file, source_fingerprint
-from codess.raw_store import RawCaptureError, verify_captured_object
+from codess.raw_store import RawCaptureError, verify_raw
 
 
 EVIDENCE_FORMAT = "codess.evidence-resolution/1"
@@ -42,7 +42,7 @@ def _captured_object(snapshot: Path, relpath: str) -> tuple[Path | None, str]:
         return sealed, "sealed"
     # Durable snapshots normally live at <registry>/projects/<id>/snapshots/<id>.
     # Resolve the single content-addressed object by manifest-relative identity;
-    # do not materialize or copy it merely to answer an evidence query.
+    # do not read or copy it merely to answer an evidence query.
     for parent in snapshot.parents:
         if parent.name == "projects":
             captured = parent.parent / "raw" / "codess.raw-1" / relpath
@@ -105,7 +105,7 @@ def resolve_event(store: dict[str, Any], event_identifier: str) -> dict[str, Any
             candidate["location"] = str(object_path)
             candidate["available"] = True
             try:
-                observed = verify_captured_object(object_path, record)
+                observed = verify_raw(object_path, record)
                 expected = row["content_sha256"]
                 candidate["equality"] = (
                     "exact" if observed["object_id"] == record.get("object_id")

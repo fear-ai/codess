@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
+from codess.hashing import codess_bytes_hash
 
 
 SOURCE_CALL_ID_MAX_BYTES = 100
-_DIGEST_HEX_CHARS = 64
+_DIGEST_BITS = 256
+_DIGEST_HEX_CHARS = _DIGEST_BITS // 4
 _SUFFIX_PREFIX = "~sha256:"
 
 
@@ -30,7 +31,7 @@ def bounded_source_call_id(
         return text
     suffix = (
         _SUFFIX_PREFIX
-        + hashlib.sha256(encoded).hexdigest()[:_DIGEST_HEX_CHARS]
+        + codess_bytes_hash(256, _DIGEST_BITS, encoded)
     ).encode("ascii")
     prefix = encoded[: max_bytes - len(suffix)]
     while prefix:

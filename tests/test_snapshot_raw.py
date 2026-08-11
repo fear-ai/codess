@@ -9,11 +9,11 @@ from pathlib import Path
 import pytest
 import zstandard
 
-from cli.ingest_cmd import _record_raw
+from codess.ingest_sources import _record_raw
 from codess.raw_store import (
     RawCaptureError, RawStore,
-    materialize_captured_object,
-    verify_captured_object,
+    restore_raw,
+    verify_raw,
 )
 from codess.snapshot import (
     SnapshotError,
@@ -75,7 +75,7 @@ def test_content_addressed_capture_reuses_a_different_valid_zstd_encoding(tmp_pa
         mode="capture",
     )
     assert second["object_id"] == first["object_id"]
-    assert second["stored_sha256"] == verify_captured_object(
+    assert second["stored_sha256"] == verify_raw(
         object_path, second
     )["stored_sha256"]
     assert second["stored_sha256"] != first["stored_sha256"]
@@ -144,7 +144,7 @@ def test_raw_verification_streams_without_path_read_bytes(tmp_path, monkeypatch)
         raise AssertionError("raw verification must not call Path.read_bytes")
 
     monkeypatch.setattr(Path, "read_bytes", reject_unbounded_read)
-    observed = verify_captured_object(raw.resolve(record), record)
+    observed = verify_raw(raw.resolve(record), record)
 
     assert observed["stored_sha256"] == record["stored_sha256"]
     assert observed["stored_size"] == record["stored_size"]
@@ -152,7 +152,7 @@ def test_raw_verification_streams_without_path_read_bytes(tmp_path, monkeypatch)
     assert observed["uncompressed_size"] == record["uncompressed_size"]
 
 
-def test_raw_materialization_streams_and_verifies_before_promotion(
+def test_raw_restore_streams_and_verifies_before_promotion(
     tmp_path, monkeypatch
 ):
     source = tmp_path / "source.db"
@@ -171,11 +171,11 @@ def test_raw_materialization_streams_and_verifies_before_promotion(
     )
 
     def reject_unbounded_read(_path):
-        raise AssertionError("raw materialization must not call Path.read_bytes")
+        raise AssertionError("raw restore must not call Path.read_bytes")
 
     monkeypatch.setattr(Path, "read_bytes", reject_unbounded_read)
     target = tmp_path / "restored.db"
-    observed = materialize_captured_object(raw.resolve(record), target, record)
+    observed = restore_raw(raw.resolve(record), target, record)
     assert observed["object_id"] == record["object_id"]
     assert target.stat().st_size == source.stat().st_size
 
@@ -223,7 +223,7 @@ def test_raw_capture_updates_normalized_source_provenance(tmp_path):
     row = conn.execute(
         "SELECT availability, capture_method, consistency, content_sha256 FROM sources"
     ).fetchone()
-    assert tuple(row[:3]) == ("captured", "stable-file-read", "stable-stat")
+    assert tuple(row[:3]) == ("captured", "stable-file-read", "stable")
     assert row[3] == records[0]["object_id"].removeprefix("sha256:")
     conn.close()
 
@@ -237,14 +237,14 @@ def test_cursor_capture_uses_consistent_sqlite_backup(tmp_path):
     writer.commit()
     observed_source_stat = source.stat()
     raw = RawStore(tmp_path / "raw")
-    materialized = tmp_path / "cohort.db"
+    working_copy = tmp_path / "cohort.db"
     progress_events = []
     record = raw.observe(
         source,
         source_system_id="cursor.composer",
         storage_format="cursor-sqlite",
         mode="capture",
-        materialized_target=materialized,
+        working_target=working_copy,
         progress=lambda event, **fields: progress_events.append((event, fields)),
     )
     writer.close()
@@ -257,10 +257,10 @@ def test_cursor_capture_uses_consistent_sqlite_backup(tmp_path):
         "raw.compress.start",
         "raw.compress.done",
         "raw.object_promoted",
-        "raw.materialized.done",
+        "raw.working_file.written",
     ]
     with sqlite3.connect(
-        materialized.resolve().as_uri() + "?mode=ro", uri=True
+        working_copy.resolve().as_uri() + "?mode=ro", uri=True
     ) as conn:
         assert conn.execute("SELECT value FROM items").fetchone()[0] == "captured"
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"

@@ -10,7 +10,7 @@ re-derive the same verification from scratch, and so a lint tool's raw
 finding count is never mistaken for a defect count without the read-through
 that separates the two.
 
-## 1. Session: Full Implementation Review (2026-08-05)
+## 1. Full Implementation Review
 
 Scope: `src/codess/` (36 modules), `src/cli/` (4 modules),
 `src/codess/adapters/` (3 vendor decoders), 46 test files. Full findings are
@@ -190,7 +190,7 @@ actually wrap the call which raised, fixed immediately by moving the
 assertion to wrap `make_request()` instead of the redundant explicit
 `validate_request()` call after it).
 
-## 2. Complexity-Metric Classification (2026-08-05)
+## 2. Complexity-Metric Classification
 
 Ruff's McCabe check (`C901`, threshold 10) flags a function count large
 enough (dozens) that a flat list has no interpretive value. What matters is

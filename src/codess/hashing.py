@@ -12,8 +12,9 @@ they consume, not in the digest they compute:
 |---|---|---|
 | `codess_hash` | A list of short values | Keys and identities built from a few components |
 | `codess_canonical_hash` | One JSON-serializable structure | Digests over a document, where equal content must give equal output |
+| `codess_text_hash` | One string, as UTF-8 | Text whose digest is recorded or compared |
 | `codess_bytes_hash` | One in-memory buffer | Content already held in memory |
-| `codess_stream_hash` | An iterable of chunks | Files and objects too large to materialize |
+| `codess_stream_hash` | An iterable of chunks | Files and objects too large to hold in memory |
 
 Each has a matching `..._check` that recomputes and compares, so verification
 never re-derives the construction by hand. `codess_digest()` returns the
@@ -80,7 +81,7 @@ def codess_digest() -> "hashlib._Hash":
     """Return a fresh incremental digest for a caller-owned read policy.
 
     Use this only when the read pattern itself is the policy -- bounded window
-    sampling, or interleaving reads with stat checks. Prefer
+    sampling, or a read bounded to a size decided in advance. Prefer
     `codess_stream_hash` when the input is simply a sequence of chunks.
     """
     return hashlib.sha256()
@@ -103,6 +104,21 @@ def canonical_bytes(value: Any) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     ).encode("utf-8", errors="surrogatepass")
+
+
+def codess_text_hash(
+    generated_bits: int,
+    truncated_bits: int,
+    text: str,
+) -> str:
+    """Digest one string as UTF-8, with no format tag or separators.
+
+    The result matches an external digest of the same UTF-8 bytes. Encoding
+    tolerates lone surrogates for the reason given in `canonical_bytes`.
+    """
+    _check_widths(generated_bits, truncated_bits)
+    encoded = text.encode("utf-8", errors="surrogatepass")
+    return _truncate(hashlib.sha256(encoded).digest(), truncated_bits)
 
 
 def codess_hash(

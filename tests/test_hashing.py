@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pathlib
 
 import pytest
 
@@ -21,6 +22,7 @@ from codess.hashing import (
     codess_digest,
     codess_hash,
     codess_stream_hash,
+    codess_text_hash,
 )
 
 MODES = (
@@ -28,6 +30,7 @@ MODES = (
     ("canonical", lambda g, t: codess_canonical_hash(g, t, {"a": 1})),
     ("bytes", lambda g, t: codess_bytes_hash(g, t, b"value")),
     ("stream", lambda g, t: codess_stream_hash(g, t, [b"val", b"ue"])),
+    ("text", lambda g, t: codess_text_hash(g, t, "value")),
 )
 
 
@@ -127,6 +130,22 @@ def test_canonical_digest_matches_a_hash_of_canonical_bytes():
 
 # --- bytes and stream modes -------------------------------------------------
 
+def test_text_mode_matches_a_utf8_digest_of_the_string():
+    """Text digests must agree with an external digest of the same bytes."""
+    assert codess_text_hash(256, 256, "payload") == hashlib.sha256(
+        b"payload"
+    ).hexdigest()
+    assert codess_text_hash(256, 256, "café") == codess_bytes_hash(
+        256, 256, "café".encode("utf-8")
+    )
+
+
+def test_text_mode_tolerates_lone_surrogates():
+    import os
+
+    assert len(codess_text_hash(256, 256, os.fsdecode(b"caf\xe9"))) == 64
+
+
 def test_bytes_mode_matches_a_plain_sha256_of_the_content():
     """Content digests must agree with what an external tool computes."""
     assert codess_bytes_hash(256, 256, b"payload") == hashlib.sha256(
@@ -202,3 +221,20 @@ def test_underlying_algorithm_is_sha256_over_tagged_input():
     """Pin the construction so a silent algorithm change fails here first."""
     expected = hashlib.sha256(b"codess.hash/1\0value").hexdigest()
     assert codess_hash(256, 256, ["value"]) == expected
+
+
+def test_direct_hashlib_use_is_confined_to_reviewed_sites():
+    """Digest construction belongs in codess.hashing.
+
+    The exceptions use truncation widths this module does not offer and are
+    under review in CoPlan 13.4.8; migrating them now would freeze an
+    unreviewed choice.
+    """
+    root = pathlib.Path(__file__).resolve().parents[1] / "src"
+    reviewed = {"hashing.py", "path_label.py", "snapshot.py", "ingest_cmd.py"}
+    offenders = sorted(
+        str(p.relative_to(root))
+        for p in root.rglob("*.py")
+        if p.name not in reviewed and "hashlib." in p.read_text(encoding="utf-8")
+    )
+    assert offenders == [], f"use codess.hashing instead of hashlib in: {offenders}"

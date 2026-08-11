@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from codess.hashing import codess_digest
 from codess.fileio import hash_file
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 
@@ -63,7 +63,7 @@ def verify_package() -> str:
     """Verify every released package file and return a deterministic digest."""
     manifest = load_manifest()
     failures: list[str] = []
-    package_hash = hashlib.sha256()
+    package_hash = codess_digest()
     for role, entry in sorted(manifest.get("files", {}).items()):
         path = REPO_ROOT / entry["path"]
         if not path.is_file():

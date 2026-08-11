@@ -7,7 +7,6 @@ paths, table names, or key-range details.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import sqlite3
@@ -16,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from codess.hashing import codess_digest
 from codess.config import (
     CURSOR_DATA, SOURCE_LINKS_FILE, SOURCE_LINKS_FORMAT, STORE_DIR,
 )
@@ -28,7 +28,7 @@ CURSOR_SELECTION_EDGE_BYTES = 512
 
 def _fingerprint_digest():
     """Return the SHA-256 digest used by new selected-row change markers."""
-    return hashlib.sha256()
+    return codess_digest()
 
 
 def connect_readonly(db_path: Path) -> sqlite3.Connection:
@@ -93,6 +93,45 @@ def parse_timestamp(value) -> float | None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.timestamp() * 1000
     return None
+
+
+def open_bubble_rows(
+    db_path: Path, composer_ids: set[str] | None = None,
+) -> Iterator[tuple[str, object]]:
+    """Yield bubble rows from `db_path`, owning the connection.
+
+    The connection-taking iterators below suit callers that already hold one.
+    This variant exists so a decoder can ask for rows by path and never touch
+    SQLite, which is what keeps vendor storage access in this module.
+    """
+    with closing(connect_readonly(db_path)) as conn:
+        yield from iter_bubble_rows(conn, composer_ids)
+
+
+def open_message_request_context_rows(
+    db_path: Path, composer_ids: set[str] | None = None,
+) -> Iterator[tuple[str, object]]:
+    """Yield request-context rows from `db_path`, owning the connection."""
+    with closing(connect_readonly(db_path)) as conn:
+        yield from iter_message_request_context_rows(conn, composer_ids)
+
+
+def read_composer_data(db_path: Path) -> list[tuple[str, Any]]:
+    """Return the `composerData:` key/value rows from one Cursor database.
+
+    Vendor table access belongs in this module, not in the adapter: the
+    adapter decides what a record means, this decides how to get it. Returns
+    an empty list when the database is absent so a caller can treat a missing
+    Cursor installation as no data rather than an error.
+    """
+    if not db_path.exists():
+        return []
+    with closing(connect_readonly(db_path)) as conn:
+        return list(conn.execute(
+            "SELECT key, value FROM cursorDiskKV "
+            "WHERE key >= ? AND key < ? ORDER BY key",
+            ("composerData:", "composerData;"),
+        ))
 
 
 def get_global_db(cursor_data: Path | None = None) -> Path | None:

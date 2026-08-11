@@ -67,6 +67,24 @@ class QueryScope:
             store["conn"].close()
 
 
+def _open_readable_store(path):
+    """Open one store read-only, confirming its core tables are queryable.
+
+    The probe distinguishes a store that exists from one that can actually be
+    read, so a caller does not discover a truncated or foreign file midway
+    through a query. The connection is closed before the error propagates,
+    since a failed open must not leak a handle.
+    """
+    conn = connect_store(path, read_only=True)
+    try:
+        conn.execute("SELECT 1 FROM sessions LIMIT 1")
+        conn.execute("SELECT 1 FROM events LIMIT 1")
+    except Exception:
+        conn.close()
+        raise
+    return conn
+
+
 def _open_query_scope(
     roots: list[Path],
     *,
@@ -92,15 +110,7 @@ def _open_query_scope(
                 roots_without_stores.append(resolved_root)
                 continue
             for path in stores:
-                conn = None
-                try:
-                    conn = connect_store(path, read_only=True)
-                    conn.execute("SELECT 1 FROM sessions LIMIT 1")
-                    conn.execute("SELECT 1 FROM events LIMIT 1")
-                except Exception:
-                    if conn is not None:
-                        conn.close()
-                    raise
+                conn = _open_readable_store(path)
                 scope.stores.append(
                     {"conn": conn, "path": path, "project_path": resolved_root}
                 )
@@ -152,13 +162,7 @@ def _open_project_id_query_scope(
                 missing.append(base)
                 continue
             for path in stores:
-                conn = connect_store(path, read_only=True)
-                try:
-                    conn.execute("SELECT 1 FROM sessions LIMIT 1")
-                    conn.execute("SELECT 1 FROM events LIMIT 1")
-                except Exception:
-                    conn.close()
-                    raise
+                conn = _open_readable_store(path)
                 scope.stores.append({
                     "conn": conn,
                     "path": path,

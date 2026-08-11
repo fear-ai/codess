@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from codess.hashing import codess_bytes_hash, codess_canonical_hash
 from codess.baseline_validation import validate_project
 from codess.config import CURRENT_POINTER_FILE, RAW_MANIFEST_FILE, SNAPSHOTS_DIR
 from codess.fileio import read_json, write_json_atomic
@@ -23,10 +23,6 @@ from codess.snapshot import current_stores
 
 
 ONBOARD_RECEIPT_FORMAT = "codess.catalog-onboard/1"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def resolve_reviewed_selection(
@@ -47,11 +43,10 @@ def resolve_reviewed_selection(
     projects.sort(key=lambda item: (item.get("project_id") or "", item["path"]))
     if not projects:
         raise ValueError(f"catalog has no projects with review decision {decision!r}")
-    encoded = json.dumps(projects, sort_keys=True, separators=(",", ":")).encode()
     return {
         "catalog": str(catalog_path.resolve()),
-        "catalog_sha256": hashlib.sha256(catalog_path.read_bytes()).hexdigest(),
-        "selection_sha256": hashlib.sha256(encoded).hexdigest(),
+        "catalog_sha256": codess_bytes_hash(256, 256, catalog_path.read_bytes()),
+        "selection_sha256": codess_canonical_hash(256, 256, projects),
         "package_digest": verify_package(),
         "review_decision": decision,
         "projects": projects,
@@ -118,7 +113,7 @@ def onboard_catalog(
     plan["raw_mode"] = raw_mode
     receipt: dict[str, Any] = {
         "receipt_format": ONBOARD_RECEIPT_FORMAT,
-        "created_at": _now(), "status": "planned", "plan": plan,
+        "created_at": datetime.now(UTC).isoformat(), "status": "planned", "plan": plan,
         "preflight": None, "apply": None,
     }
     if stop_after != "plan":

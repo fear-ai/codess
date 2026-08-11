@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
 import uuid
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
+from codess.hashing import codess_bytes_hash, codess_digest
 from codess.config import (
     DEFAULT_HASH_CHUNK_BYTES, SOURCE_FULL_HASH_MAX, SOURCE_SAMPLE_CHUNK_BYTES,
 )
@@ -38,7 +38,7 @@ def _no_hash_active() -> bool:
 
 
 def hash_file(path: Path, *, chunk_size: int = DEFAULT_HASH_CHUNK_BYTES) -> str:
-    digest = hashlib.sha256()
+    digest = codess_digest()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(chunk_size), b""):
             digest.update(chunk)
@@ -61,7 +61,7 @@ def read_hash(path: Path, *, expected_hash: str | None = None) -> bytes:
     if _no_hash_active():
         log.warning("hash verification skipped (CODESS_NO_HASH): %s", path)
         return content
-    actual = hashlib.sha256(content).hexdigest()
+    actual = codess_bytes_hash(256, 256, content)
     if actual != expected_hash:
         raise HashMismatchError(
             f"hash mismatch for {path}: expected {expected_hash}, got {actual}"
@@ -76,8 +76,8 @@ def verify_hash(path: Path, expected_hash: str) -> None:
     Use this instead of `read_hash` when a caller only needs pass/fail on a
     file that may be large (a raw-capture object, a SQLite store) and never
     reads its content afterward -- `read_hash` returns full content, which
-    is correct for small JSON documents but would materialize a multi-GB
-    file for no reason here. Streams via `hash_file`'s chunked read.
+    is correct for small JSON documents but would read a multi-GB
+    file into memory for no reason here. Streams via `hash_file`'s chunked read.
     Raises HashMismatchError on mismatch; a no-op when CODESS_NO_HASH is
     set (still logs a warning, matching read_hash).
     """
@@ -101,7 +101,7 @@ def write_hash(path: Path, content: bytes) -> str:
     temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
     temporary.write_bytes(content)
     temporary.replace(path)
-    return hashlib.sha256(content).hexdigest()
+    return codess_bytes_hash(256, 256, content)
 
 
 def rewrite_hash(
@@ -122,6 +122,25 @@ def rewrite_hash(
     return write_hash(path, new_content)
 
 
+def read_exactly(stream: Any, limit: int, chunk_size: int) -> Iterator[bytes]:
+    """Yield at most `limit` bytes from `stream`, in chunks.
+
+    Reading to end-of-file is wrong for a file something else is writing:
+    the end moves, so the read covers a state that never existed as a whole.
+    Reading a fixed count decided before the read starts gives a well-defined
+    prefix instead. If the file has since grown, the prefix is still exactly
+    the bytes that were there at the start; if it has been truncated, the
+    stream simply ends early and the caller sees fewer bytes than requested.
+    """
+    remaining = limit
+    while remaining > 0:
+        chunk = stream.read(min(chunk_size, remaining))
+        if not chunk:
+            return
+        remaining -= len(chunk)
+        yield chunk
+
+
 def source_fingerprint(
     path: Path,
     *,
@@ -132,14 +151,22 @@ def source_fingerprint(
         before = path.stat()
     except OSError:
         return "unavailable", None, None, "unavailable", "unavailable"
-    digest = hashlib.sha256()
+    digest = codess_digest()
     try:
         with path.open("rb") as stream:
             if before.st_size <= SOURCE_FULL_HASH_MAX:
-                for chunk in iter(lambda: stream.read(SOURCE_SAMPLE_CHUNK_BYTES), b""):
+                # Hash exactly the bytes the first stat announced, not to EOF:
+                # a session file being appended to has no stable end.
+                read_bytes = 0
+                for chunk in read_exactly(
+                    stream, before.st_size, SOURCE_SAMPLE_CHUNK_BYTES
+                ):
                     digest.update(chunk)
+                    read_bytes += len(chunk)
                 method = "full-sha256-fingerprint"
-                revision = f"sha256-fingerprint:{digest.hexdigest()}"
+                revision = (
+                    f"sha256-fingerprint:{digest.hexdigest()}:size:{read_bytes}"
+                )
             else:
                 maximum_offset = max(0, before.st_size - SOURCE_SAMPLE_CHUNK_BYTES)
                 offsets = sorted({
@@ -166,23 +193,29 @@ def source_fingerprint(
             "stat",
             "read-error",
         )
-    if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
-        return (
-            f"volatile-stat:{after.st_mtime_ns}:{after.st_size}",
-            after.st_mtime * 1000,
-            after.st_size,
-            "stat",
-            "changed-during-fingerprint",
-        )
+    # The fingerprint above covers a defined prefix, so growth does not
+    # invalidate it: the digest still describes exactly the bytes that were
+    # present when the read began. Report the change as advisory rather than
+    # discarding a usable revision -- an appending session file is ordinary,
+    # not an error.
+    file_changed = (before.st_mtime_ns, before.st_size) != (
+        after.st_mtime_ns, after.st_size
+    )
+    grew = after.st_size > before.st_size
     mtime = after.st_mtime * 1000
-    size = after.st_size
-    consistency = "stable-stat"
+    size = before.st_size
+    consistency = (
+        "stable"
+        if not file_changed
+        else "appended" if grew
+        else "rewritten"
+    )
     wal_path = Path(str(path) + "-wal")
     if _include_sidecars and wal_path.is_file():
         wal_revision, wal_mtime, wal_size, wal_method, wal_consistency = (
             source_fingerprint(wal_path, _include_sidecars=False)
         )
-        combined_digest = hashlib.sha256()
+        combined_digest = codess_digest()
         combined_digest.update(
             f"main:{revision}\0wal:{wal_revision}".encode("utf-8")
         )
@@ -194,8 +227,8 @@ def source_fingerprint(
         size += wal_size or 0
         method = f"{method}+wal:{wal_method}"
         consistency = (
-            "stable-stat-main-wal-nontransactional"
-            if wal_consistency == "stable-stat"
+            "stable-main-wal-nontransactional"
+            if wal_consistency == "stable"
             else f"wal-{wal_consistency}"
         )
     return revision, mtime, size, method, consistency

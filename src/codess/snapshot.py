@@ -14,13 +14,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from codess.hashing import codess_canonical_hash, codess_digest
 from codess import __version__
 from codess.config import (
     CURRENT_POINTER_FILE, MANIFEST_BACKUP_FILE, MANIFEST_FILE,
     RAW_MANIFEST_FILE, SNAPSHOTS_DIR, STORE_DIR,
 )
 from codess.fileio import (
-    HashMismatchError, hash_file, read_hash, verify_hash, write_hash,
+    HashMismatchError, hash_file, read_hash, verify_hash,
 )
 from codess.raw_store import RAW_FORMAT, RawStore
 from codess.project_catalog import durable_project_root
@@ -123,7 +124,7 @@ def _software_revision() -> str | None:
         ).stdout
         if not status:
             return revision
-        digest = hashlib.sha256()
+        digest = codess_digest()
         digest.update(b"git-status\0")
         digest.update(status)
         digest.update(b"git-diff\0")
@@ -421,9 +422,7 @@ def create_snapshot(
     created_at = datetime.now(timezone.utc)
     created_at_text = created_at.isoformat()
     policy = build_policy or {"raw_mode": "seal" if seal else "unspecified"}
-    policy_digest = hashlib.sha256(
-        json.dumps(policy, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    policy_digest = codess_canonical_hash(256, 256, policy)
     identity = hashlib.sha256(
         f"{project_path.resolve()}\0{created_at_text}\0{package_digest}\0{policy_digest}".encode("utf-8")
     ).hexdigest()[:12]

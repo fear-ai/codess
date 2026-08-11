@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 from pathlib import Path
+
+from codess.hashing import codess_digest
 
 
 IDENTITY_FORMAT = "codess.id/1"
 
 
 def _qualified(kind: str, *components: object) -> str:
-    digest = hashlib.sha256()
+    digest = codess_digest()
     digest.update(IDENTITY_FORMAT.encode("ascii"))
     digest.update(b"\0")
     digest.update(kind.encode("ascii"))

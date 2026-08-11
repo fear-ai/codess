@@ -202,7 +202,7 @@ capture. Storage deletion remains a reviewed maintenance operation.
 | [Codess](Codess.md) | Problem, solution, product capabilities, terminology, boundaries, and longer-term vision |
 | [Operations](Operations.md) | Installation, source locations, normal execution, diagnosis, and maintenance commands |
 | [Functional Design](Designs.md) | Decided functional behavior, rationale, invariants, and explicitly optional directions |
-| [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, current state, code review, and work registry |
+| [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, current state, code review, and task list |
 | [CoSchema](CoSchema.md) | Common entities, relationships, fields, vocabularies, and query/store contracts |
 | [Claude Code Source Schema](CCSchema.md) | Claude Code storage, records, selective access, mapping, and limitations |
 | [Codex Source Schema](CodexSchema.md) | Codex storage, records, selective access, mapping, and limitations |

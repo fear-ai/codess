@@ -127,3 +127,16 @@ def test_no_hash_env_var_false_values_still_verify(tmp_path, monkeypatch):
     monkeypatch.setenv("CODESS_NO_HASH", "0")
     with pytest.raises(HashMismatchError):
         read_hash(path, expected_hash=_digest(b"wrong"))
+
+
+def test_read_exactly_stops_at_the_announced_size():
+    """A file that grows during a read must not extend the read."""
+    import io
+
+    from codess.fileio import read_exactly
+
+    stream = io.BytesIO(b"abcdefghij")
+    assert b"".join(read_exactly(stream, 4, 2)) == b"abcd"
+
+    short = io.BytesIO(b"abc")
+    assert b"".join(read_exactly(short, 10, 2)) == b"abc"

@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 import platform
 import uuid
-import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from codess.config import (
     PROJECT_FILE, REGISTRY, SOURCE_LINKS_FILE, SOURCE_LINKS_FORMAT, STORE_DIR,
 )
+from codess.hashing import codess_canonical_hash
 from codess.identity import location_id
 from codess.fileio import write_json_atomic
 from codess.helpers import ephemeral_project_location_reason
@@ -27,10 +27,6 @@ PROJECT_SELECTION_STATES = frozenset({
     # actually a linked worktree of the related repository-level Project.
     "worktree",
 })
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _catalog_path(registry_root: Path) -> Path:
@@ -51,8 +47,9 @@ def _save_catalog_entry(
     catalog back) with nothing else in common between them; extracted so a
     future site can't stamp only one of the two by omission.
     """
-    entry["updated_at"] = _now()
-    catalog["updated_at"] = _now()
+    stamped = datetime.now(UTC).isoformat()
+    entry["updated_at"] = stamped
+    catalog["updated_at"] = stamped
     write_json_atomic(_catalog_path(registry_root), catalog)
 
 
@@ -125,7 +122,7 @@ def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str,
     entry.update({
         "project_id": project_id,
         "logical_name": entry.get("logical_name") or project_path.name,
-        "updated_at": _now(),
+        "updated_at": datetime.now(UTC).isoformat(),
     })
     machine_id = _machine_id(registry_root)
     observed_location_id = location_id(machine_id, project_path)
@@ -144,7 +141,7 @@ def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str,
         "path": resolved,
         "path_obsolete": False,
         "state": "active",
-        "observed_at": _now(),
+        "observed_at": datetime.now(UTC).isoformat(),
         "platform": platform.system().lower(),
     }
     entry["locations"] = sorted(locations.values(), key=lambda item: item["location_id"])
@@ -192,7 +189,7 @@ def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str,
     entry["path_aliases"] = sorted(aliases - obsolete_paths)
     by_id[project_id] = entry
     catalog["projects"] = sorted(by_id.values(), key=lambda item: item["project_id"])
-    catalog["updated_at"] = _now()
+    catalog["updated_at"] = datetime.now(UTC).isoformat()
     write_json_atomic(_catalog_path(registry_root), catalog)
     binding = {
         "binding_format": PROJECT_BINDING_FORMAT,
@@ -252,7 +249,7 @@ def set_project_selection_state(
     entry["selection_state"] = state
     disposition = {
         "state": state,
-        "updated_at": _now(),
+        "updated_at": datetime.now(UTC).isoformat(),
     }
     if related_project_id:
         disposition["related_project_id"] = related_project_id
@@ -328,10 +325,7 @@ def load_project_set(path: Path) -> dict[str, Any]:
         "name": value.get("name"),
         "projects": normalized,
     }
-    encoded = json.dumps(
-        canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-    ).encode("utf-8")
-    canonical["selection_sha256"] = hashlib.sha256(encoded).hexdigest()
+    canonical["selection_sha256"] = codess_canonical_hash(256, 256, canonical)
     canonical["path"] = str(path.expanduser().resolve())
     return canonical
 
@@ -461,7 +455,7 @@ def catalog_readiness(registry_root: Path) -> dict[str, Any]:
     )
     return {
         "format": "codess.catalog-readiness/1",
-        "generated_at": _now(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "summary": {
             "eligible_projects": total,
             "query_ready_projects": ready,
@@ -594,18 +588,10 @@ def resolve_project_query_scopes(
         scopes,
         key=lambda item: (item["project_id"], item["snapshot_id"]),
     )
-    resolved_bytes = json.dumps(
-        [
-            {
-                "project_id": item["project_id"],
-                "snapshot_id": item["snapshot_id"],
-            }
-            for item in scopes
-        ],
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    resolved_sha256 = hashlib.sha256(resolved_bytes).hexdigest()
+    resolved_sha256 = codess_canonical_hash(256, 256, [
+        {"project_id": item["project_id"], "snapshot_id": item["snapshot_id"]}
+        for item in scopes
+    ])
     for item in scopes:
         item["resolved_selection_sha256"] = resolved_sha256
     return scopes
@@ -652,7 +638,7 @@ def add_project_location(
         "path": resolved,
         "path_obsolete": False,
         "state": "active",
-        "observed_at": _now(),
+        "observed_at": datetime.now(UTC).isoformat(),
         "platform": platform.system().lower(),
     }
     entry["locations"] = sorted(
@@ -698,7 +684,7 @@ def retire_project_location(
         raise ValueError("refusing to retire the last active location")
     target["state"] = "retired"
     target["path_obsolete"] = True
-    target["retired_at"] = _now()
+    target["retired_at"] = datetime.now(UTC).isoformat()
     _save_catalog_entry(registry_root, catalog, entry)
     return {"project_id": project_id, "path": resolved, "state": "retired"}
 
@@ -758,12 +744,13 @@ def register_relocation(
     if entry is None:
         raise ValueError(f"project is absent from catalog: {project_id}")
     old_path = str(old_root.expanduser().resolve())
+    stamped = datetime.now(UTC).isoformat()
     for location in entry.get("locations", []):
         if location.get("path") == old_path:
             location["state"] = "retired"
             location["path_obsolete"] = True
-            location["retired_at"] = _now()
-    catalog["updated_at"] = _now()
+            location["retired_at"] = stamped
+    catalog["updated_at"] = stamped
     write_json_atomic(_catalog_path(registry_root), catalog)
     if new_root is None:
         return {"project_id": project_id, "old_path": old_path, "new_path": None}

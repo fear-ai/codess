@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import heapq
 import json
 import os
@@ -12,6 +11,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+from codess.hashing import codess_bytes_hash, codess_text_hash
 
 
 REQUEST_FORMAT = "codess.query-request/1"
@@ -125,7 +126,7 @@ def _canonical_bytes(value: Any) -> bytes:
 
 def content_hash(value: Any) -> str:
     """Return a deterministic content identity (not an authenticity proof)."""
-    return "sha256:" + hashlib.sha256(_canonical_bytes(value)).hexdigest()
+    return "sha256:" + codess_bytes_hash(256, 256, _canonical_bytes(value))
 
 
 def make_request(
@@ -631,7 +632,7 @@ def selected_project_ids(stores: list[dict[str, Any]]) -> list[str]:
         if ids:
             selected.update(str(value) for value in ids)
         else:
-            digest = hashlib.sha256(str(store["project_path"]).encode("utf-8")).hexdigest()
+            digest = codess_text_hash(256, 256, str(store["project_path"]))
             selected.add(f"codess:legacy-project-location:sha256:{digest}")
     return sorted(selected)
 
@@ -658,9 +659,7 @@ def selected_project_snapshots(
             )
         ]
         if not project_ids:
-            digest = hashlib.sha256(
-                str(store["project_path"]).encode("utf-8")
-            ).hexdigest()
+            digest = codess_text_hash(256, 256, str(store["project_path"]))
             project_ids = [f"codess:legacy-project-location:sha256:{digest}"]
         snapshot_id = _store_snapshot_id(store)
         selected.extend({

@@ -1,13 +1,13 @@
 """CC JSONL parser and normalizer."""
 
 import json
-import hashlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
 from codess import field_state
+from codess.hashing import codess_bytes_hash
 
 from codess.config import (
     TRUNCATE_DIALOG,
@@ -1236,7 +1236,7 @@ def normalize_user(
                 "content_role": "tool_result_detail", "origin_kind": "tool_generated",
                 "metadata": _event_metadata(record, extra={
                     "source_locator": str(path),
-                    "content_sha256": hashlib.sha256(raw).hexdigest(),
+                    "content_sha256": codess_bytes_hash(256, 256, raw),
                     "byte_size": len(raw), "character_length": full_len,
                     "extraction": "complete" if len(extracted) == full_len else "bounded",
                     "media_type": "text/plain",

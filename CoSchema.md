@@ -246,6 +246,34 @@ Event-oriented numeric times use Unix milliseconds. Manifest, ingest, and
 observation timestamps use RFC 3339 UTC strings. Time-basis fields state the
 evidence supporting a normalized value.
 
+### 5.1 Time Column Naming
+
+The rule above -- numeric for source-reported event time, text for
+Codess-recorded time -- is currently stated only in prose, while every column
+carries the same `_at` suffix regardless of which it is. A reader cannot tell
+from `observed_at` and `event_at` that one is RFC 3339 text and the other
+Unix milliseconds, and must consult the DDL for each.
+
+The naming does not merely fail to help; it actively misleads in one place.
+`sessions.started_at` is `REAL` while `processing_runs.started_at` is `TEXT`.
+The same column name denotes two different representations in one schema, so
+code reading both must know which table it is in, and a query joining them
+cannot compare the values without conversion.
+
+A suffix that encodes the representation removes the ambiguity:
+
+| Suffix | Type | Meaning | Examples |
+|---|---|---|---|
+| `_time` | `TEXT`, RFC 3339 UTC | An instant Codess recorded | `observed_time`, `ingested_time`, `created_time` |
+| `_atms` | `REAL`, Unix milliseconds | An instant the source reported | `event_atms`, `started_atms`, `ended_atms` |
+
+Both halves matter. `_time` alone would not distinguish the two, since the
+present `_at` columns already fail to; pairing a plain suffix for recorded
+text with an explicit unit for source numerics makes the representation
+readable at every use, and makes the `started_at` conflict impossible to
+restate. This is a breaking schema change and is tracked with the other
+CoSchema strengthening work rather than applied piecemeal.
+
 ## 6. Types and Classification
 
 Every mapped Event can retain:

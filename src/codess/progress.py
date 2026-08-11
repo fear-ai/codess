@@ -28,14 +28,14 @@ class ProgressTrace:
         self.stream = stream if stream is not None else sys.stderr
         self.enabled = enabled
         self.max_events = max_events
-        self.started = time.monotonic()
+        self.start_tick = time.monotonic()
         self.events: deque[dict[str, Any]] = deque(maxlen=max_events)
         self.dropped_events = 0
 
     def __call__(self, event: str, **fields: Any) -> dict[str, Any]:
         record = {
             "at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-            "elapsed_seconds": round(time.monotonic() - self.started, 3),
+            "elapsed_seconds": round(time.monotonic() - self.start_tick, 3),
             "event": event,
             **fields,
         }
@@ -76,7 +76,7 @@ class ProgressTrace:
         if self.dropped_events:
             records.append({
                 "at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-                "elapsed_seconds": round(time.monotonic() - self.started, 3),
+                "elapsed_seconds": round(time.monotonic() - self.start_tick, 3),
                 "event": "progress.events_dropped",
                 "count": self.dropped_events,
             })

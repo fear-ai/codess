@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sqlite3
@@ -13,8 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from codess.hashing import codess_digest
 from codess.raw_store import (
-    RAW_FORMAT, RawCaptureError, RawStore, verify_captured_object,
+    RAW_FORMAT, RawCaptureError, RawStore, verify_raw,
 )
 from codess.fileio import (
     check_policy_format, hash_file, load_versioned_policy, source_fingerprint,
@@ -348,7 +348,7 @@ def semantic_digest(
     store_paths: Iterable[Path], *, exclude_tables: frozenset[str] = frozenset(),
     normalize_observations: bool = False,
 ) -> str:
-    digest = hashlib.sha256()
+    digest = codess_digest()
     for path in sorted(store_paths, key=lambda item: item.name):
         conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
@@ -532,7 +532,7 @@ def _validate_raw(
                 )
                 continue
             try:
-                observed = verify_captured_object(object_path, record)
+                observed = verify_raw(object_path, record)
                 _add_check(
                     report, f"{label}.stored_size",
                     observed["stored_size"] == record.get("stored_size"),

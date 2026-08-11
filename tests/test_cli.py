@@ -882,7 +882,7 @@ def test_ingest_partial_source_failure_continues_and_exits_1(durable_tmp_path):
     assert report["diagnostics"]["failed_sources"] == 1
 
 
-def test_force_ingest_rebuilds_existing_store_from_fresh_database(durable_tmp_path):
+def test_force_ingest_discards_stale_store_content(durable_tmp_path):
     root = durable_tmp_path
     project = root / "project"
     project.mkdir()

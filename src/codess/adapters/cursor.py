@@ -11,10 +11,10 @@ from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESU
 from codess.content_processing import apply_processing
 from codess.context_content import bound_context_content
 from codess.cursor_source import (
-    connect_readonly,
-    iter_bubble_rows,
-    iter_message_request_context_rows,
+    open_bubble_rows,
+    open_message_request_context_rows,
     parse_timestamp as _parse_timestamp,
+    read_composer_data,
 )
 from codess.mapping import annotate_mapping, structured_json
 from codess.tool_result_status import application_failure_evidence
@@ -92,11 +92,8 @@ def _load_message_request_contexts(
 ) -> dict[str, tuple[str, dict]]:
     """Read one composer's request contexts and release the SQLite handle."""
     contexts: dict[str, tuple[str, dict]] = {}
-    conn = connect_readonly(db_path)
     try:
-        for key, value in iter_message_request_context_rows(
-            conn, {composer_id}
-        ):
+        for key, value in open_message_request_context_rows(db_path, {composer_id}):
             if value is None:
                 continue
             try:
@@ -108,8 +105,8 @@ def _load_message_request_contexts(
             parts = str(key).split(":", 2)
             if len(parts) == 3:
                 contexts[parts[2]] = (str(key), decoded)
-    finally:
-        conn.close()
+    except Exception as exc:  # vendor storage errors stay in cursor_source
+        log.warning("Cannot read Cursor request contexts from %s: %s", db_path, exc)
     return contexts
 
 
@@ -184,40 +181,32 @@ def get_composer_data(db_path: Path) -> list[dict]:
     """Decode composerData keys from cursorDiskKV. Returns list of {composer_id, keys, has_conversation, ...}.
     Based on: legel gist, Cursor forum; composerData can be None for some entries."""
     import base64
-    from contextlib import closing
 
-    if not db_path.exists():
-        return []
     out = []
     try:
-        with closing(connect_readonly(db_path)) as conn:
-            cur = conn.execute(
-                "SELECT key, value FROM cursorDiskKV "
-                "WHERE key >= 'composerData:' AND key < 'composerData;'"
-            )
-            for key, value in cur:
-                composer_id = key.split(":", 1)[1] if ":" in key else key
-                entry = {"composer_id": composer_id, "key": key, "value_null": value is None}
-                if value is None:
+        for key, value in read_composer_data(db_path):
+            composer_id = key.split(":", 1)[1] if ":" in key else key
+            entry = {"composer_id": composer_id, "key": key, "value_null": value is None}
+            if value is None:
+                out.append(entry)
+                continue
+            try:
+                data = json.loads(value)
+            except json.JSONDecodeError:
+                try:
+                    data = json.loads(base64.b64decode(value).decode("utf-8", errors="replace"))
+                except Exception:
+                    entry["decode_error"] = True
                     out.append(entry)
                     continue
-                try:
-                    data = json.loads(value)
-                except json.JSONDecodeError:
-                    try:
-                        data = json.loads(base64.b64decode(value).decode("utf-8", errors="replace"))
-                    except Exception:
-                        entry["decode_error"] = True
-                        out.append(entry)
-                        continue
-                if isinstance(data, dict):
-                    entry["top_keys"] = list(data.keys())
-                    entry["has_conversation"] = "conversation" in data and len(data.get("conversation") or []) > 0
-                    # Known/possible fields from forums, OSS: conversation, workspaceRoot?, ...
-                    for k in ("workspaceRoot", "workspace", "folder", "projectPath"):
-                        if k in data:
-                            entry[k] = data[k]
-                out.append(entry)
+            if isinstance(data, dict):
+                entry["top_keys"] = list(data.keys())
+                entry["has_conversation"] = "conversation" in data and len(data.get("conversation") or []) > 0
+                # Known/possible fields from forums, OSS: conversation, workspaceRoot?, ...
+                for k in ("workspaceRoot", "workspace", "folder", "projectPath"):
+                    if k in data:
+                        entry[k] = data[k]
+            out.append(entry)
     except Exception as exc:
         log.warning("Cannot read Cursor composer data from %s: %s", db_path, exc)
     return out
@@ -231,9 +220,8 @@ def _iter_bubbles(
     """Yield (composer_id, bubble_id, message_dict) from cursorDiskKV bubbleId keys."""
     if composer_ids == set():
         return
-    conn = connect_readonly(db_path)
     try:
-        for key, value in iter_bubble_rows(conn, composer_ids):
+        for key, value in open_bubble_rows(db_path, composer_ids):
             if stats is not None:
                 stats["rows"] = stats.get("rows", 0) + 1
             if value is None:
@@ -268,8 +256,8 @@ def _iter_bubbles(
                 yield composer_id, bubble_id, projected
             elif stats is not None:
                 stats["non_objects"] = stats.get("non_objects", 0) + 1
-    finally:
-        conn.close()
+    except Exception as exc:  # vendor storage errors stay in cursor_source
+        log.warning("Cannot read Cursor bubbles from %s: %s", db_path, exc)
 
 
 def process_db(
@@ -289,7 +277,7 @@ def process_db(
 
     current_composer: str | None = None
     bubbles: list[tuple[str, dict]] = []
-    composer_started: float | None = None
+    composer_start_tick: float | None = None
     last_progress: float | None = None
 
     def emit(event: str, **fields) -> None:
@@ -305,8 +293,8 @@ def process_db(
         emit(
             "cursor.composer.read.done", bubbles=len(bubbles),
             phase_seconds=(
-                round(time.monotonic() - composer_started, 3)
-                if composer_started is not None else None
+                round(time.monotonic() - composer_start_tick, 3)
+                if composer_start_tick is not None else None
             ),
         )
 
@@ -329,19 +317,19 @@ def process_db(
             bubbles.clear()
         if composer_id != current_composer:
             current_composer = composer_id
-            composer_started = last_progress = time.monotonic()
+            composer_start_tick = last_progress_tick = time.monotonic()
             emit("cursor.composer.read.start")
         bubbles.append((bubble_id, data))
-        now = time.monotonic()
+        now_tick = time.monotonic()
         if len(bubbles) % _PROGRESS_ROWS == 0 or (
             last_progress is not None
-            and now - last_progress >= _PROGRESS_SECONDS
+            and now_tick - last_progress_tick >= _PROGRESS_SECONDS
         ):
             emit(
                 "cursor.composer.read.progress", bubbles=len(bubbles),
-                phase_seconds=round(now - composer_started, 3),
+                phase_seconds=round(now_tick - composer_start_tick, 3),
             )
-            last_progress = now
+            last_progress_tick = now_tick
     if current_composer is not None:
         finish_read()
         yield from _process_composer(

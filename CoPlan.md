@@ -2,9 +2,9 @@
 
 CoPlan explains how Codess is implemented, how components relate, how behavior
 is tested, what is operational now, and what engineering work remains. It is
-the sole current implementation-status and work registry.
+the sole current implementation-status and task list.
 
-## Work Registry at a Glance
+## Task List at a Glance
 
 Every numbered work item (full detail in
 [14.1 Immediate Core Work](#141-immediate-core-work) and
@@ -20,8 +20,8 @@ tracked work items and are not repeated in this table.
 
 Rows are ordered by priority, not by identifier. Identifiers are assigned
 once and never reused or renumbered, so a later item can carry a higher
-priority than an earlier one -- W20 and W22 sit with the High group above
-the Normal items that precede them numerically.
+priority than an earlier one -- W20 sits with the High group above the
+Normal items that precede it numerically.
 
 | ID | Priority | Status | Work |
 |---|---|---|---|
@@ -30,13 +30,15 @@ the Normal items that precede them numerically.
 | W03 | Critical | **Under review** | Separate exact package integrity from store write compatibility, and reduce runtime integrity checking to what a local development environment needs -- one digest spans the executable contract and the validation fixtures alike, so a fixture edit can make an unchanged store layout unwritable. Blocked on confirming which runtime checks survive and whether they become optional. |
 | W04 | High | Planned | Shared candidate-record contract and runtime mapping-profile enforcement. |
 | W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. |
-| W06 | High | Planned | Move domain SQL and workflows out of command modules. |
+| W06 | High | **WIP** | Move domain SQL and workflows out of command modules. Vendor decode and store writing now live in `codess/ingest_sources.py`; `ingest_cmd` fell from about two thousand lines to fifteen hundred and no longer ingests a source itself. Remaining: snapshot creation and promotion are still inline in the Project loop, and `query_cmd`'s report SQL is partly converted (13.4.1). |
 | W07 | High | Planned | Bound ancillary reads that can encounter large source or repository content. |
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. |
 | W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. |
-| W10 | High | Planned | Complete the Cursor source-access boundary. |
-| W20 | High | WIP | Establish lifetime and resilience requirements for the five derived values. `codess/hashing.py` and `path_key` naming are done; migrating call sites is not. Two decisions remain open: `path_key`'s move/cross-machine behavior, and creation-versus-content snapshot identity. |
-| W22 | High | Planned | Route every JSON digest through one canonical encoder with `ensure_ascii=False` and `surrogatepass`. 16 modules serialize independently and disagree, so equal documents can produce different digests. |
+| W20 | High | WIP | Establish lifetime and resilience requirements for the five derived values. `codess/hashing.py` now owns every digest and `path_key` is renamed; two transient hashes may not be needed at all, and `snapshot_id` still sits inside structures whose digests it depends on. Blocked on `path_key`'s move/cross-machine behavior and on creation-versus-content snapshot identity. |
+| W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES`. |
+| W25 | Normal | Planned | Strengthen CoSchema time columns: encode representation in the name and resolve `started_at` denoting both TEXT and REAL. |
+| W26 | Normal | Planned | Reevaluate and repartition the four Cursor modules now that the source boundary is closed. |
+| W23 | Normal | Planned | Decomposition and naming cleanups found by the 3.5 audits: over-large catalog functions, raw-object naming (`materialize`/`_captured_object`), the duplicated stat-consistency guard, and closed-vocabulary constants. |
 | W11 | Normal | TODO | Improve search reports and structured-query examples. |
 | W12 | Normal | TODO | Report source-to-common coverage, loss, and unknown shapes. |
 | W13 | Normal | TODO | Mechanically enforce architecture/contract paths; observe child-process coverage. Query-request validation-library adoption is Postponed (13.4.2). |
@@ -59,7 +61,7 @@ physical store implementation, and the tests that establish conformance.
 The first part of this document describes the intended implementation
 architecture. It distinguishes that intended structure from the current code:
 the implementation-status and code-review sections state what exists and where
-it diverges, while the work registry turns each unresolved finding into a
+it diverges, while the task list turns each unresolved finding into a
 prioritized item with completion evidence. Product capabilities and functional
 rationale are not restated here unless they impose a concrete software
 boundary or verification obligation.
@@ -329,7 +331,7 @@ not visible without deliberately comparing the two.
 The mechanism observed here -- a module needs one fact from a file another
 module already owns, a three-line inline read is smaller than a shared-code
 change, the inline read silently drops a check the canonical path performs
--- is not specific to snapshot files. Section 14 (Current Work Registry)
+-- is not specific to snapshot files. Section 14 (Current Task List)
 already tracks the Cursor SQL boundary (W10) as a comparable case: a second
 module reimplementing access to state its owning module already exposes.
 Any future audit for the same pattern should look for the same three
@@ -443,9 +445,9 @@ constant criterion to calls rather than literals.
 
 | Cluster | Independent sites | Shared decision with no owner | Divergence found |
 |---|---|---|---|
-| Current UTC time | 9 private `_now` helpers | Which representation is persisted | Yes: 7 return ISO text, `registry_store` renames it `_now_iso`, `storage_report` returns a `datetime` |
-| SHA-256 derivation | 40 calls across 21 modules | Algorithm, encoding, truncation width and end | Yes: widths of 48, 64, 96, and 256 bits chosen per site with no stated basis |
-| Canonical JSON for digesting | 16 modules | Serialization form that makes equal content give equal digests | Yes: 4 sites pass `ensure_ascii=False`, 29 take the default |
+| Current UTC time | A private `_now` helper in most modules that stamps records | Which representation is persisted | Yes: most return ISO text, `registry_store` renames it `_now_iso`, `storage_report` returns a `datetime` |
+| SHA-256 derivation | A direct `hashlib` call wherever a digest is needed | Algorithm, encoding, truncation width and end | Yes: widths of 48, 64, 96, and 256 bits chosen per site with no stated basis |
+| Canonical JSON for digesting | An inline `json.dumps` before each digest | Serialization form that makes equal content give equal digests | Yes: a minority passed `ensure_ascii=False`, the rest took the default |
 
 The pattern is uniform. Each site was individually reasonable, nothing was
 visibly broken, and the duplication was accumulated rather than chosen --
@@ -462,13 +464,30 @@ not the ranking the site counts suggest:
 - **Silently wrong results.** The `ensure_ascii` split makes two equal
   documents digest differently, with no error and no failing test. This is
   the only cluster that produces a wrong answer rather than a maintenance
-  hazard, which is why it became W22 at High priority despite being the
-  smallest cluster.
+  hazard, which is why it was prioritized and resolved first despite being
+  the smallest cluster.
 - **Unreviewed values.** The SHA-256 widths were selected per site; two of
   the five key sites turned out not to need a hash at all (13.4.8). Tracked
   as W20.
 - **Reader confusion.** The `_now` return-type split means a name does not
   predict its own type. No incorrect behavior, but every reader must check.
+
+The three clusters are now resolved differently, which is itself the point.
+The SHA-256 and canonical-JSON clusters became one shared module because
+each carried a single decision that simply had no owner. The `_now` cluster
+remains open because its decision has not been made rather than merely
+misplaced.
+
+Concretely, `_now` awaits one choice: **what a timestamp accessor returns.**
+Most sites return ISO 8601 text, `storage_report` returns a `datetime`, and
+both are legitimate for their callers -- persistence wants text, comparison
+and arithmetic want an aware object. The question is whether to provide two
+accessors named so the return type is evident, or one canonical type with
+conversion at the boundary. Until that is settled a shared helper would
+relocate the ambiguity rather than remove it, because the divergence is in
+the contract, not the implementation. This is the reverse of the hashing
+case, where every site wanted the same thing and just had no common place to
+get it.
 
 Two conclusions carry back to the constant method. First, applying it to
 calls is worthwhile precisely because a call hides a decision that a
@@ -483,6 +502,273 @@ consolidation 3.5.3 rejects. It is also why the 12 incremental digest
 constructions keep their read policy in `fileio`: only the digest
 construction was a shared decision, not the bounded-window sampling around
 it.
+
+#### 3.5.5 Coupling and Separation of Concerns
+
+The audits above work upward from individual values. Two further passes
+look at the codebase as a whole -- one from repeated values, one from module
+dependencies -- and they converge on the same modules.
+
+**Bottom-up: repeated literals mark absent vocabulary.** Bare strings
+recur across many modules, but they are not one problem. Three groups behave
+differently and warrant different treatment:
+
+| Group | Examples | Failure mode | Treatment |
+|---|---|---|---|
+| CoSchema field names | `project_id`, `session_id`, `event_kind`, `snapshot_id` | A typo yields a silently missing value, since `dict.get` returns `None` rather than raising | Leave as literals; see below |
+| Closed vocabularies | Actor kinds, origin kinds, content roles, status values, raw modes | An invalid value is accepted and stored, corrupting a controlled vocabulary | Named constants or an enumeration |
+| Vendor keys | `cc`, `codex`, `cursor` and their display forms | A missed site silently omits one vendor from an operation | Bundle; see the Vendor discussion below |
+
+**Resolution for field names: keep the literals, add a contract test.**
+Three reasons, in order of weight.
+
+First, the indirection loses information. `row["project_id"]` names the
+column it reads; `row[FIELD_PROJECT_ID]` names a constant that names the
+column, so every reader resolves one extra hop to learn the same fact. That
+is the cost 3.5.3 warns about for constants, and it applies with more force
+here because the literal *is* the documentation.
+
+Second, constants would not catch the actual failure. A misspelled key fails
+because `dict.get` returns `None` rather than raising, and a constant only
+moves that risk to whether the right constant was chosen -- `FIELD_SESSION_ID`
+where `FIELD_SOURCE_ID` was meant reads as plausibly as the literal would.
+Neither form is checked at the point of use.
+
+Third, the real exposure is different from what constants address. These
+names are a published contract that CoSchema declares, restated at every use
+with nothing connecting declaration to use, so a schema rename is a
+search-and-replace with no mechanical check. A test asserting that every
+field name used in a query exists in `contract.json` closes exactly that gap,
+catches the misspelling case that constants do not, and leaves the call sites
+readable. That is the better trade, and it belongs with the mechanical checks
+in 13.5 rather than with a renaming pass.
+
+Closed vocabularies are the opposite. Their values are enumerated in
+CoSchema and validated at the store boundary, so a wrong literal is a
+correctness defect rather than a typo, and the set is small enough that
+naming it is genuinely clarifying. These are the ones worth extracting.
+
+**Vendor keys are a third case, and the strongest.** The three-vendor key
+set appears across command modules, discovery, refresh, review, and Project
+handling, in several shapes: as a set of valid keys, as key-to-display-name
+mappings, and as the reverse mapping. `store.SOURCE_PROFILES` already models
+a vendor properly -- source system identity, vendor and product names,
+harness, storage format, surface kind, and mapping profile, keyed by display
+name -- but it is private to `store` and describes only the fields `store`
+needs, so every other module re-derives its own partial view.
+
+A shared vendor description is the natural consolidation, and the existing
+table is most of it already. The question is its shape. A frozen dataclass
+per vendor, exposed as one vendor table, would give every module the same
+fields, make the key-and-display-name pairing a property rather than two
+mirrored dictionaries, and turn "iterate the vendors" into iterating a
+collection rather than repeating a literal set. It would also give the
+per-vendor paths, environment variables, and store filenames -- currently
+scattered -- one place to live.
+
+**Where vendor-specific and common concerns actually sit.** The intended
+layout is a narrow vendor-specific layer under a common model:
+
+```text
+  vendor-specific          common                       consumers
+  ───────────────          ──────                       ─────────
+  adapters/cc.py    ─┐
+  adapters/codex.py  ├──►  candidate records  ──►  store ──►  query
+  adapters/cursor.py─┘         (CoSchema)                      CLI
+
+  cursor_source.py  ── vendor storage access ──┘
+```
+
+The measured reality diverges: vendor names appear well outside that layer,
+so the three change scenarios cost very differently.
+
+| Change | Touches | Assessment |
+|---|---|---|
+| Improve handling for one vendor | That vendor's adapter, sometimes `cursor_source` | Correct and cheap. The adapter layer works as intended |
+| Add a processing step for every vendor | All three adapters, plus `store` if the common model gains a field | Reasonable. Repetition across three adapters is the cost of keeping vendor decode separate, and is preferable to a shared decoder with per-vendor branches |
+| Add a fourth vendor | Sixteen files, including every command module, `config`, `walk_sessions`, `project`, `snapshot`, `evidence`, `token_usage`, `storage_report`, and `schema_contract` | The defect. Most of those files need only a *description* of the vendor -- its key, display name, paths, store filename -- not knowledge of how it decodes |
+
+The third row is the argument for W24. The adapters are legitimately
+per-vendor and would still be written for a new vendor; what should not be
+required is editing a dozen unrelated modules that merely enumerate vendors.
+Once one vendor table supplies keys, display names, paths, and store
+filenames, adding a vendor becomes: write an adapter, add a table entry, and
+add a mapping profile. The rest iterate the table.
+
+**Partitioning beyond vendor coupling.** Reviewing the same 32 files for
+structure rather than vendor names surfaces three problems the vendor table
+does not address.
+
+*Command modules are the largest code in the tree, and hold domain logic.*
+`cli/ingest_cmd.py` is the biggest module at roughly 2,000 lines across
+about twenty functions -- an average near a hundred lines each -- and
+`cli/query_cmd.py` is third largest. A command module should adapt
+arguments, call a domain operation, and render a result; these run ingest
+workflows and report SQL directly. This is W06, and the size measurement is
+the argument for prioritizing it: the two largest modules in the codebase
+are both in the layer that should hold the least.
+
+*Two modules mix a store with its policy.* `store.py` combines connection
+and transaction handling, per-vendor profile data, and event-mapping rules;
+`query_api.py` combines request validation, SQL construction, multi-store
+merge, and result shaping. Both are cohesive by subject and hard to read by
+size. The useful split is by *phase* rather than by entity: validation,
+construction, execution, and shaping are separable in `query_api`, and
+profiles, schema access, and write operations are separable in `store`.
+Neither should be split by vendor or by table.
+
+*Related modules are fragmented without a package.* `codess/` holds around
+sixty flat modules including four Cursor-specific ones, three catalog
+modules, and three baseline modules. Flatness is a deliberate choice
+recorded in 2, and it should not be abandoned wholesale, but a subpackage
+per genuine cluster -- as `adapters/` and `vendor_audits/` already are --
+would make the dependency direction visible at the file tree rather than
+only in imports.
+
+*What not to do.* None of this is an argument for splitting by size alone.
+`adapters/codex.py` and `adapters/cc.py` are large because vendor formats
+are large, and dividing them would spread one format's decode across
+several files for no gain. Size is a symptom worth investigating, not a
+defect in itself; the defect is a module doing work that belongs in another
+layer.
+
+**Proposed reorganization.** The pieces of a vendor description already
+exist; they are split across three owners and then re-derived by every
+consumer:
+
+| Fact | Currently owned by | Re-derived in |
+|---|---|---|
+| Key (`cc`) and display name (`Claude`) | Nowhere; mirrored dictionaries | Command modules, discovery, refresh, review |
+| Source system identity (`anthropic.claude-code`) | `store.SOURCE_PROFILES` (private) | `token_usage`, `storage_report` hardcode the strings |
+| Vendor storage paths | `config` (`CC_PROJECTS`, `CODEX_SESSIONS`, `CURSOR_DATA`) | `evidence` hardcodes `~/.codex/sessions` again |
+| Store filename (`sessions_cc.db`) | `config` (three constants) | `get_store_path` maps display name to constant |
+| Mapping profile name | `store.SOURCE_PROFILES` | Adapter tests |
+
+One `vendors.py` module should own all five, as a frozen dataclass per
+vendor exposed through an ordered table:
+
+```text
+codess/vendors.py
+    @dataclass(frozen=True)
+    class Vendor:
+        key            "cc"                     # CLI and internal selector
+        display        "Claude"                 # store-set and report label
+        system_id      "anthropic.claude-code"  # CoSchema source_system_id
+        product        "claude-code"
+        harness        "claude-code-cli"
+        storage_format "claude-jsonl"
+        surface        "cli"
+        mapping        "claude"                 # released mapping profile
+        store_db       "sessions_cc.db"
+        source_roots   (CC_PROJECTS,)           # from config, not duplicated
+
+    VENDORS: tuple[Vendor, ...]
+    by_key(key) / by_display(name) / keys() / displays()
+```
+
+The dependency direction stays correct: `vendors` imports `config` for
+paths and is imported by everything else, so it is a leaf beside `config`
+and `fileio` rather than a new hub. `store.SOURCE_PROFILES` becomes a view
+over the vendor table rather than a second source of truth.
+
+**What the refactor changes, by group.** The earlier "sixteen files" figure
+was the subset that must change to *add* a vendor. The full footprint is
+larger: 32 files name a vendor at least once. Counting them by role shows
+why the groups are not multiples of three -- vendors are not represented
+symmetrically.
+
+| Group | Files | Vendor references | After the vendor table |
+|---|---|---|---|
+| Decode | 8 | Heaviest per file | Unchanged. Vendor-specific by design |
+| Enumerate | 17 | 3 to 27 each | Iterate `VENDORS`; most drop to zero references |
+| Dispatch | 4 | 4 to 138 | Resolve `--source` to a `Vendor`, then pass it |
+| Incidental | 3 | 1 to 2 | A stray name in a docstring or constant; no change needed |
+
+Three asymmetries explain the shape. Cursor needs more decode files than the
+others (`cursor_source`, `cursor_cohort`, `cursor_feature_audit`) because it
+is the only vendor whose storage is a shared SQLite database rather than
+per-session files, so selection and caching are separate concerns. Claude
+Code and Codex have feature-audit modules while Cursor's sits elsewhere.
+And `cli.ingest_cmd` alone carries 138 references -- more than every
+adapter combined -- which is not a vendor property at all but the command-
+layer concentration W06 tracks.
+
+**Expected reduction.** The vendor table does not delete files; it removes
+knowledge from them. The 17 enumerate files should drop to near zero vendor
+references, since almost all of what they name is description rather than
+behavior. The 4 dispatch files retain argument validation only, and shrink
+much further once W06 moves their workflows into domain modules. The 8
+decode files and 3 incidental ones are unaffected. So the count of files
+naming a vendor should fall from 32 to roughly 11 -- the decode layer plus
+the vendor table itself -- and the count that must change to add a vendor from
+16 to 3.
+
+**Naming: not a registry.** `codess/vendors.py` is unrelated to
+the *registry* in the operational sense -- the central `~/.codess` store of
+Project records, bindings, and snapshots. That collision is exactly the
+vocabulary hazard 14.3 records for overloaded terms, so the module should
+not be called a registry in prose or in code. `VENDORS` as an ordered tuple
+with lookup helpers needs no collective noun; where one is unavoidable,
+"vendor table" or "vendor descriptions" avoids the clash.
+
+**Cursor SQL is a separate axis, and now closed.** W10 concerned *where
+vendor SQL lives*, not which modules know vendor names, and it is complete:
+`cursor_source` owns every vendor-table query and connection, and
+`adapters/cursor.py` has no SQL and no SQLite dependency. The adapter asks
+for records by path (`read_composer_data`, `open_bubble_rows`,
+`open_message_request_context_rows`) and decides only what they mean. Its
+remaining `cursorDiskKV` mentions are record-type labels retained as source
+evidence, which is correct.
+
+That leaves W24 free of interference: W10 pushed vendor-specific *access*
+down into the source layer, while W24 pulls vendor-specific *description*
+out of unrelated modules. The Cursor module partitioning that the closed
+boundary now makes assessable is W26.
+
+**Sequencing.** W24 is unblocked. W06 is complementary rather than blocking: the vendor table reduces what command modules *know* about
+vendors, while W06 reduces what they *do* at all. Running W24 before W06
+still helps, since `cli.ingest_cmd`'s 138 vendor references are the largest
+single concentration in the codebase.
+
+What it must not become is a home for vendor *behavior*. Decoding differences
+belong in the adapters, and a vendor table that starts holding decode callbacks
+recreates the vendor mixing 3.5.5 identifies in the command layer, only
+centralized. The boundary is that the registry describes vendors and the
+adapters interpret them, which is the same separation W10 established for
+Cursor source access.
+
+**Top-down: command modules concentrate every concern.** Measuring how many
+`codess` modules each module imports gives a direct reading of where
+concerns collect:
+
+| Module | Imports many `codess` modules | Also mixes |
+|---|---|---|
+| `cli.admin_cmd` | Highest fan-out in the tree | Catalog, retention, snapshot, and reporting workflows |
+| `cli.ingest_cmd` | Nearly as high | All three vendors by name, plus transactions, raw capture, and publication |
+| `cli.query_cmd` | Third | Report SQL alongside argument adaptation |
+
+This is the same finding as **W06**, now with a measurement behind it rather
+than an impression. The vendor mixing is the sharper half: `cli.ingest_cmd`
+names Claude Code, Codex, and Cursor throughout, so adding or changing a
+vendor means editing a command module. `store` and `walk_sessions` mix
+vendors too, but for a defensible reason -- they implement the common model
+over all three, which is their purpose. The test is whether a module *decides*
+per vendor (a concern that belongs in an adapter or source module) or merely
+*dispatches* across them.
+
+By contrast the most-imported modules are `config`, `fileio`, and `hashing`.
+Shared leaf utilities with high fan-in and no fan-out are the intended
+shape, and their prominence is evidence the dependency direction is right
+even where the command layer is not.
+
+**What this does not justify.** Neither pass is an argument for splitting
+modules by size. `project_catalog` is large and contains two functions over
+a hundred lines each (`ensure_project_binding`, `catalog_readiness`), which
+is worth reducing -- but by extracting the steps those functions perform,
+not by dividing the module, since catalog identity, locations, and readiness
+are one concern. The failure mode to avoid is the one 3.5.3 records for
+constants: rearranging structure without removing a shared decision leaves
+the same coupling with more files to read.
 
 ## 4. CoSchema Read and Write Path
 
@@ -777,11 +1063,13 @@ and selects indexed key ranges for the resulting composer IDs.
 | Update detection | Selected headers, fallback indexes, bubble ranges, and request-context ranges form the Project change marker; whole-database modification time is only a cheap container observation. |
 
 Cursor still violates the intended source-access boundary:
-`adapters.cursor` opens SQLite and executes bubble and request-context queries.
-That prevents testing decode from bounded source records alone and spreads
-vendor table knowledge across two components. W10 moves all Cursor SQL and
-key-range iteration into `cursor_source`; the adapter will receive selected
-records plus provenance and will have no SQLite dependency.
+`adapters.cursor` previously opened SQLite and executed bubble and
+request-context queries, which prevented testing decode from bounded source
+records alone and spread vendor table knowledge across two components. W10
+moved all Cursor SQL, connection handling, and key-range iteration into
+`cursor_source`. The adapter now requests records by path and has no SQLite
+dependency; its remaining `cursorDiskKV` references are record-type labels
+retained as source evidence.
 
 | Source case | Current decision | Remaining action |
 |---|---|---|
@@ -918,7 +1206,7 @@ do not yet govern every vendor. The intended boundary is:
 4. diagnostics preserve partial, unsupported, and malformed evidence; and
 5. only a conforming candidate enters transactional persistence.
 
-This work is tracked explicitly in the work registry and code review.
+This work is tracked explicitly in the task list and code review.
 
 ## 8. Database Lifecycle and Indexing
 
@@ -1361,7 +1649,7 @@ path.
 
 | Stage | Required decision or evidence | Completion condition |
 |---|---|---|
-| Requirement | Named use case, defect, source gap, or measured limitation in the work registry | Scope, priority, affected vendors or components, and expected outcome are explicit |
+| Requirement | Named use case, defect, source gap, or measured limitation in the task list | Scope, priority, affected vendors or components, and expected outcome are explicit |
 | Source analysis | Representative exact records, field states, source versions, and relationship evidence | The observed source behavior and unsupported cases are reproducible |
 | Design | Functional rule in Designs, source interpretation in the vendor schema, common contract in CoSchema, or component plan here | Only the documents and executable contracts whose authority changes are updated |
 | Implementation | Changes in the modules that own source access, decode, mapping, store, query, or interface behavior | Dependency boundaries remain intact or the deviation is recorded |
@@ -1724,11 +2012,12 @@ developer's live harness data.
 |---|---|---|
 | Entry and packaging | Compliant | The installed `codess` command and source-tree entry both dispatch through `codess.project:console_main`; package discovery follows the documented `src/` layout. |
 | Discovery | Largely compliant | Scan is index-led, rejects broad system roots, prunes known generated trees, and attributes nested workspaces to repository Projects. Known-source fallback traversal remains bounded to vendor storage rather than arbitrary work trees. |
-| Vendor separation | Partially compliant | Claude Code and Codex source traversal are separated from their adapters. Cursor selection is centralized substantially, but the Cursor adapter still issues vendor-table SQL. |
+| Vendor separation | Compliant | Source traversal is separated from decode for all three vendors. `cursor_source` owns every vendor-table query and connection; no adapter has a SQLite dependency. |
 | Mapping and classification | Partially compliant | Mapping profiles, traces, field diagnostics, and representative adapter fixtures exist. Common runtime conformance and strict behavior are not yet enforced uniformly across vendors. |
 | CoSchema persistence | Compliant in the principal path | The released package is hash-checked, the DDL is centralized, logical and physical contracts are compared, foreign keys are enabled, and source replacement commits or rolls back atomically. |
 | Query | Partially compliant | The typed executor provides bounded, deterministic, multi-store results with provenance and stable identities. Several report modes still execute separate SQL inside the command renderer. |
 | Publication and evidence | Largely compliant | SQLite backup, manifest hashes, atomic pointer replacement, content-addressed raw objects, and read-time verification implement reproducible publication. Raw-mode semantics remain unresolved under W15. |
+| Derived values | Compliant in construction | Every digest routes through `codess/hashing.py`, which fixes the algorithm, the canonical JSON form, and the supported widths. What each value should identify, and how long it must live, remains under review in W20. |
 | Configuration | Compliant | Scan, ingest, and query validate resolved configuration before source work; built-ins, environment, command arguments, and JSON policies have explicit ownership. |
 | Operational reporting | Partially compliant | `ProgressTrace` supplies bounded timed ingest events, but ordinary logging, direct stderr messages, error conversion, and result-channel rules are not implemented through one structured facility. |
 | Maintenance wrappers | Partially compliant | Most wrappers adapt arguments and call library operations. A small number still contain catalog or pruning workflow logic that belongs in a domain module. |
@@ -1738,7 +2027,7 @@ developer's live harness data.
 
 | Finding | Impact | Related work |
 |---|---|---|
-| Source and command boundaries | Cursor decode and CLI coordinators own SQL or workflow outside their intended layer | W06, W10 |
+| Command boundaries | CLI coordinators own SQL or workflow outside their intended layer; the Cursor half is resolved | W06 |
 | Runtime mapping conformance | Released profiles do not govern every emitted vendor candidate uniformly | W04 |
 | Query path fragmentation | Some reports bypass the typed executor and query-contract parity is incomplete | W05, W06, W13 |
 | Ancillary unbounded reads | Tool output and worktree identity can materialize large bodies | W07 |
@@ -1749,14 +2038,15 @@ developer's live harness data.
 | Operational reporting fragmentation | Status, progress, logger calls, exceptions, and exit results lack one event and rendering contract | W18 |
 | Session discovery coupling | Project canonicalization is reachable only through vendor filesystem discovery, so its rules cannot be tested directly | W19 |
 | Derived key requirements | The five SHA-256 sites do not state what they identify, how long the value lives, or what must recompute it; two are transient hashes that may not be needed | W20, W03 |
-| Canonical serialization divergence | 16 modules serialize JSON for digesting independently and disagree on `ensure_ascii`, so equal documents with non-ASCII content can produce different digests without any error | W22 |
+| Canonical serialization divergence | Resolved: every digest over a structure routes through one canonical encoder, so equal content cannot hash differently | Closed |
 
 ### 13.4 Deviations and Defects
 
 #### 13.4.1 Source and Command Boundaries
 
-The Cursor source-access boundary violation and its **W10** resolution are
-described in 6.4.
+The Cursor source-access boundary violation is resolved: **W10** is complete
+and described in 6.4. `cursor_source` owns all vendor SQL and connections;
+the adapter receives selected records by path and has no SQLite dependency.
 
 Command-layer separation is tracked by **W06**. `cli.ingest_cmd` contains
 source workflows, transactions, raw-record handling, and publication
@@ -1765,6 +2055,271 @@ typed executor. Vendor ingest coordinators and specialized read-only analyses
 belong in `codess` modules. Command modules should retain argument adaptation,
 presentation, and exit status. The few maintenance scripts that still perform
 catalog or pruning workflows require the same treatment.
+
+**What actually blocks it.** Nothing external. W06 has no dependency on
+another item, no undecided design question, and no missing contract -- it has
+been open because the change is large and has had no safe increment.
+`ingest_cmd.run()` is roughly a thousand lines, half the module, holding 53
+top-level statements and three nested closures. It opens transactions,
+handles raw records, coordinates publication, and renders results in one
+scope, so any edit touches everything and no test covers a part of it in
+isolation. That is the obstacle: not difficulty in knowing what to do, but
+the absence of a first step that cannot break ingest.
+
+**Increments that are individually safe.** Each step below preserves
+behavior, is verifiable by the existing suite passing unchanged, and leaves
+the tree working. None depends on a later one.
+
+| Step | Change | Why it is safe | Evidence it worked |
+|---|---|---|---|
+| 1 | Lift the three closures in `run()` to module level with explicit parameters | They capture argument values, not accumulating state, so lifting is mechanical | Existing ingest tests pass unchanged |
+| 2 | Extract each `run()` phase -- configuration resolution, Project selection, per-vendor ingest, publication, reporting -- into named private functions in the same module, still called in order | Pure code motion within one module; no import or signature crosses a boundary | Same, plus each phase is now separately callable in a test |
+| 3 | Add tests against the extracted phase functions | Adds coverage without changing code | New tests pass; coverage attributes to the phases rather than one opaque call |
+| 4 | Move the vendor ingest coordinators (`_ingest_cc`, `_ingest_codex`, `_ingest_cursor`) into a `codess` domain module | They already take explicit parameters after step 2 and return reports; the command keeps calling them | Existing tests pass; `ingest_cmd` loses its transaction and raw-record handling |
+| 5 | Move publication coordination likewise | Same shape as step 4 | Same |
+| 6 | Replace `query_cmd`'s direct report SQL with typed-executor calls, one report at a time | Each report is independent, so a single report can be converted and compared against the previous output | Report output is byte-identical before and after |
+
+Steps 1 to 3 are preparation and can be done without deciding anything.
+Step 4 is where the module boundary actually moves, and it is only safe
+*after* step 2, because extracting a coordinator out of a thousand-line
+function and into another module at once is the change that has been
+deferred. Step 6 is independent of 1 to 5 and can proceed in parallel.
+
+**Why the vendor blocks are not simply extracted with parameters.** The
+obvious move -- lift each `if "cc" in sources:` block into a function -- was
+measured rather than assumed. Each vendor block reads 14 to 16 names from the
+enclosing scope and the publication block reads 27, for 30 distinct values
+overall. Raw counts do not settle the question, though; the roles do:
+
+| Role | Count | Examples | What it implies |
+|---|---|---|---|
+| Run-wide configuration | 8 | `iopt`, `opts`, `force`, `min_size`, `sources`, `progress_trace`, `staging_root`, `registry_root` | Identical for every Project. Belongs in one object built once, not threaded through each call |
+| Per-Project identity | 5 | `project_path`, `project_entry`, `state_path` | Genuinely varies per iteration; the natural parameters |
+| Accumulators mutated in place | 5 | `proj_stats`, `changed_vendors`, `diagnostics` | Sets and dicts, so a callee can add to them through a plain parameter |
+| Counters read and rebound | 3 | `project_ingested`, `project_had_error` | The hard case: `+=` and `=` on integers and booleans |
+| Rollback markers | 3 | `resource_start`, `review_start` | Positions captured before the block so a failure can truncate back |
+| Other per-Project state | 6 | `raw_store`, `project_raw_records`, `seal_upgrade` | Mostly one-way inputs |
+
+Two conclusions follow. First, a fourteen-parameter signature is not the
+alternative -- eight of those values are run-wide, so the honest shape is a
+configuration object plus a handful of per-Project arguments. Second, the
+three rebound counters are why the extraction is step 4 rather than step 2:
+a function cannot rebind its caller's integer, so each extracted block must
+*return* its counters and the caller must accumulate them. That is a real
+interface change, not code motion, and it is exactly the sort of change that
+should not ride along with a mechanical one.
+
+**How the state should be packaged.** The role analysis above says what
+needs to travel; the measurements say where the boundaries are. Two facts
+decide the shape.
+
+First, **only three values genuinely accumulate across Projects**:
+`had_error`, `total_ingested`, and `total_events`. Everything else assigned
+before the loop is either configuration that never changes or a value the
+loop overwrites each iteration. A run-level result is therefore small.
+
+Second, **`opts` is already an ad-hoc version of both objects, fused into
+one**. It carries nineteen keys, of which six -- `project_id`,
+`location_id`, `content_actions`, `raw_records`, `raw_store`, and
+`raw_records_changed` -- are reassigned inside the Project loop. A reader
+cannot tell from a call site whether `opts["raw_store"]` is run
+configuration or this iteration's store, and a function that receives `opts`
+receives both. That fusion, not the parameter count, is the actual defect.
+
+Three objects, distinguished by lifetime:
+
+| Object | Lifetime | Mutability | Holds |
+|---|---|---|---|
+| `IngestConfig` | One run | Frozen | Resolved arguments and policy: sources, resource limits, raw mode, force, minimum size, registry root, staging root, validate-only. Built once by `_resolve_ingest_request` |
+| `IngestRun` | One run | Mutable, small | The three accumulators plus the shared services a run owns: progress trace, diagnostics counter, per-vendor `source_stats` |
+| `ProjectRun` | One Project | Mutable | Identity (path, entry, binding, state path), this Project's accumulators (`proj_stats`, `changed_vendors`, `catalog_changed_vendors`), counters (`ingested`, `processed_events`, `had_error`), rollback markers, and per-Project services (`raw_store`, `raw_records`) |
+
+Methods rather than bare fields, because the accumulate-and-report pattern
+is what the current code spells out longhand at every site:
+
+```text
+IngestConfig                       # frozen; no methods beyond accessors
+    store_path(project, vendor)    # replaces _store_path's five arguments
+
+IngestRun
+    absorb(project_run)            # folds one Project's counters into the run
+    note_failure()                 # the had_error = True that appears 8 times
+    summary()                      # what _report_ingest_outcome renders
+
+ProjectRun
+    record_vendor(display, n, events, failed, store_changed)
+                                   # the block repeated for all three vendors
+    note_failure()
+    rollback_markers()             # resource/review/diagnostic positions
+```
+
+`ProjectRun.record_vendor` is the piece that resolves the counter-rebinding
+problem: the three per-vendor blocks currently rebind `project_ingested`,
+`project_processed_events`, `project_had_error`, `total_ingested`,
+`total_events`, and `had_error` in the enclosing scope, which is precisely
+what an extracted function cannot do. Calling a method on an object it was
+handed works, because the object is mutable and shared rather than rebound.
+`IngestRun.absorb` then folds a finished Project into the run once, instead
+of six `+=` statements interleaved through the vendor blocks.
+
+Two constraints on the design. The per-Project object must not hold a
+reference to the run object: the direction is that a Project reports upward
+when it completes, so a Project cannot silently mutate run totals mid-ingest
+and leave them inconsistent if it later fails. And `IngestConfig` must be
+frozen, because the current `opts` demonstrates what happens otherwise --
+values written during one Project silently become inputs to the next.
+
+The migration order follows from lifetimes rather than from size.
+`IngestConfig` first, since `_resolve_ingest_request` already computes
+exactly its contents and returning a frozen object instead of a tuple
+changes nothing else. `ProjectRun` second, which is what makes the vendor
+blocks extractable. `IngestRun` last, since its value appears only once the
+vendor blocks stop rebinding run totals directly.
+
+`IngestConfig` and `VendorStore` are implemented.
+
+`IngestConfig` wraps the existing options mapping rather than restating its
+seventeen keys as fields, since those keys are already contract-documented on
+`build_ingest_run_options` and a second copy would be a second thing to keep
+current. What it adds is a boundary that actually holds: `frozen=True` stops
+field rebinding, and the mapping is stored as a `MappingProxyType` over a
+*copy*, so neither `config.sources = ...` nor `config["force"] = ...` nor a
+later edit to the caller's dict can change resolved settings. The remaining
+gap is nested values, which a deep freeze would cost more to close than it is
+worth; the guarantee is "no accidental rewrite through this object", not an
+immutable object graph.
+
+One field is deliberately excluded from that guarantee. `staged_store_roots`
+is registered partway through a run when a rebuild stages a Project, and
+removed on promotion, so it is live shared state rather than a setting.
+Copying it broke rebuild staging, which the existing suite caught
+immediately; it is now typed `MutableMapping` so the exception is visible
+rather than implied.
+
+`VendorStore` unifies three free functions -- path resolution, store creation
+with catalog sync, and post-ingest totals -- that each re-derived the same two
+facts: where a store lives given the run's staging arrangement, and what the
+vendor is called in a report. The vendor display-name mapping had been
+written out at two sites and its inverse at a third; all three now read one
+table. The class is frozen because a store's identity does not change once
+chosen, and its methods are `path`, `exists`, `create`, and `totals`.
+
+`total_errors` replaces the paired `had_error`/`project_had_error` booleans.
+The two were always set together, so a count costs nothing extra and carries
+strictly more: reports now say how many failures occurred rather than only
+that one did, and zero reads naturally as no errors.
+
+`opts` remains the open case. It carries three lifetimes at once -- run-wide
+settings mirrored from the options mapping, run-wide collectors that
+accumulate across Projects, and six keys reassigned on every loop iteration.
+Every adapter takes the whole dict, so splitting it changes their signatures;
+that is the step-4 interface change rather than something to do piecemeal.
+The boundary is now documented at the construction site so the next reader
+sees which keys belong to which lifetime.
+
+**What is actually being counted.** The state threaded through `run()` was
+enumerated rather than estimated. Eighteen values are tracked, at three
+levels that form a hierarchy, plus a fourth group that is derived and should
+never be stored at all:
+
+| Level | Values | Mutation sites |
+|---|---|---|
+| Per vendor, within one block | `n`, `e`, `failed`, `store_changed` | Returned by `_ingest_*`, consumed immediately |
+| Per Project | `project_ingested`, `project_processed_events`, `project_errors`, `proj_stats`, `changed_vendors`, `catalog_changed_vendors` | 8 rebindings plus 6 collection updates |
+| Per run | `total_ingested`, `total_events`, `total_errors`, `source_stats`, `diagnostics` | 15 rebindings plus 9 collection updates |
+| Derived | `overall_sessions`, `overall_events`, and three `status` expressions | Recomputed at each use |
+
+Two observations shape the design. The counters are **the same three
+quantities at two scales** -- sessions ingested, events processed, errors --
+so a per-Project tally and a run tally are one type used twice, not two
+types. And every `status` is a function of the error count
+(`"failed" if total_errors else "accepted"`), which is why status is a
+property rather than a field: storing it would allow it to disagree with the
+count it summarizes.
+
+**The shape that follows.** One tally type, held at both levels, with the
+run holding the Projects' results rather than each Project reaching upward:
+
+```text
+IngestTally                       # the three counters, used at both scales
+    sessions, events, errors      # ints
+    add(sessions=, events=, errors=)
+    absorb(other)                 # fold a finished tally into this one
+    status                        # property: derived, never stored
+    failed                        # property: errors > 0
+
+ProjectOutcome                    # one Project's result
+    tally: IngestTally
+    store_totals: dict            # per-vendor session/event counts
+    changed_vendors: set
+    catalog_changed_vendors: set
+    record_vendor(display, sessions, events, failed, store_changed)
+
+IngestOutcome                     # the whole run
+    tally: IngestTally
+    source_stats: dict
+    diagnostics: Counter
+    absorb(project_outcome)       # the only upward path
+    overall_sessions / overall_events   # properties over source_stats
+```
+
+The design is implemented. `record_vendor` is what removed the rebinding
+problem. The three vendor
+blocks currently do six `+=` statements each against enclosing variables;
+they would instead call one method on an object they were handed. Because
+the object is mutable and shared rather than rebound, an extracted function
+can update it -- which is precisely what a plain integer parameter cannot
+do, and the reason steps 4 and 5 have been blocked.
+
+`absorb` is the only path from a Project to the run, called from the Project
+loop's `finally` so it runs exactly once whether the Project completed or
+failed. That direction matters: today a vendor block updates
+`project_ingested` and `total_ingested` in adjacent lines, so a Project that
+fails after the first vendor has already contributed to the run totals. With
+`absorb` the run learns about a Project exactly once, after its outcome is
+known.
+
+**Where closures remain, and why.** Nesting is justified when a helper
+rebinds enclosing state, because that is precisely what a module-level
+function cannot do. Six closures survive; they divide cleanly:
+
+| Closure | Rebinds via `nonlocal` | Verdict |
+|---|---|---|
+| `_ingest_cursor.flush`, `ingest_db_stream.flush` | `current_events`, `largest`, `current_tick` | Justified. A batch flusher exists to reset the counters it reads; returning them would make every call site do the reset |
+| `run.cleanup_cursor_cohort` | `cursor_cohort_temp` | Justified today, but it is the one whose enclosing state should move into the step 4 refactor rather than persist |
+| `_sqlite_backup.backup_progress` | `last_progress_tick` | Justified. It is an SQLite progress callback with a fixed signature, so throttling state has nowhere else to live |
+| `_ingest_cc.record_source`, `_save_stats.mut` | none | Not justified by rebinding. They read enclosing values only, so they lift to module level with explicit parameters exactly as the three in `run()` did |
+
+The rule the audit applies: a closure that rebinds is a design choice, a
+closure that only reads is an accident of where it was written. The two
+without `nonlocal` are candidates for the same treatment already applied in
+step 1, and are noted here rather than done immediately because they sit
+inside functions that step 4 will move.
+
+**Progress.** Steps 1 to 4 are complete, step 5 is partly done, and step 6
+has begun. `run()` is
+down from about a thousand lines to under nine hundred, and its top-level
+statement count from 53 to 37, with every increment landing on an unchanged
+suite.
+
+| Step | State | What moved |
+|---|---|---|
+| 1 | Done | Two of three closures lifted to module level. `cleanup_cursor_cohort` stays: it rebinds an enclosing variable through `nonlocal` at four sites, so lifting it means introducing shared state, which belongs with step 4 rather than before it |
+| 2 | Done | Request resolution, the completion report, the preflight report, the repeated vendor store-open, and the post-ingest store totals are named functions. The store-open and store-totals cases were verbatim duplication across all three vendors, differing only in the display name |
+| 3 | Done | `tests/test_ingest_phases.py` covers source-selector expansion, argument rejection, store-path resolution under preflight and rebuild staging, and vendor store creation -- paths that previously required running a whole ingest to reach |
+| 4 | Done | The three vendor coordinators and the nine helpers they share moved to `codess/ingest_sources.py`. `ingest_cmd` no longer decodes a vendor source or writes a store during ingest; it resolves arguments, drives the Project loop, and renders results |
+| 5 | Partly done | Catalog resync and Artifact correlation are named phases (`_resync_project_catalog`, `_correlate_project_artifacts`) rather than inline blocks. Snapshot creation and promotion remain inline, and should follow the same shape |
+| 6 | Begun | `query_cmd`'s duplicated store-readability probe is one helper; the diagnostics report SQL remains |
+
+One observation from doing the work: an attempt to introduce a per-Project
+state object *before* extracting the vendor blocks was reverted. The
+container looked reasonable in isolation but had no consumer yet, so it
+would have been scaffolding committed ahead of the change it was meant to
+serve. The increments hold only if each one is complete on its own.
+
+The measurement that makes this urgent rather than tidy: `ingest_cmd` and
+`query_cmd` are the largest and third-largest modules in the codebase, and
+both sit in the layer that should hold the least logic.
 
 #### 13.4.2 Mapping and Query Contracts
 
@@ -2118,13 +2673,13 @@ mechanical rather than a redesign.
 |---|---|---|---|
 | A. Lift helpers only | Move the four helpers to module level with explicit parameters; leave the body otherwise intact | Canonicalization rules become directly testable; smallest possible diff; behavior-preserving by inspection | The function remains long; discovery and assembly stay interleaved |
 | B. Lift helpers and separate the three stages | A. plus splitting the body into vendor discovery, canonicalization, and row assembly, passing path sets between them | Each stage independently testable; the pipeline becomes readable as three named steps | Larger diff; requires deciding the intermediate representation passed between stages |
-| C. Per-vendor discovery modules | B. plus one discovery function per vendor behind a common signature | Vendor-specific traversal isolated, matching the adapter-layer separation elsewhere | Largest scope; overlaps W10's Cursor boundary work and should not proceed independently of it |
+| C. Per-vendor discovery modules | B. plus one discovery function per vendor behind a common signature | Vendor-specific traversal isolated, matching the adapter-layer separation elsewhere | Largest scope; the Cursor boundary it depended on is now closed, so it is unblocked |
 
 Design A is the recommended first step: it removes the testability blocker
 at near-zero risk and is a strict prefix of B. B should follow once A's
 extracted functions have tests, since the intermediate representation is
 easier to choose when the canonicalization contract is pinned by tests.
-C should wait for W10 to avoid two overlapping changes to Cursor discovery.
+C is unblocked now that the Cursor source boundary is closed, but should still follow B.
 
 **Validation.** The extraction is behavior-preserving, so the existing
 discovery tests must pass unchanged -- that is the primary evidence, and a
@@ -2235,8 +2790,8 @@ other implied a path followed. It is now `candidate:path-key:`, which states
 the input domain and the class of value.
 
 **Related finding: the algorithm name is pervasive.** `hashlib.sha256` is
-called directly in 21 modules, and `sha256` appears in about
-eighteen distinct field names (`selection_sha256`, `catalog_sha256`,
+called directly wherever a digest was needed, and `sha256` appears in many
+field names (`selection_sha256`, `catalog_sha256`,
 `manifest_sha256`, `plan_sha256`, and others) plus a dozen stored value
 prefixes (`codess:workspace:sha256:`, `codess:processing:sha256:`,
 `rawrel:sha256:`, `full-sha256-fingerprint`, and more). Two groups need
@@ -2255,9 +2810,8 @@ the decision is the same one: what each value is for. Note that changing any
 stored prefix alters values already written, so each is a wire-format
 decision distinct from the Python identifier beside it.
 
-**Why the algorithm is called so many times.** `hashlib.sha256` appears 40
-times across 21 modules. The count is not one duplicated operation; it is
-three operations that were never named, plus genuine sprawl:
+**Why the algorithm was called so widely.** The direct calls were not one
+duplicated operation; they were three operations that had never been named:
 
 | Group | Calls | What it does | Mode that serves it |
 |---|---|---|---|
@@ -2269,19 +2823,274 @@ Every group is now served, but not by one function: the modes exist because
 these operations differ in what they consume and in whether their output
 must match an external tool's.
 
-The justification for so many direct calls is therefore partial. Streaming
+The justification for so many direct calls was therefore partial. Streaming
 sites are legitimately distinct in their *read policy*, which stays in
-`fileio`; their digest construction does not need to be.
-The key-derivation sites had no shared function to call until now, which is
-the accidental duplication `codess_hash` removes. The canonical-document
-sites reveal a different missing abstraction -- a canonical-JSON encoder.
+`fileio`; their digest construction was not. The key-derivation sites had no
+shared function to call, which is the accidental duplication the shared
+module removes. The canonical-document sites revealed a further missing
+abstraction -- a canonical-JSON encoder.
+
+**Reading a file that is being appended to.** This is the ordinary case for
+session transcripts, not an edge case, and the original handling was wrong in
+a way a stat comparison could not fix.
+
+The defect was reading to end-of-file. When a coding assistant is appending,
+the end moves, so a read that stops "at EOF" covers a state that never
+existed as a whole -- it includes some of the new bytes but not all of them,
+and the resulting digest describes nothing. Comparing stat before and after
+detected that this had happened but could not make the digest meaningful,
+and the check itself was unreliable: a rewrite restoring the original size
+and modification time is invisible to it.
+
+The fix is to stop depending on detection. `fileio.read_exactly` reads a
+count decided *before* the read begins -- the size the first stat reported --
+so the digest always covers a well-defined prefix:
+
+```text
+  stat        size 10 MB
+  read        exactly 10 MB  ── assistant appends 2 MB during this read
+  stat        size 12 MB
+  result      digest of the first 10 MB, which is exactly what was there
+              consistency = "appended", file_changed = True
+```
+
+The prefix is correct whether or not the file grew, so growth is no longer a
+correctness problem and does not need to be detected to stay safe. The second
+stat is retained only to describe what happened, which is why the outcome is
+advisory:
+
+| Observation | Consistency | Outcome |
+|---|---|---|
+| Size and mtime unchanged | `stable` | Content digest is the revision |
+| File grew | `appended` | Digest of the announced prefix is still the revision; the flag records that the source was active |
+| Size shrank or mtime moved without growth | `rewritten` | Same digest, weaker claim: the prefix may no longer be a prefix of the current file |
+
+A later scan of a closed session produces a `stable` revision, so evidence
+improves without intervention.
+
+**A record caught mid-write is skipped, not treated as corruption.** The
+bounded read above protects the *file* digest; the record reader needs the
+same treatment. `bounded_jsonl.iter_bounded_jsonl` previously reported a
+final line with no terminating newline as `malformed`, which is the same
+diagnostic a genuinely corrupt record gets -- so an ordinary open session
+looked like damaged data.
+
+It now reports `incomplete` and stops, because nothing can follow an
+unterminated line. The distinction matters in both directions: `malformed`
+says the vendor wrote something Codess cannot read and is worth
+investigating, while `incomplete` says the vendor has not finished writing
+and the next read will get the record. Neither raises; the record is skipped
+and a warning names the file and line, so a skipped record is visible rather
+than silently absent. Existing callers already skip on any diagnostic
+reason, so the new value flows through their counts without change.
+
+| Line state | Reason | Meaning |
+|---|---|---|
+| Parses as an object | none | Ingested |
+| Terminated, unparseable | `malformed` | Vendor data problem; investigate |
+| Terminated, not an object | `non_object` | Unexpected shape |
+| Exceeds the record bound | `oversize` | Rejected by resource policy |
+| Not terminated | `incomplete` | Writer still active; retry later |
+
+Capture is the exception and keeps a rejection. A raw object claims to be the
+exact bytes of one source state, so a copy taken while the source moved
+cannot make that claim and `_compress_file` raises. Its stronger guarantee is
+not the stat comparison but the size check that follows -- the bytes written
+must equal the size announced -- so the stat comparison there is a cheap
+first rejection rather than the guarantee.
+
+`stat_is_stable` is therefore gone. It named a verdict the code should not
+have been relying on, and extracting it had made a weak check look
+authoritative by giving it a name and a home. The comparison survives inline
+at the one site that still wants it, with a comment stating what it does and
+does not detect. Window sampling remains in `fileio` as fingerprint policy;
+it was never the reusable part.
+
+**Text encoding is the same audit one level down.** Six `encode` variants
+are in use: bare `.encode()`, `"utf-8"`, `"ascii"`, and three error
+handlers (`surrogatepass`, `surrogateescape`, `replace`). Reviewing which
+applies under what circumstance separates deliberate choices from accidents:
+
+| Variant | Circumstance | Assessment |
+|---|---|---|
+| `"utf-8"` | Default for text that becomes bytes | Correct, and now mostly inside `hashing` rather than at call sites |
+| `"ascii"` | Format tags, entity kinds, and offset markers that are ASCII by construction | Deliberate: it asserts the value cannot contain non-ASCII, so a violation raises rather than passing silently |
+| `"utf-8", surrogatepass` | Any value that may carry a filesystem path | Correct; see the surrogate hazard below |
+| `"utf-8", surrogateescape` | `snapshot`'s untracked-path digest | Correct and self-consistent: it decodes and re-encodes with the same handler, so the bytes round-trip exactly |
+| `"utf-8", replace` | Truncated raw-line excerpts in adapter diagnostics | Correct: this is human-readable evidence, not an identity, so lossy substitution is preferable to failing a decode |
+| bare `.encode()` | Two preflight key sites, and formerly one digest input | The default happens to be UTF-8, so these work by coincidence rather than statement |
+
+Only the bare form is a defect, and it was worst where a digest depended on
+it: `catalog_operations` hand-rolled canonical JSON and encoded it with no
+argument, so its digest silently depended on two defaults at once. It now
+uses `codess_canonical_hash`. The two remaining bare calls are the preflight
+key sites under review.
+
+**Reduced to two real variants.** The three error handlers are not
+independent choices; each is determined by what the caller is producing, so
+they collapse into the encoding decision rather than multiplying it:
+
+- `surrogatepass` wherever a value may carry a filesystem path and the
+  result is an identity -- undecodable bytes must still hash, not raise.
+- `surrogateescape` only where bytes are decoded and re-encoded as a pair,
+  so the round trip is exact.
+- `replace` only for human-readable excerpts, where a lossy substitution is
+  better than failing.
+
+That leaves the genuine choice as UTF-8 versus ASCII, and the right default
+is UTF-8 with ASCII as a deliberate, local override. ASCII is not a stricter
+UTF-8 for the same purpose: it asserts *this value is ASCII by
+construction*, so a violation raises instead of passing silently. That
+assertion is worth keeping exactly where it holds by construction -- format
+tags, entity kinds, and the offset markers in bounded sampling -- and is
+wrong everywhere else, because vendor content is not ASCII.
+
+The practical form is that call sites should not pass an encoding at all.
+`hashing` already applies UTF-8 with `surrogatepass` internally, so the
+majority of sites simply pass text. What remains is the small ASCII set,
+where naming the encoding at the call site is the point rather than an
+oversight. Collapsing those into UTF-8 would discard a real check, which is
+the distinction 3.5.3 draws for constants: syntactic similarity is not
+shared meaning.
+
+One case was poor decomposition rather than a missing helper. `raw_store`
+carried three near-identical decompress-and-digest loops, differing only in
+whether each chunk was also written to an output file. That duplication was
+invisible while each loop was read on its own, and became obvious only once
+digest construction was the thing being surveyed -- the practical argument
+for auditing calls the way 3.5 audits constants.
+
+Reviewing the call sites rather than the loops shows the redundancy was one
+level higher than it appeared. `raw_store` exposes three operations over a
+stored object -- capture it, verify it, restore it -- and each is really the
+same read with a different disposition of the bytes:
+
+| Operation | Consumers | Bytes go to | Compares against a record |
+|---|---|---|---|
+| `_compress_file` | `raw_store` capture | A new stored object | No, it produces the record |
+| `verify_captured_object` | `baseline_validation`, `evidence_resolver` | Discarded | Yes |
+| `materialize_captured_object` | `cursor_cohort` | A restored file | Yes |
+
+Two of the three differ only in the destination, which is why one helper
+with an optional output absorbs both. Capture differs more substantially --
+it reads an uncompressed source and writes a compressed object, the inverse
+direction -- so it stays separate rather than being forced into the same
+shape. The consumers confirm the split is real: verification is called from
+validation paths that never want the bytes, restoration only from the Cursor
+cohort cache that does.
+
+The helper is named `_read_source_identity` rather than for decompression.
+Decompression is the storage encoding, not the purpose; what every caller
+actually wants is the identity of the original source bytes, recovered from
+a stored copy. Naming it for the mechanism would have described how it
+happens to work today rather than what it is for, and would have to change
+if the storage encoding ever did.
+
+**The surrounding names need the same treatment.** `_captured_object` is
+weak in both halves. `object` is near-contentless -- it says only that
+something is stored -- and `captured` names a *mode* (`capture` is one of
+four raw modes) rather than what the thing is, so the name only parses for
+a reader who already knows the mode vocabulary. What these functions operate
+on is a stored copy of exact vendor bytes: a *raw object* in the
+`codess.raw/1` sense, which the module's own format tag already names.
+`verify_raw_object` and `restore_raw_object` would say what is verified and
+restored without depending on mode vocabulary, and would remain accurate if
+capture modes changed.
+
+`materialize` was the sharper problem, because it is a borrowed term used
+in two senses in this codebase, only one of which was wrong.
+
+The correct sense survives and should stay: "bring into memory," as in
+`fileio.verify_hash`'s note that `read_hash` "would materialize a multi-GB
+file for no reason here," and `evidence_resolver`'s "do not materialize or
+copy it merely to answer an evidence query." Both describe a cost being
+avoided, which is the ordinary meaning.
+
+The wrong sense was the operation name and its parameter. In
+Rust, materialization is not a domain term at all -- the relevant senses are
+from databases (a materialized view: a query result stored rather than
+recomputed) and from lazy evaluation (forcing a deferred computation into
+concrete values). Neither describes this function, which decompresses a
+stored object back to a file. Nothing was deferred and nothing is being
+cached from a computation; bytes are being written back out. `restore` says
+that plainly and carries no borrowed connotation. Both renames are applied:
+`verify_captured_object` and `materialize_captured_object` are now
+`verify_raw` and `restore_raw`.
+
+The parameter `materialized_target` had the same defect with a further one
+on top -- it named neither what the file is nor why it exists. It is an
+uncompressed copy written beside the capture so a caller can open the
+database directly rather than decompressing on each use, so it is now
+`working_copy_target`, with `working_copy_path` and `working_copy_bytes`
+following. The call chain reads consistently:
+
+```text
+cli.ingest_cmd            working_copy_path=cohort_db
+  cursor_cohort           working_copy_path: Path            (parameter)
+    cache hit  →          restore_raw(object_path, working_copy_path, cached)
+    cache miss →          raw_store.observe(..., working_copy_target=working_copy_path)
+      raw_store           os.replace(capture_path, working_copy_target)
+                          progress("raw.working_copy.done", working_copy_bytes=...)
+```
+
+**Partition or bundle the read/decompress/validate/update/compress/store
+sequence?** Checking the callers answers this: no caller assembles those
+steps. Each direction is already one public operation with private steps
+underneath.
+
+```text
+WRITE PATH                              READ PATH
+RawStore.observe(path, mode)            verify_raw(path, record)
+  stat source                             stat stored object
+  fingerprint source        ─┐            digest stored bytes
+  compress → staged file     │            ┌─ _read_source_identity ─┐
+  digest source bytes       ─┴─ shared ───┤   decompress + digest   │
+  store object + record                   └─ compare with record ───┘
+
+                                        restore_raw(path, target, record)
+                                          same read, plus:
+                                            write chunks to target
+                                            compare, then os.replace
+```
+
+The steps are not independently meaningful -- verifying without reading, or
+compressing without storing, is not an operation any caller wants -- so
+bundling at the public boundary is right. The seam that does exist is
+direction: capture reads an uncompressed source and writes a compressed
+object; verify and restore read a compressed object back. That is where the
+code divides, and the two read operations differ only in the destination of
+the bytes, which is what one helper with an optional output absorbs.
+
+**Read-path naming should correspond to `observe`.** `observe` is a good
+name for the write path because it states the epistemic claim the module
+makes: Codess is recording that a source existed in a particular state at a
+particular moment, not asserting ownership of it. The four raw modes are
+degrees of that observation, from recording identity alone to retaining
+exact bytes, which is why the parameter is `mode` rather than a boolean.
+
+The read side has no comparable organizing verb. `verify_raw` and
+`restore_raw` are accurate but unrelated to each other and to `observe`,
+and `RawStore.resolve` returns a path without reading anything, so the
+public surface reads as four unrelated verbs. A closer correspondence would
+name the read operations after what they do with a prior observation --
+`RawStore.observe` writes one, and the read path re-examines it. Deferring
+the specific names to W23 with the rest of the raw-object renaming, since
+the useful constraint is that they be recognizable as the inverse of
+`observe` rather than any particular word.
+
+The migration is complete except for three sites whose truncation widths the
+shared module does not offer; those wait on the width decisions in this
+section. A contract test fails if a new direct `hashlib` call appears
+anywhere else, so the boundary is enforced rather than conventional.
 
 ##### JSON Serialization: `ensure_ascii=False` Universally
 
-`json.dumps(..., sort_keys=True, separators=(",", ":"))` is written out in
-16 modules, and they do **not** agree: 4 pass `ensure_ascii=False` while 29
-take the default `True`. The two produce different bytes for any non-ASCII
-content, and therefore different digests for equal content:
+`json.dumps(..., sort_keys=True, separators=(",", ":"))` was written out at
+every site that digested a structure, and those sites did **not** agree: a
+minority passed `ensure_ascii=False` and the rest took the default `True`.
+Two sites in one file disagreed with each other. The two forms produce
+different bytes for any non-ASCII content, and therefore different digests
+for equal content:
 
 ```text
 input:  {"n": "café"}
@@ -2706,7 +3515,7 @@ as separate work:
 | Mechanical check | Owning item |
 |---|---|
 | Import-boundary test for adapter, source, store, query, and CLI layers | W13 |
-| SQL-ownership check recognizing the narrow focused-audit exception | W13, with W06 and W10 supplying the boundaries |
+| SQL-ownership check recognizing the narrow focused-audit exception | W13, with W06 supplying the remaining boundary |
 | Mapping-profile conformance over every emitted adapter fixture | W04 |
 | Query-request vectors covering every rejection path, with a check that no path lacks a vector | W13 (13.4.2) |
 | Transaction-failure tests at each source replacement and publication edge | W03, since publication identity is under review |
@@ -2718,11 +3527,14 @@ Coverage percentage is supporting evidence, not an acceptance criterion by
 itself. Completion depends on the named failure, boundary, and use case being
 exercised with the expected normalized identities and results.
 
-## 14. Current Work Registry
+## 14. Current Task List
 
-This registry contains only incomplete work. Its identifiers connect
+This task list contains only incomplete work. Its identifiers connect
 requirements, code-review findings, implementation changes, and completion
-evidence. Status means **WIP** for active work, **Planned** for accepted and
+evidence. Completed items are removed rather than marked done, and their
+outcome is recorded in the section that analysed them, so the list stays a
+statement of what is left rather than a history. Identifiers are never reused,
+so a gap in the sequence means an item closed. Status means **WIP** for active work, **Planned** for accepted and
 ordered work, **TODO** for accepted but unscheduled work, **Under review** for
 an established problem without an accepted resolution, and **Postponed** for
 work intentionally outside the current phase.
@@ -2736,13 +3548,14 @@ work intentionally outside the current phase.
 | W03 | Critical | Under review | Separate exact package integrity from store write compatibility, and reduce runtime integrity checking to what a local development environment demonstrably needs. One digest spans the executable contract and the validation fixtures alike; the fixtures are a development-lifecycle concern that the test suite already settles. The write gate and snapshot creation both consult the combined value, so a fixture edit makes published stores unwritable although layout, decoder, and data are unchanged. Because mismatch is resolved by regenerating the store from vendor sources, the gate needs only to prevent mixing records written under different rules. Blocked on confirming which runtime checks survive that standard and whether they become optional; see 13.4.4. | The write gate consults only the executable contract and directs regeneration on mismatch; retained runtime checks each cite a demonstrated failure they prevent; exact package verification remains available as a release and diagnostic operation. |
 | W04 | High | Planned | Define the shared candidate-record contract and enforce released mapping profiles at the runtime decode boundary. | All three adapters satisfy the typed and runtime candidate contract, pass the same post-decode conformance check, and share strict/diagnostic semantics. |
 | W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. | Bounded deterministic results and complete requested expansions agree with focused direct queries. |
-| W06 | High | Planned | Move domain SQL and workflows out of command modules. | Commands adapt arguments and render results; ingest operations live in domain modules; repeated reports use the typed executor or an explicit read-only analysis component. |
+| W06 | High | **WIP** | Move domain SQL and workflows out of command modules. Vendor decode and store writing now live in `codess/ingest_sources.py`; `ingest_cmd` fell from about two thousand lines to fifteen hundred and no longer ingests a source itself. Remaining: snapshot creation and promotion are still inline in the Project loop, and `query_cmd`'s report SQL is partly converted (13.4.1). |
 | W07 | High | Planned | Bound ancillary reads that can encounter large source or repository content. | Persisted tool output, worktree fingerprinting, and growing manifests stream or reject by explicit policy without first materializing the complete body. |
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. | Small correctness and representative scale cases report timing, query plans, rows, memory, and stable result identities. |
 | W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. | Selection, fingerprinting, decode, and query remain bounded as unrelated Cursor content grows. |
-| W10 | High | Planned | Complete the Cursor source-access boundary. | `cursor_source` owns vendor SQL and returns bounded selected records and metadata; the adapter has no SQLite dependency. |
 | W20 | High | WIP | Establish what each derived value identifies, how long it must live, and what must be able to recompute it (13.4.8). No site uses content-addressed retrieval, so these are naming and comparison values. Delivered: `codess/hashing.py` with four modes and declared widths, and the `path_key` naming correction. Remaining: migrate the call sites, and correct two defects -- `snapshot_id` is written into `store_meta` and the manifest, both of which are then hashed, so a derived name sits inside the structure whose digest it depends on; and `sha256` is embedded in stored identity and key prefixes that no reader recomputes, making an algorithm change a wire-format change. Blocked on two decisions: whether `path_key` names a location or a Project when a reviewed directory moves or is used from another machine, and whether snapshot identity stays a creation identity (recommended) or becomes a content identity. | Each site states its lifetime and resilience requirement; key derivation routes through `codess_hash` with a declared width; no derived identity is an input to a digest recorded over the structure containing it; the two transient hashes are removed or justified; path-derived values are documented as machine-local; the relational key retains the full digest and keeps repeat invocations distinct. |
-| W22 | High | Planned | Route every digest over a JSON structure through one canonical encoder. `json.dumps(..., sort_keys=True, separators=(",", ":"))` is written out in 16 modules and they disagree: 4 pass `ensure_ascii=False`, 29 take the default, so equal documents with non-ASCII content produce different digests with no error and no failing test. `canonical_bytes` in `codess/hashing.py` fixes the form and encodes with `surrogatepass`, without which an undecodable filesystem path raises and aborts the operation (13.4.8). | Every structure digest routes through the shared encoder; no module calls `json.dumps` for a value that is hashed; a test covers non-ASCII and lone-surrogate content; digests over non-ASCII documents that change are identified and accepted before migration. |
+| W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES` so discovery, refresh, review, Project handling, and the command modules stop re-deriving partial vendor views from bare keys (3.5.5). The vendor table describes vendors; adapters interpret them, and decode behavior must not migrate into it. Do not name it a registry -- that term already denotes the central `~/.codess` store. | One vendor description supplies keys, display names, identity fields, paths, and store filenames; no module repeats the vendor key set or a key-to-name mapping; adding a vendor touches the vendor table and its adapter, not the command layer. |
+| W25 | Normal | Planned | Strengthen CoSchema time representation. Every time column carries `_at` regardless of type, so a reader cannot tell RFC 3339 text from Unix milliseconds without the DDL, and `started_at` currently denotes `REAL` in `sessions` and `TEXT` in `processing_runs` -- one name, two representations, in one schema. Adopt `_time` for recorded text and `_atms` for source-reported numerics (CoSchema 5.1). Breaking schema change; regenerate stores rather than migrate. | No column name denotes more than one representation; the suffix states the type at every use; the DDL, contract, and query paths agree. |
+| W26 | Normal | Planned | Reevaluate the Cursor module partitioning now that W10 has closed the source-access boundary. Four modules are Cursor-specific -- `cursor_source`, `adapters/cursor`, `cursor_cohort`, `cursor_feature_audit` -- more than any other vendor, because Cursor stores sessions in shared SQLite databases rather than per-session files, so selection, caching, and decode are genuinely separate. Confirm that split is still the right one against the closed boundary, and check whether the cohort cache belongs with source access rather than beside the adapter. | Each Cursor module states which of selection, caching, and decode it owns; no module spans two; the adapter keeps no storage dependency. |
 
 ### 14.2 Next Functional Work
 
@@ -2758,6 +3571,7 @@ work intentionally outside the current phase.
 | W18 | Normal | Planned | Implement and transition to the structured operational-reporting subsystem defined in Section 9.6.1. | One event contract and its renderers govern status, progress, warnings, and command-boundary errors; stdout results remain clean, retained events remain bounded, and all command families pass channel, privacy, and failure-path tests. |
 | W19 | Normal | Planned | Decompose `walk_sessions()` so Project canonicalization is testable independently of vendor filesystem discovery. Designs A/B/C and their sequencing are in 13.4.7; A is the recommended first step and C should follow W10. | Existing discovery tests pass unchanged, and Git-root attribution, parent-versus-child selection, and aggregator exclusion have direct unit tests that do not invoke vendor discovery. |
 | W21 | Normal | Planned | Route the `walk_sessions` inline `debug` print statements through the reporting contract W18 defines, rather than the module-local diagnostics dictionary. Starts after W19's extraction and W18's contract; excluded from W19 so the extraction stays behavior-preserving (13.4.7). | The statements emit through the shared contract with tests asserting channel and content; no direct `print` for operational status remains in the module. |
+| W23 | Normal | Planned | Apply the decomposition and naming findings from 3.5.4 and 3.5.5. Reduce `project_catalog.ensure_project_binding` and `catalog_readiness` to their named steps, extracting within the module rather than splitting it. Rename the raw-object operations so they do not depend on mode vocabulary or a borrowed database term: `verify_raw_object` and `restore_raw_object` for today's `verify_captured_object` and `materialize_captured_object`. Extract the stat-consistency guard duplicated between `fileio.source_fingerprint` and `raw_store._compress_file`. Extract the closed vocabularies (Actor kinds, origin kinds, content roles, statuses, raw modes) as named values, leaving CoSchema field names as literals. | Each named step is separately readable and tested; renamed operations have no callers using the old names; one stat guard serves both sites with callers choosing to raise or record; closed-vocabulary literals are replaced and an invalid value fails at the boundary. |
 
 ### 14.3 Secondary Maintenance
 
@@ -2809,6 +3623,105 @@ work intentionally outside the current phase.
   is unnecessary -- Codess reads ISO 8601 from vendor JSON, not free-text
   logs -- and relative time specifications are unnecessary while
   `--since`/`--until` accept absolute values only.
+
+  **A wrapper named `_now` has no precedent, and that is an argument against
+  one.** Surveying the installed third-party libraries, no package defines a
+  function named `now`, `_now`, or `utcnow` at all; they call the standard
+  library inline, overwhelmingly `time.time()` and `time.monotonic()`, with
+  `datetime.now(timezone.utc)` where an aware object is wanted. The standard
+  library itself offers `time.time`, `time.monotonic`, and `datetime.now`
+  and provides no wrapper. Nine private `_now` helpers is therefore not a
+  convention Codess is following but one it invented, which is why the
+  helpers diverged without anyone noticing.
+
+  The conclusion is not "add one shared `_now`" but "stop wrapping." The
+  wrappers are now removed: sites call `datetime.now(UTC)` directly, as every
+  surveyed library does, and the standard call is shorter than the import
+  that would have replaced it while naming its own return type.
+
+  **`datetime.now(UTC)` rather than `time.time()`, for recorded stamps.**
+  Both are correct clocks; they differ in what they produce. `time.time()`
+  yields an epoch float, which is what the surveyed libraries reach for most
+  because they measure intervals. Codess mostly *records* instants into
+  documents and CoSchema columns, and the schema already fixes two
+  conventions: Codess-generated stamps (`observed_at`, `ingested_at`) are
+  `TEXT` holding ISO 8601, while vendor-reported event times (`started_at`,
+  `event_at`) are `REAL`. An aware `datetime` renders directly to the first
+  and carries its timezone explicitly, so a reader of the call site can see
+  the value is UTC; an epoch float would need a conversion at every write and
+  states nothing about its own zone.
+
+  **`time.time()` should go; `time.monotonic()` must stay.** These are not
+  the same call with different precision, and the distinction is not
+  stylistic.
+
+  `time.time()` survives at two sites, both in `walk_sessions`, computing
+  millisecond cutoffs against vendor timestamps. `datetime.now(UTC)` produces
+  the identical value through `.timestamp()`, so nothing technical requires
+  the second spelling, and having two ways to ask for the current instant is
+  precisely the divergence this item is removing. Replace both.
+
+  `time.monotonic()` is a different clock and cannot be replaced, at any of
+  its call sites. It measures elapsed time from an arbitrary origin and is
+  guaranteed never to move backwards; wall-clock time carries no such
+  guarantee, because NTP correction, a manual clock change, or a DST
+  transition can step it in either direction. Ingest progress reporting
+  computes `phase_seconds=round(time.monotonic() - source_started, 3)`, and a
+  five-second backward NTP correction during a long ingest would make the
+  wall-clock form report a negative duration:
+
+  ```text
+  wall clock:  995.0 - 1000.0  =  -5.0 seconds   (NTP stepped back mid-ingest)
+  monotonic:  5012.0 - 5000.0  =  12.0 seconds   (correct; cannot go backwards)
+  ```
+
+  The same applies to every deadline loop (`while time.monotonic() < deadline`),
+  where a backward step would extend a timeout unpredictably and a forward
+  step would end it early. Substituting wall clock there would convert a
+  correct timeout into an intermittent, unreproducible one.
+
+  **Monotonic cannot replace wall clock, so "use it everywhere" is not
+  available.** It is not a better clock but a different measurement: its
+  origin is arbitrary, typically system boot, so a monotonic value is a
+  duration since an unspecified moment rather than a point in time. Rendering
+  one as a date gives nonsense -- a current reading of 2810934.9 seconds
+  interpreted as an epoch is 1970-02-02 -- and two processes need not share
+  an origin, so the values are not comparable across a subprocess boundary or
+  meaningful in a stored record.
+
+  Everything Codess persists is a point in time that a later reader must
+  interpret: `observed_time` says when a Source was seen, `ingested_time`
+  when it entered a store. Those cannot be monotonic values. Conversely no
+  duration should be computed from wall clock, for the reason above.
+
+  The rule is therefore about which question is asked, and each of the three
+  has exactly one answer: `datetime.now(UTC)` for an instant that will be
+  recorded, `time.monotonic()` for a duration or deadline, and nothing else.
+  `time.time()` answers the first question in a second form and is
+  redundant; its two remaining sites should move to `datetime.now(UTC)`.
+
+  Removing the wrappers also exposed a defect they had concealed. Two sites
+  in `project_catalog` called `_now()` twice within a single write, stamping
+  one logical event with two different timestamps. With the calls inline the
+  duplication is visible, and both now compute the value once and apply it to
+  every field of that event.
+  What genuinely belongs in a shared module is the part the standard library
+  does *not* supply: the ISO 8601 rendering CoSchema persists, and the named
+  duration converters. That is a formatting decision, not a clock accessor,
+  and naming it accordingly (a `timestamp_text()` rather than a `_now()`)
+  makes the distinction visible at every call site.
+
+  **Comparison with the `spank-py` precedent.** Its timestamp module is
+  substantial because its problem is: it parses timestamps out of arbitrary
+  log lines, so it carries a table of a dozen formats, detection regexes, a
+  yearless-syslog year heuristic, and relative-time specifications. Codess
+  reads ISO 8601 from structured vendor JSON at a handful of sites, so none
+  of that applies -- adopting it would import machinery for a problem Codess
+  does not have. What transfers is the structural lesson only: one module
+  owns representation, callers do not construct timestamps themselves, and
+  the epoch-versus-text choice is made once. Codess makes that choice
+  differently (ISO text rather than epoch floats) for a stated reason, which
+  is the distinction worth recording rather than the shared shape.
 - Following that investigation, decide whether hash derivation is worth
   segregating into one module with no `hashlib` references permitted
   elsewhere. This was previously stated as a conclusion; it is a question.
@@ -2819,7 +3732,7 @@ work intentionally outside the current phase.
   key derivation, and only if a shared helper survives the analysis above.
 
   The direct-call count is the argument in favour: `hashlib.sha256` is
-  invoked in 21 modules, so `identity.py`, `fileio.py`, and
+  invoked directly across the codebase, so `identity.py`, `fileio.py`, and
   `content_processing.py` each independently decide encoding, chunking,
   truncation, and output prefix. That is not one abstraction waiting to be
   extracted, but it does mean no single place states which algorithm Codess

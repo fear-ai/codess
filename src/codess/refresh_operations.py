@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from codess.config import LARGE_STORE_BYTES, LAST_INGEST_REPORT_FILE, STORE_DIR
+from codess.hashing import codess_canonical_hash, codess_text_hash
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.project_annotations import build_project_annotations
 from codess.project_catalog import durable_project_root, load_catalog
@@ -35,15 +35,8 @@ REFRESH_DESIGNATORS = frozenset({
 REFRESH_STAGES = frozenset({"plan", "preflight", "apply"})
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _canonical_hash(value: object) -> str:
-    encoded = json.dumps(
-        value, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return codess_canonical_hash(256, 256, value)
 
 
 def _load_project_references(path: Path) -> list[str]:
@@ -369,8 +362,8 @@ def _run_project_ingest(
         command.extend(["--resource-policy", str(resource_policy)])
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root / "src")
-    started_at = _now()
-    started = time.monotonic()
+    started_at = datetime.now(UTC).isoformat()
+    start_tick = time.monotonic()
     try:
         result = subprocess.run(
             command, cwd=repo_root, env=env, capture_output=True,
@@ -406,13 +399,11 @@ def _run_project_ingest(
         "returncode": returncode,
         "error_type": error_type,
         "started_at": started_at,
-        "completed_at": _now(),
-        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "completed_at": datetime.now(UTC).isoformat(),
+        "elapsed_seconds": round(time.monotonic() - start_tick, 3),
         "command": command,
         "stdout_bytes": len(stdout.encode("utf-8")),
-        "stdout_sha256": hashlib.sha256(
-            stdout.encode("utf-8")
-        ).hexdigest(),
+        "stdout_sha256": codess_text_hash(256, 256, stdout),
         "stdout_tail": stdout[-4_000:] if stdout else "",
         "stderr_tail": stderr[-4_000:] if stderr else "",
         "ingest_summary": _result_summary(project, stdout=stdout),
@@ -462,7 +453,7 @@ def refresh_projects(
     plan = resolve_refresh_selection(registry, **resolve_args)
     receipt: dict[str, Any] = {
         "receipt_format": REFRESH_RECEIPT_FORMAT,
-        "created_at": _now(),
+        "created_at": datetime.now(UTC).isoformat(),
         "receipt_path": (
             str(receipt_path.expanduser().resolve())
             if receipt_path is not None else None
@@ -492,7 +483,7 @@ def refresh_projects(
     }
 
     def checkpoint() -> None:
-        receipt["updated_at"] = _now()
+        receipt["updated_at"] = datetime.now(UTC).isoformat()
         if receipt_path is not None:
             write_json_atomic(receipt_path.expanduser().resolve(), receipt)
 

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
+
+from codess.hashing import codess_bytes_hash
 
 
 RESOURCE_POLICY_FORMAT = "codess.resource-policy/1"
@@ -114,5 +115,5 @@ def load_resource_policy(path: str | Path | None = None) -> ResourcePolicy:
         maximums=maximums,
         origins=origins,
         file_path=str(policy_path),
-        file_sha256=hashlib.sha256(payload).hexdigest(),
+        file_sha256=codess_bytes_hash(256, 256, payload),
     )

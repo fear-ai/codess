@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from cli.ingest_cmd import _append_bounded_event
+from codess.ingest_sources import _append_bounded_event
 from codess.context_content import bound_context_content
 from codess.resources import (
     ResourceLimitError, check_events, check_source, file_usage,

@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from codess.hashing import (
+    codess_bytes_hash, codess_canonical_hash, codess_text_hash,
+)
 from codess import __version__
 from codess.fileio import source_fingerprint
 from codess.identity import (
@@ -64,10 +66,6 @@ SOURCE_PROFILES = {
         "mapping": "cursor",
     },
 }
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _json_dict(raw: Any) -> dict[str, Any]:
@@ -172,7 +170,7 @@ def init_db(db_path: Path) -> None:
             "decoder_version": DECODER_VERSION,
             "validator_version": VALIDATOR_VERSION,
             "created_by": __version__,
-            "created_at": _now(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         conn.executemany(
             "INSERT INTO store_meta(key, value) VALUES (?, ?)", meta.items()
@@ -309,7 +307,7 @@ def sync_project_catalog(
                 location["location_id"], project_id, location["machine_id"],
                 location["path"], int(bool(location.get("path_obsolete"))),
                 location.get("state", "unknown"),
-                location.get("observed_at") or _now(),
+                location.get("observed_at") or datetime.now(UTC).isoformat(),
                 json.dumps({"platform": location.get("platform")}, separators=(",", ":")),
             ),
         )
@@ -317,9 +315,9 @@ def sync_project_catalog(
         workspace_key = "\0".join((
             project_id, workspace["source_system_id"], workspace["workspace_id"]
         ))
-        binding_id = "codess:workspace:sha256:" + hashlib.sha256(
-            workspace_key.encode("utf-8")
-        ).hexdigest()
+        binding_id = "codess:workspace:sha256:" + codess_text_hash(
+            256, 256, workspace_key
+        )
         conn.execute(
             """
             INSERT INTO workspace_bindings(
@@ -392,7 +390,7 @@ def ensure_source(
     global_id = global_source_revision_id(
         profile["source_system_id"], source_file, revision
     )
-    now = _now()
+    now = datetime.now(UTC).isoformat()
     conn.execute(
         """
         INSERT INTO sources(
@@ -506,7 +504,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         archive_source = "vendor"
     started_at = session.get("started_at")
     time_basis = session.get("time_basis") or ("event" if started_at is not None else "unknown")
-    now = _now()
+    now = datetime.now(UTC).isoformat()
     source_system_id = session.get("source_system_id") or profile["source_system_id"]
     vendor_session_id = session.get("vendor_session_id") or session.get("id")
     session_global_id = global_session_id(source_system_id, vendor_session_id)
@@ -759,7 +757,7 @@ def _ensure_content_object(
     privacy_class: str | None = None,
 ) -> str:
     encoded = value.encode("utf-8")
-    digest = hashlib.sha256(encoded).hexdigest()
+    digest = codess_bytes_hash(256, 256, encoded)
     content_id = f"codess:content:sha256:{digest}"
     conn.execute(
         """
@@ -944,16 +942,15 @@ def record_processing_run(
     actions: list[dict[str, Any]],
 ) -> str:
     """Persist one scoped content-processing run and its derivation identities."""
-    policy_text = json.dumps(policy, sort_keys=True, separators=(",", ":"))
-    policy_sha = hashlib.sha256(policy_text.encode("utf-8")).hexdigest()
-    now = _now()
-    identity_text = json.dumps(
+    # Route both digests through the shared canonical encoder rather than
+    # serializing here: a local json.dumps would disagree with it on any
+    # non-ASCII content, so equal policies could hash differently.
+    policy_sha = codess_canonical_hash(256, 256, policy)
+    now = datetime.now(UTC).isoformat()
+    run_id = "codess:processing:sha256:" + codess_canonical_hash(
+        256, 256,
         {"project_id": project_id, "policy_sha256": policy_sha, "actions": actions},
-        sort_keys=True, separators=(",", ":"),
     )
-    run_id = "codess:processing:sha256:" + hashlib.sha256(
-        identity_text.encode("utf-8")
-    ).hexdigest()
     rejection = next(
         (str(item.get("reason")) for item in actions if not item.get("accepted", True)),
         None,
@@ -1048,7 +1045,7 @@ def _record_diagnostic(
             severity,
             reason_code, source_field,
             None if source_value is None else str(source_value),
-            mapping_rule, detail, _now(),
+            mapping_rule, detail, datetime.now(UTC).isoformat(),
         ),
     )
 

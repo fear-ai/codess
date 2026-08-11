@@ -10,26 +10,22 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from codess.config import get_stats_path
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def load_registry_data(registry_root: Path) -> dict[str, Any]:
     """Load registry JSON or return an empty shell (for first write)."""
     stats_path = get_stats_path(registry_root)
     if not stats_path.exists():
-        return {"projects": [], "updated": _now_iso()}
+        return {"projects": [], "updated": datetime.now(UTC).isoformat()}
     try:
         data = json.loads(stats_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return {"projects": [], "updated": _now_iso()}
+        return {"projects": [], "updated": datetime.now(UTC).isoformat()}
     if "projects" not in data:
         data["projects"] = []
     return data
@@ -38,7 +34,7 @@ def load_registry_data(registry_root: Path) -> dict[str, Any]:
 def save_registry_data(registry_root: Path, data: dict[str, Any]) -> None:
     stats_path = get_stats_path(registry_root)
     stats_path.parent.mkdir(parents=True, exist_ok=True)
-    data["updated"] = _now_iso()
+    data["updated"] = datetime.now(UTC).isoformat()
     stats_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
@@ -63,14 +59,14 @@ def update_project_entry(
 
 
 def merge_ingest_sources(entry: dict[str, Any], source_stats: dict[str, Any]) -> None:
-    entry["last_ingestion"] = _now_iso()
+    entry["last_ingestion"] = datetime.now(UTC).isoformat()
     src = dict(entry.get("sources") or {})
     src.update(source_stats)
     entry["sources"] = src
 
 
 def merge_scan_rows(entry: dict[str, Any], scan_rows: list[dict[str, Any]]) -> None:
-    entry["last_scan"] = _now_iso()
+    entry["last_scan"] = datetime.now(UTC).isoformat()
     by_vendor: dict[str, Any] = {}
     for r in scan_rows:
         v = str(r.get("vendor", ""))
@@ -106,5 +102,5 @@ def prune_legacy_cursor_global_entries(registry_root: Path) -> int:
 
 
 def merge_query_stats(entry: dict[str, Any], sessions: int, events: int) -> None:
-    entry["last_query"] = _now_iso()
+    entry["last_query"] = datetime.now(UTC).isoformat()
     entry["query"] = {"sessions": int(sessions), "events": int(events)}

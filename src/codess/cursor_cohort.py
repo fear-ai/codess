@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import time
 from pathlib import Path
 from typing import Any, Callable
 
+from codess.hashing import codess_canonical_hash
 from codess.fileio import write_json_atomic
-from codess.raw_store import RawCaptureError, RawStore, materialize_captured_object
+from codess.raw_store import RawCaptureError, RawStore, restore_raw
 from codess.store import ingest_state_marker, load_ingest_state
 
 
@@ -74,12 +74,9 @@ def combine_selection_markers(
     markers: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     """Return one cache key for a set of per-Project Cursor selections."""
-    canonical = json.dumps(
-        [[project, markers[project]] for project in sorted(markers)],
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    digest = hashlib.sha256(canonical).hexdigest()
+    digest = codess_canonical_hash(
+        256, 256, [[project, markers[project]] for project in sorted(markers)]
+    )
     mtimes = [
         marker.get("source_mtime") for marker in markers.values()
         if isinstance(marker.get("source_mtime"), (int, float))
@@ -148,7 +145,7 @@ def prepare_cursor_cohort(
     *,
     raw_store: RawStore,
     cache_path: Path,
-    materialized_path: Path,
+    working_path: Path,
     source_system_id: str,
     storage_format: str,
     marker: dict[str, Any],
@@ -166,20 +163,20 @@ def prepare_cursor_cohort(
         if cached is not None:
             object_path = raw_store.resolve(cached)
             try:
-                phase_started = time.monotonic()
+                phase_tick = time.monotonic()
                 if progress is not None:
                     progress(
                         "cursor.cohort.restore.start",
                         object_id=cached.get("object_id"),
                         stored_bytes=cached.get("stored_size"),
                     )
-                materialize_captured_object(object_path, materialized_path, cached)
+                restore_raw(object_path, working_path, cached)
                 if progress is not None:
                     progress(
                         "cursor.cohort.restore.done",
                         object_id=cached.get("object_id"),
-                        materialized_bytes=cached.get("uncompressed_size"),
-                        phase_seconds=round(time.monotonic() - phase_started, 3),
+                        working_bytes=cached.get("uncompressed_size"),
+                        phase_seconds=round(time.monotonic() - phase_tick, 3),
                     )
                 return cached, marker, "reused"
             except RawCaptureError:
@@ -193,7 +190,7 @@ def prepare_cursor_cohort(
         source_system_id=source_system_id,
         storage_format=storage_format,
         mode="capture",
-        materialized_target=materialized_path,
+        working_target=working_path,
         progress=progress,
     )
     # Re-read the source revision after the backup: if it moved during the
