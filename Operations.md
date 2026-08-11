@@ -8,7 +8,7 @@ path and basic diagnosis. Exact command options remain in `codess --help`.
 
 Codess requires:
 
-- Python 3.10 or newer;
+- Python 3.11 or newer;
 - local read access to the vendor stores being examined;
 - write access to the selected Project's `.codess/` directory; and
 - write access to the central Codess registry, normally `~/.codess/`.
@@ -59,12 +59,100 @@ Every configured Source root must be absolute. Pointing Codess at copied test
 data is a useful way to diagnose source interpretation without touching live
 application state.
 
-## 4. First Project
+## 4. Regenerating After a Schema or Package Change
+
+Read this first if `ingest` reports:
+
+```text
+UnsupportedStoreError: store package differs from the current released
+package; rebuild the derived working store from source
+```
+
+Codess does not migrate stores. Vendor sources remain the authority, so a
+store written under a different released package is rebuilt rather than
+converted. The procedure preserves the old data instead of deleting it, so a
+comparison remains possible if a rebuild produces something unexpected.
+
+Move existing stores aside, keeping them:
+
+```bash
+# One Project.
+mv /path/to/project/.codess /path/to/project/.codess.old
+
+# Every Project the registry knows about.
+python - <<'PY'
+import json, shutil
+from pathlib import Path
+registry = Path.home() / ".codess" / "ingested_projects.json"
+for entry in json.loads(registry.read_text())["projects"]:
+    store = Path(entry["path"]) / ".codess"
+    if store.is_dir():
+        shutil.move(str(store), str(store) + ".old")
+PY
+```
+
+The central registry accumulates an entry per Project ever scanned,
+including temporary directories from test runs, and has no retention policy.
+Move it aside as well so the rebuilt list reflects what currently exists:
+
+```bash
+mv ~/.codess/ingested_projects.json ~/.codess/ingested_projects.old.json
+```
+
+Rediscover and rebuild. Use `--days 0` for the first scan so Projects older
+than the default window are not silently omitted:
+
+```bash
+codess scan --dir ~/Work --days 0 --out -
+codess ingest --dir /path/to/project
+codess query overview --dir /path/to/project
+```
+
+Read the warnings rather than only the exit status. Both commands report on
+stderr while results go to stdout, so they are easy to miss when redirecting:
+
+| Message | Meaning |
+|---|---|
+| `N project(s) have coding work older than the ... window` | Projects exist but were not listed; widen with `--days 0` |
+| `scan diagnostics: stale_index_entries=N` | A vendor index references Sessions whose files are gone |
+| `ingest diagnostics: malformed=N unsupported=N` | Records that could not be decoded; investigate before trusting counts |
+| `skipping incomplete final record` | A Session was being written during the read; re-ingest later to pick it up |
+| `cursor.workspace.skip ... reason=no-bubble-rows` | A Cursor workspace exists with no retained conversation |
+
+`.codess.old` is a working archive, not a retained artifact. Keep it only
+while confirming the rebuild: `codess query overview` against the new store
+should report Session and Event counts consistent with the
+`last-ingest-report.json` inside the archived directory. Delete
+`.codess.old` once that comparison holds -- it is a copy of derived data
+that vendor sources can reproduce, so keeping it past validation costs disk
+for no evidence.
+
+No vendor format currently requires skipping, and Codess keeps no
+supported-version list. Sessions written by many harness releases decode
+through the same path, because the vendors' record envelopes have been
+stable across the range retained locally. A record shape the decoder does
+not recognize is counted as `unsupported` rather than dropped, so a format
+change appears as a rising diagnostic on one source system instead of as
+missing data.
+
+The harness version is recorded per Session, so the range actually present
+is a query rather than an assumption:
+
+```bash
+sqlite3 -readonly path/to/.codess/sessions_cc.db \
+  "SELECT harness_version, COUNT(*) FROM sessions GROUP BY 1 ORDER BY 2 DESC"
+```
+
+To rehearse the decode without writing anything, add `--validate`: ingest
+stages into a temporary directory, reports the same diagnostics, and leaves
+the Project, registry, and raw store untouched.
+
+## 5. First Project
 
 Use one real repository or Project directory whose Sessions are expected to be
 small and easy to recognize.
 
-### 4.1 Discover
+### 5.1 Discover
 
 ```bash
 PROJECT=/absolute/path/to/project
@@ -75,7 +163,7 @@ Scan consults vendor indexes and bounded metadata. It does not normalize
 Session content. Confirm that the row names the intended Project and
 source systems before ingesting.
 
-### 4.2 Validate
+### 5.2 Validate
 
 Run a non-publishing parse and validation when testing a new Source shape or
 configuration:
@@ -87,7 +175,7 @@ codess ingest --dir "$PROJECT" --source all --validate
 Validation uses temporary stores and reports malformed, ignored, empty, and
 failed Sources without changing the Project's selected Project store set.
 
-### 4.3 Ingest
+### 5.3 Ingest
 
 ```bash
 codess ingest --dir "$PROJECT" --source all
@@ -98,7 +186,7 @@ the common records, writes per-source-system SQLite stores, and publishes the
 completed Project store set. Progress is emitted on standard error without
 printing Session content.
 
-### 4.4 Orient
+### 5.4 Orient
 
 ```bash
 codess query overview --dir "$PROJECT"
@@ -116,7 +204,7 @@ If results do not resemble the expected Project work, stop and investigate
 Project attribution, Source selection, and vendor mapping before ingesting more
 Projects.
 
-## 5. Routine Updates
+## 6. Routine Updates
 
 Repeating ingest performs an assessed update. Unchanged selected evidence is
 skipped; changed Sources are decoded and replace their prior normalized
@@ -158,7 +246,7 @@ codess catalog status
 codess catalog annotations
 ```
 
-## 6. Selecting Several Projects
+## 7. Selecting Several Projects
 
 `--dir` may be repeated. `--dirs` accepts a plain path list or a CSV containing
 `directory_path`.
@@ -175,7 +263,7 @@ Inspect the resolved Project scope before drawing cross-Project conclusions.
 The stores preserve Project and source-system identity even when results are
 merged for display.
 
-## 7. Content and Resource Controls
+## 8. Content and Resource Controls
 
 Built-in bounds protect against accidental binary ingestion, extremely large
 transcripts, oversized context bodies, and excessive Event counts. They are
@@ -197,7 +285,7 @@ record before raising it. Oversize or non-text input can indicate incorrect
 Project selection, a vendor format change, or a record that should remain
 external rather than searchable content.
 
-## 8. Raw Evidence
+## 9. Raw Evidence
 
 The ordinary `reference` mode records the Source locator and bounded update
 evidence without retaining another complete copy. `capture` and `seal` are for
@@ -213,9 +301,9 @@ objects support provenance and recovery; they are not inserted wholesale into
 the searchable database. The functional tradeoffs and mode boundaries are
 defined in [Raw Evidence and Integrity](Designs.md#48-raw-evidence-and-integrity).
 
-## 9. Basic Diagnosis
+## 10. Basic Diagnosis
 
-### 9.1 No Project Appears in Scan
+### 10.1 No Project Appears in Scan
 
 Check:
 
@@ -228,14 +316,14 @@ Check:
 Use `--debug` for bounded source-selection diagnostics. It must not be treated
 as a routine content dump.
 
-### 9.2 Ingest Reports Malformed or Unsupported Records
+### 10.2 Ingest Reports Malformed or Unsupported Records
 
 Identify the source system, Source locator, record locator, exact type, and
 diagnostic reason. Compare the representative record with the vendor schema and
 adapter fixture. A malformed optional field should not remove an otherwise
 usable Event; a core identity or ordering failure should remain explicit.
 
-### 9.3 Search Returns Unexpected Counts
+### 10.3 Search Returns Unexpected Counts
 
 Verify:
 
@@ -248,14 +336,14 @@ Verify:
 
 Use direct read-only SQLite queries to reconcile a focused result.
 
-### 9.4 Cursor Is Slow or Busy
+### 10.4 Cursor Is Slow or Busy
 
 Codess queries selected Cursor headers and composer key ranges through read-only
 SQLite connections. Confirm that the selected workspace mapping is narrow and
 that the live database is not continuously changing. Do not copy, vacuum,
 rewrite, or fully decode the Cursor database merely to diagnose one Project.
 
-### 9.5 Current Snapshot Manifest Hash Mismatch
+### 10.5 Current Snapshot Manifest Hash Mismatch
 
 `scan`, `ingest`, and `query` verify the current snapshot's `manifest.json`
 against the hash recorded in its `current.json` pointer before trusting it.
@@ -277,7 +365,7 @@ routine flag: every bypassed check is logged as a warning, and using it
 does not repair the underlying inconsistency. Prefer identifying and fixing
 the cause of the mismatch over routinely suppressing the check.
 
-## 10. Schema Maintenance
+## 11. Schema Maintenance
 
 Normal ingest verifies the installed schema package before it writes a store.
 When changing CoSchema, a mapping profile, or SQLite DDL, run the focused
@@ -294,7 +382,7 @@ Choose `same`, `compatible`, `breaking`, or `manual` only after reviewing the
 reported contract changes. Then run the full test suite and the smallest real
 source-system example that exercises the changed translation.
 
-## 11. Maintenance Boundaries
+## 12. Maintenance Boundaries
 
 Snapshots, raw objects, catalogs, and receipts support repeatable operation but
 are not the primary product surface. Before deleting any of them:

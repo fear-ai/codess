@@ -103,25 +103,9 @@ def resolve_session_id(
         conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         try:
-            columns = {
-                str(row[1]) for row in conn.execute("PRAGMA table_info(sessions)")
-            }
-            global_column = (
-                "global_id" if "global_id" in columns else "NULL AS global_id"
-            )
-            system_column = (
-                "source_system_id"
-                if "source_system_id" in columns
-                else "'legacy.unknown' AS source_system_id"
-            )
-            vendor_column = (
-                "vendor_session_id"
-                if "vendor_session_id" in columns
-                else "id AS vendor_session_id"
-            )
             for row in conn.execute(
-                "SELECT id,"
-                f"{global_column},{system_column},{vendor_column} FROM sessions"
+                "SELECT id, global_id, source_system_id, vendor_session_id "
+                "FROM sessions"
             ):
                 stable = row["global_id"] or global_session_id(
                     row["source_system_id"], row["vendor_session_id"] or row["id"]

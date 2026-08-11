@@ -593,9 +593,6 @@ def test_candidate_snapshot_does_not_publish_before_validation(tmp_path, monkeyp
         publish=False,
     )
     monkeypatch.setattr(
-        "codess.baseline_operations.preserve_legacy", lambda *args: None
-    )
-    monkeypatch.setattr(
         "codess.baseline_operations.archive_stale_working_stores",
         lambda *args: None,
     )
@@ -628,7 +625,6 @@ def test_candidate_snapshot_does_not_publish_before_validation(tmp_path, monkeyp
             registry=registry,
             policy_path=None,
             repeat=False,
-            preserve_legacy_stores=False,
             approve_catalog=None,
             min_size=0,
             query_smoke=False,
@@ -712,9 +708,6 @@ def test_repeat_build_failure_leaves_prior_pointers_current(
         },
     ))
     monkeypatch.setattr(
-        "codess.baseline_operations.preserve_legacy", lambda *args: None
-    )
-    monkeypatch.setattr(
         "codess.baseline_operations.archive_stale_working_stores",
         lambda *args: None,
     )
@@ -746,7 +739,6 @@ def test_repeat_build_failure_leaves_prior_pointers_current(
             registry=registry,
             policy_path=None,
             repeat=True,
-            preserve_legacy_stores=False,
             approve_catalog=None,
             min_size=0,
             query_smoke=False,
@@ -835,7 +827,6 @@ def test_fixed_point_with_allowed_source_drift_does_not_recheck_live_reference(
         registry=tmp_path / "registry",
         policy_path=tmp_path / "policy.json",
         repeat=True,
-        preserve_legacy_stores=False,
         approve_catalog=None,
         min_size=0,
         query_smoke=False,

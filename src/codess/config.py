@@ -90,7 +90,11 @@ def env_expanded_path(key: str, default: str) -> Path:
 # branch on whether an override was given -- moving it into the table would
 # require reading it back out afterward, i.e. no simplification.
 _IS_ENV_TABLE = (
-    ("CODESS_DAYS", env_int, 90),
+    # One year. The window exists to keep an incremental rescan cheap, not to
+    # decide what is worth ingesting: for anyone using coding tools routinely,
+    # 90 days omits most of a Project's history on the first ingest, which is
+    # exactly when the complete record is wanted. Use --days 0 for all time.
+    ("CODESS_DAYS", env_int, 365),
     ("CODESS_VERBOSE", env_bool, "0"),
     ("CODESS_DEBUG", env_bool, "0"),
     ("CODESS_MIN_SIZE", env_int, KB(20)),
@@ -357,14 +361,20 @@ def validate_config() -> list[str]:
 
 
 def get_project_stores(project_path: Path) -> list[Path]:
-    """Return current snapshot stores, falling back to legacy working paths."""
+    """Return the current snapshot's stores, or the working stores if unpublished.
+
+    A Project that has been ingested but not yet published has no snapshot
+    pointer, so the per-vendor working stores are the only thing to read.
+    """
     from codess.snapshot import current_stores
 
     current = current_stores(project_path)
     if current:
         return current
     base = project_path / STORE_DIR
-    legacy = base / STORE_DB
-    if legacy.exists():
-        return [legacy]
-    return [p for p in (base / STORE_DB_CC, base / STORE_DB_CODEX, base / STORE_DB_CURSOR) if p.exists()]
+    return [
+        path for path in (
+            base / STORE_DB_CC, base / STORE_DB_CODEX, base / STORE_DB_CURSOR,
+        )
+        if path.exists()
+    ]

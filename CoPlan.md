@@ -7,15 +7,15 @@ the sole current implementation-status and task list.
 ## Task List at a Glance
 
 Every numbered work item (full detail in
-[14.1 Immediate Core Work](#141-immediate-core-work) and
-[14.2 Next Functional Work](#142-next-functional-work)), in one place for
+[14.2 Immediate Core Work](#142-immediate-core-work) and
+[14.3 Next Functional Work](#143-next-functional-work)), in one place for
 immediate review. Status follows 14's own vocabulary -- **WIP** active,
 **Planned** accepted and ordered, **TODO** accepted but unscheduled,
 **Under review** an established problem with no accepted resolution yet
 (distinct from merely unscheduled), **Postponed** intentionally outside the
 current phase. Unnumbered Postponed directions (mapping expression
 language, remote schema registries, and the rest of
-[14.4 Deferred Directions](#144-deferred-directions)) are not individually
+[14.5 Deferred Directions](#145-deferred-directions)) are not individually
 tracked work items and are not repeated in this table.
 
 Rows are ordered by priority, not by identifier. Identifiers are assigned
@@ -35,6 +35,13 @@ Normal items that precede it numerically.
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. |
 | W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. |
 | W20 | High | WIP | Establish lifetime and resilience requirements for the five derived values. `codess/hashing.py` now owns every digest and `path_key` is renamed; two transient hashes may not be needed at all, and `snapshot_id` still sits inside structures whose digests it depends on. Blocked on `path_key`'s move/cross-machine behavior and on creation-versus-content snapshot identity. |
+| W27 | Normal | Planned | Make discovery scoping configurable and documented: `AGGREGATORS` and `EXCLUDE_REVIEW_DIRS` are hardcoded to one developer's layout. |
+| W28 | Normal | Planned | Give the central registry a retention policy; it accumulates an entry per Project ever scanned, including test temporary directories. |
+| W29 | High | Planned | Own the static-analysis configuration as one concern: declare rule selection, decide the S608 exemptions, reduce the SQL interpolation they cover, and track lint and type output as evidence. |
+| W31 | High | Planned | Make `IDENTITY_FORMAT` observable and enforced: it is hashed into every identity but recorded nowhere, so two derivation schemes cannot be told apart. |
+| W32 | Normal | Planned | Route `identity._qualified` through `codess_hash`; it hand-rolls component hashing and hardcodes `sha256` in the emitted value. |
+| W33 | Low | Planned | Rename `package`/`package_digest` to `matching_set`/`matching_set_digest`; the current name reads as the Python distribution. Rides with W03. |
+| W34 | Normal | **Under review** | Contain the digest algorithm in `codess/hashing.py`; `sha256` is named ~144 times elsewhere. Blocked on approving where an algorithm name may appear at all. |
 | W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES`. |
 | W25 | Normal | Planned | Strengthen CoSchema time columns: encode representation in the name and resolve `started_at` denoting both TEXT and REAL. |
 | W26 | Normal | Planned | Reevaluate and repartition the four Cursor modules now that the source boundary is closed. |
@@ -2036,6 +2043,8 @@ developer's live harness data.
 | Package identity coupling | Non-semantic package changes can affect current-layout write compatibility | W03 |
 | Test observability | Child-process scan and ingest paths are not attributed by ordinary coverage | W13 |
 | Operational reporting fragmentation | Status, progress, logger calls, exceptions, and exit results lack one event and rendering contract | W18 |
+| Discovery scoping | Aggregator and exclusion directory sets are hardcoded to one layout, and the recency window silently omitted Projects until it was reported | W27 |
+| Registry retention | The central registry accumulates an entry per Project ever scanned and prunes none | W28 |
 | Session discovery coupling | Project canonicalization is reachable only through vendor filesystem discovery, so its rules cannot be tested directly | W19 |
 | Derived key requirements | The five SHA-256 sites do not state what they identify, how long the value lives, or what must recompute it; two are transient hashes that may not be needed | W20, W03 |
 | Canonical serialization divergence | Resolved: every digest over a structure routes through one canonical encoder, so equal content cannot hash differently | Closed |
@@ -2307,8 +2316,8 @@ suite.
 | 1 | Done | Two of three closures lifted to module level. `cleanup_cursor_cohort` stays: it rebinds an enclosing variable through `nonlocal` at four sites, so lifting it means introducing shared state, which belongs with step 4 rather than before it |
 | 2 | Done | Request resolution, the completion report, the preflight report, the repeated vendor store-open, and the post-ingest store totals are named functions. The store-open and store-totals cases were verbatim duplication across all three vendors, differing only in the display name |
 | 3 | Done | `tests/test_ingest_phases.py` covers source-selector expansion, argument rejection, store-path resolution under preflight and rebuild staging, and vendor store creation -- paths that previously required running a whole ingest to reach |
-| 4 | Done | The three vendor coordinators and the nine helpers they share moved to `codess/ingest_sources.py`. `ingest_cmd` no longer decodes a vendor source or writes a store during ingest; it resolves arguments, drives the Project loop, and renders results |
-| 5 | Partly done | Catalog resync and Artifact correlation are named phases (`_resync_project_catalog`, `_correlate_project_artifacts`) rather than inline blocks. Snapshot creation and promotion remain inline, and should follow the same shape |
+| 4 | Moved, not yet validated | The three vendor coordinators and the nine helpers they share are in `codess/ingest_sources.py`, and `ingest_cmd` no longer decodes a source or writes a store during ingest. The move is covered only by the existing suite passing unchanged and by preflight runs over 24 real Projects; the new module has no tests of its own, and no published store has been rebuilt through it |
+| 5 | Two phases of four | Catalog resync and Artifact correlation are named functions. Snapshot creation and promotion remain inline in the Project loop, so the transactions W06 is about are still in the command module. Deferred until the snapshot-identity decisions in W03 and W20 settle, since extracting them now would fix the current derivation in place |
 | 6 | Begun | `query_cmd`'s duplicated store-readability probe is one helper; the diagnostics report SQL remains |
 
 One observation from doing the work: an attempt to introduce a per-Project
@@ -2539,6 +2548,26 @@ only a test document moved. Rebuilding from source is then the only way
 back, which is disproportionate to a change that provably cannot affect
 stored data.
 
+**W03 was reproduced against real data, not only reasoned about.** Removing
+the `codess:legacy:uuid:` column defaults changed `schema.sql`, which changed
+the package digest, which made every already-published store on this machine
+unwritable:
+
+```text
+UnsupportedStoreError: store package differs from the current released
+package; rebuild the derived working store from source
+```
+
+The DDL edit was semantic, so refusing the write was defensible here. What
+the incident demonstrates is the mechanism: any packaged-file change produces
+this outcome, including edits to fixtures that no runtime code reads. The
+same one-line failure would have followed a comment change in a test
+document. That is the coupling W03 exists to break.
+
+It also shows the practical cost. Validation had to run in preflight mode
+against every real Project rather than ingesting, because ingesting would
+have required rebuilding stores unrelated to the change under test.
+
 **Fixture identity is a development-lifecycle concern, not a runtime one.**
 Fixtures establish that the decoders behave correctly; that is settled by
 running the test suite before a release, not by a check inside the shipped
@@ -2768,10 +2797,11 @@ Codess-derived identity -- it is not qualified, not hashed except when
 over-long, and not comparable across Sessions, which is why the schema
 constrains it as `UNIQUE(session_id, source_call_id)` rather than globally.
 
-**Naming rule: name the use, not the algorithm.** A name should say what a
-value is *for*, since that is what a reader must know to use it correctly
-and what stays true if the implementation changes. Three suffixes carry
-distinct meanings and should be applied by actual use:
+**Proposed naming rule: name the use, not the algorithm.** Not approved; it
+is recorded here as the shape a decision could take, and W34 is blocked on
+making one. A name should say what a value is *for*, since that is what a
+reader must know to use it correctly and what stays true if the
+implementation changes. Three suffixes carry distinct meanings:
 
 | Suffix | Meaning | Consequence if the algorithm changes |
 |---|---|---|
@@ -2779,10 +2809,12 @@ distinct meanings and should be applied by actual use:
 | `_key` | A derived lookup or grouping value; equality is all that is promised | Values change together; anything holding old ones must be regenerated |
 | `_hash` or `_digest` | An integrity claim to be recomputed and compared | The verifier must know the algorithm, so naming it is correct here |
 
-Only the third case should mention the algorithm, because a verifier must
-know what to recompute. Everywhere else, naming the algorithm publishes a
-choice that callers should not depend on, and makes a future change look
-like a rename.
+Under this proposal only the third case mentions the algorithm, because a
+verifier must know what to recompute. The competing position is that no name
+outside `hashing` should carry an algorithm at all, with verification callers
+passing the width they expect and the module choosing how to satisfy it --
+which removes the exception entirely at the cost of a less self-describing
+field name. Neither has been chosen.
 
 By this rule `candidate:path-sha256:` was wrong, and the earlier
 `candidate:path:` was wrong differently -- one advertised the algorithm, the
@@ -3502,6 +3534,280 @@ is why none is currently a defect. This is accidental-collision arithmetic
 over locally generated values; no adversarial analysis applies, since the
 inputs are a developer's own paths and runs.
 
+#### 13.4.9 Real-Source Validation
+
+The automated suite runs on fixtures. This records a validation pass over
+actual vendor data, which is the separate layer 13.1 names. It ran in
+preflight mode, so it read live vendor stores and wrote nothing outside a
+temporary directory.
+
+| Project | Vendors | Sessions | Events | Shape under test |
+|---|---|---|---|---|
+| Misses | Claude Code | 406 | 32,059 | Large single-vendor |
+| ZKs | Claude Code | 25 | 22,692 | Mid single-vendor |
+| spank-py | Claude Code | 5 | 4,171 | Mid single-vendor |
+| Requihash | Claude Code | 1 | 3,594 | Small, one long Session |
+| OSINT | Claude Code | 2 | 1,440 | Small single-vendor |
+| wisw | Claude Code | 2 | 3,169 | Small single-vendor |
+| SWEmore | Codex | 1 | 416 | Small single-vendor |
+| gits | Codex | 1 | 1,230 | Small, nested layout |
+| jsonschema | Codex | 1 | 166 | Smallest observed |
+| zerowalletmac | Cursor | 47 | 27,513 | Large single-vendor |
+| CContext | Cursor | 1 | 857 | Small, separate work root |
+| skip | Cursor | 1 | 667 | Small, separate work root |
+| spank-rs | Codex, Cursor | 4 | 35,758 | Multi-vendor |
+
+**No retained Session format is old enough to warrant skipping.** The
+question is worth asking before adding a version gate, so the locally
+retained corpus was surveyed rather than assumed.
+
+| Source system | Versions observed | Envelope drift | Oldest decode |
+|---|---|---|---|
+| Claude Code | 21 releases, all `2.1.x` | None; `user`, `assistant`, `attachment`, `system` appear across every version | Clean |
+| Codex | 17 releases, `0.58.0` through `0.145.0` | None; `session_meta`, `response_item`, `event_msg`, `turn_context` in all of them | 309 Events, no failures |
+| Cursor | Not versioned per record | None; every sampled bubble carries `text`, with `richText` on user turns only | Clean |
+
+Every Claude Code file carries a `version`, so none is unversioned. The
+oldest Codex rollout in the corpus is roughly nine months old and decodes
+without error. The only shape difference found across the whole range is
+`world_state`, which appears from Codex 0.144 and is already handled.
+
+Two conclusions. First, a version gate would currently exclude nothing and
+would add a failure mode -- a version string the gate does not recognize --
+in exchange for no benefit. Second, the property that makes this safe is not
+that vendors have kept formats stable, but that unknown records are counted
+rather than assumed: an unrecognized shape becomes an `unsupported_records`
+diagnostic, so a format change appears as a number to investigate instead of
+as silently missing data. That is the mechanism to preserve; a skip list
+would replace it with a guess about which versions matter.
+
+If a genuinely incompatible format does appear, the evidence will be a rise
+in `unsupported_records` for a specific source system, which is the signal
+W12's coverage reporting exists to surface.
+
+**Two discovery defects were found and fixed during this validation.** Both
+made a scan's result depend on how it was invoked rather than on what was
+present.
+
+The recency window omitted Projects silently. `CODESS_DAYS` defaulted to 90,
+so a Project whose last Session predated that window produced no row and no
+message -- indistinguishable from a directory with no coding work. The
+default is now one year. The window exists to keep an incremental rescan
+cheap, not to decide what is worth ingesting -- for routine use of coding
+tools, 90 days omits most of a Project's history on the first ingest, which
+is when the complete record is most wanted. Omissions are now reported with
+the flag that widens them.
+
+`--debug` disabled the window entirely, so diagnostic output described a
+different selection than an ordinary run. Anything a reader was shown while
+debugging could not be reproduced without it. Recency is a selection, not a
+diagnostic; `--days 0` is the way to widen it. A regression test asserts the
+two runs list the same Projects.
+
+**Discovered inventory.** Scanning the home directory with an all-time
+window finds 24 Projects holding retained coding work, 476 Sessions, and
+about 1.6 GB of vendor data. Listed rather than summarized, because which
+Projects exist is the point:
+
+| Project | Vendors | Sessions | MB |
+|---|---|---|---|
+| `ZK/Zero400` | CC, Cursor | 31 | 736 |
+| `ZK/zerowalletmac` | Cursor | 47 | 196 |
+| `Spank/spank-rs` | Codex, Cursor | 4 | 179 |
+| `Code/CodeSess` | CC, Codex | 6 | 162 |
+| `ZK/ZeroPerf` | CC, Cursor | 6 | 77 |
+| `Code/Misses` | CC | 343 | 72 |
+| `WP/wpages` | Codex | 3 | 47 |
+| `Claw/setpack` | Codex | 1 | 46 |
+| `Spank/spank-py` | CC | 5 | 15 |
+| `ZK/Requihash` | CC | 1 | 8 |
+| `Code/wisw` | CC | 1 | 7 |
+| `Claude/CContext` | Cursor | 1 | 6 |
+| `Code/OSINT` | CC | 3 | 3 |
+| `ZK/gits` | Codex | 1 | 3 |
+| `Github/skip` | Cursor | 1 | 3 |
+| `Code/SWEmore` | Codex | 1 | 2 |
+| `Github/Schema` | Cursor | 1 | 2 |
+| `WP/wp` | Codex | 1 | 1 |
+| `Code/jsonschema` | Codex | 1 | 0.6 |
+| `WP/harduw` | Codex | 1 | 0.2 |
+| `Spank/HECpoc` | Cursor | 0 | 0.1 |
+| `WP/multiwp`, `WP/multiwp/python`, `WP/must-py` | CC | 0 | -- |
+| `~/.openclaw-repo/workspace` | Codex | 1 | 0.1 |
+| `~/.codex` | Codex | 1 | 0.03 |
+
+The last two are not repositories. They are tool working directories that
+accumulated Sessions because work happened while the current directory was
+one of them. They are correctly discovered, and worth keeping in the corpus:
+a Project boundary tested only against clean repositories is not being
+tested. `WP/multiwp/python` is a repository nested inside another
+repository, which is the case 6's boundary rules exist for.
+
+**`Work/ZK` is large because it is a container, not a Project.** It holds
+eighteen directories, of which five have retained coding work; the rest are
+papers, test scratch, and archives. One of them, `ZKs`, contains 68 nested
+repositories and is listed in `EXCLUDE_REVIEW_DIRS` as a review tree.
+
+That exclusion was root-dependent and is now fixed. `EXCLUDE_REVIEW_DIRS`
+entries were matched as a prefix of the path relative to the scan root, so
+`ZK/ZKs` matched when scanning `~/Work` and `Work/ZK/ZKs` did not match when
+scanning `~`. The same directory was therefore excluded or included
+depending on where the scan started, which is why an earlier inventory
+listed `ZKs` with 15 Sessions. Matching is now on path segments, so
+exclusion is a property of the directory rather than of the invocation.
+
+**Roots and aggregators.** `AGGREGATORS` names directories that group
+Projects rather than being Projects -- `WP`, `ZK`, `Claw`, `Claude`,
+`Cursor`, `Github`, `CodingTools`. A directory named in that set is never
+reported as a Project itself; its children are. This is why `Work/ZK`
+never appears as a row while `ZK/Zero400` does, and why scanning `~/Work`
+and `~` produce the same Projects under different labels.
+
+Both `AGGREGATORS` and `EXCLUDE_REVIEW_DIRS` are hardcoded in `config.py`
+and specific to one developer's layout. Neither is configurable, and
+neither is documented outside the source. That is a limitation worth
+recording: another user's aggregator directories would be reported as
+Projects, and their review trees would be scanned.
+
+
+
+All thirteen Projects reported `accepted` with zero errors, and every store passed
+`PRAGMA integrity_check` with no foreign-key violations. Decode depth was
+checked rather than assumed: Cursor produced 12,183 tool invocations against
+12,186 results, Claude Code 6,427 against 6,424, and Codex 394 against 394,
+so call and result linkage holds across all three vendors. Every Project
+with locally retained sessions was covered; none was excluded for failing.
+
+Three observations were followed to their source rather than left as
+summary figures.
+
+`spank-rs` decoded its Codex sessions but produced no Cursor sessions,
+despite discovery reporting Cursor evidence for that Project. Reading the
+vendor storage directly confirms the decision: the attributed workspace
+database has an empty `cursorDiskKV` table, and no composer in the global
+store references the Project. The workspace was opened in Cursor without a
+conversation being persisted, so there is nothing to decode. The progress
+record already said this -- `reason=no-bubble-rows` -- and the check
+confirms the skip is correct rather than a selection defect.
+
+`Misses` reported 7,077 Events with no time, which is not an older storage
+format and is not specific to that Project. The records are all
+`product_state`, and reading the raw Claude Code JSONL shows the vendor
+format itself splits into two groups:
+
+| Vendor record | Carries a timestamp | Fields |
+|---|---|---|
+| `attachment` | Yes, always | Full envelope: `uuid`, `parentUuid`, `cwd`, `gitBranch`, `version`, `sessionId` |
+| `queue-operation` | Yes, always | `operation`, `content`, `timestamp`, `sessionId` |
+| `ai-title` | No | `aiTitle`, `sessionId`, `type` |
+| `last-prompt` | No | `lastPrompt`, `leafUuid`, `sessionId`, `type` |
+| `mode`, `permission-mode` | No | The value, `sessionId`, `type` |
+| `custom-title` | No | `customTitle`, `sessionId`, `type` |
+| `file-history-snapshot` | No | `snapshot`, `messageId`, `isSnapshotUpdate` |
+
+The distinction is what the record *is*. Timestamped records describe an
+event that happened at a moment -- a queued prompt, an attachment delivered
+with a turn. The others record current state: the session's title, its mode,
+the last prompt text. Claude Code overwrites them as state changes and never
+stamps them, so there is no moment to record.
+
+This is why every Claude Code Project shows the pattern -- eleven of eleven
+observed, roughly 16,700 such records in total -- rather than it being a
+property of one Project's age. `product_state` Events that *do* carry a time
+are the `attachment` and `queue-operation` kinds mapped into the same
+`event_type`, which is consistent rather than contradictory.
+
+The decode is therefore correct, and the "missing" count is better read as a
+measurement of how much of a Session is state rather than activity. What is
+worth reconsidering under W01 is the grouping: mapping records with
+fundamentally different time semantics into one `event_type` makes a
+null-timestamp count look like a gap when it is a category.
+
+`jsonschema` reported 58 tool results against 55 invocations. Reading the
+Codex rollout accounts for the difference exactly, and the source itself is
+balanced:
+
+| Source records | Count | Produces |
+|---|---|---|
+| `function_call` | 53 | 53 invocations |
+| `function_call_output` | 53 | 53 results |
+| `patch_apply_end` | 4 | 4 results, reusing the `call_` id of an existing invocation |
+| `web_search_end` | 1 | 1 result, and one further invocation from its distinct `ws_` id |
+
+Codex reports some tool activity twice: once as a request/response pair in
+the conversation stream, and again as an event-stream record describing what
+the harness did. `patch_apply_end` carries the same `call_id` as its
+originating `function_call`, so the store's upsert merges it into that
+invocation and adds a second result -- one call, two results, which is the
+honest representation of two source records describing one operation.
+`web_search_end` carries a `ws_`-prefixed id that matches no `function_call`,
+so it creates its own invocation.
+
+So the answer to "more found than looked at" is neither: nothing is missing
+and nothing is invented. Every result corresponds to a retained source
+record, and the count exceeds the invocation count because Codex emits more
+result-shaped records than call-shaped ones.
+
+**All three numbers are correct, and each answers a different question.**
+They should be separately recoverable rather than reconciled into one:
+
+| Count | Question it answers | Where it lives |
+|---|---|---|
+| 53 | How many tool calls did the model make? | Invocations whose evidence includes a request record |
+| 55 | How many distinct tool operations does the store hold? | `COUNT(*) FROM tool_invocations` |
+| 58 | How many result records did the vendor write? | `COUNT(*) FROM tool_results` |
+
+Collapsing them would lose real information. Reporting only 53 hides the
+web search, which happened. Reporting only 58 implies more operations than
+occurred. Reporting only 55 conceals that four operations were described
+twice, which is exactly the evidence a reader needs when a patch application
+reports both a model-visible result and a harness-observed outcome.
+
+The distinction is already recoverable from stored data, so this is a
+reporting gap rather than a decode one. `events.source_record_type` retains
+the vendor shape -- `response_item` for the conversation stream, `event_msg`
+for the harness event stream -- and a Codex store shows both
+(`{'response_item': 94, 'event_msg': 49}` in one observed Project). What is
+missing is that `tool_invocations.invocation_kind` is written as the
+constant `"harness_capability"` for every row, so the column that should
+carry this distinction currently carries nothing.
+
+Two changes follow, both belonging to W02. Populate `invocation_kind` from
+the evidence actually present -- a request-and-response pair, a
+harness-observed operation, or both -- so the 53 is derivable rather than
+inferred. And have tool reporting state the pair rather than one number,
+since "55 operations, 58 result records" is accurate where either alone
+invites a wrong conclusion.
+
+#### 13.4.10 SQL Construction Volume
+
+10.4 already establishes which interpolation patterns are safe, why a
+`.join()` rewrite helps single-line queries and harms multi-line ones, and
+that suppression is per-file with the rationale recorded there rather than
+in source. This section records only what the audit adds: how many sites
+there now are.
+
+Twelve modules carry a per-file `S608` ignore, covering 56 findings --
+`cursor_feature_audit` 15, `query_cmd` 11, `query_api` 9,
+`configuration_audit` 8, the rest one to four each. Every one matches a
+pattern 10.4.2 classifies as safe, so the count is not a defect list.
+
+It is still a measurement worth acting on. Fifty-six interpolation sites is
+more SQL assembly than the layering intends, and W06 already says most of
+the query paths belong behind the typed executor. The four shapes -- 
+placeholder runs, column projections, predicate fragments, fixed table
+names -- each have a natural home in a helper, so concentrating them reduces
+the count and the maintenance surface together, and leaves a smaller set of
+files where a per-file ignore names a module rather than covering one.
+Tracked as part of W29, starting with `cursor_feature_audit`, which holds
+the most and whose queries are assembled once from constants.
+
+The exemptions do their job whenever the rule runs: selecting `S` reports 73
+findings without them and 17 with. What is missing is that `pyproject.toml`
+never declares `select`, so `S` runs only when someone passes it on the
+command line -- the exemptions are correct and the selection that would
+exercise them is not recorded. Both belong to W29.
+
 ### 13.5 Mechanical Enforcement
 
 **Status: Postponed.** The test layout matches the intended validation
@@ -3539,7 +3845,79 @@ ordered work, **TODO** for accepted but unscheduled work, **Under review** for
 an established problem without an accepted resolution, and **Postponed** for
 work intentionally outside the current phase.
 
-### 14.1 Immediate Core Work
+### 14.1 Grouping and Sequence
+
+Twenty-eight open items is too many to act on as a list. They fall into six
+groups by what they change, which is also roughly their risk order. Within a
+group the items are largely independent; between groups the order matters.
+
+| Group | Items | Impact if wrong | Risk of doing it |
+|---|---|---|---|
+| Decode correctness | W01, W02 | Stored evidence is wrong or missing, and nothing downstream can detect it | Low: additive, verified against real Sources |
+| Store identity and integrity | W03, W14, W15, W20, W25, W31, W32, W33, W34 | A store cannot be written, or an identity means two things | High: changes force a rebuild, and W25 changes column names |
+| Structure and boundaries | W06, W19, W21, W23, W24, W26 | Nothing breaks; the code stays hard to change | Medium: behavior-preserving, but wide diffs |
+| Query and contract surface | W04, W05, W11, W12, W13, W17 | Results are unclear or unverifiable | Low to medium |
+| Operations and reporting | W16, W18, W27, W28, W29 | Operators cannot see what happened or scope what runs | Low: mostly additive |
+| Performance and bounding | W07, W08, W09 | Large inputs are slow or unbounded; Cursor work may depend on unrelated shared content | Low |
+
+**W06 steps 4 and 5, in execution order.** These are the two items with
+work already begun and a defined remainder, so they are stated here in
+enough detail to pick up without re-deriving the analysis in 13.4.1.
+
+*Step 4 -- finish validating the move.* The coordinators are in
+`codess/ingest_sources.py`, but the move rests on the existing suite passing
+and on preflight runs. Two things are missing:
+
+1. Direct tests for `ingest_sources`. Every function there is currently
+   reached only through a full ingest. `_collect_bounded_events`,
+   `_record_raw`, and `_observe_resource` take explicit parameters and are
+   testable as they stand; the three coordinators need a Project fixture with
+   one Session per vendor.
+2. One real rebuild. No published store has been written through the moved
+   code -- preflight discards its stores, so the publication path has not
+   run. Rebuild one Project of each vendor and compare Session and Event
+   counts against its retained `last-ingest-report.json`.
+
+*Step 5 -- extract snapshot publication.* One block remains in the Project
+loop, about 230 lines, holding snapshot creation, candidate promotion, and
+the pointer update. It is the last domain workflow in a command module.
+
+1. Wait for W20 to settle whether `snapshot_id` is a creation or content
+   identity, and for W03 to decide whether `package_digest` stays in its
+   derivation. Extracting first would fix the current derivation in place.
+2. Extract in the same shape as the two phases already done: a function
+   taking `config`, the Project outcome, and the store paths, returning the
+   published snapshot identity or `None`. Both existing phases return a value
+   the caller records rather than mutating shared state.
+3. Move it to `codess/` once it no longer references command-layer locals.
+   `_resync_project_catalog` and `_correlate_project_artifacts` should move
+   with it; they are domain operations that stayed in the command module only
+   because they were extracted before the module existed.
+
+Neither step changes behavior. Both are complete when the existing suite
+passes unchanged and one Project of each vendor rebuilds to matching counts.
+
+**Do first, because everything else assumes them.** W03 is Critical and
+blocks ordinary work: any packaged-file edit currently makes every published
+store unwritable, so it is paid on every schema change. W20 decides what
+`snapshot_id` means, which W06 step 5 waits on. W29 is cheap and makes every
+later change measurable rather than assumed.
+
+**Then the decode work.** W01 and W02 are the only items whose failure mode
+is silently wrong data. They are Critical for that reason, not because they
+are urgent.
+
+**Structure last, in dependency order.** W06 steps 4 and 5 need W20; W24
+needs W26 to settle the Cursor split; W23 and W19 are independent and can
+proceed whenever. None of them changes behavior, so they are safe to defer
+and expensive to interleave with the identity work.
+
+**Two items should be reconsidered rather than scheduled.** W16 evaluates
+interfaces no consumer has asked for, and W17 waits on a consumer that has
+not appeared. Both have been open without a requester; if none emerges they
+belong in 14.4 rather than in the active list.
+
+### 14.2 Immediate Core Work
 
 | ID | Priority | Status | Work | Completion evidence |
 |---|---|---|---|---|
@@ -3556,8 +3934,15 @@ work intentionally outside the current phase.
 | W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES` so discovery, refresh, review, Project handling, and the command modules stop re-deriving partial vendor views from bare keys (3.5.5). The vendor table describes vendors; adapters interpret them, and decode behavior must not migrate into it. Do not name it a registry -- that term already denotes the central `~/.codess` store. | One vendor description supplies keys, display names, identity fields, paths, and store filenames; no module repeats the vendor key set or a key-to-name mapping; adding a vendor touches the vendor table and its adapter, not the command layer. |
 | W25 | Normal | Planned | Strengthen CoSchema time representation. Every time column carries `_at` regardless of type, so a reader cannot tell RFC 3339 text from Unix milliseconds without the DDL, and `started_at` currently denotes `REAL` in `sessions` and `TEXT` in `processing_runs` -- one name, two representations, in one schema. Adopt `_time` for recorded text and `_atms` for source-reported numerics (CoSchema 5.1). Breaking schema change; regenerate stores rather than migrate. | No column name denotes more than one representation; the suffix states the type at every use; the DDL, contract, and query paths agree. |
 | W26 | Normal | Planned | Reevaluate the Cursor module partitioning now that W10 has closed the source-access boundary. Four modules are Cursor-specific -- `cursor_source`, `adapters/cursor`, `cursor_cohort`, `cursor_feature_audit` -- more than any other vendor, because Cursor stores sessions in shared SQLite databases rather than per-session files, so selection, caching, and decode are genuinely separate. Confirm that split is still the right one against the closed boundary, and check whether the cohort cache belongs with source access rather than beside the adapter. | Each Cursor module states which of selection, caching, and decode it owns; no module spans two; the adapter keeps no storage dependency. |
+| W27 | Normal | Planned | Make discovery scoping configurable and documented. `AGGREGATORS` (directories that group Projects rather than being one) and `EXCLUDE_REVIEW_DIRS` (review and backup trees) are frozen sets in `config.py` naming one developer's directories, with no override and no mention outside the source. Another user's grouping directories would be reported as Projects, and their review trees scanned. Exclusion matching was also root-dependent until this session, so the same directory was included or excluded depending on where the scan started. | Both sets are configurable and documented; a scan of an unfamiliar tree can be scoped without editing source; exclusion is a property of the directory rather than of the invocation. |
+| W28 | Normal | Planned | Give the central registry a retention policy. `ingested_projects.json` gains an entry for every Project ever scanned and drops none: an observed registry held 1,452 entries of which 1,424 were temporary directories from test runs and 28 were live. `tools/prune_project_catalog.py` prunes temporary paths from the reviewed catalog but nothing prunes the registry. | Entries for paths that no longer exist are reported and removable; a test run cannot silently enlarge a developer's registry; retention is stated rather than implied. |
+| W29 | High | Planned | Own the static-analysis configuration as one concern rather than three. `pyproject.toml` declares twelve per-file `S608` ignores with a rationale in 10.4 but never declares `select`, so ruff runs its default set: the `S` rules are off unless selected explicitly, and import sorting, function complexity, line length, and annotation coverage are never reported. Mypy has no configuration and runs only by hand. The work is one decision with four parts -- choose the rule set, settle what the `S608` exemptions become, reduce the interpolation sites they cover so fewer modules need exempting (13.4.10), and record lint and type counts alongside test results. Splitting these produced three items that could not be scheduled independently. | `[tool.ruff.lint] select` names the intended rules; every exemption names a module that still needs one after the reduction; a clean run means the selected rules passed; lint and type counts are reported with test results. |
+| W31 | High | Planned | Make `IDENTITY_FORMAT` observable and enforced. It is hashed into every `global_id` but appears neither in the value nor in `store_meta`, so a store cannot report which derivation produced its identities and nothing prevents appending identities from a second scheme. Because identities are compared across stores, the qualifier must travel in the value (`codess:session:id1:sha256:...`) rather than in one store's metadata. | The derivation format is readable from any identity; a store records it; a write whose format differs is refused as the other identifiers already are. |
+| W32 | Normal | Planned | Route entity-identity derivation through `codess/hashing.py`. `identity._qualified` calls `codess_digest()` -- the escape hatch reserved for callers whose read pattern is the policy -- and then hand-rolls the NUL-separated component hashing that `codess_hash` exists to provide, so the one construction the module was written for is the one place not using it. The emitted value also hardcodes `sha256`, which 13.4.8's naming rule reserves for integrity claims a reader recomputes. Changing the emitted prefix alters every stored identity, so this lands with W31 rather than alone. | Identity derivation calls the shared component mode; no module outside `hashing` composes a digest by hand; the algorithm name is not part of a value nothing recomputes. |
+| W33 | Low | Planned | Rename the released file set to `matching_set`, with `matching_set_digest` for the value. `package` and `package_digest` read as the Python distribution in a codebase that is one, when the value covers the SQLite DDL, the logical and mapping contracts, the vendor mapping profiles, and the conformance fixtures. `matching_set` names the relationship the digest expresses -- a store may be written only by software whose released files match the set it was written under -- and avoids `contract`, `format`, `binding`, `release`, and `baseline`, all already in use. Alternatives and their objections are in CoSchema 1.1. The name is in `store_meta`, so this is a wire-format change and rides with W03. | One name describes the released file set across code, `store_meta`, and documentation; it does not collide with Python packaging or with an existing term; 14.4 records it as vocabulary. |
+| W34 | Normal | Under review | Contain the digest algorithm inside `codess/hashing.py`. The string `sha256` appears about 144 times outside that module -- field names (`stored_sha256`, `selection_sha256`), stored value prefixes (`codess:session:sha256:`), and documentation -- so replacing the algorithm would be a wire-format change across the project rather than an edit to one module. Blocked on a decision that has not been made: 13.4.8 proposes keeping the algorithm in the name of integrity fields a reader recomputes and removing it elsewhere, but that split is a proposal, not an approved rule, and the alternative -- no algorithm name anywhere outside `hashing`, with verification callers passing the width they expect -- has not been evaluated against it. | A reviewed rule states where an algorithm name may appear; code outside `hashing` follows it; changing the algorithm touches one module plus whatever format change the rule allows. |
 
-### 14.2 Next Functional Work
+### 14.3 Next Functional Work
 
 | ID | Priority | Status | Work | Start or completion condition |
 |---|---|---|---|---|
@@ -3573,7 +3958,7 @@ work intentionally outside the current phase.
 | W21 | Normal | Planned | Route the `walk_sessions` inline `debug` print statements through the reporting contract W18 defines, rather than the module-local diagnostics dictionary. Starts after W19's extraction and W18's contract; excluded from W19 so the extraction stays behavior-preserving (13.4.7). | The statements emit through the shared contract with tests asserting channel and content; no direct `print` for operational status remains in the module. |
 | W23 | Normal | Planned | Apply the decomposition and naming findings from 3.5.4 and 3.5.5. Reduce `project_catalog.ensure_project_binding` and `catalog_readiness` to their named steps, extracting within the module rather than splitting it. Rename the raw-object operations so they do not depend on mode vocabulary or a borrowed database term: `verify_raw_object` and `restore_raw_object` for today's `verify_captured_object` and `materialize_captured_object`. Extract the stat-consistency guard duplicated between `fileio.source_fingerprint` and `raw_store._compress_file`. Extract the closed vocabularies (Actor kinds, origin kinds, content roles, statuses, raw modes) as named values, leaving CoSchema field names as literals. | Each named step is separately readable and tested; renamed operations have no callers using the old names; one stat guard serves both sites with callers choosing to raise or record; closed-vocabulary literals are replaced and an invalid value fails at the boundary. |
 
-### 14.3 Secondary Maintenance
+### 14.4 Secondary Maintenance
 
 - Fix publication, catalog, raw, refresh, or retention behavior when it
   threatens correctness, bounded storage, or normal operation.
@@ -3753,7 +4138,10 @@ work intentionally outside the current phase.
   case (disambiguated in-text from a security/compliance audit at its point
   of use). Full findings, exact line numbers, and suggested precise
   definitions per sense in
-  `experiments/vocabulary-audit-findings.md`.
+  `experiments/vocabulary-audit-findings.md`. Record `matching set` there as
+  the settled term for the released file set a store is written under (W33),
+  so the concept is not renamed again from one of the terms already
+  overloaded.
 - Consolidate duration arithmetic. No dedicated time module exists, and
   unit conversion is written inline at each use. `walk_sessions.py` alone
   mixes three conventions: days as `/(24 * 3600 * 1000)`, weeks as
@@ -3778,7 +4166,7 @@ work intentionally outside the current phase.
 - Decompose `walk_sessions()`. Tracked as **W19**; the review, candidate
   designs, and validation approach are in 13.4.7.
 
-### 14.4 Deferred Directions
+### 14.5 Deferred Directions
 
 The following remain **Postponed** until a concrete consumer or measured
 limitation justifies reopening them:
@@ -3898,3 +4286,77 @@ what a previously saved document will validate against. State which one is
 being changed, explicitly, every time either changes, even when a
 precedent for the distinction already exists elsewhere in the same
 document."
+
+### 15.7 A Finding Reclassified on Assertion Rather Than Evidence
+
+**Miss:** The software version being lower than values already recorded in
+published stores was reported as a defect. Told the reset was deliberate, the
+item was rewritten as intentional on that assertion alone, without checking.
+The record showed a bare one-line edit with no rationale, and stores in the
+field whose provenance read higher than the software that would rebuild them:
+deliberate at the moment it was made and still a defect in effect. The
+rewrite lost the effect and had to be corrected a second time.
+
+**Prompt that would have caught it:** "When told that something reported as
+a defect was intentional, check the record before reclassifying it. Intent
+and effect are separate findings: an edit can be deliberate and still leave a
+broken invariant, and the useful item names both. Reclassifying on assertion
+turns a verified observation into an unverified one."
+
+### 15.8 Configuration Reported Absent After a Grep That Could Not Find It
+
+**Miss:** `pyproject.toml` was reported as having no ruff configuration,
+based on a clean lint run and a grep for `[tool.ruff]` written to match only
+a top-level table. The file declares twelve per-file `S608` ignores under
+`[tool.ruff.lint.per-file-ignores]`. Reading the file would have taken one
+command; the grep pattern encoded an assumption about the table's name and
+returned nothing, which was then read as evidence.
+
+**Prompt that would have caught it:** "Before reporting configuration as
+missing, read the file. A grep that finds nothing proves the pattern did not
+match, not that the setting is absent, and configuration formats nest."
+
+### 15.9 A Wrong Conclusion Repeated Into Four Places Before Being Checked
+
+**Miss:** Having found the ignores, the next claim was that they "have no
+effect" because `S` is not in ruff's default set. That was asserted from
+reading the configuration rather than running it, then written into a work
+item, a section of analysis, a completion criterion, and a miss record --
+each restating the previous one. One command settles it: selecting `S`
+reports 73 findings without the ignores and 17 with, so they suppress 56.
+The correction had to be applied in four places because the claim had been
+propagated before it was tested.
+
+**Prompt that would have caught it:** "Test a claim about what a tool does
+before writing it down once, let alone four times. A statement that some
+configuration is inert is a claim about behavior, and behavior is checked by
+running it. Propagating an untested claim multiplies the correction."
+
+### 15.10 Related Work Split Into Separate Items That Cannot Be Scheduled Apart
+
+**Miss:** Rule selection, the `S608` exemptions, and reducing SQL
+interpolation were filed as three items across two priorities. They are one
+decision: selecting `S` determines whether the exemptions matter, and
+reducing the interpolation determines how many exemptions remain. None can
+be completed without settling the others, so three items produced three
+partial descriptions of one piece of work and no schedulable unit. It took
+being asked why they were separate to notice.
+
+**Prompt that would have caught it:** "After writing several work items in
+one area, ask whether any could be finished without the others. If not, they
+are one item with parts, and splitting them hides the dependency rather than
+recording it."
+
+### 15.11 A Proposal Restated Until It Read as an Approved Rule
+
+**Miss:** A naming rule -- `_id` for entities, `_key` for lookups,
+`_hash` for integrity claims -- was proposed in one section, then referenced
+from later sections as though it were settled, and finally used as the
+justification for a work item's completion criterion. Nobody had approved it.
+The same happened with a replacement for "package": one candidate was called
+"the closest", which read on re-reading as a recommendation.
+
+**Prompt that would have caught it:** "Mark a proposal as unapproved every
+time it is restated, not only where it is introduced. A rule referenced
+three sections later reads as decided, and the reader has no way to tell that
+it was one option among several."

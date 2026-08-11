@@ -367,34 +367,6 @@ def test_current_raw_records_rejects_unparseable_raw_manifest(tmp_path):
         current_raw_records(project)
 
 
-def test_snapshot_preserves_older_store_format_identity(tmp_path):
-    project = tmp_path / "project"
-    store = project / ".codess" / "sessions_cursor.db"
-    init_db(store)
-    with sqlite3.connect(store) as conn:
-        conn.execute("PRAGMA user_version = 3")
-        conn.execute(
-            "UPDATE store_meta SET value='3' WHERE key='format_version'"
-        )
-        conn.execute(
-            "UPDATE store_meta SET value='legacy-package' WHERE key='package_digest'"
-        )
-    raw = RawStore(tmp_path / "raw")
-    source = tmp_path / "session.jsonl"
-    source.write_bytes(b"legacy")
-    record = raw.observe(
-        source,
-        source_system_id="openai.codex",
-        storage_format="codex-jsonl",
-        mode="capture",
-    )
-    snapshot = create_snapshot(project, [store], [record], raw_store=raw)
-    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
-    assert "coschema3" in snapshot.name
-    assert manifest["format_version"] == 3
-    assert manifest["package_digest"] == "legacy-package"
-
-
 def test_snapshot_build_failure_does_not_replace_current_pointer(tmp_path, monkeypatch):
     project = tmp_path / "project"
     store = project / ".codess" / "sessions_codex.db"

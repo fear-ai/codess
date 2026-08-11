@@ -48,10 +48,11 @@ STANDARD_TOOLS = frozenset({
 })
 
 QUERY_SOURCE_FILTERS = {
-    "cc": ("anthropic.claude-code", "claude"),
-    "codex": ("openai.codex", "codex"),
-    "cursor": ("cursor.composer", "cursor"),
+    "cc": "anthropic.claude-code",
+    "codex": "openai.codex",
+    "cursor": "cursor.composer",
 }
+"""CLI source selector to the CoSchema source-system namespace it selects."""
 
 
 class QueryScope:
@@ -183,20 +184,15 @@ def _open_project_id_query_scope(
 
 
 def _source_predicate(scope: QueryScope, alias: str = "s") -> tuple[str, tuple[str, ...]]:
-    """Return a compatibility-aware session-source predicate and parameters."""
+    """Return a session-source predicate and its parameters."""
     if not scope.source_tokens:
         return "1", ()
-    clauses = []
-    params: list[str] = []
-    for token in sorted(scope.source_tokens):
-        source_system_id, legacy_label = QUERY_SOURCE_FILTERS[token]
-        clauses.append(
-            f"({alias}.source_system_id=? OR "
-            f"({alias}.source_system_id='legacy.unknown' "
-            f"AND lower({alias}.source)=?))"
-        )
-        params.extend((source_system_id, legacy_label))
-    return "(" + " OR ".join(clauses) + ")", tuple(params)
+    tokens = sorted(scope.source_tokens)
+    placeholders = ", ".join("?" for _ in tokens)
+    return (
+        f"{alias}.source_system_id IN ({placeholders})",
+        tuple(QUERY_SOURCE_FILTERS[token] for token in tokens),
+    )
 
 
 def _timestamp_last_sort_key(
@@ -270,14 +266,9 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
         )
         for row in rows:
             source_system_id = row["source_system_id"]
-            if not source_system_id or source_system_id == "legacy.unknown":
-                # Pre-provenance stores did not persist a source namespace.  Keep
-                # their IDs globally distinct by deriving a compatibility
-                # namespace from the recorded vendor label.
-                source_system_id = f"legacy.vendor:{str(row['source']).casefold()}"
             stable_id = (
                 row["global_id"]
-                if row["global_id"] and not row["global_id"].startswith("codess:legacy:")
+                if row["global_id"]
                 else global_session_id(
                     source_system_id, row["vendor_session_id"] or row["id"]
                 )
@@ -379,11 +370,11 @@ def run(args) -> int:
         bool(getattr(args, "taxonomy", False)),
     ]
     if getattr(args, "query_action", None):
-        # A stable session ID is a typed predicate.  Other legacy report modes
+        # A stable session ID is a typed predicate.  Other report modes
         # would make the requested result contract ambiguous.
-        legacy_without_session_filter = primary_modes[:2] + primary_modes[3:]
-        if any(legacy_without_session_filter) or getattr(args, "sess", None) is not None:
-            print("codess: typed query actions cannot be combined with legacy report modes", file=sys.stderr)
+        report_modes_without_session_filter = primary_modes[:2] + primary_modes[3:]
+        if any(report_modes_without_session_filter) or getattr(args, "sess", None) is not None:
+            print("codess: typed query actions cannot be combined with report modes", file=sys.stderr)
             return 1
         primary_modes = [True]
     if sum(primary_modes) > 1:
@@ -581,7 +572,7 @@ def _typed_filters(args, source_tokens: set[str] | None) -> dict:
     if getattr(args, "session_identifier", None):
         filters["session_ids"] = [args.session_identifier]
     if source_tokens:
-        filters["source_system_ids"] = [QUERY_SOURCE_FILTERS[token][0] for token in sorted(source_tokens)]
+        filters["source_system_ids"] = [QUERY_SOURCE_FILTERS[token] for token in sorted(source_tokens)]
     return filters
 
 
@@ -648,7 +639,7 @@ def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
             print(f"codess: event {event_ids[0]!r} resolved in {len(matches)} stores; use a globally unique ID", file=sys.stderr)
             return 1
         allowed = (
-            {QUERY_SOURCE_FILTERS[token][0] for token in scope.source_tokens}
+            {QUERY_SOURCE_FILTERS[token] for token in scope.source_tokens}
             if scope.source_tokens else None
         )
         if allowed and matches[0]["source"]["source_system_id"] not in allowed:
@@ -658,7 +649,7 @@ def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
         return 0 if matches[0]["selected"] else 2
     if action == "configurations":
         allowed = (
-            {QUERY_SOURCE_FILTERS[token][0] for token in scope.source_tokens}
+            {QUERY_SOURCE_FILTERS[token] for token in scope.source_tokens}
             if scope.source_tokens else None
         )
         audit_stores = scope.stores
@@ -999,7 +990,7 @@ def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
         if scope.source_tokens:
             session_predicate, session_params = _source_predicate(scope)
             source_ids = tuple(
-                QUERY_SOURCE_FILTERS[token][0]
+                QUERY_SOURCE_FILTERS[token]
                 for token in sorted(scope.source_tokens)
             )
             placeholders = ",".join("?" for _ in source_ids)

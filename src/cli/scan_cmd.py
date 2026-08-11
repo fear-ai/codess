@@ -7,7 +7,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from codess.config import get_stats_path
+from codess.config import CODESS_DAYS, get_stats_path
 from codess.helpers import unsafe_traversal_root_reason, write_csv
 from codess.sanitize import protect_csv_row
 from codess.project import (
@@ -63,6 +63,17 @@ def _print_scan_diagnostics(diagnostics: dict) -> None:
         print(
             "codess: scan diagnostics: "
             + " ".join(f"{key}={value}" for key, value in counts.items()),
+            file=sys.stderr,
+        )
+    # A Project omitted by the recency window is not a diagnostic among
+    # others: the result is incomplete in a way the reader cannot see from
+    # the output, so it is stated separately with the way to widen it.
+    hidden = diagnostics.get("projects_outside_recency_window", 0)
+    if hidden:
+        print(
+            f"codess: {hidden} project(s) have coding work older than the "
+            f"{CODESS_DAYS}-day window and are not listed; "
+            "use --days 0 for all, or CODESS_DAYS to change the default",
             file=sys.stderr,
         )
 

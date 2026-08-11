@@ -51,7 +51,7 @@ CREATE TABLE workspace_bindings (
 
 CREATE TABLE sources (
   id INTEGER PRIMARY KEY,
-  global_id TEXT NOT NULL UNIQUE DEFAULT ('codess:legacy:uuid:' || lower(hex(randomblob(16)))),
+  global_id TEXT NOT NULL UNIQUE,
   source_system_id TEXT NOT NULL,
   source_uri TEXT NOT NULL,
   storage_format TEXT NOT NULL,
@@ -85,8 +85,8 @@ CREATE TABLE model_configurations (
 
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
-  global_id TEXT NOT NULL UNIQUE DEFAULT ('codess:legacy:uuid:' || lower(hex(randomblob(16)))),
-  observation_id TEXT NOT NULL UNIQUE DEFAULT ('codess:legacy:uuid:' || lower(hex(randomblob(16)))),
+  global_id TEXT NOT NULL UNIQUE,
+  observation_id TEXT NOT NULL UNIQUE,
   source_system_id TEXT NOT NULL DEFAULT 'legacy.unknown',
   vendor_session_id TEXT,
   vendor_name TEXT,
@@ -147,7 +147,7 @@ CREATE TABLE model_turns (
 
 CREATE TABLE events (
   id INTEGER PRIMARY KEY,
-  global_id TEXT NOT NULL UNIQUE DEFAULT ('codess:legacy:uuid:' || lower(hex(randomblob(16)))),
+  global_id TEXT NOT NULL UNIQUE,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   source_id INTEGER REFERENCES sources(id),
   event_id TEXT NOT NULL,

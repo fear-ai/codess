@@ -394,7 +394,6 @@ def _apply_arguments(parser) -> None:
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--repeat", action="store_true")
-    parser.add_argument("--preserve-legacy", action="store_true")
     parser.add_argument("--approve-catalog", type=Path)
     parser.add_argument("--min-size", type=int, default=0)
     parser.add_argument("--no-query-smoke", action="store_true")
@@ -603,7 +602,6 @@ def _baseline_apply(args) -> int:
     result = apply_project(
         args.project, source=args.source, raw_mode=args.raw_mode,
         registry=args.registry, policy_path=args.policy, repeat=args.repeat,
-        preserve_legacy_stores=args.preserve_legacy,
         approve_catalog=args.approve_catalog, min_size=args.min_size,
         query_smoke=not args.no_query_smoke, repo_root=REPO_ROOT,
         report_path=args.report,

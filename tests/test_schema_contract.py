@@ -137,17 +137,26 @@ def test_mapping_event_verifier_checks_rules_provenance_and_json():
     ]
 
 
-def test_writer_refuses_legacy_store_but_reader_can_identify_it(tmp_path):
-    path = tmp_path / "legacy.db"
+def test_store_from_a_superseded_format_is_refused_for_read_and_write(tmp_path):
+    """Only the current format is accepted; older stores are rebuilt, not read."""
+    path = tmp_path / "superseded.db"
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE sessions(id TEXT PRIMARY KEY)")
     conn.commit()
-    assert require_store(conn, write=False, allow_legacy_read=True) == 1
-    with pytest.raises(UnsupportedStoreError):
-        require_store(conn, write=True)
+    for write in (False, True):
+        with pytest.raises(UnsupportedStoreError):
+            require_store(conn, write=write)
     conn.close()
     with pytest.raises(UnsupportedStoreError):
         init_db(path)
+
+
+def test_only_the_current_format_is_readable():
+    from codess.schema_contract import (
+        FORMAT_VERSION, SUPPORTED_READ_FORMATS, SUPPORTED_WRITE_FORMATS,
+    )
+
+    assert SUPPORTED_READ_FORMATS == SUPPORTED_WRITE_FORMATS == {FORMAT_VERSION}
 
 
 def test_writer_refuses_store_from_another_released_package(tmp_path):

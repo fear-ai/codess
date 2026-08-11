@@ -24,7 +24,7 @@ MAPPINGS_ROOT = REPO_ROOT / "schema" / "mappings"
 FORMAT_ID = "codess.coschema"
 FORMAT_VERSION = 4
 APPLICATION_ID = 0x434F4445
-SUPPORTED_READ_FORMATS = frozenset({2, 3, 4})
+SUPPORTED_READ_FORMATS = frozenset({4})
 SUPPORTED_WRITE_FORMATS = frozenset({4})
 
 
@@ -237,27 +237,15 @@ def validate_database_contract(conn: sqlite3.Connection) -> list[str]:
     return errors
 
 
-def has_legacy_schema(conn: sqlite3.Connection) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'"
-    ).fetchone()
-    return row is not None and database_identity(conn) == (0, 0)
+def require_store(conn: sqlite3.Connection, *, write: bool) -> int:
+    """Validate a database before use and return its logical format version.
 
-
-def require_store(
-    conn: sqlite3.Connection,
-    *,
-    write: bool,
-    allow_legacy_read: bool = False,
-) -> int:
-    """Validate a database before use and return its logical format version."""
+    Only the current format is accepted, for reading as well as writing. A
+    store written by an earlier format is not migrated: Codess rebuilds from
+    vendor sources, which remain the authority, so carrying read support for
+    superseded layouts would preserve a path nothing needs.
+    """
     application_id, version = database_identity(conn)
-    if application_id == 0 and version == 0 and has_legacy_schema(conn):
-        if not write and allow_legacy_read:
-            return 1
-        raise UnsupportedStoreError(
-            "legacy unversioned Codess store is read-only; rebuild into CoSchema v4"
-        )
     if application_id != APPLICATION_ID:
         raise UnsupportedStoreError(
             f"not a Codess store: application_id={application_id:#x}"

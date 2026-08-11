@@ -704,7 +704,7 @@ def test_scan_debug_dir_label():
             CODESS_CODEX_SESSIONS=str(tmp / "codex"),
             CODESS_CURSOR_DATA=str(cursor_base),
         )
-        r = _run(["scan", "--dir", str(work), "--debug", "--out", "-"], env=env)
+        r = _run(["scan", "--dir", str(work), "--debug", "--days", "0", "--out", "-"], env=env)
         assert r.returncode == 0
         assert "[dir]" in r.stderr
         assert "[scan]" in r.stderr
@@ -818,7 +818,7 @@ def test_scan_days_ago_in_debug():
             CODESS_CODEX_SESSIONS=str(tmp / "codex"),
             CODESS_CURSOR_DATA=str(cursor_base),
         )
-        r = _run(["scan", "--dir", str(work), "--debug", "--out", "-"], env=env)
+        r = _run(["scan", "--dir", str(work), "--debug", "--days", "0", "--out", "-"], env=env)
         assert r.returncode == 0
         assert "days_ago=" in r.stderr
 
@@ -1015,3 +1015,82 @@ def test_scan_registry_filter_and_ref_columns(tmp_path):
     assert len(lines) == 2
     assert "Claude" in lines[1]
     assert str(proj.resolve()) in lines[1]
+
+
+def test_debug_does_not_change_which_projects_are_listed():
+    """Diagnostic output must describe the same selection an ordinary run gets.
+
+    `--debug` previously disabled the recency window, so a project older than
+    the window appeared only when debugging. A reader could then not reproduce
+    what they had been shown.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        work = tmp / "work"
+        work.mkdir()
+        proj = work / "old"
+        proj.mkdir()
+        cc = tmp / "cc"
+        cc.mkdir()
+        slug = "-" + str(proj.resolve()).lstrip("/").replace("/", "-")
+        (cc / slug).mkdir(parents=True)
+        (cc / slug / "sessions-index.json").write_text(
+            json.dumps({"entries": [{
+                "projectPath": str(proj), "sessionId": "s1",
+                "fileMtime": 1e12, "messageCount": 2, "isSidechain": False,
+            }]})
+        )
+        (tmp / "codex").mkdir()
+        (tmp / "cursor" / "User").mkdir(parents=True)
+        env = _scan_env(
+            tmp, CODESS_CC_PROJECTS=str(cc),
+            CODESS_CODEX_SESSIONS=str(tmp / "codex"),
+            CODESS_CURSOR_DATA=str(tmp / "cursor"),
+        )
+
+        plain = _run(["scan", "--dir", str(work), "--out", "-"], env=env)
+        debug = _run(["scan", "--dir", str(work), "--debug", "--out", "-"], env=env)
+
+        def project_names(result):
+            rows = [
+                line.split(",")[0]
+                for line in result.stdout.strip().splitlines()[1:]
+                if line
+            ]
+            return sorted(name for name in rows if name != "(global)")
+
+        assert project_names(plain) == project_names(debug)
+        # The project is outside the window, so neither run lists it ...
+        assert project_names(plain) == []
+        # ... and the omission is stated rather than left as an empty result.
+        assert "older than the" in plain.stderr
+
+
+def test_projects_outside_the_window_are_listed_with_days_zero():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        work = tmp / "work"
+        work.mkdir()
+        proj = work / "old"
+        proj.mkdir()
+        cc = tmp / "cc"
+        cc.mkdir()
+        slug = "-" + str(proj.resolve()).lstrip("/").replace("/", "-")
+        (cc / slug).mkdir(parents=True)
+        (cc / slug / "sessions-index.json").write_text(
+            json.dumps({"entries": [{
+                "projectPath": str(proj), "sessionId": "s1",
+                "fileMtime": 1e12, "messageCount": 2, "isSidechain": False,
+            }]})
+        )
+        (tmp / "codex").mkdir()
+        (tmp / "cursor" / "User").mkdir(parents=True)
+        env = _scan_env(
+            tmp, CODESS_CC_PROJECTS=str(cc),
+            CODESS_CODEX_SESSIONS=str(tmp / "codex"),
+            CODESS_CURSOR_DATA=str(tmp / "cursor"),
+        )
+
+        result = _run(["scan", "--dir", str(work), "--days", "0", "--out", "-"], env=env)
+        assert "old" in result.stdout
+        assert "older than the" not in result.stderr

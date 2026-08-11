@@ -14,6 +14,7 @@ from codess.project import path_to_slug
 from codess.raw_store import RawStore
 from codess.snapshot import create_snapshot
 from codess.store import connect, init_db, replace_session_events
+from store_fixtures import insert_event, insert_session
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -126,11 +127,8 @@ def test_query_aggregates_multiple_project_roots():
             store = project / ".codess" / "sessions_cc.db"
             init_db(store)
             conn = sqlite3.connect(store)
-            conn.execute(
-                "INSERT INTO sessions "
-                "(id, source, type, started_at, project_path) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (f"s{index}", "Claude", "Code", index + 1, str(project)),
+            insert_session(
+                conn, f"s{index}", started_at=index + 1, project_path=str(project),
             )
             conn.commit()
             conn.close()
@@ -158,11 +156,7 @@ def test_query_aggregates_multiple_vendor_stores():
         for index, store in enumerate(stores):
             init_db(store)
             conn = sqlite3.connect(store)
-            conn.execute(
-                "INSERT INTO sessions "
-                "(id, source, type, started_at) VALUES (?, ?, ?, ?)",
-                (f"s{index}", "test", "Code", 1),
-            )
+            insert_session(conn, f"s{index}", source="test", started_at=1)
             conn.commit()
             conn.close()
         env = {**os.environ, "CODESS_REGISTRY": str(proj / "registry")}
@@ -182,23 +176,21 @@ def test_query_duplicate_session_ids_route_by_global_number():
         for store, source, timestamp, content in stores:
             init_db(store)
             conn = sqlite3.connect(store)
-            conn.execute(
-                "INSERT INTO sessions "
-                "(id, source, type, started_at, ended_at, project_path) "
-                "VALUES ('same', ?, 'Code', ?, ?, ?)",
-                (source, timestamp, timestamp, str(proj)),
+            insert_session(
+                conn, "same", source=source, started_at=timestamp,
+                ended_at=timestamp, project_path=str(proj),
+                global_id=f"codess:session:sha256:{source}-same",
             )
-            conn.execute(
-                "INSERT INTO events "
-                "(session_id, event_id, event_type, subtype, role, content, timestamp) "
-                "VALUES ('same', 'e1', 'user_message', 'prompt', 'user', ?, ?)",
-                (content, timestamp),
+            insert_event(
+                conn, "same", "e1", event_type="user_message", subtype="prompt",
+                role="user", content=content, timestamp=timestamp,
+                global_id=f"codess:event:sha256:{source}-same-e1",
             )
-            conn.execute(
-                "INSERT INTO events "
-                "(session_id, event_id, event_type, tool_name, timestamp) "
-                "VALUES ('same', 'e2', 'tool_call', ?, ?)",
-                ("Read" if source == "Codex" else "Bash", timestamp),
+            insert_event(
+                conn, "same", "e2", event_type="tool_call",
+                tool_name="Read" if source == "Codex" else "Bash",
+                timestamp=timestamp,
+                global_id=f"codess:event:sha256:{source}-same-e2",
             )
             conn.commit()
             conn.close()
@@ -247,10 +239,9 @@ def test_query_scales_beyond_sqlite_attach_limit():
                 store = project / ".codess" / filename
                 init_db(store)
                 conn = sqlite3.connect(store)
-                conn.execute(
-                    "INSERT INTO sessions "
-                    "(id, source, type, started_at) VALUES (?, 'test', 'Code', ?)",
-                    (f"s-{project_index}-{store_index}", project_index * 10 + store_index),
+                insert_session(
+                    conn, f"s-{project_index}-{store_index}", source="test",
+                    started_at=project_index * 10 + store_index,
                 )
                 conn.commit()
                 conn.close()
@@ -276,10 +267,7 @@ def test_query_warns_for_root_without_store_and_counts_it_as_zero():
         store = populated / ".codess" / "sessions_cc.db"
         init_db(store)
         conn = sqlite3.connect(store)
-        conn.execute(
-            "INSERT INTO sessions "
-            "(id, source, type, started_at) VALUES ('s1', 'Claude', 'Code', 1)"
-        )
+        insert_session(conn, "s1", started_at=1)
         conn.commit()
         conn.close()
         registry = tmp / "registry"
@@ -308,39 +296,29 @@ def test_query_aggregates_permissions_and_task_review():
             store = project / ".codess" / "sessions_cc.db"
             init_db(store)
             conn = sqlite3.connect(store)
-            conn.execute(
-                "INSERT INTO sessions "
-                "(id, source, type, started_at) VALUES (?, 'Claude', 'Code', ?)",
-                (f"s{index}", index + 1),
+            insert_session(conn, f"s{index}", started_at=index + 1)
+            insert_event(
+                conn, f"s{index}", "permission", event_type="user_message",
+                subtype="permission_denied", tool_name="Bash",
+                timestamp=index + 1,
             )
-            conn.execute(
-                "INSERT INTO events "
-                "(session_id, event_id, event_type, subtype, tool_name, timestamp) "
-                "VALUES (?, 'permission', 'user_message', 'permission_denied', 'Bash', ?)",
-                (f"s{index}", index + 1),
+            insert_event(
+                conn, f"s{index}", "failure", event_type="user_message",
+                subtype="tool_failure", tool_name="Read", timestamp=index + 1.5,
             )
-            conn.execute(
-                "INSERT INTO events "
-                "(session_id, event_id, event_type, subtype, tool_name, timestamp) "
-                "VALUES (?, 'failure', 'user_message', 'tool_failure', 'Read', ?)",
-                (f"s{index}", index + 1.5),
-            )
-            conn.execute(
-                "INSERT INTO events "
-                "(session_id, event_id, event_type, tool_name, tool_input, timestamp) "
-                "VALUES (?, 'task', 'tool_call', 'Task', ?, ?)",
-                (f"s{index}", json.dumps({"description": f"task {index}"}), index + 1),
+            insert_event(
+                conn, f"s{index}", "task", event_type="tool_call",
+                tool_name="Task",
+                tool_input=json.dumps({"description": f"task {index}"}),
+                timestamp=index + 1,
             )
             if index == 0:
-                conn.execute(
-                    "INSERT INTO events "
-                    "(session_id, event_id, event_type, subtype, content_len, "
-                    "timestamp, metadata) VALUES (?, 'compact-summary', "
-                    "'system_event', 'context_compaction_summary', 123, 10, ?)",
-                    (
-                        f"s{index}",
-                        json.dumps({"content_truncated": True}),
-                    ),
+                insert_event(
+                    conn, f"s{index}", "compact-summary",
+                    event_type="system_event",
+                    subtype="context_compaction_summary",
+                    content_len=123, timestamp=10,
+                    metadata=json.dumps({"content_truncated": True}),
                 )
             conn.commit()
             conn.close()
@@ -372,40 +350,38 @@ def test_query_lineage_and_session_metadata_report():
         store = project / ".codess" / "sessions_codex.db"
         init_db(store)
         conn = sqlite3.connect(store)
-        conn.execute(
-            "INSERT INTO sessions "
-            "(id, source, type, release, started_at, metadata) "
-            "VALUES ('s1', 'Codex', 'Code', '1.2.3', 1, ?)",
-            (json.dumps({"originator": "codex_cli_rs", "source": "cli"}),),
+        insert_session(
+            conn, "s1", source="Codex", release="1.2.3", started_at=1,
+            metadata=json.dumps({"originator": "codex_cli_rs", "source": "cli"}),
         )
         conn.executemany(
             "INSERT INTO events "
-            "(session_id, event_id, event_type, subtype, tool_name, "
+            "(session_id, global_id, event_id, event_type, subtype, tool_name, "
             "content_len, timestamp, metadata) "
-            "VALUES ('s1', ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES ('s1', 'codess:event:sha256:s1-' || ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
-                    "call-1", "tool_call", None, "shell", None, 1,
+                    "call-1", "call-1", "tool_call", None, "shell", None, 1,
                     json.dumps({"call_id": "lineage-1", "status": "completed"}),
                 ),
                 (
-                    "result-1", "user_message", "tool_result", "shell", 12, 2,
+                    "result-1", "result-1", "user_message", "tool_result", "shell", 12, 2,
                     json.dumps({"call_id": "lineage-1"}),
                 ),
                 (
-                    "call-2", "tool_call", None, "apply_patch", None, 3,
+                    "call-2", "call-2", "tool_call", None, "apply_patch", None, 3,
                     json.dumps({"call_id": "lineage-2"}),
                 ),
                 (
-                    "orphan", "user_message", "tool_result", "Read", 5, 4,
+                    "orphan", "orphan", "user_message", "tool_result", "Read", 5, 4,
                     json.dumps({"tool_use_id": "orphan-id"}),
                 ),
                 (
-                    "call-3", "tool_call", None, "shell", None, 5,
+                    "call-3", "call-3", "tool_call", None, "shell", None, 5,
                     json.dumps({"call_id": "lineage-3"}),
                 ),
                 (
-                    "result-3", "user_message", "tool_failure", "shell", 9, 6,
+                    "result-3", "result-3", "user_message", "tool_failure", "shell", 9, 6,
                     json.dumps({"call_id": "lineage-3"}),
                 ),
             ],
@@ -517,9 +493,9 @@ def test_query_no_mode_exit_1():
     """Query without a mode flag exits 1."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        # Create empty store
+        # Create an empty per-vendor store
         (tmp / ".codess").mkdir()
-        init_db(tmp / ".codess" / "sessions.db")
+        init_db(tmp / ".codess" / "sessions_cc.db")
         r = _run(["query", "--dir", str(tmp)])
         assert r.returncode == 1
         assert "Specify" in r.stderr
@@ -1386,7 +1362,9 @@ def test_query_jsonl_sessions_and_stats_are_typed():
         store = project / ".codess/sessions_cc.db"
         init_db(store)
         conn = sqlite3.connect(store)
-        conn.execute("INSERT INTO sessions(id,source,type,started_at,project_path) VALUES('s1','Claude','Code',12.5,?)", (str(project),))
+        insert_session(
+            conn, "s1", started_at=12.5, project_path=str(project),
+        )
         conn.commit()
         conn.close()
         sessions = _run(["query", "--dir", str(project), "--sessions", "--output-format", "jsonl"])
@@ -1407,23 +1385,24 @@ def test_query_vendor_filter_stable_session_id_sequence_and_csv():
         store = project / ".codess/sessions_cc.db"
         init_db(store)
         conn = sqlite3.connect(store)
-        conn.executemany(
-            "INSERT INTO sessions(id,global_id,source_system_id,source,type,started_at,project_path) "
-            "VALUES(?,?,?,?,?,?,?)",
-            [
-                ("claude-1", "global-claude", "anthropic.claude-code", "Claude", "Code", 1, str(project)),
-                ("cursor-1", "global-cursor", "cursor.composer", "Cursor", "Code", 2, str(project)),
-            ],
+        insert_session(
+            conn, "claude-1", source="Claude", global_id="global-claude",
+            started_at=1, project_path=str(project),
         )
-        conn.executemany(
-            "INSERT INTO events(session_id,event_id,sequence_no,event_type,subtype,content,timestamp) "
-            "VALUES(?,?,?,?,?,?,?)",
-            [
-                ("claude-1", "c1", 1, "user_message", "prompt", "claude", 1),
-                ("cursor-1", "u2", 2, "user_message", "prompt", "SECOND", 1),
-                ("cursor-1", "u1", 1, "user_message", "prompt", "FIRST", 2),
-            ],
+        insert_session(
+            conn, "cursor-1", source="Cursor", global_id="global-cursor",
+            started_at=2, project_path=str(project),
         )
+        for session_id, event_id, sequence_no, content, timestamp in (
+            ("claude-1", "c1", 1, "claude", 1),
+            ("cursor-1", "u2", 2, "SECOND", 1),
+            ("cursor-1", "u1", 1, "FIRST", 2),
+        ):
+            insert_event(
+                conn, session_id, event_id, sequence_no=sequence_no,
+                event_type="user_message", subtype="prompt",
+                content=content, timestamp=timestamp,
+            )
         conn.commit()
         conn.close()
         registry = project / "registry"
@@ -1541,14 +1520,11 @@ def test_query_ambiguous_vendor_session_id_requests_global_id():
             store = project / ".codess" / name
             init_db(store)
             conn = sqlite3.connect(store)
-            conn.execute(
-                "INSERT INTO sessions(id,global_id,source_system_id,source,type) "
-                "VALUES('same',?,?,?, 'Code')",
-                (
-                    f"global-{index}",
-                    "anthropic.claude-code" if index == 0 else "cursor.composer",
-                    "Claude" if index == 0 else "Cursor",
-                ),
+            insert_session(
+                conn, "same",
+                source="Claude" if index == 0 else "Cursor",
+                global_id=f"global-{index}",
+                observation_id=f"observation-{index}",
             )
             conn.commit()
             conn.close()
@@ -1694,15 +1670,13 @@ def test_query_pipeline_close_has_no_broken_pipe_traceback():
         store = project / ".codess/sessions_cc.db"
         init_db(store)
         conn = sqlite3.connect(store)
-        conn.execute(
-            "INSERT INTO sessions(id,global_id,source_system_id,source,type,started_at) "
-            "VALUES('s1','global-s1','anthropic.claude-code','Claude','Code',1)"
-        )
-        conn.executemany(
-            "INSERT INTO events(session_id,event_id,sequence_no,event_type,subtype,content,timestamp) "
-            "VALUES('s1',?,?, 'assistant_message','response',?,?)",
-            [(f"e{i}", i, "x" * 2000, i) for i in range(1, 300)],
-        )
+        insert_session(conn, "s1", global_id="global-s1", started_at=1)
+        for index in range(1, 300):
+            insert_event(
+                conn, "s1", f"e{index}", sequence_no=index,
+                event_type="assistant_message", subtype="response",
+                content="x" * 2000, timestamp=index,
+            )
         conn.commit()
         conn.close()
         proc = subprocess.Popen(

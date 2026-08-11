@@ -1,34 +1,10 @@
 {
-  "format_id": "codess.coschema",
-  "format_version": 4,
   "application_id": 1129268293,
   "decoder_version": "0.2",
-  "validator_version": "0.2",
-  "state": "released",
   "files": {
     "contract": {
       "path": "schema/coschema/contract.json",
       "sha256": "df15b9995cb3fea98c5f63d270e4aa757fbf6580cc6cc93f3b274bb93ded98ee"
-    },
-    "mapping_contract": {
-      "path": "schema/coschema/mapping-contract.json",
-      "sha256": "366a45902d0b24d8399e9f0e92a891adcebfd8c0a5529f3ac7df0c17b9e88f51"
-    },
-    "sqlite_schema": {
-      "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "662946a03a9328bae7a276c5cbbe9fcafab0d0de32444a2f2197c3fd4fbe65c6"
-    },
-    "mapping_claude": {
-      "path": "schema/mappings/claude.json",
-      "sha256": "0291aeb1af4acb666905994e763514980785a2e458149ae16140f83ab934494c"
-    },
-    "mapping_codex": {
-      "path": "schema/mappings/codex.json",
-      "sha256": "a7737e8887cd0d17d83ae845ce9bd3dc7996a62d89bb630d50a902011584aa5d"
-    },
-    "mapping_cursor": {
-      "path": "schema/mappings/cursor.json",
-      "sha256": "5d91b9e2ce4db5da040b3cc9070ecd1a82855ea7d2bc9f4ed37123ebe4e1b826"
     },
     "fixture_compatibility_store_meta_v2": {
       "path": "schema/coschema/fixtures/compatibility/store-meta-v2.json",
@@ -69,9 +45,34 @@
     "fixture_negative_event_sequence_zero": {
       "path": "schema/coschema/fixtures/negative/event-sequence-zero.json",
       "sha256": "d123c812edcd665eacf7e85dcbca06d2ea3b0d52598c59cded4df5e5e42e7433"
+    },
+    "mapping_claude": {
+      "path": "schema/mappings/claude.json",
+      "sha256": "0291aeb1af4acb666905994e763514980785a2e458149ae16140f83ab934494c"
+    },
+    "mapping_codex": {
+      "path": "schema/mappings/codex.json",
+      "sha256": "a7737e8887cd0d17d83ae845ce9bd3dc7996a62d89bb630d50a902011584aa5d"
+    },
+    "mapping_contract": {
+      "path": "schema/coschema/mapping-contract.json",
+      "sha256": "366a45902d0b24d8399e9f0e92a891adcebfd8c0a5529f3ac7df0c17b9e88f51"
+    },
+    "mapping_cursor": {
+      "path": "schema/mappings/cursor.json",
+      "sha256": "5d91b9e2ce4db5da040b3cc9070ecd1a82855ea7d2bc9f4ed37123ebe4e1b826"
+    },
+    "sqlite_schema": {
+      "path": "schema/coschema/sqlite/schema.sql",
+      "sha256": "d4837c4939cd80ef4278d2cf3a8a29d7d96891c0a55afba2672c1ed69a922ae4"
     }
   },
+  "format_id": "codess.coschema",
+  "format_version": 4,
   "reader_compatibility": {
+    "legacy_read": [
+      1
+    ],
     "read": [
       2,
       3,
@@ -79,9 +80,8 @@
     ],
     "write": [
       4
-    ],
-    "legacy_read": [
-      1
     ]
-  }
+  },
+  "state": "released",
+  "validator_version": "0.2"
 }

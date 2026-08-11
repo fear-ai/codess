@@ -21,70 +21,11 @@ from codess.config import (
     WORKING_ARCHIVES_DIR,
 )
 from codess.fileio import hash_file, read_json, write_json_atomic
-from codess.schema_contract import FORMAT_VERSION, has_legacy_schema, verify_package
+from codess.schema_contract import verify_package
 from codess.snapshot import (
     current_stores, publish_snapshot, snapshot_store_paths,
     snapshot_store_paths_from_base,
 )
-
-_LEGACY_TABLE_COUNT_QUERIES = {
-    "sessions": "SELECT COUNT(*) FROM sessions",
-    "events": "SELECT COUNT(*) FROM events",
-}
-
-
-def preserve_legacy(project: Path, enabled: bool) -> Path | None:
-    base = project / STORE_DIR
-    legacy: list[Path] = []
-    for path in sorted(base.glob("*.db")):
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
-        try:
-            if has_legacy_schema(conn):
-                legacy.append(path)
-        finally:
-            conn.close()
-    if not legacy:
-        return None
-    if (base / CURRENT_POINTER_FILE).exists():
-        raise RuntimeError("legacy working databases coexist with current.json; review manually")
-    if not enabled:
-        raise RuntimeError("legacy stores found; rerun with --preserve-legacy")
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    destination = base / "legacy" / f"pre-coschema{FORMAT_VERSION}-{stamp}"
-    destination.mkdir(parents=True, exist_ok=False)
-    manifest: dict[str, Any] = {
-        "baseline_kind": "legacy-unversioned-codess",
-        "preserved_at": datetime.now(timezone.utc).isoformat(),
-        "files": {},
-    }
-    for source in legacy:
-        conn = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)
-        try:
-            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-            counts = {}
-            for table, count_query in _LEGACY_TABLE_COUNT_QUERIES.items():
-                exists = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-                    (table,),
-                ).fetchone()
-                if exists:
-                    counts[table] = int(conn.execute(count_query).fetchone()[0])
-        finally:
-            conn.close()
-        manifest["files"][source.name] = {
-            "sha256": hash_file(source), "size": source.stat().st_size,
-            "integrity_check": integrity, **counts,
-        }
-        shutil.move(str(source), destination / source.name)
-    state = base / STATE_FILE
-    if state.exists():
-        manifest["files"][state.name] = {
-            "sha256": hash_file(state), "size": state.stat().st_size,
-        }
-        shutil.move(str(state), destination / state.name)
-    write_json_atomic(destination / "baseline.json", manifest)
-    return destination
-
 
 def archive_stale_working_stores(project: Path) -> Path | None:
     base = project / STORE_DIR
@@ -96,12 +37,11 @@ def archive_stale_working_stores(project: Path) -> Path | None:
     for path in databases:
         conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
         try:
-            if not has_legacy_schema(conn):
-                package_digests.add(
-                    dict(conn.execute("SELECT key, value FROM store_meta")).get(
-                        "package_digest"
-                    )
+            package_digests.add(
+                dict(conn.execute("SELECT key, value FROM store_meta")).get(
+                    "package_digest"
                 )
+            )
         finally:
             conn.close()
     if package_digests == {current_digest} or not package_digests:
@@ -221,7 +161,6 @@ def apply_project(
     registry: Path,
     policy_path: Path | None,
     repeat: bool,
-    preserve_legacy_stores: bool,
     approve_catalog: Path | None,
     min_size: int,
     query_smoke: bool,
@@ -234,7 +173,6 @@ def apply_project(
     policy = load_policy(policy_path)
     if policy.get("require_fixed_point") and not repeat:
         raise RuntimeError("policy requires --repeat")
-    legacy = preserve_legacy(project, preserve_legacy_stores)
     working_archive = archive_stale_working_stores(project)
     first_reset = reset_rebuildable_working_stores(project)
     first_ingest = run_ingest(
@@ -340,7 +278,6 @@ def apply_project(
     result = {
         "report_format": "codess.apply-report/1",
         "project": str(project), "status": final["status"],
-        "legacy_preserved": str(legacy) if legacy else None,
         "working_stores_archived": str(working_archive) if working_archive else None,
         "working_stores_reset": {
             "before_first": first_reset,

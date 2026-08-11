@@ -11,6 +11,10 @@ import pytest
 _src = Path(__file__).resolve().parent.parent / "src"
 if str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
+# Test-support modules live beside the tests that use them.
+_here = Path(__file__).parent
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
 
 
 @pytest.fixture(autouse=True)

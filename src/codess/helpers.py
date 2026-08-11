@@ -140,8 +140,17 @@ def is_excluded(p: Path, work_root: Path | None = None) -> bool:
         return True
     if "/Save" in rel or rel.startswith("Save"):
         return True
-    for d in EXCLUDE_REVIEW_DIRS:
-        if rel == d or rel.startswith(d + "/"):
+    # Match on path segments rather than a root-relative prefix: the same
+    # directory must be excluded whether it is reached as `ZK/ZKs` from
+    # ~/Work or `Work/ZK/ZKs` from the home directory. Anchoring to one root
+    # made exclusion depend on where the scan started.
+    parts = p.parts
+    for entry in EXCLUDE_REVIEW_DIRS:
+        needle = tuple(entry.split("/"))
+        if any(
+            parts[i:i + len(needle)] == needle
+            for i in range(len(parts) - len(needle) + 1)
+        ):
             return True
     return False
 def write_csv(path: Path, rows: list[list], headers: list[str] | None = None) -> None:

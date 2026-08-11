@@ -21,7 +21,7 @@ inputs to later research or assessment.
 
 ### I Want to Explore One Project
 
-Follow the [basic setup and first run](Operations.md#4-first-project) to scan,
+Follow the [basic setup and first run](Operations.md#5-first-project) to scan,
 ingest, orient, and search one repository. Start here if you want to answer:
 
 - Which Sessions exist for this Project?
@@ -52,13 +52,13 @@ available to qualify results.
 
 ### I Operate or Maintain Codess
 
-Use [First Project](Operations.md#4-first-project) for ordinary operation and
-[Basic Diagnosis](Operations.md#9-basic-diagnosis) when results or performance
+Use [First Project](Operations.md#5-first-project) for ordinary operation and
+[Basic Diagnosis](Operations.md#10-basic-diagnosis) when results or performance
 are unexpected.
 
 ## Quick Start
 
-Codess requires Python 3.10 or newer. From the repository root:
+Codess requires Python 3.11 or newer. From the repository root:
 
 ```bash
 python -m pip install -e .
@@ -192,7 +192,7 @@ local paths, credentials, and other private material.
 - Export or third-party indexing must be explicitly selected.
 - `.codess/` data should not be committed to a Project repository.
 
-The [Raw Evidence](Operations.md#8-raw-evidence) procedure covers explicit
+The [Raw Evidence](Operations.md#9-raw-evidence) procedure covers explicit
 capture. Storage deletion remains a reviewed maintenance operation.
 
 ## Documentation Map

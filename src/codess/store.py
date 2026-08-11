@@ -26,8 +26,6 @@ from codess.schema_contract import (
     APPLICATION_ID,
     FORMAT_ID,
     FORMAT_VERSION,
-    UnsupportedStoreError,
-    has_legacy_schema,
     load_ddl,
     require_store,
     verify_package,
@@ -84,7 +82,7 @@ def _profile(source: str | None) -> dict[str, str]:
     return SOURCE_PROFILES.get(
         str(source or ""),
         {
-            "source_system_id": "legacy.unknown",
+            "source_system_id": "unknown.source-system",
             "vendor_name": "unknown",
             "product_name": str(source or "unknown").lower(),
             "harness_name": "unknown",
@@ -145,7 +143,7 @@ def _path_is_obsolete(
 
 
 def init_db(db_path: Path) -> None:
-    """Create a new CoSchema v4 store; refuse mutation of legacy/unknown stores."""
+    """Create a new CoSchema v4 store, refusing any database that is not one."""
     verify_package()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -154,10 +152,6 @@ def init_db(db_path: Path) -> None:
             "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
         ).fetchone()
         if has_tables:
-            if has_legacy_schema(conn):
-                raise UnsupportedStoreError(
-                    f"{db_path} is a legacy store; preserve it and rebuild CoSchema v4"
-                )
             require_store(conn, write=True)
             return
         conn.executescript(load_ddl())
@@ -193,7 +187,7 @@ def connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:
-        require_store(conn, write=not read_only, allow_legacy_read=read_only)
+        require_store(conn, write=not read_only)
     except Exception:
         conn.close()
         raise

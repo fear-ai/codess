@@ -24,7 +24,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--repeat", action="store_true")
-    parser.add_argument("--preserve-legacy", action="store_true")
     parser.add_argument("--approve-catalog", type=Path)
     parser.add_argument("--min-size", type=int, default=0)
     parser.add_argument("--no-query-smoke", action="store_true")
@@ -38,7 +37,6 @@ def main(argv: list[str] | None = None) -> int:
             registry=args.registry,
             policy_path=args.policy,
             repeat=args.repeat,
-            preserve_legacy_stores=args.preserve_legacy,
             approve_catalog=args.approve_catalog,
             min_size=args.min_size,
             query_smoke=not args.no_query_smoke,

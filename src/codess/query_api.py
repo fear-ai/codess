@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from codess.hashing import codess_bytes_hash, codess_text_hash
+from codess.hashing import codess_bytes_hash
 
 
 REQUEST_FORMAT = "codess.query-request/1"
@@ -625,15 +625,12 @@ def _store_provenance(store: dict[str, Any]) -> dict[str, Any]:
 
 
 def selected_project_ids(stores: list[dict[str, Any]]) -> list[str]:
-    """Return stable Project IDs, with an explicit legacy location fallback."""
+    """Return the stable Project IDs the selected stores contain."""
     selected: set[str] = set()
     for store in stores:
-        ids = [row[0] for row in store["conn"].execute("SELECT id FROM projects")]
-        if ids:
-            selected.update(str(value) for value in ids)
-        else:
-            digest = codess_text_hash(256, 256, str(store["project_path"]))
-            selected.add(f"codess:legacy-project-location:sha256:{digest}")
+        selected.update(
+            str(row[0]) for row in store["conn"].execute("SELECT id FROM projects")
+        )
     return sorted(selected)
 
 
@@ -658,9 +655,6 @@ def selected_project_snapshots(
                 "SELECT id FROM projects ORDER BY id"
             )
         ]
-        if not project_ids:
-            digest = codess_text_hash(256, 256, str(store["project_path"]))
-            project_ids = [f"codess:legacy-project-location:sha256:{digest}"]
         snapshot_id = _store_snapshot_id(store)
         selected.extend({
             "project_id": project_id,
@@ -1600,8 +1594,6 @@ def execute(
         )
     if any(row.get("content_complete") is False for row in rows):
         limitations.append("one or more returned rows has incomplete normalized content")
-    if any(value.startswith("codess:legacy-project-location:") for value in observed_project_ids):
-        limitations.append("one or more legacy stores lacks a stable Project ID; scope is location-bound")
     result = {
         "format": RESULT_FORMAT,
         "processor": QUERY_PROCESSOR,

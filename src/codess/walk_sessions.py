@@ -245,6 +245,28 @@ def _session_metrics_cursor_global() -> dict:
     return {"count": m["count"], "events": m["events"], "size_mb": round(BMB(m["size_bytes"]), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "invalid_keys": m.get("invalid_keys", 0), "header_count": m.get("header_count", 0), "timed_header_count": m.get("timed_header_count", 0), "errors": [m["error"]] if m.get("error") else []}
 
 
+def _has_any_sessions(
+    project: Path,
+    cc_paths: set,
+    codex_paths: set,
+    cursor_paths: set,
+    subagent: bool,
+    codex_index: list | None,
+) -> bool:
+    """Report whether a Project has any retained Session, ignoring recency.
+
+    Used only to distinguish "hidden by the time window" from "no coding
+    work", so an omission can be reported rather than looked like absence.
+    """
+    if project in cc_paths and _session_metrics_cc(project, None, subagent)["count"]:
+        return True
+    if project in codex_paths and _session_metrics_codex(
+        project, None, codex_index=codex_index
+    )["count"]:
+        return True
+    return bool(project in cursor_paths and _session_metrics_cursor(project)["count"])
+
+
 def walk_sessions(
     work_root: Path,
     vendor_filter: list[str] | None = None,
@@ -427,10 +449,14 @@ def walk_sessions(
                 keep.add(p)
         return keep
 
+    # Recency is a selection, not a diagnostic: `debug` must not change which
+    # Projects are reported, or a reader cannot trust a scan they did not run
+    # with it. Projects excluded by the window are counted and reported.
     cutoff_ms = None
-    if recent_days is not None and recent_days > 0 and not debug:
+    if recent_days is not None and recent_days > 0:
         import time
         cutoff_ms = (time.time() - recent_days * 86400) * 1000
+    excluded_by_recency = 0
 
     projects = sorted(canonicalize({p for p in all_paths if p.exists()}), key=str)
     rows = []
@@ -489,7 +515,16 @@ def walk_sessions(
             sess_count += m_cursor["count"]
             sess_mb += m_cursor["size_mb"]
             span_w = span_w or m_cursor["span_weeks"]
-        if not src or (not debug and cutoff_ms and not has_recent):
+        if not src:
+            # No sessions survived selection. When a window is active, check
+            # whether the Project has work at all: a Project hidden by the
+            # window is a different outcome from one with no coding work, and
+            # a reader cannot tell them apart from an empty result.
+            if cutoff_ms and _has_any_sessions(p, cc_paths, codex_paths, cursor_paths, subagent, codex_index):
+                excluded_by_recency += 1
+            continue
+        if cutoff_ms and not has_recent:
+            excluded_by_recency += 1
             continue
         row = {
             "path": rel,
@@ -550,4 +585,6 @@ def walk_sessions(
             if debug:
                 print("[scan] project (global) path=(global)", file=sys.stderr)
                 print(f"  Cursor central: sess={m_global.get('count')} events={m_global.get('events', 0)} mb={m_global.get('size_mb')} span_weeks={m_global.get('span_weeks')} days_ago={m_global.get('days_ago')} headers={m_global.get('header_count', 0)} timed_headers={m_global.get('timed_header_count', 0)}", file=sys.stderr)
+    if excluded_by_recency:
+        _record_count(diagnostics, "projects_outside_recency_window", excluded_by_recency)
     return rows

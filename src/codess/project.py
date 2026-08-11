@@ -211,15 +211,19 @@ def build_scan_run_options(args: Any) -> dict[str, Any]:
     """Return resolved scan behavior for one CLI invocation.
 
     Keys: stop_on_error, debug, subagent (bool); recent_days (int | None,
-    None when debug bypasses the day filter); vendors (list[str] | None,
-    None meaning all vendors).
+    None meaning no time window); vendors (list[str] | None, None meaning
+    all vendors).
+
+    `debug` does not widen the window. Diagnostic output must describe the
+    same selection an ordinary run produces, or a reader cannot reproduce
+    what they were shown; use `--days 0` to select all time.
     """
     from codess.config import CODESS_DAYS, DEBUG, STOP, SUBAGENT
 
     stop_on_error = flag_or_env(args, "stop", STOP)
     debug = flag_or_env(args, "debug", DEBUG)
     subagent = flag_or_env(args, "subagent", SUBAGENT)
-    recent_days = None if debug else (
+    recent_days = (
         args.days if getattr(args, "days", None) is not None else CODESS_DAYS
     )
     source_filter = getattr(args, "source", None)
