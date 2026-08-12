@@ -890,3 +890,31 @@ def test_a_working_archive_is_named_the_instant_its_manifest_reports(tmp_path):
     manifest = json.loads((destination / "archive.json").read_text(encoding="utf-8"))
     archived_at = datetime.fromisoformat(manifest["archived_at"])
     assert destination.name.endswith(archived_at.strftime("%Y%m%dT%H%M%SZ"))
+
+
+def test_package_verify_reports_both_digests_and_what_each_covers():
+    """Exact package verification has a named consumer now that the gate does not.
+
+    W03 removed the fixtures from the write gate; the guarantee did not
+    disappear, it moved here, where its question -- "is this working tree the
+    reviewed one" -- is the right one to ask.
+    """
+    import io
+    import json
+    from contextlib import redirect_stdout
+
+    from cli.admin_cmd import run
+    from codess.schema_contract import CONTRACT_ROLES, contract_digest, verify_package
+
+    captured = io.StringIO()
+    with redirect_stdout(captured):
+        assert run(["package", "verify"]) == 0
+    report = json.loads(captured.getvalue())
+
+    assert report["format"] == "codess.package-verification/1"
+    assert report["contract_digest"] == contract_digest()
+    assert report["package_digest"] == verify_package()
+    assert report["contract_digest"] != report["package_digest"]
+    assert set(report["contract_files"]) == CONTRACT_ROLES
+    assert report["other_files"], "the fixtures outside the gate must be named"
+    assert not set(report["other_files"]) & CONTRACT_ROLES

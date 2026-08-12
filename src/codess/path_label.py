@@ -7,8 +7,9 @@ resolving the path string itself. review_project.py is the sole consumer.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
+
+from codess.hashing import codess_hash
 
 
 REFERENCE_SEGMENTS = frozenset({"sOSS", "Claws", "ZKs", "CodingTools"})
@@ -38,16 +39,22 @@ def classify_project_path(path: Path, *, work_root: Path | None = None) -> dict[
     return {"topic": topic, "ownership": "own" if parts else "unknown", "activity_state": "active", "selection_state": "candidate"}
 
 
-def path_key(path: Path) -> str:
-    """Return a reproducible review key, never a logical Project identity.
+def local_path_key(path: Path) -> str:
+    """Return a reproducible key for one reviewed location on this machine.
 
-    Derived from the resolved path text alone, so the same checkout at a
-    different location -- or on a different machine, where case sensitivity
-    and Unicode normalization of path components differ -- yields a
-    different key. Review catalogs holding this key are therefore
-    machine-local.
+    Names a location, not a Project. Derived from the resolved path text
+    alone, so the same checkout at a different location -- or on a different
+    machine, where case sensitivity and Unicode normalization of path
+    components differ -- yields a different key. Review catalogs holding it
+    are machine-local.
+
+    The name says so because the previous one did not: `path_key` read as an
+    identity, and the review catalog is keyed by `path` rather than by this
+    value, which serves only as an alternative reference when recording a
+    decision. Codess already has a portable Project identity
+    (`project_catalog.ensure_project_binding`), and a candidate acquires one
+    when it is approved; a second, path-derived identity would disagree with
+    it the first time a directory moved (W20, 13.4.8).
     """
     normalized = str(path.expanduser().resolve())
-    return "candidate:path-key:" + hashlib.sha256(
-        normalized.encode("utf-8")
-    ).hexdigest()[:24]
+    return "local:path-key:" + codess_hash(256, 64, [normalized])

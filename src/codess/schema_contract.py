@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from codess.hashing import codess_digest
 from codess.fileio import hash_file
@@ -36,7 +38,33 @@ class UnsupportedStoreError(SchemaContractError):
     """A database is not writable/readable by this software contract."""
 
 
+log = logging.getLogger(__name__)
+
 _sha256 = hash_file
+
+CONTRACT_OVERRIDE_ENV = "CODESS_NO_CONTRACT_CHECK"
+
+
+def contract_check_disabled() -> bool:
+    """Whether the operator has opted out of contract checking.
+
+    Two situations use this. A test may exercise a store whose recorded
+    contract deliberately disagrees. A recovery may read or extend a store
+    when the released files that produced it are no longer reconstructible --
+    vendor sources deleted, a working tree partly restored -- where refusing
+    the write protects nothing and leaves retained evidence unreachable.
+
+    Read from the environment rather than `config`, for the same reason
+    `fileio._no_hash_active` does: `--no-check` sets the variable after
+    config's module-level constants have resolved, so reading the constant
+    would miss a flag set on the command line.
+
+    The override is not the default and warns. Each bypass logs a warning,
+    and a store written under it records `contract_override` in `store_meta`.
+    """
+    return os.environ.get(CONTRACT_OVERRIDE_ENV, "0").strip().lower() in (
+        "1", "true", "yes",
+    )
 
 
 @lru_cache(maxsize=1)
@@ -58,13 +86,46 @@ def load_manifest() -> dict[str, Any]:
     return manifest
 
 
-@lru_cache(maxsize=1)
-def verify_package() -> str:
-    """Verify every released package file and return a deterministic digest."""
+CONTRACT_ROLES = frozenset({
+    "sqlite_schema",
+    "contract",
+    "mapping_contract",
+    "mapping_claude",
+    "mapping_codex",
+    "mapping_cursor",
+})
+"""The manifest roles that determine what a store *is*.
+
+These six files are loaded by `src/` at runtime: the DDL fixes the physical
+layout, `contract.json` the logical one that `validate_database_contract`
+checks against, and the mapping contract and three profiles the mapping
+evidence attached to decoded records. Nothing outside this set can change the
+layout or the decode of a store, which is the only question the write gate
+asks.
+
+The manifest's remaining entries are validation fixtures. They are verified
+by `verify_package`, which is a release and diagnostic operation, and they
+are deliberately excluded from `contract_digest` -- see 13.4.4.
+"""
+
+
+def _digest_manifest_files(roles: Iterable[str] | None, subject: str) -> str:
+    """Verify the named released files and fold them into one digest.
+
+    `roles` selects a subset of the manifest by role name, or every file when
+    None. Each file is hashed and compared with its recorded value, and the
+    per-file hashes are folded in role order so the result is deterministic
+    and independent of filesystem ordering.
+    """
     manifest = load_manifest()
+    entries = sorted(
+        (role, entry)
+        for role, entry in manifest.get("files", {}).items()
+        if roles is None or role in roles
+    )
     failures: list[str] = []
-    package_hash = codess_digest()
-    for role, entry in sorted(manifest.get("files", {}).items()):
+    combined = codess_digest()
+    for role, entry in entries:
         path = REPO_ROOT / entry["path"]
         if not path.is_file():
             failures.append(f"{role}: missing {entry['path']}")
@@ -75,28 +136,67 @@ def verify_package() -> str:
                 f"{role}: hash mismatch for {entry['path']} "
                 f"({actual} != {entry.get('sha256')})"
             )
-        package_hash.update(role.encode("utf-8"))
-        package_hash.update(b"\0")
-        package_hash.update(actual.encode("ascii"))
-        package_hash.update(b"\n")
+        combined.update(role.encode("utf-8"))
+        combined.update(b"\0")
+        combined.update(actual.encode("ascii"))
+        combined.update(b"\n")
     if failures:
-        raise SchemaContractError("invalid released CoSchema package: " + "; ".join(failures))
-    return package_hash.hexdigest()
+        if contract_check_disabled():
+            # Report the digest of what is on disk, so a recovery run is
+            # reproducible and the caller sees what it proceeded with.
+            log.warning(
+                "%s: proceeding despite %d failure(s) because %s is set: %s",
+                subject, len(failures), CONTRACT_OVERRIDE_ENV, "; ".join(failures),
+            )
+        else:
+            raise SchemaContractError(f"invalid {subject}: " + "; ".join(failures))
+    return combined.hexdigest()
+
+
+@lru_cache(maxsize=1)
+def contract_digest() -> str:
+    """Verify the executable contract and return its digest.
+
+    This is the value a store records and the write gate compares. It answers
+    one question -- *would extending this store mix records written under
+    different rules?* -- and only the six files in `CONTRACT_ROLES` can change
+    that answer.
+
+    It replaces a digest over the whole manifest, of which ten of sixteen
+    entries were validation fixtures. Editing one made every published store
+    unwritable although its layout, decoder, and data were unchanged, and a
+    fixture edit that had not yet updated the manifest broke the loaders
+    below as well -- so a half-finished edit to a test document disabled the
+    program rather than only the write path (13.4.4).
+    """
+    return _digest_manifest_files(CONTRACT_ROLES, "CoSchema executable contract")
+
+
+@lru_cache(maxsize=1)
+def verify_package() -> str:
+    """Verify every released package file and return a deterministic digest.
+
+    A release and diagnostic operation: it answers "is this working tree the
+    reviewed one", which covers the validation fixtures as well as the
+    contract. Runtime paths use `contract_digest` instead, because a store's
+    compatibility does not depend on test data.
+    """
+    return _digest_manifest_files(None, "released CoSchema package")
 
 
 @lru_cache(maxsize=1)
 def load_contract() -> dict[str, Any]:
-    verify_package()
+    contract_digest()
     return json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
 
 
 def load_ddl() -> str:
-    verify_package()
+    contract_digest()
     return DDL_PATH.read_text(encoding="utf-8")
 
 
 def load_mapping(name: str) -> dict[str, Any]:
-    verify_package()
+    contract_digest()
     if name not in {"claude", "codex", "cursor"}:
         raise SchemaContractError(f"unknown mapping profile: {name}")
     mapping = json.loads(
@@ -288,11 +388,19 @@ def require_store(conn: sqlite3.Connection, *, write: bool) -> int:
     meta = store_metadata(conn)
     if meta.get("format_id") != FORMAT_ID or int(meta.get("format_version", -1)) != version:
         raise UnsupportedStoreError("store_meta disagrees with SQLite format identity")
-    if write and meta.get("package_digest") != verify_package():
-        raise UnsupportedStoreError(
-            "store package differs from the current released package; rebuild "
-            "the derived working store from source"
-        )
+    if write and meta.get("package_digest") != contract_digest():
+        if contract_check_disabled():
+            log.warning(
+                "writing a store recorded under contract %s with %s in effect; "
+                "records written under different rules may be mixed",
+                meta.get("package_digest"), CONTRACT_OVERRIDE_ENV,
+            )
+        else:
+            raise UnsupportedStoreError(
+                "store was written under a different CoSchema contract; rebuild "
+                "the derived working store from source, or set "
+                f"{CONTRACT_OVERRIDE_ENV}=1 to proceed anyway"
+            )
     if write and meta.get("decoder_version") != DECODER_VERSION:
         raise UnsupportedStoreError(
             "store decoder version differs from the current decoder; rebuild"

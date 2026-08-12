@@ -23,7 +23,7 @@ from codess.config import (
     CURRENT_POINTER_FILE, MANIFEST_FILE, RAW_MANIFEST_FILE, RAW_MODES, STORE_DIR,
 )
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
-from codess.schema_contract import FORMAT_VERSION, require_store, verify_package
+from codess.schema_contract import FORMAT_VERSION, require_store, contract_digest
 from codess.store import integrity_report, table_counts
 from codess.snapshot import (
     SnapshotError, current_stores, read_manifest, current_snapshot,
@@ -719,7 +719,7 @@ def validate_project(
     )
     _add_check(
         report, "package_digest",
-        manifest.get("package_digest") == verify_package(),
+        manifest.get("package_digest") == contract_digest(),
         manifest.get("package_digest"),
     )
     required_decoder = policy.get(

@@ -9,7 +9,7 @@ from typing import Any, Iterable
 from codess.baseline_validation import load_policy, validate_project
 from codess.fileio import read_json, write_json_atomic
 from codess.project_catalog import durable_project_root
-from codess.schema_contract import FORMAT_VERSION, verify_package
+from codess.schema_contract import FORMAT_VERSION, contract_digest
 
 
 SELECTION_FORMAT = "codess.baseline-selection/1"
@@ -76,7 +76,7 @@ def update_approved_catalog(
     old.update(entry)
     entries[entry["path"]] = old
     data["projects"] = sorted(entries.values(), key=lambda item: item["path"])
-    data["package_digest"] = verify_package()
+    data["package_digest"] = contract_digest()
     write_json_atomic(path, data)
 
 
@@ -96,7 +96,7 @@ def load_baseline_selection(path: Path) -> dict[str, Any]:
 def _accepted_from_reports(
     projects: Iterable[dict[str, Any]], *, repo_root: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
-    package_digest = verify_package()
+    package_digest = contract_digest()
     approved: list[dict[str, Any]] = []
     reviewed: list[dict[str, Any]] = []
     registries: set[str] = set()
@@ -154,7 +154,7 @@ def verify_reviewed_catalog(path: Path, *, repo_root: Path) -> dict[str, Any]:
     catalog = read_json(path)
     if catalog.get("catalog_format") != REVIEWED_FORMAT:
         raise ValueError("unsupported reviewed-baseline catalog format")
-    if catalog.get("package_digest") != verify_package():
+    if catalog.get("package_digest") != contract_digest():
         raise ValueError("reviewed package digest differs from the current package")
     registry = Path(catalog["registry"]).expanduser().resolve()
     results = []
@@ -202,7 +202,7 @@ def freeze_reviewed_catalogs(
     approved_projects, reviewed_projects, registry = _accepted_from_reports(
         selection["projects"], repo_root=repo_root
     )
-    package_digest = verify_package()
+    package_digest = contract_digest()
     approved = {
         "catalog_format": APPROVED_FORMAT,
         "coschema_format": FORMAT_VERSION,

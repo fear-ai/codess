@@ -18,7 +18,7 @@ from codess.project_catalog import (
     add_project_location, durable_project_root, get_project_entry,
     retire_project_location,
 )
-from codess.schema_contract import verify_package
+from codess.schema_contract import contract_digest
 from codess.snapshot import current_stores
 
 
@@ -47,7 +47,7 @@ def resolve_reviewed_selection(
         "catalog": str(catalog_path.resolve()),
         "catalog_sha256": codess_bytes_hash(256, 256, catalog_path.read_bytes()),
         "selection_sha256": codess_canonical_hash(256, 256, projects),
-        "package_digest": verify_package(),
+        "package_digest": contract_digest(),
         "review_decision": decision,
         "projects": projects,
     }

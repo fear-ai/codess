@@ -20,27 +20,26 @@ tracked work items and are not repeated in this table.
 
 Rows are ordered by priority, not by identifier. Identifiers are assigned
 once and never reused or renumbered, so a later item can carry a higher
-priority than an earlier one -- W20 sits with the High group above the
-Normal items that precede it numerically.
+priority than an earlier one -- W29 and W31 sit with the High group above the
+Normal items that precede them numerically.
 
 | ID | Priority | Status | Work |
 |---|---|---|---|
 | W01 | Critical | WIP | Audit source-type and Actor classification across CC/Codex/Cursor. |
 | W02 | Critical | WIP | Strengthen tool, context, compaction, model-setting, and agent/subagent decode. |
-| W03 | Critical | **Under review** | Separate exact package integrity from store write compatibility, and reduce runtime integrity checking to what a local development environment needs -- one digest spans the executable contract and the validation fixtures alike, so a fixture edit can make an unchanged store layout unwritable. Blocked on confirming which runtime checks survive and whether they become optional. |
 | W04 | High | Planned | Shared candidate-record contract and runtime mapping-profile enforcement. |
 | W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. |
 | W07 | High | Planned | Bound ancillary reads that can encounter large source or repository content. |
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. |
 | W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. |
-| W20 | High | WIP | Establish lifetime and resilience requirements for the five derived values. `codess/hashing.py` now owns every digest and `path_key` is renamed; two transient hashes may not be needed at all, and `snapshot_id` still sits inside structures whose digests it depends on. Blocked on `path_key`'s move/cross-machine behavior and on creation-versus-content snapshot identity. |
 | W27 | Normal | Planned | Make discovery scoping configurable and documented: `AGGREGATORS` and `EXCLUDE_REVIEW_DIRS` are hardcoded to one developer's layout. |
 | W28 | Normal | Planned | Give the central registry a retention policy; it accumulates an entry per Project ever scanned, including test temporary directories. |
 | W29 | High | Planned | Own the static-analysis configuration as one concern: declare rule selection, decide the S608 exemptions, reduce the SQL interpolation they cover, and track lint and type output as evidence. |
 | W31 | High | Planned | Make `IDENTITY_FORMAT` observable and enforced: it is hashed into every identity but recorded nowhere, so two derivation schemes cannot be told apart. |
 | W32 | Normal | Planned | Route `identity._qualified` through `codess_hash`; it hand-rolls component hashing and hardcodes `sha256` in the emitted value. |
-| W33 | Low | Planned | Rename `package`/`package_digest` to `matching_set`/`matching_set_digest`; the current name reads as the Python distribution. Rides with W03. |
+| W33 | Low | Planned | Rename `package_digest` to name the contract it now records; the current name reads as the Python distribution and no longer matches what the value covers. W03 narrowed it to six files, so the rename should follow that meaning. Batch with W20's `store_meta` change. |
 | W34 | Normal | **Under review** | Contain the digest algorithm in `codess/hashing.py`; `sha256` is named ~144 times elsewhere. Blocked on approving where an algorithm name may appear at all. |
+| W35 | Low | **Postponed** | Decide whether the eight manifest fixtures no test reads should be wired into tests or removed from the released set. Not an integrity question: W03 took them out of the write gate, so they now affect only `codess package verify`. |
 | W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES`. |
 | W25 | Normal | Planned | Strengthen CoSchema time columns: encode representation in the name and resolve `started_at` denoting both TEXT and REAL. |
 | W11 | Normal | TODO | Improve search reports and structured-query examples. |
@@ -480,9 +479,9 @@ not the ranking the site counts suggest:
   the only cluster that produces a wrong answer rather than a maintenance
   hazard, which is why it was prioritized and resolved first despite being
   the smallest cluster.
-- **Unreviewed values.** The SHA-256 widths were selected per site; two of
-  the five key sites turned out not to need a hash at all (13.4.8). Tracked
-  as W20.
+- **Unreviewed values.** The SHA-256 widths were selected per site; of the
+  five key sites, one turned out not to need a hash at all and the rest moved
+  to declared widths (13.4.8). Resolved under W20.
 - **Reader confusion.** The `_now` return-type split means a name does not
   predict its own type. No incorrect behavior, but every reader must check.
 
@@ -2203,7 +2202,7 @@ developer's live harness data.
 | CoSchema persistence | Compliant in the principal path | The released package is hash-checked, the DDL is centralized, logical and physical contracts are compared, foreign keys are enabled, and source replacement commits or rolls back atomically. |
 | Query | Partially compliant | The typed executor provides bounded, deterministic, multi-store results with provenance and stable identities. The fixed reports are in `query_reports` rather than the command renderer, but remain outside the request contract, so query-contract parity is still incomplete. |
 | Publication and evidence | Largely compliant | SQLite backup, manifest hashes, atomic pointer replacement, content-addressed raw objects, and read-time verification implement reproducible publication. Raw-mode semantics remain unresolved under W15. |
-| Derived values | Compliant in construction | Every digest routes through `codess/hashing.py`, which fixes the algorithm, the canonical JSON form, and the supported widths. What each value should identify, and how long it must live, remains under review in W20. |
+| Derived values | Compliant | Every digest routes through `codess/hashing.py`, which fixes the algorithm, the canonical JSON form, and the supported widths; a contract test fails if a `hashlib` call or an undeclared width appears elsewhere. Each value's lifetime and resilience requirement is stated in 13.4.8. Where an algorithm name may appear in a stored value remains W34's question. |
 | Configuration | Compliant | Scan, ingest, and query validate resolved configuration before source work; built-ins, environment, command arguments, and JSON policies have explicit ownership. |
 | Operational reporting | Partially compliant | `ProgressTrace` supplies bounded timed ingest events, but ordinary logging, direct stderr messages, error conversion, and result-channel rules are not implemented through one structured facility. |
 | Maintenance wrappers | Partially compliant | Most wrappers adapt arguments and call library operations. A small number still contain catalog or pruning workflow logic that belongs in a domain module. |
@@ -2218,13 +2217,11 @@ developer's live harness data.
 | Ancillary unbounded reads | Tool output and worktree identity can materialize large bodies | W07 |
 | Project identity fallback | Direct library writes can create unrelated provisional Project IDs | W14 |
 | Raw mode ambiguity | `none` has no bytes but still creates a raw-manifest observation | W15 |
-| Package identity coupling | Non-semantic package changes can affect current-layout write compatibility | W03 |
 | Test observability | Child-process scan and ingest paths are not attributed by ordinary coverage | W13 |
 | Operational reporting fragmentation | Status, progress, logger calls, exceptions, and exit results lack one event and rendering contract | W18 |
 | Discovery scoping | Aggregator and exclusion directory sets are hardcoded to one layout, and the recency window silently omitted Projects until it was reported | W27 |
 | Registry retention | The central registry accumulates an entry per Project ever scanned and prunes none | W28 |
 | Session discovery coupling | Project canonicalization is reachable only through vendor filesystem discovery, so its rules cannot be tested directly | W19 |
-| Derived key requirements | The five SHA-256 sites do not state what they identify, how long the value lives, or what must recompute it; two are transient hashes that may not be needed | W20, W03 |
 | Canonical serialization divergence | Resolved: every digest over a structure routes through one canonical encoder, so equal content cannot hash differently | Closed |
 
 ### 13.4 Deviations and Defects
@@ -2749,8 +2746,8 @@ state whether `none` means no bytes or no raw observation and then align the
 mode name, manifest, documentation, and tests. Normalized Source provenance is
 required either way.
 
-Package identity separation is tracked by **W03** because it can block
-current-format writes.
+Package identity separation was tracked by **W03**, now closed; the decision
+and what implementing it revealed are recorded at the end of this section.
 
 **What the digest covers.** `schema_contract.verify_package()` walks the
 released manifest, verifies each listed file against its recorded SHA-256,
@@ -2849,6 +2846,64 @@ release and diagnostic operation, where its cost is appropriate and its
 question is the right one. Each identity needs a named consumer and a test
 fixing which question it answers, so adding a file to the manifest cannot
 silently reintroduce the coupling.
+
+**Decision and outcome.** Accepted and implemented: `contract_digest()` covers
+the six runtime files, is what a store records, and is what the write gate
+compares; `verify_package()` retains the whole released set and is reached
+from `codess package verify`, which reports both values and names the files
+outside the gate. Six is not merely sufficient but exact -- the DDL fixes the
+physical layout, `contract.json` the logical one, and the mapping contract
+and three profiles the decode; nothing else in the manifest is loaded by
+`src/` at all.
+
+Two things measured during implementation changed the argument that was
+recorded above, and both are worth keeping:
+
+*The cost argument was wrong and is withdrawn.* `verify_package()` is
+`@lru_cache(maxsize=1)`: 3.18 ms cold, 0.0006 ms warm, once per process
+rather than per store. The six subsystems that reach it share one cached
+result, so cost was never a reason to act here.
+
+*The skip is implemented, and cost was the wrong reason to weigh it.* This
+section's requirement that a retained runtime check "should be skippable"
+was first read as resting on cost, and dropped when cost measured
+negligible. That inverted the argument. Cost is a reason to make a check
+cheap; **recovery** is the reason to make it escapable, and it does not
+depend on how fast the check runs. A store whose recorded contract
+disagrees, whose vendor sources are gone and whose released files are not
+reconstructible, is unreadable under a mandatory gate -- the check would
+then be protecting nothing and withholding retained evidence. Tests need
+the same escape for the opposite reason: to exercise a deliberately
+mismatched store without regenerating the released set.
+
+`--no-check` (`CODESS_NO_CONTRACT_CHECK`) covers both the write gate and
+digest verification, following the existing `--no-hash` precedent, including
+its environment-read (the flag is parsed after config's constants resolve).
+The override is not the default and warns: each bypass logs the store and
+the failures it passed over, and a store created under it records
+`contract_override` in `store_meta`, so a later reader does not have to
+infer it from a failing check.
+
+*A second, sharper failure mode was found by reproducing the first.* The
+recorded defect is that a fixture edit makes published stores unwritable.
+Editing a fixture *without* updating the manifest is worse: `verify_package`
+raises inside `load_ddl`, `load_contract`, and `load_mapping`, so a
+half-finished edit to a test document disabled store creation and every
+other path that reads the released contract -- not only the write gate. Both
+modes were reproduced before the change and confirmed fixed after, with a
+control proving a real DDL or mapping-profile change still refuses the write.
+
+**What the manifest's other ten entries turned out to be.** The framing above
+treats the fixtures as test data whose lifecycle the test suite settles. That
+is true of two of them. The other eight -- both `compatibility/store-meta-v*`,
+`maximal/event`, `minimal/session`, `negative/event-sequence-zero`,
+`hazard/cursor-tool-former`, and the rest -- are referenced by nothing but
+the manifest itself. The two that tests do read are read by direct path, not
+through the manifest. So most of the digest's members were inert: they could
+not fail a test, because no test read them, yet they gated every store write.
+Whether they should be wired into tests or removed from the released set is
+a fixture-inventory question rather than an integrity one, and is tracked
+separately as **W35** (Postponed).
 
 #### 13.4.5 Test Observability
 
@@ -2983,7 +3038,8 @@ argument for sequencing, not for merging.
 
 #### 13.4.8 Derived Key Requirements
 
-Independently derived SHA-256 keys are tracked by **W20**.
+Independently derived SHA-256 keys were tracked by **W20**, now closed. The
+requirements below are the settled record; each site's outcome is noted with it.
 
 **The identity system, in layers.** Codess derives identifiers in three
 distinct groups, and only the third is under review. Confusing them is the
@@ -3068,7 +3124,7 @@ separating:
   operators. These are the ones that would make an algorithm change a
   wire-format change.
 
-This is scoped into W20 rather than treated as a separate cleanup, because
+This was scoped into W20 rather than treated as a separate cleanup, because
 the decision is the same one: what each value is for. Note that changing any
 stored prefix alters values already written, so each is a wire-format
 decision distinct from the Python identifier beside it.
@@ -3446,9 +3502,13 @@ three.
 
 Callers pass widths and never name the algorithm, so replacing SHA-256
 becomes a change to one module rather than to 21. The three widths at 64,
-128, and 256 bits replace the current ad-hoc 48, 64, 96, and 256; the sites
-using 48 and 96 bits are under review above and will move to a supported
-width when their requirements are settled.
+128, and 256 bits replace the former ad-hoc 48, 64, 96, and 256. The
+migration is complete: the 48-bit snapshot suffix and the two 96-bit sites
+(`local_path_key` and the preflight identity) moved to 64, the narrowest
+supported width, which each of them has orders of magnitude of headroom
+against. No `hashlib` call remains outside `codess/hashing.py`, and a
+contract test fails if one appears or if a caller requests an undeclared
+width.
 
 **Codess-specific naming is spelled out, not abbreviated.** The function is
 `codess_hash` rather than `cs_hash` because every existing product-scoped
@@ -3698,6 +3758,33 @@ consumer appears later, a content digest can be added to the manifest as a
 separate field without renaming anything -- which is the advantage of not
 overloading the name.
 
+*Decision and outcome.* Both settled and implemented. Snapshot identity
+stays a **creation** identity, and `snapshot_id` is no longer written into
+each copied store's `store_meta`; the manifest and the directory name carry
+it. `_backup_store` lost the parameter, `rebuild_manifest` takes the
+identity from the directory, and `query_api` reports it from the snapshot
+pointer.
+
+Removing it also removed a check, which was worth confirming rather than
+assuming. `snapshot_store_paths_from_base` compared each store's recorded
+`snapshot_id` against the manifest's -- but the line above it already
+verifies that store's content digest against the manifest, which names the
+exact file. The digest is the stronger claim: it rejects a store copied from
+a sibling snapshot *and* any modification to the correct one, both of which
+were confirmed after the change. The identity comparison could only restate
+what the digest had established, and it was that restatement that created
+the cycle.
+
+`path_key` is settled as a **location** name and renamed `local_path_key`,
+with its emitted prefix `local:path-key:`. The review catalog is keyed by
+`path` rather than by this value, which serves as an alternative reference
+when recording a decision, so nothing depended on it being an identity. The
+portable identity a candidate needs already exists and is acquired on
+approval (`project_catalog.ensure_project_binding`); a second, path-derived
+one would disagree with it the first time a directory moved. Whether the
+review catalog should also carry a Project name is recorded as a Postponed
+direction rather than an open item.
+
 *Migration.* Existing snapshot directories keep their names; nothing
 recomputes an identity after creation. Removing `snapshot_id` from
 `store_meta` affects only stores written after the change, and the reader at
@@ -3747,6 +3834,27 @@ string with the caller supplying the length. Two sites should lose their
 hash rather than gain a shared one: the staging key has a working
 sequential alternative in the same file, and the snapshot identity's digest
 is decorative under the creation-identity reading recommended above.
+
+*Outcome.* The staging key is removed rather than migrated, and removing it
+resolved a divergence rather than only a duplication. `VendorStore.path`
+hashed the Project path to place preflight stores, while the Project loop
+derived the state path from the loop index -- so during preflight a
+Project's stores and its ingest state landed in different staging
+directories. Nothing failed, because preflight discards both and always runs
+with `force`, so the state was never read back; but the two were independent
+answers to one question, and either could have changed without the other.
+Preflight now registers its staging directory in `staged_store_roots`, the
+mapping a rebuild already used, so one registration serves stores and state
+alike and the hash has no remaining caller.
+
+The snapshot identity's digest is retained rather than dropped. Under the
+creation-identity reading its inputs are already distinguishing -- a
+microsecond timestamp plus the Project path -- but the suffix costs nothing,
+disambiguates two snapshots created within the same microsecond, and
+removing it would change every snapshot directory name for no gain. It moved
+from 48 to the supported 64 bits. The remaining three persisted values keep
+their hashes, since each is a retrieval or relational key with a stated
+requirement.
 
 **Supported truncation lengths.** A shared helper must retain 16 and 32 hex
 characters (8 and 16 bytes) as available lengths alongside the full 64. Both
@@ -4078,7 +4186,7 @@ as separate work:
 | SQL-ownership check recognizing the narrow focused-audit exception | W13; W06 and W26 have supplied the boundary, so every module holding SQL is now a source-access, query, or store module |
 | Mapping-profile conformance over every emitted adapter fixture | W04 |
 | Query-request vectors covering every rejection path, with a check that no path lacks a vector | W13 (13.4.2) |
-| Transaction-failure tests at each source replacement and publication edge | W03, since publication identity is under review |
+| Transaction-failure tests at each source replacement and publication edge | Unowned: W03 and W20 both closed, so the publication identity these would test is settled and the check can be built |
 | Subprocess-aware coverage for scan and ingest, keeping installed CLI integration tests | W13 |
 | Operational-event contract, channel-separation, privacy, and error-boundary tests | W18 |
 | Small real-Source validation per changed vendor decoder, extended to a multi-vendor Project only when common classification or query behavior changes | W01, W02 |
@@ -4101,14 +4209,14 @@ work intentionally outside the current phase.
 
 ### 14.1 Grouping and Sequence
 
-Twenty-eight open items is too many to act on as a list. They fall into six
+Twenty-seven open items is too many to act on as a list. They fall into six
 groups by what they change, which is also roughly their risk order. Within a
 group the items are largely independent; between groups the order matters.
 
 | Group | Items | Impact if wrong | Risk of doing it |
 |---|---|---|---|
 | Decode correctness | W01, W02 | Stored evidence is wrong or missing, and nothing downstream can detect it | Low: additive, verified against real Sources |
-| Store identity and integrity | W03, W14, W15, W20, W25, W31, W32, W33, W34 | A store cannot be written, or an identity means two things | High: changes force a rebuild, and W25 changes column names |
+| Store identity and integrity | W14, W15, W25, W31, W32, W33, W34, W35 | A store cannot be written, or an identity means two things | High: changes force a rebuild, and W25 changes column names |
 | Structure and boundaries | W19, W21, W24 | Nothing breaks; the code stays hard to change | Medium: behavior-preserving, but wide diffs |
 | Query and contract surface | W04, W05, W11, W12, W13, W17 | Results are unclear or unverifiable | Low to medium |
 | Operations and reporting | W16, W18, W27, W28, W29 | Operators cannot see what happened or scope what runs | Low: mostly additive |
@@ -4137,27 +4245,41 @@ deeper one over the families W01 would flag.
 
 #### 14.1.2 Store Identity and Integrity
 
-**W03, W14, W15, W20, W25, W31, W32, W33, W34. The largest group and the
-most blocked.** Three items are Under review rather than merely unscheduled
--- W03, W15, W34 -- which means an established problem with no accepted
-resolution, so scheduling them before the decision is scheduling an argument.
+**W14, W15, W25, W31, W32, W33, W34, W35. Still the largest group, and
+no longer the most blocked.** W03 closed: the write gate consults the
+executable contract only, which removes the tax that was paid on every
+packaged-file edit whether or not anyone was working on identity (13.4.4).
 
-Two decisions unblock most of it:
+Two items remain Under review -- W15 and W34 -- meaning an established
+problem with no accepted resolution, so scheduling them before the decision
+is scheduling an argument. W35 is Postponed by decision rather than blocked.
 
-| Decision | Frees | Why it gates |
-|---|---|---|
-| What the write gate must actually check (W03) | W33, and the retained-check question in W34 | `package_digest` is the value W33 renames and the gate W03 narrows; deciding the gate first means renaming once |
-| What `snapshot_id` identifies -- creation or content (W20) | The remaining `snapshot_id` defect, and W31/W32's ordering | An identity that changes meaning changes every store written under it |
+**What W03's closure freed.** Three things, in order of usefulness:
 
-W03 is the one that costs on every ordinary change: any packaged-file edit
-currently makes every published store unwritable, so it is paid on each
-schema change whether or not anyone is working on identity. That is the
-argument for doing it first, ahead of items with higher apparent value.
+| Freed | Why |
+|---|---|
+| W33 | `package_digest` is the field it renames; the gate that reads it is now settled, so the rename lands once instead of racing a semantic change to the same value |
+| W34's retained-check half | The "should runtime checks become optional" question is answered -- no, because the cost that motivated it measured at 3 ms once per process. What remains in W34 is only the algorithm-naming rule |
+| Ordinary schema work | A DDL or mapping edit no longer makes unrelated published stores unwritable, so W25 and the decode items can proceed without a rebuild per edit |
 
-W25 is the expensive one and should go last in the group: renaming every time
-column is a breaking schema change, and doing it before W03 and W20 settle
-would mean regenerating stores twice. W31 and W32 land together, since both
-change the emitted identity string. W14 and W15 are small and independent.
+**W20 is closed.** `path_key` is `local_path_key` and names a machine-local
+location; `snapshot_id` stays a creation identity and no longer sits in
+`store_meta`, so the circularity W31 and W32 would have inherited is gone;
+and every derivation routes through `codess_hash` at a declared width, with
+a contract test failing if a `hashlib` call or an undeclared width appears
+(13.4.8). W31 and W32 are the group's remaining identity work and land
+together, since both change the emitted identity string.
+
+W25 remains the expensive one and should go last: renaming every time column
+is a breaking schema change, and doing it before W33 lands would mean
+regenerating stores twice. W31 and W32 land together. W14 and W15 are small
+and independent.
+
+**A rebuild is already due.** W03's digest split and W20's `store_meta`
+removal both changed what a store records, so stores written before them
+need regenerating. W33's rename changes the same metadata again; landing it
+before the next rebuild costs nothing extra, and landing it after means a
+second one.
 
 #### 14.1.3 Structure and Boundaries
 
@@ -4245,13 +4367,11 @@ active list, where they read as work someone intends to start.
 |---|---|---|---|---|
 | W01 | Critical | WIP | Audit source-type and Actor classification across representative Claude Code, Codex, and Cursor Sessions. | Fixtures and real-source checks agree on Actors, roles, origins, relations, and source-accounting totals. |
 | W02 | Critical | WIP | Strengthen tool, context, compaction, model-setting, and agent/subagent decode. | Each supported family has exact source evidence, mapping, partial/malformed coverage, diagnostics, and an explicit validation basis. |
-| W03 | Critical | Under review | Separate exact package integrity from store write compatibility, and reduce runtime integrity checking to what a local development environment demonstrably needs. One digest spans the executable contract and the validation fixtures alike; the fixtures are a development-lifecycle concern that the test suite already settles. The write gate and snapshot creation both consult the combined value, so a fixture edit makes published stores unwritable although layout, decoder, and data are unchanged. Because mismatch is resolved by regenerating the store from vendor sources, the gate needs only to prevent mixing records written under different rules. Blocked on confirming which runtime checks survive that standard and whether they become optional; see 13.4.4. | The write gate consults only the executable contract and directs regeneration on mismatch; retained runtime checks each cite a demonstrated failure they prevent; exact package verification remains available as a release and diagnostic operation. |
 | W04 | High | Planned | Define the shared candidate-record contract and enforce released mapping profiles at the runtime decode boundary. | All three adapters satisfy the typed and runtime candidate contract, pass the same post-decode conformance check, and share strict/diagnostic semantics. |
 | W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. | Bounded deterministic results and complete requested expansions agree with focused direct queries. |
 | W07 | High | Planned | Bound ancillary reads that can encounter large source or repository content. | Persisted tool output, worktree fingerprinting, and growing manifests stream or reject by explicit policy without first materializing the complete body. |
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. | Small correctness and representative scale cases report timing, query plans, rows, memory, and stable result identities. |
 | W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. | Selection, fingerprinting, decode, and query remain bounded as unrelated Cursor content grows. |
-| W20 | High | WIP | Establish what each derived value identifies, how long it must live, and what must be able to recompute it (13.4.8). No site uses content-addressed retrieval, so these are naming and comparison values. Delivered: `codess/hashing.py` with four modes and declared widths, and the `path_key` naming correction. Remaining: migrate the call sites, and correct two defects -- `snapshot_id` is written into `store_meta` and the manifest, both of which are then hashed, so a derived name sits inside the structure whose digest it depends on; and `sha256` is embedded in stored identity and key prefixes that no reader recomputes, making an algorithm change a wire-format change. Blocked on two decisions: whether `path_key` names a location or a Project when a reviewed directory moves or is used from another machine, and whether snapshot identity stays a creation identity (recommended) or becomes a content identity. | Each site states its lifetime and resilience requirement; key derivation routes through `codess_hash` with a declared width; no derived identity is an input to a digest recorded over the structure containing it; the two transient hashes are removed or justified; path-derived values are documented as machine-local; the relational key retains the full digest and keeps repeat invocations distinct. |
 | W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES` so discovery, refresh, review, Project handling, and the command modules stop re-deriving partial vendor views from bare keys (3.5.5). The vendor table describes vendors; adapters interpret them, and decode behavior must not migrate into it. Do not name it a registry -- that term already denotes the central `~/.codess` store. | One vendor description supplies keys, display names, identity fields, paths, and store filenames; no module repeats the vendor key set or a key-to-name mapping; adding a vendor touches the vendor table and its adapter, not the command layer. |
 | W25 | Normal | Planned | Strengthen CoSchema time representation. Every time column carries `_at` regardless of type, so a reader cannot tell RFC 3339 text from Unix milliseconds without the DDL, and `started_at` currently denotes `REAL` in `sessions` and `TEXT` in `processing_runs` -- one name, two representations, in one schema. Adopt `_time` for recorded text and `_atms` for source-reported numerics (CoSchema 5.1). Breaking schema change; regenerate stores rather than migrate. | No column name denotes more than one representation; the suffix states the type at every use; the DDL, contract, and query paths agree. |
 | W27 | Normal | Planned | Make discovery scoping configurable and documented. `AGGREGATORS` (directories that group Projects rather than being one) and `EXCLUDE_REVIEW_DIRS` (review and backup trees) are frozen sets in `config.py` naming one developer's directories, with no override and no mention outside the source. Another user's grouping directories would be reported as Projects, and their review trees scanned. Exclusion matching was also root-dependent until this session, so the same directory was included or excluded depending on where the scan started. | Both sets are configurable and documented; a scan of an unfamiliar tree can be scoped without editing source; exclusion is a property of the directory rather than of the invocation. |
@@ -4259,8 +4379,9 @@ active list, where they read as work someone intends to start.
 | W29 | High | Planned | Own the static-analysis configuration as one concern rather than three. `pyproject.toml` declares twelve per-file `S608` ignores with a rationale in 10.4 but never declares `select`, so ruff runs its default set: the `S` rules are off unless selected explicitly, and import sorting, function complexity, line length, and annotation coverage are never reported. Mypy has no configuration and runs only by hand. The work is one decision with four parts -- choose the rule set, settle what the `S608` exemptions become, reduce the interpolation sites they cover so fewer modules need exempting (13.4.10), and record lint and type counts alongside test results. Splitting these produced three items that could not be scheduled independently. | `[tool.ruff.lint] select` names the intended rules; every exemption names a module that still needs one after the reduction; a clean run means the selected rules passed; lint and type counts are reported with test results. |
 | W31 | High | Planned | Make `IDENTITY_FORMAT` observable and enforced. It is hashed into every `global_id` but appears neither in the value nor in `store_meta`, so a store cannot report which derivation produced its identities and nothing prevents appending identities from a second scheme. Because identities are compared across stores, the qualifier must travel in the value (`codess:session:id1:sha256:...`) rather than in one store's metadata. | The derivation format is readable from any identity; a store records it; a write whose format differs is refused as the other identifiers already are. |
 | W32 | Normal | Planned | Route entity-identity derivation through `codess/hashing.py`. `identity._qualified` calls `codess_digest()` -- the escape hatch reserved for callers whose read pattern is the policy -- and then hand-rolls the NUL-separated component hashing that `codess_hash` exists to provide, so the one construction the module was written for is the one place not using it. The emitted value also hardcodes `sha256`, which 13.4.8's naming rule reserves for integrity claims a reader recomputes. Changing the emitted prefix alters every stored identity, so this lands with W31 rather than alone. | Identity derivation calls the shared component mode; no module outside `hashing` composes a digest by hand; the algorithm name is not part of a value nothing recomputes. |
-| W33 | Low | Planned | Rename the released file set to `matching_set`, with `matching_set_digest` for the value. `package` and `package_digest` read as the Python distribution in a codebase that is one, when the value covers the SQLite DDL, the logical and mapping contracts, the vendor mapping profiles, and the conformance fixtures. `matching_set` names the relationship the digest expresses -- a store may be written only by software whose released files match the set it was written under -- and avoids `contract`, `format`, `binding`, `release`, and `baseline`, all already in use. Alternatives and their objections are in CoSchema 1.1. The name is in `store_meta`, so this is a wire-format change and rides with W03. | One name describes the released file set across code, `store_meta`, and documentation; it does not collide with Python packaging or with an existing term; 14.4 records it as vocabulary. |
+| W33 | Low | Planned | Rename `package_digest` to name what it now records. `package` reads as the Python distribution in a codebase that is one, and after W03 the value no longer covers the released *set* at all: it covers the six-file executable contract, while the full set keeps its own digest for release verification. The name should follow that meaning -- `contract_digest` is already the function name, so the stored field and the documentation should agree with it rather than retaining `package_digest` for a value that is not the package. `matching_set` was the earlier candidate (CoSchema 1.1) and is now the weaker one, since it describes the released set that the write gate no longer consults. The field is in `store_meta`, so this is a wire-format change: batch it with W20's `snapshot_id` removal into one regeneration. | One name describes the value across code, `store_meta`, and documentation; it does not collide with Python packaging; the released-set digest and the contract digest are separately named; 14.4 records the vocabulary. |
 | W34 | Normal | Under review | Contain the digest algorithm inside `codess/hashing.py`. The string `sha256` appears about 144 times outside that module -- field names (`stored_sha256`, `selection_sha256`), stored value prefixes (`codess:session:sha256:`), and documentation -- so replacing the algorithm would be a wire-format change across the project rather than an edit to one module. Blocked on a decision that has not been made: 13.4.8 proposes keeping the algorithm in the name of integrity fields a reader recomputes and removing it elsewhere, but that split is a proposal, not an approved rule, and the alternative -- no algorithm name anywhere outside `hashing`, with verification callers passing the width they expect -- has not been evaluated against it. | A reviewed rule states where an algorithm name may appear; code outside `hashing` follows it; changing the algorithm touches one module plus whatever format change the rule allows. |
+| W35 | Low | Postponed | Resolve the validation-fixture inventory. Ten of the sixteen released manifest entries are fixtures; two are read by tests, by direct path rather than through the manifest, and the remaining eight are referenced by nothing but the manifest itself. They therefore cannot fail a test, because no test reads them. W03 removed them from the write gate, so they no longer gate anything a store does, which is why this is Low rather than Critical: it is now a question about what the released set should contain, not about whether stores can be written. Either wire each fixture into a test that reads it through the manifest, or remove it from the released set; carrying a released file no consumer reads is a claim the repository cannot check. | Every entry in the released manifest has a named consumer, or is removed; a test fails if an entry acquires none. |
 
 ### 14.3 Next Functional Work
 
@@ -4284,9 +4405,6 @@ active list, where they read as work someone intends to start.
 - Add resource controls for observed accidental or pathological input.
 - Maintain Session names and utilization observations without displacing
   source decode, mapping, or search work.
-- Establish what the independently derived SHA-256 keys are each *for*
-  before deciding whether they consolidate. Tracked as **W20**; the
-  per-site requirements and the snapshot-identity decision are in 13.4.8.
 
 - Consolidate UTC timestamp derivation. Nine modules each define a private
   helper returning the current UTC time for record stamping. Seven are
@@ -4496,8 +4614,13 @@ limitation justifies reopening them:
 - a built-in general search engine beyond current SQLite predicates;
 - standardized Parquet, DuckDB, or merged-database products;
 - automatic narrative or assessment generation;
-- cost, quota, or billing analysis; and
-- broad raw-source search.
+- cost, quota, or billing analysis;
+- broad raw-source search; and
+- a portable Project name in the review catalog. `local_path_key` names a
+  machine-local location by decision (13.4.8), so a reviewed candidate that
+  moves loses its reference. Reopening this needs a portable input that
+  exists before approval, which is the point at which a candidate acquires a
+  real Project identity today.
 
 ## 15. Prompt Ideas
 

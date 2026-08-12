@@ -307,7 +307,12 @@ def test_snapshot_is_validated_promoted_and_sealable(tmp_path):
     assert check.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
     meta = dict(check.execute("SELECT key, value FROM store_meta"))
     check.close()
-    assert meta["snapshot_id"] == manifest["snapshot_id"]
+    # The snapshot identity lives in the manifest, not in the stores it
+    # names: it is derived before the copy and the manifest records that
+    # copy's digest, so a copy carrying the identity would sit inside the
+    # structure whose digest depends on it (W20, 13.4.8).
+    assert "snapshot_id" not in meta
+    assert meta["snapshot_created_at"] == manifest["created_at"]
 
     successor = create_snapshot(project, [store], [record], raw_store=raw)
     successor_manifest = json.loads(
@@ -542,7 +547,7 @@ def test_retained_snapshot_requires_exact_package_unless_explicitly_compatible(
     snapshot_id = snapshot.name
     assert snapshot_store_paths(project, snapshot_id)
 
-    monkeypatch.setattr("codess.snapshot.verify_package", lambda: "f" * 64)
+    monkeypatch.setattr("codess.snapshot.contract_digest", lambda: "f" * 64)
     with pytest.raises(SnapshotError, match="package digest mismatch"):
         snapshot_store_paths(project, snapshot_id)
     assert snapshot_store_paths(
@@ -616,3 +621,89 @@ def test_a_transactional_backup_is_exempt_from_the_stat_guard(tmp_path, monkeypa
     )
     assert uncompressed == 4096
     assert content_hash
+
+
+# --- snapshot identity lives above the stores --------------------------------
+#
+# W20: `snapshot_id` was written into each copied store's `store_meta`, and
+# the manifest then recorded that store's digest -- so a derived name sat
+# inside the structure whose digest depended on it. The identity stays a
+# creation identity; it moved to the manifest and the directory name.
+
+def test_a_snapshot_store_does_not_carry_the_snapshot_identity(tmp_path):
+    from codess.schema_contract import store_metadata
+    from codess.store import connect
+
+    project = tmp_path / "project"
+    store = project / ".codess" / "sessions_cc.db"
+    init_db(store)
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"type":"user"}\n', encoding="utf-8")
+    record = raw.observe(
+        source, source_system_id="anthropic.claude-code",
+        storage_format="claude-jsonl", mode="capture",
+    )
+    snapshot = create_snapshot(project, [store], [record], raw_store=raw)
+    manifest = read_manifest(snapshot)
+
+    conn = connect(next(snapshot.glob("*.db")), read_only=True)
+    try:
+        meta = store_metadata(conn)
+    finally:
+        conn.close()
+    assert "snapshot_id" not in meta
+    assert meta["snapshot_created_at"] == manifest["created_at"]
+    assert manifest["snapshot_id"] == snapshot.name
+
+
+def test_membership_is_proven_by_the_manifest_digest(tmp_path):
+    """Removing the identity string does not weaken verification.
+
+    The manifest records each store's digest, which names that exact file --
+    a strictly stronger claim than a copied identity string, since it also
+    detects any modification.
+    """
+    project = tmp_path / "project"
+    store = project / ".codess" / "sessions_cc.db"
+    init_db(store)
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"type":"user"}\n', encoding="utf-8")
+    record = raw.observe(
+        source, source_system_id="anthropic.claude-code",
+        storage_format="claude-jsonl", mode="capture",
+    )
+    snapshot = create_snapshot(project, [store], [record], raw_store=raw)
+    snapshot_id = snapshot.name
+    assert snapshot_store_paths(project, snapshot_id)
+
+    retained = next(snapshot.glob("*.db"))
+    original = retained.read_bytes()
+    conn = sqlite3.connect(retained)
+    conn.execute("INSERT INTO store_meta VALUES ('tampered','1')")
+    conn.commit()
+    conn.close()
+    with pytest.raises(SnapshotError, match="hash mismatch"):
+        snapshot_store_paths(project, snapshot_id)
+
+    retained.write_bytes(original)
+    assert snapshot_store_paths(project, snapshot_id)
+
+
+def test_a_rebuilt_manifest_takes_the_identity_from_the_directory(tmp_path):
+    """The directory name is the identity now that the stores omit it."""
+    project = tmp_path / "project"
+    store = project / ".codess" / "sessions_cc.db"
+    init_db(store)
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"type":"user"}\n', encoding="utf-8")
+    record = raw.observe(
+        source, source_system_id="anthropic.claude-code",
+        storage_format="claude-jsonl", mode="capture",
+    )
+    snapshot = create_snapshot(project, [store], [record], raw_store=raw)
+
+    rebuilt = rebuild_manifest(snapshot)
+    assert rebuilt["snapshot_id"] == snapshot.name

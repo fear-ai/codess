@@ -543,7 +543,7 @@ def test_all_current_honors_exact_and_read_compatible_package_policy(
     _project, registry, project_id = _captured_project(tmp_path)
     scope = resolve_project_query_scopes(registry, [project_id])[0]
     monkeypatch.setattr(
-        "codess.snapshot.verify_package",
+        "codess.snapshot.contract_digest",
         lambda: "different-current-package-digest",
     )
 

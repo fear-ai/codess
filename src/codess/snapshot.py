@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import platform
@@ -14,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from codess.hashing import codess_canonical_hash, codess_digest
+from codess.hashing import codess_canonical_hash, codess_digest, codess_hash
 from codess import __version__
 from codess.config import (
     CURRENT_POINTER_FILE, MANIFEST_BACKUP_FILE, MANIFEST_FILE,
@@ -27,7 +26,7 @@ from codess.raw_store import RAW_FORMAT, RawStore
 from codess.project_catalog import durable_project_root
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import (
-    APPLICATION_ID, FORMAT_ID, FORMAT_VERSION, SUPPORTED_READ_FORMATS, database_identity, require_store, store_metadata, table_names, verify_package,
+    APPLICATION_ID, FORMAT_ID, FORMAT_VERSION, SUPPORTED_READ_FORMATS, contract_digest, database_identity, require_store, store_metadata, table_names,
 )
 
 
@@ -151,9 +150,17 @@ def _backup_store(
     source_path: Path,
     target_path: Path,
     *,
-    snapshot_id: str,
     snapshot_created_at: str,
 ) -> None:
+    """Copy one store into a snapshot, stamping when the snapshot was made.
+
+    The snapshot identity is not written into the copy. It is derived before
+    the copy and the manifest then records this file's digest, so storing it
+    inside the file would place a derived name inside the structure whose
+    digest depends on it. The manifest is the layer above the stores and
+    holds the identity (13.4.8); membership is proven by that digest, which
+    `snapshot_store_paths_from_base` verifies.
+    """
     source = open_readonly(source_path)
     target = sqlite3.connect(target_path)
     try:
@@ -162,7 +169,6 @@ def _backup_store(
         target.executemany(
             "INSERT OR REPLACE INTO store_meta(key, value) VALUES (?, ?)",
             (
-                ("snapshot_id", snapshot_id),
                 ("snapshot_created_at", snapshot_created_at),
                 ("snapshot_software_version", __version__),
             ),
@@ -410,7 +416,7 @@ def create_snapshot(
     store_format_version, package_digest, source_stores = _store_package_identity(
         store_paths
     )
-    if store_format_version == FORMAT_VERSION and package_digest != verify_package():
+    if store_format_version == FORMAT_VERSION and package_digest != contract_digest():
         raise SnapshotError(
             "current-format store package differs from the current package"
         )
@@ -418,9 +424,13 @@ def create_snapshot(
     created_at_text = created_at.isoformat()
     policy = build_policy or {"raw_mode": "seal" if seal else "unspecified"}
     policy_digest = codess_canonical_hash(256, 256, policy)
-    identity = hashlib.sha256(
-        f"{project_path.resolve()}\0{created_at_text}\0{package_digest}\0{policy_digest}".encode("utf-8")
-    ).hexdigest()[:12]
+    # A creation identity: the suffix disambiguates snapshots created within
+    # one microsecond of each other, not across a corpus, so the narrowest
+    # supported width is ample (13.4.8).
+    identity = codess_hash(
+        256, 64,
+        [str(project_path.resolve()), created_at_text, package_digest, policy_digest],
+    )
     snapshot_id = (
         f"{created_at.strftime('%Y%m%dT%H%M%S.%fZ')}-"
         f"coschema{store_format_version}-{identity}"
@@ -436,7 +446,7 @@ def create_snapshot(
         for source_path in sorted(source_stores, key=lambda p: p.name):
             target = tmp / source_path.name
             _backup_store(
-                source_path, target, snapshot_id=snapshot_id,
+                source_path, target,
                 snapshot_created_at=created_at_text,
             )
             stores[source_path.name] = {
@@ -552,7 +562,7 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
             format_version = format_version or version
             meta = store_metadata(conn)
             for key in (
-                "snapshot_id", "snapshot_created_at", "snapshot_software_version",
+                "snapshot_created_at", "snapshot_software_version",
                 "decoder_version", "validator_version", "package_digest",
             ):
                 meta_by_key.setdefault(key, meta.get(key))
@@ -569,7 +579,9 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
             conn.close()
     return {
         "snapshot_format": "codess.snapshot/1",
-        "snapshot_id": meta_by_key.get("snapshot_id") or snapshot_dir.name,
+        # The directory name is the snapshot identity; the stores no longer
+        # carry a copy of it.
+        "snapshot_id": snapshot_dir.name,
         "parent_snapshot_id": None,
         "created_at": meta_by_key.get("snapshot_created_at"),
         "software_version": meta_by_key.get("snapshot_software_version"),
@@ -627,7 +639,7 @@ def snapshot_store_paths_from_base(
             or manifest["format_version"] not in SUPPORTED_READ_FORMATS
         ):
             raise SnapshotError("retained snapshot format is unsupported")
-        package_matches = manifest.get("package_digest") == verify_package()
+        package_matches = manifest.get("package_digest") == contract_digest()
         if not package_matches and not allow_package_mismatch:
             raise SnapshotError("retained snapshot exact CoSchema package digest mismatch")
         raw_manifest = snapshot / RAW_MANIFEST_FILE
@@ -651,8 +663,9 @@ def snapshot_store_paths_from_base(
                     if application_id != APPLICATION_ID or version not in SUPPORTED_READ_FORMATS:
                         raise SnapshotError(f"retained store format mismatch: {name}")
                 meta = store_metadata(conn)
-                if meta.get("snapshot_id") != manifest.get("snapshot_id"):
-                    raise SnapshotError(f"retained store snapshot identity mismatch: {name}")
+                # Membership is established by the manifest hash verified
+                # above, which names this exact file; a `snapshot_id` copied
+                # into the store would only restate it.
                 if meta.get("package_digest") != manifest.get("package_digest"):
                     raise SnapshotError(f"retained store package digest mismatch: {name}")
                 if _logical_counts(path, entry.get("counts", {}).keys()) != entry.get("counts"):

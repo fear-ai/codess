@@ -29,7 +29,8 @@ from codess.schema_contract import (
     load_ddl,
     require_store,
     table_names,
-    verify_package,
+    contract_check_disabled,
+    contract_digest,
 )
 from codess.tool_identity import bounded_source_call_id
 from codess.mapping import canonical_json, structured_json
@@ -145,7 +146,7 @@ def _path_is_obsolete(
 
 def init_db(db_path: Path) -> None:
     """Create a new CoSchema v4 store, refusing any database that is not one."""
-    verify_package()
+    contract_digest()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
@@ -156,7 +157,7 @@ def init_db(db_path: Path) -> None:
             require_store(conn, write=True)
             return
         conn.executescript(load_ddl())
-        package_digest = verify_package()
+        package_digest = contract_digest()
         meta = {
             "format_id": FORMAT_ID,
             "format_version": str(FORMAT_VERSION),
@@ -167,6 +168,10 @@ def init_db(db_path: Path) -> None:
             "created_by": __version__,
             "created_at": datetime.now(UTC).isoformat(),
         }
+        if contract_check_disabled():
+            # Records that the digest was not verified at creation, so a
+            # later reader does not have to infer it from a failing check.
+            meta["contract_override"] = "1"
         conn.executemany(
             "INSERT INTO store_meta(key, value) VALUES (?, ?)", meta.items()
         )

@@ -449,6 +449,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--no-check",
+        action="store_true",
+        help=(
+            "proceed when the released CoSchema contract does not verify or "
+            "does not match the one a store was written under "
+            "[CODESS_NO_CONTRACT_CHECK]. Intended for tests and recovery; "
+            "each bypass logs a warning, and a store created under it records "
+            "`contract_override` in its metadata."
+        ),
+    )
+    p.add_argument(
         "--force",
         action="store_true",
         default=False,
@@ -696,8 +707,8 @@ def parse_and_run(argv: list[str] | None = None) -> int:
     """
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     if raw_argv and raw_argv[0] in {
-        "refresh", "catalog", "baseline", "evidence", "schema", "session",
-        "storage",
+        "refresh", "catalog", "baseline", "evidence", "package", "schema",
+        "session", "storage",
     }:
         from cli.admin_cmd import run as run_admin
         return run_admin(raw_argv)
@@ -714,6 +725,11 @@ def parse_and_run(argv: list[str] | None = None) -> int:
     if args.verbose or VERBOSE:
         logging.basicConfig(level=logging.DEBUG)
 
+    if getattr(args, "no_check", False):
+        # schema_contract.contract_check_disabled reads the environment
+        # directly, for the same reason as CODESS_NO_HASH below: config's
+        # constants have already resolved by the time a flag is parsed.
+        os.environ["CODESS_NO_CONTRACT_CHECK"] = "1"
     from codess.config import NO_HASH
     if flag_or_env(args, "no_hash", NO_HASH):
         # fileio.read_hash/rewrite_hash read CODESS_NO_HASH directly (a leaf

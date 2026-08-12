@@ -223,18 +223,32 @@ def test_underlying_algorithm_is_sha256_over_tagged_input():
     assert codess_hash(256, 256, ["value"]) == expected
 
 
-def test_direct_hashlib_use_is_confined_to_reviewed_sites():
-    """Digest construction belongs in codess.hashing.
+def test_direct_hashlib_use_is_confined_to_the_hashing_module():
+    """Digest construction belongs in codess.hashing, with no exceptions.
 
-    The exceptions use truncation widths this module does not offer and are
-    under review in CoPlan 13.4.8; migrating them now would freeze an
-    unreviewed choice.
+    Four modules were exempt while they used truncation widths this module
+    did not offer. W20 settled those widths -- the 48- and 96-bit sites moved
+    to the narrowest supported 64 -- so the exemptions are gone and the rule
+    is now what it always claimed to be.
     """
     root = pathlib.Path(__file__).resolve().parents[1] / "src"
-    reviewed = {"hashing.py", "path_label.py", "snapshot.py", "ingest_cmd.py"}
     offenders = sorted(
         str(p.relative_to(root))
         for p in root.rglob("*.py")
-        if p.name not in reviewed and "hashlib." in p.read_text(encoding="utf-8")
+        if p.name != "hashing.py" and "hashlib." in p.read_text(encoding="utf-8")
     )
     assert offenders == [], f"use codess.hashing instead of hashlib in: {offenders}"
+
+
+def test_every_derived_width_is_a_supported_one():
+    """No site may truncate to a width the module does not declare."""
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "src"
+    unsupported = []
+    for path in sorted(root.rglob("*.py")):
+        for match in re.finditer(r"codess_\w*hash\(\s*(\d+),\s*(\d+)", path.read_text(encoding="utf-8")):
+            truncated = int(match.group(2))
+            if truncated not in SUPPORTED_TRUNCATED_BITS:
+                unsupported.append(f"{path.name}: {truncated}")
+    assert unsupported == [], f"unsupported truncation widths: {unsupported}"

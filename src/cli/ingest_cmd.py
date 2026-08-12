@@ -3,7 +3,6 @@
 import json
 import logging
 import sys
-import hashlib
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -19,6 +18,7 @@ from codess.config import (
 )
 from codess.content_processing import ContentPolicy, ContentProcessor
 from codess.fileio import write_json_atomic
+from codess.hashing import codess_hash
 from codess.cursor_source import (
     get_global_db as get_cursor_global_db,
     get_project_composer_headers as get_cursor_project_composer_headers,
@@ -377,14 +377,20 @@ class VendorStore:
 
         Preflight redirects every Project into a private staging tree so a
         validate-only run cannot touch real data. A rebuild redirects one
-        Project to its staged replacement until promotion.
+        Project to its staged replacement until promotion. Both redirections
+        read the same registered mapping, so a Project's stores and its
+        ingest state resolve to one directory.
+
+        Preflight previously derived its own directory by hashing the Project
+        path here, while the Project loop derived the state path from the
+        loop index -- two answers to one question, which put a Project's
+        stores and its state in different staging directories. Nothing failed,
+        because preflight discards both and always runs with `force`, so the
+        state was never read back (W20, 13.4.8).
         """
-        project = self.project_path
-        if self.config.validate_only:
-            key = hashlib.sha256(str(project).encode()).hexdigest()[:16]
-            project = self.config.staging_root / key
-        else:
-            project = self.config.staged_store_roots.get(project.resolve(), project)
+        project = self.config.staged_store_roots.get(
+            self.project_path.resolve(), self.project_path,
+        )
         return get_store_path(project, self.display_name)
 
     def exists(self) -> bool:
@@ -1085,7 +1091,10 @@ def run(args) -> int:
                 project_index=project_index + 1, project_total=len(roots),
             )
             if settings["validate_only"]:
-                digest = hashlib.sha256(str(project_path).encode()).hexdigest()[:24]
+                # A within-run label for a Project preflight never persists.
+                # 64 bits is the narrowest supported width and is ample for
+                # the handful of Projects one run selects (13.4.8).
+                digest = codess_hash(256, 64, [str(project_path)])
                 binding = {"project_id": f"codess:preflight-project:{digest}", "location_id": f"preflight:{digest}"}
                 project_entry = {
                     "project_id": binding["project_id"], "logical_name": project_path.name,
@@ -1095,10 +1104,15 @@ def run(args) -> int:
             else:
                 binding = ensure_project_binding(registry_root, project_path)
                 project_entry = get_project_entry(registry_root, binding["project_id"])
-            work_root = (
-                staging_root / str(project_index)
-                if staging_root
-                else staged_store_roots.get(project_path, project_path)
+            if staging_root:
+                # Register the preflight staging directory so store paths and
+                # the state path resolve through one mapping rather than each
+                # deriving a location of its own.
+                staged_store_roots[project_path.resolve()] = (
+                    staging_root / str(project_index)
+                )
+            work_root = staged_store_roots.get(
+                project_path.resolve(), project_path,
             )
             state_path = get_state_path(work_root)
             project_raw_records: list[dict] = (

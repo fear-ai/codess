@@ -273,6 +273,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--catalog", type=Path, default=REPO_ROOT / "catalog/reviewed-baselines.json")
     verify.set_defaults(handler=_baseline_verify)
 
+    package = families.add_parser("package")
+    package_commands = package.add_subparsers(dest="package_command", required=True)
+    package_verify = package_commands.add_parser("verify")
+    package_verify.set_defaults(handler=_package_verify)
+
     evidence = families.add_parser("evidence")
     evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
     gather = evidence_commands.add_parser("gather")
@@ -622,6 +627,36 @@ def _baseline_freeze(args) -> int:
 
 def _baseline_verify(args) -> int:
     _json(verify_reviewed_catalog(args.catalog, repo_root=REPO_ROOT))
+    return 0
+
+
+def _package_verify(args) -> int:
+    """Verify every released file and report both digests.
+
+    This is where exact package verification lives now that the write gate
+    consults only the executable contract: it answers "is this working tree
+    the reviewed one", which covers the validation fixtures, and it is a
+    release and diagnostic question rather than one a store write asks.
+
+    Reports both values because they answer different questions and an
+    operator diagnosing a refused write needs to see which one moved.
+    """
+    from codess.schema_contract import (
+        CONTRACT_ROLES, contract_digest, load_manifest, verify_package,
+    )
+
+    roles = sorted(load_manifest().get("files", {}))
+    _json({
+        "format": "codess.package-verification/1",
+        "package_digest": verify_package(),
+        "contract_digest": contract_digest(),
+        "contract_files": sorted(CONTRACT_ROLES),
+        "other_files": [role for role in roles if role not in CONTRACT_ROLES],
+        "gate": (
+            "store writes compare contract_digest; package_digest covers the "
+            "released set including validation fixtures"
+        ),
+    })
     return 0
 
 

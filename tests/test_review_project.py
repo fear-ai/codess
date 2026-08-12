@@ -2,7 +2,7 @@
 
 import pytest
 
-from codess.path_label import path_key
+from codess.path_label import local_path_key
 from codess.review_project import CandidateReviewError, load_candidate_csv
 
 
@@ -22,8 +22,10 @@ def test_candidate_csv_does_not_assume_remote_availability(tmp_path):
     assert item["observations"]["remote"]["status"] == "unchecked"
     assert item["observations"]["local_availability"] == "present"
     assert item["review"]["decision"] is None
-    assert item["path_key"] == path_key(local)
-    assert item["path_key"].startswith("candidate:path-key:")
+    assert item["path_key"] == local_path_key(local)
+    # The prefix names a machine-local location rather than a candidate,
+    # which is what the value has always been (W20).
+    assert item["path_key"].startswith("local:path-key:")
     assert "project_id" not in item
 
 

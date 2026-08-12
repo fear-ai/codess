@@ -90,11 +90,36 @@ def test_store_path_uses_the_project_when_not_staging(tmp_path):
 
 
 def test_store_path_redirects_into_staging_for_preflight(tmp_path):
+    """Preflight registers each Project's staging directory, like a rebuild.
+
+    Both redirections read one mapping. Preflight previously derived its own
+    directory by hashing the Project path, while the Project loop derived the
+    state path from the loop index, so a Project's stores and its state landed
+    in different staging directories (W20).
+    """
     staging = tmp_path / "staging"
-    cfg = config(tmp_path, options={"validate_only": True}, staging_root=staging)
+    cfg = config(
+        tmp_path, options={"validate_only": True}, staging_root=staging,
+        staged_store_roots={tmp_path.resolve(): staging / "0"},
+    )
     store = cfg.vendor_store(tmp_path, "codex")
     assert staging in store.path.parents
     assert store.path.name == "sessions_codex.db"
+
+
+def test_preflight_stores_and_state_share_one_directory(tmp_path):
+    """The defect the registration removed: two answers to one question."""
+    from codess.config import get_state_path
+
+    staging = tmp_path / "staging"
+    work_root = staging / "0"
+    cfg = config(
+        tmp_path, options={"validate_only": True}, staging_root=staging,
+        staged_store_roots={tmp_path.resolve(): work_root},
+    )
+    store = cfg.vendor_store(tmp_path, "cc").path
+    state = get_state_path(work_root)
+    assert store.parent == state.parent
 
 
 def test_store_path_follows_a_staged_root_when_one_is_registered(tmp_path):
@@ -104,8 +129,14 @@ def test_store_path_follows_a_staged_root_when_one_is_registered(tmp_path):
 
 
 def test_preflight_store_paths_differ_by_project(tmp_path):
+    """Each Project gets its own staging directory, so stores cannot collide."""
+    staging = tmp_path / "staging"
     cfg = config(
-        tmp_path, options={"validate_only": True}, staging_root=tmp_path / "staging",
+        tmp_path, options={"validate_only": True}, staging_root=staging,
+        staged_store_roots={
+            (tmp_path / "a").resolve(): staging / "0",
+            (tmp_path / "b").resolve(): staging / "1",
+        },
     )
     assert cfg.vendor_store(tmp_path / "a", "cc").path != (
         cfg.vendor_store(tmp_path / "b", "cc").path

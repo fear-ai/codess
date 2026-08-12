@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 
 from codess.schema_contract import (
+    MANIFEST_PATH,
+    SchemaContractError,
     APPLICATION_ID,
     FORMAT_ID,
     FORMAT_VERSION,
@@ -568,3 +570,308 @@ def test_evolution_gate_classifies_and_fails_closed():
     unknown = copy.deepcopy(old)
     unknown["future_rule"] = True
     assert required(list(compare(old, unknown))) == "manual"
+
+
+# --- contract digest versus package digest -----------------------------------
+#
+# The write gate compares the executable contract, not the whole released set.
+# Ten of the manifest's sixteen entries are validation fixtures, and editing
+# one used to make every published store unwritable although its layout,
+# decoder, and data were unchanged (13.4.4).
+
+def rewrite_manifest_hash(role: str, path: Path) -> None:
+    """Point the manifest at a file's current bytes, as a release would."""
+    import hashlib
+
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest["files"][role]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def clear_package_caches() -> None:
+    import codess.schema_contract as module
+
+    module.load_manifest.cache_clear()
+    module.load_contract.cache_clear()
+    module.contract_digest.cache_clear()
+    module.verify_package.cache_clear()
+
+
+@pytest.fixture
+def restore_package():
+    """Restore every released file this test may edit, whatever happens."""
+    import codess.schema_contract as module
+
+    originals = {
+        path: path.read_text(encoding="utf-8")
+        for path in (
+            MANIFEST_PATH,
+            module.PACKAGE_ROOT / "fixtures" / "minimal" / "session.json",
+            module.DDL_PATH,
+        )
+    }
+    clear_package_caches()
+    try:
+        yield originals
+    finally:
+        for path, text in originals.items():
+            path.write_text(text, encoding="utf-8")
+        clear_package_caches()
+
+
+def test_the_contract_digest_covers_only_the_runtime_files():
+    """Six files determine what a store is; nothing else can change that."""
+    from codess.schema_contract import CONTRACT_ROLES, load_manifest
+
+    assert CONTRACT_ROLES == {
+        "sqlite_schema", "contract", "mapping_contract",
+        "mapping_claude", "mapping_codex", "mapping_cursor",
+    }
+    assert CONTRACT_ROLES <= set(load_manifest()["files"])
+
+
+def test_the_two_digests_are_distinct():
+    """They answer different questions, so they must not be interchangeable."""
+    from codess.schema_contract import contract_digest, verify_package
+
+    assert contract_digest() != verify_package()
+    assert len(contract_digest()) == 64
+
+
+def test_a_new_store_records_the_contract_digest(tmp_path):
+    from codess.schema_contract import contract_digest, store_metadata
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    try:
+        assert store_metadata(conn)["package_digest"] == contract_digest()
+    finally:
+        conn.close()
+
+
+def test_editing_a_fixture_does_not_make_a_store_unwritable(
+    tmp_path, restore_package,
+):
+    """The defect W03 removed: a test document must not gate a store write."""
+    import codess.schema_contract as module
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    fixture = module.PACKAGE_ROOT / "fixtures" / "minimal" / "session.json"
+    fixture.write_text(
+        restore_package[fixture].rstrip("\n") + "\n\n", encoding="utf-8",
+    )
+    rewrite_manifest_hash("fixture_minimal_session", fixture)
+    clear_package_caches()
+
+    connect(path).close()
+
+
+def test_a_fixture_edit_with_a_stale_manifest_does_not_break_the_loaders(
+    tmp_path, restore_package,
+):
+    """The sharper failure: a half-finished edit disabled the program.
+
+    `load_ddl` and `load_contract` verified the whole manifest, so a fixture
+    whose recorded hash had not yet been updated broke every path that reads
+    the DDL -- including creating a store, which has nothing to do with it.
+    """
+    import codess.schema_contract as module
+
+    fixture = module.PACKAGE_ROOT / "fixtures" / "minimal" / "session.json"
+    fixture.write_text(
+        restore_package[fixture].rstrip("\n") + "\n\n", encoding="utf-8",
+    )
+    clear_package_caches()
+
+    assert module.load_ddl()
+    init_db(tmp_path / "store.db")
+
+
+def test_a_fixture_edit_is_still_reported_by_package_verification(
+    restore_package,
+):
+    """Nothing is weakened: the fixtures are still verified, elsewhere."""
+    import codess.schema_contract as module
+
+    fixture = module.PACKAGE_ROOT / "fixtures" / "minimal" / "session.json"
+    fixture.write_text(
+        restore_package[fixture].rstrip("\n") + "\n\n", encoding="utf-8",
+    )
+    clear_package_caches()
+
+    with pytest.raises(SchemaContractError, match="released CoSchema package"):
+        module.verify_package()
+
+
+def test_changing_the_ddl_still_refuses_the_write(tmp_path, restore_package):
+    """The control: a real contract change must still stop a store write."""
+    import codess.schema_contract as module
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    module.DDL_PATH.write_text(
+        restore_package[module.DDL_PATH] + "\n-- semantic change\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_hash("sqlite_schema", module.DDL_PATH)
+    clear_package_caches()
+
+    with pytest.raises(UnsupportedStoreError, match="rebuild"):
+        connect(path)
+
+
+def test_changing_a_mapping_profile_still_refuses_the_write(
+    tmp_path, restore_package,
+):
+    """Mapping profiles are runtime files, so they gate writes as the DDL does."""
+    import codess.schema_contract as module
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    profile = module.MAPPINGS_ROOT / "claude.json"
+    original = profile.read_text(encoding="utf-8")
+    try:
+        profile.write_text(original.rstrip("\n") + "\n\n", encoding="utf-8")
+        rewrite_manifest_hash("mapping_claude", profile)
+        clear_package_caches()
+        with pytest.raises(UnsupportedStoreError, match="rebuild"):
+            connect(path)
+    finally:
+        profile.write_text(original, encoding="utf-8")
+        clear_package_caches()
+
+
+# --- explicit override -------------------------------------------------------
+#
+# Contract checking runs by default and is skippable by explicit request. Two
+# situations use the skip: a test exercising a deliberately mismatched store,
+# and a recovery where the released files that produced a store are no longer
+# reconstructible, so refusing the write protects nothing and leaves retained
+# evidence unreachable.
+
+@pytest.fixture
+def contract_override(monkeypatch):
+    """Enable the override for one test, clearing the digest caches around it."""
+    from codess.schema_contract import CONTRACT_OVERRIDE_ENV
+
+    clear_package_caches()
+    monkeypatch.setenv(CONTRACT_OVERRIDE_ENV, "1")
+    yield
+    monkeypatch.delenv(CONTRACT_OVERRIDE_ENV, raising=False)
+    clear_package_caches()
+
+
+def test_the_override_is_off_unless_asked_for(monkeypatch):
+    from codess.schema_contract import CONTRACT_OVERRIDE_ENV, contract_check_disabled
+
+    monkeypatch.delenv(CONTRACT_OVERRIDE_ENV, raising=False)
+    assert contract_check_disabled() is False
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("1", True), ("true", True), ("YES", True), (" 1 ", True),
+    ("0", False), ("false", False), ("", False), ("maybe", False),
+])
+def test_the_override_reads_the_usual_truthy_spellings(
+    monkeypatch, value, expected,
+):
+    from codess.schema_contract import CONTRACT_OVERRIDE_ENV, contract_check_disabled
+
+    monkeypatch.setenv(CONTRACT_OVERRIDE_ENV, value)
+    assert contract_check_disabled() is expected
+
+
+def test_a_refused_write_names_the_override(tmp_path):
+    """The refusal names the flag, so the escape is discoverable."""
+    from codess.schema_contract import CONTRACT_OVERRIDE_ENV
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "UPDATE store_meta SET value=? WHERE key='package_digest'", ("0" * 64,)
+    )
+    conn.commit()
+    with pytest.raises(UnsupportedStoreError, match=CONTRACT_OVERRIDE_ENV):
+        require_store(conn, write=True)
+    conn.close()
+
+
+def test_the_override_allows_writing_a_mismatched_store(
+    tmp_path, contract_override,
+):
+    """Recovery: the contract that produced this store is gone."""
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "UPDATE store_meta SET value=? WHERE key='package_digest'", ("0" * 64,)
+    )
+    conn.commit()
+    try:
+        assert require_store(conn, write=True) == FORMAT_VERSION
+    finally:
+        conn.close()
+
+
+def test_the_override_allows_an_unverifiable_contract(
+    restore_package, contract_override,
+):
+    """A partly restored working tree still permits work."""
+    import codess.schema_contract as module
+
+    module.DDL_PATH.write_text(
+        restore_package[module.DDL_PATH] + "\n-- unrecorded\n", encoding="utf-8",
+    )
+    clear_package_caches()
+    assert len(module.contract_digest()) == 64
+
+
+def test_the_override_is_reported_when_it_is_used(
+    tmp_path, contract_override, caplog,
+):
+    """Each bypass logs a warning."""
+    import logging
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "UPDATE store_meta SET value=? WHERE key='package_digest'", ("0" * 64,)
+    )
+    conn.commit()
+    try:
+        with caplog.at_level(logging.WARNING, logger="codess.schema_contract"):
+            require_store(conn, write=True)
+    finally:
+        conn.close()
+    assert any("CODESS_NO_CONTRACT_CHECK" in record.message for record in caplog.records)
+
+
+def test_a_store_created_under_the_override_records_that(
+    tmp_path, contract_override,
+):
+    """The store records that its digest was not verified."""
+    from codess.schema_contract import store_metadata
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    try:
+        assert store_metadata(conn).get("contract_override") == "1"
+    finally:
+        conn.close()
+
+
+def test_an_ordinary_store_records_no_override(tmp_path):
+    from codess.schema_contract import store_metadata
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    try:
+        assert "contract_override" not in store_metadata(conn)
+    finally:
+        conn.close()

@@ -677,7 +677,9 @@ def _store_provenance(store: dict[str, Any]) -> dict[str, Any]:
         "project_ids": project_ids,
         "project_path": str(store["project_path"]),
         "store_path": str(store["path"]),
-        "snapshot_id": meta.get("snapshot_id"),
+        # Read from the snapshot pointer rather than the store: the identity
+        # lives in the manifest above the stores (13.4.8).
+        "snapshot_id": _store_snapshot_id(store),
         "snapshot_created_at": meta.get("snapshot_created_at"),
         "package_digest": meta.get("package_digest"),
         "format_version": meta.get("format_version"),

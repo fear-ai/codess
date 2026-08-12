@@ -20,7 +20,7 @@ from codess.config import (
     WORKING_ARCHIVES_DIR,
 )
 from codess.fileio import hash_file, open_readonly, read_json, write_json_atomic
-from codess.schema_contract import store_metadata, verify_package
+from codess.schema_contract import store_metadata, contract_digest
 from codess.snapshot import (
     current_stores, publish_snapshot, snapshot_store_paths,
     snapshot_store_paths_from_base,
@@ -31,7 +31,7 @@ def archive_stale_working_stores(project: Path) -> Path | None:
     databases = sorted(base.glob("*.db"))
     if not databases:
         return None
-    current_digest = verify_package()
+    current_digest = contract_digest()
     package_digests: set[str | None] = set()
     for path in databases:
         conn = open_readonly(path)

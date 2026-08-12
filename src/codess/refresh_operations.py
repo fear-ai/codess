@@ -21,7 +21,7 @@ from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.project_annotations import build_project_annotations
 from codess.project_catalog import durable_project_root, load_catalog
 from codess.refresh_receipts import REFRESH_RECEIPT_FORMAT
-from codess.schema_contract import verify_package
+from codess.schema_contract import contract_digest
 from codess.snapshot import SnapshotError, read_manifest, current_snapshot
 
 
@@ -299,7 +299,7 @@ def resolve_refresh_selection(
         "catalog_sha256": (
             hash_file(catalog_path) if catalog_path.is_file() else None
         ),
-        "package_digest": verify_package(),
+        "package_digest": contract_digest(),
     }
 
 
