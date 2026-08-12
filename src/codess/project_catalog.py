@@ -89,43 +89,61 @@ def _source_links(project_path: Path) -> list[dict[str, Any]]:
     return [item for item in value.get("links", []) if isinstance(item, dict)]
 
 
-def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str, Any]:
-    """Return and persist one stable project identity for an observed location."""
-    registry_root = registry_root.expanduser().resolve()
-    project_path = project_path.expanduser().resolve()
-    if registry_root == REGISTRY.resolve():
-        reason = ephemeral_project_location_reason(project_path)
-        if reason:
-            raise ValueError(reason)
-    binding_path = _binding_path(project_path)
-    binding: dict[str, Any] | None = None
-    if binding_path.exists():
-        binding = json.loads(binding_path.read_text(encoding="utf-8"))
-        if binding.get("binding_format") != PROJECT_BINDING_FORMAT:
-            raise ValueError("unsupported project binding format")
-    catalog = load_catalog(registry_root)
-    resolved = str(project_path)
-    by_id = {
-        item.get("project_id"): item
-        for item in catalog["projects"]
-        if isinstance(item, dict) and item.get("project_id")
-    }
+def _read_existing_binding(binding_path: Path) -> dict[str, Any] | None:
+    """Read a Project's retained binding, refusing an unsupported format.
+
+    A binding written under a different format is rejected rather than
+    ignored: silently discarding it would mint a second identity for a
+    Project that already has one, which is the failure this file prevents.
+    """
+    if not binding_path.exists():
+        return None
+    binding = json.loads(binding_path.read_text(encoding="utf-8"))
+    if binding.get("binding_format") != PROJECT_BINDING_FORMAT:
+        raise ValueError("unsupported project binding format")
+    return binding
+
+
+def _resolve_project_id(
+    binding: dict[str, Any] | None,
+    entries_by_id: dict[str, dict[str, Any]],
+    resolved_path: str,
+) -> str:
+    """Find this Project's stable identity, or mint one.
+
+    Three sources in falling order of authority: the Project's own retained
+    binding, a catalog entry already claiming this exact location, and
+    finally a new identity. The catalog search matters when a binding file
+    was deleted but the catalog still records the Project -- reminting there
+    would split one Project's history across two identities.
+    """
     project_id = binding.get("project_id") if binding else None
-    if not project_id:
-        for item in by_id.values():
-            if any(loc.get("path") == resolved for loc in item.get("locations", [])):
-                project_id = item["project_id"]
-                break
-    if not project_id:
-        project_id = f"codess:project:{uuid.uuid4()}"
-    entry = dict(by_id.get(project_id) or {})
-    entry.update({
-        "project_id": project_id,
-        "logical_name": entry.get("logical_name") or project_path.name,
-        "updated_at": datetime.now(UTC).isoformat(),
-    })
-    machine_id = _machine_id(registry_root)
-    observed_location_id = location_id(machine_id, project_path)
+    if project_id:
+        return str(project_id)
+    for entry in entries_by_id.values():
+        if any(
+            location.get("path") == resolved_path
+            for location in entry.get("locations", [])
+        ):
+            return str(entry["project_id"])
+    return f"codess:project:{uuid.uuid4()}"
+
+
+def _merged_locations(
+    entry: dict[str, Any],
+    observed_location_id: str,
+    *,
+    machine_id: str,
+    resolved_path: str,
+    observed_at: str,
+) -> list[dict[str, Any]]:
+    """Record this observation among the Project's known locations.
+
+    Retained locations keep their state; only the one just observed is
+    rewritten. `path_obsolete` is defaulted rather than assumed false, since
+    a retired or missing location is obsolete by definition and older entries
+    predate the field.
+    """
     locations = {
         item.get("location_id"): dict(item)
         for item in entry.get("locations", [])
@@ -138,33 +156,55 @@ def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str,
     locations[observed_location_id] = {
         "location_id": observed_location_id,
         "machine_id": machine_id,
-        "path": resolved,
+        "path": resolved_path,
         "path_obsolete": False,
         "state": "active",
-        "observed_at": datetime.now(UTC).isoformat(),
+        "observed_at": observed_at,
         "platform": platform.system().lower(),
     }
-    entry["locations"] = sorted(locations.values(), key=lambda item: item["location_id"])
+    return sorted(locations.values(), key=lambda item: item["location_id"])
+
+
+def _apply_source_links(
+    entry: dict[str, Any],
+    project_path: Path,
+    observed_location_id: str,
+    resolved_path: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Fold approved source links into workspace bindings and path aliases.
+
+    Only approved links are read: a proposed or rejected link is evidence of
+    a selection decision, not authority to bind a workspace. A link whose
+    source path differs from the observed one marks that path obsolete, which
+    is how a moved or renamed Project stops claiming its former location
+    while keeping the alias history that identifies it.
+
+    Returns the sorted workspace bindings and path aliases.
+    """
     workspaces = {
         (item.get("source_system_id"), item.get("workspace_id")): dict(item)
         for item in entry.get("workspace_bindings", [])
-        if isinstance(item, dict) and item.get("source_system_id") and item.get("workspace_id")
+        if isinstance(item, dict)
+        and item.get("source_system_id")
+        and item.get("workspace_id")
     }
     for workspace in workspaces.values():
         workspace.setdefault("path_obsolete", False)
     aliases = set(entry.get("path_aliases", []))
-    aliases.add(resolved)
+    aliases.add(resolved_path)
     obsolete_paths: set[str] = set()
     for link in _source_links(project_path):
         if link.get("selection_state") != "approved":
             continue
         source_system_id = link.get("source_system_id")
         identity = link.get("source_identity") or {}
-        workspace_id = identity.get("workspace_id") if isinstance(identity, dict) else None
+        workspace_id = (
+            identity.get("workspace_id") if isinstance(identity, dict) else None
+        )
         if source_system_id and workspace_id:
             source_project_path = link.get("source_project_path")
             path_obsolete = bool(link.get("path_obsolete"))
-            if source_project_path and source_project_path != resolved:
+            if source_project_path and source_project_path != resolved_path:
                 path_obsolete = True
             workspaces[(source_system_id, str(workspace_id))] = {
                 "source_system_id": source_system_id,
@@ -177,19 +217,71 @@ def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str,
             }
         source_path = link.get("source_project_path")
         if source_path and (
-            link.get("path_obsolete") or str(source_path) != resolved
+            link.get("path_obsolete") or str(source_path) != resolved_path
         ):
             obsolete_paths.add(str(source_path))
         target_path = link.get("target_project_path")
         if target_path:
             aliases.add(str(target_path))
-    entry["workspace_bindings"] = sorted(
-        workspaces.values(), key=lambda item: (item["source_system_id"], item["workspace_id"])
+    return (
+        sorted(
+            workspaces.values(),
+            key=lambda item: (item["source_system_id"], item["workspace_id"]),
+        ),
+        sorted(aliases - obsolete_paths),
     )
-    entry["path_aliases"] = sorted(aliases - obsolete_paths)
+
+
+def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str, Any]:
+    """Return and persist one stable project identity for an observed location.
+
+    Four steps, each a named function above: read any retained binding,
+    resolve the identity, rebuild the entry from this observation, and write
+    the catalog and binding together. They are extracted within this module
+    rather than into another because catalog identity, locations, and
+    readiness are one concern (3.5.5).
+    """
+    registry_root = registry_root.expanduser().resolve()
+    project_path = project_path.expanduser().resolve()
+    if registry_root == REGISTRY.resolve():
+        reason = ephemeral_project_location_reason(project_path)
+        if reason:
+            raise ValueError(reason)
+    binding_path = _binding_path(project_path)
+    binding = _read_existing_binding(binding_path)
+
+    catalog = load_catalog(registry_root)
+    resolved = str(project_path)
+    by_id = {
+        item.get("project_id"): item
+        for item in catalog["projects"]
+        if isinstance(item, dict) and item.get("project_id")
+    }
+    project_id = _resolve_project_id(binding, by_id, resolved)
+
+    # One observation, one timestamp. These were three separate `now()` calls,
+    # so a single logical event could be stamped at three different instants.
+    observed_at = datetime.now(UTC).isoformat()
+    machine_id = _machine_id(registry_root)
+    observed_location_id = location_id(machine_id, project_path)
+
+    entry = dict(by_id.get(project_id) or {})
+    entry.update({
+        "project_id": project_id,
+        "logical_name": entry.get("logical_name") or project_path.name,
+        "updated_at": observed_at,
+    })
+    entry["locations"] = _merged_locations(
+        entry, observed_location_id,
+        machine_id=machine_id, resolved_path=resolved, observed_at=observed_at,
+    )
+    entry["workspace_bindings"], entry["path_aliases"] = _apply_source_links(
+        entry, project_path, observed_location_id, resolved,
+    )
+
     by_id[project_id] = entry
     catalog["projects"] = sorted(by_id.values(), key=lambda item: item["project_id"])
-    catalog["updated_at"] = datetime.now(UTC).isoformat()
+    catalog["updated_at"] = observed_at
     write_json_atomic(_catalog_path(registry_root), catalog)
     binding = {
         "binding_format": PROJECT_BINDING_FORMAT,
@@ -363,10 +455,135 @@ def _entry_is_query_eligible(entry: dict[str, Any]) -> bool:
     }
 
 
-def catalog_readiness(registry_root: Path) -> dict[str, Any]:
-    """Report per-Project query readiness without claiming source freshness."""
-    from codess.refresh_receipts import latest_refresh_observations
+def _assess_query_status(
+    registry_root: Path, project_id: str, *, eligible: bool,
+) -> tuple[str, str | None, str | None]:
+    """Decide whether one Project can be queried, and why not if it cannot.
+
+    Returns the status, the current snapshot identity, and a detail string
+    for the failing cases. A Project that was never selected is reported as
+    `not_selected` rather than as a failure: it has no published snapshot
+    because none was asked for, which is not the same as a broken one.
+
+    `package_mismatch` is separated from `snapshot_fail` because they call
+    for different actions -- regenerating the store versus investigating a
+    damaged snapshot -- and a caller cannot tell them apart from a message.
+    """
     from codess.snapshot import SnapshotError, snapshot_store_paths_from_base
+
+    if not eligible:
+        return "not_selected", None, None
+    base = durable_project_root(registry_root, project_id)
+    try:
+        current_id = _current_snapshot_id(base)
+        if current_id is None:
+            return "missing_current_snapshot", None, None
+        snapshot_store_paths_from_base(base, current_id)
+        return "query_ready", current_id, None
+    except (OSError, ValueError, SnapshotError) as exc:
+        detail = str(exc)
+        status = (
+            "package_mismatch"
+            if "package digest mismatch" in detail
+            else "snapshot_fail"
+        )
+        return status, None, detail
+
+
+def _readiness_row(
+    entry: dict[str, Any],
+    *,
+    query_status: str,
+    current_snapshot_id: str | None,
+    detail: str | None,
+    eligible: bool,
+    refresh_observation: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Compose one Project's readiness record.
+
+    Selection and activity state each have two possible homes -- the entry
+    itself or its `curation` block -- because curation was added later and
+    older entries carry the values at the top level. Reading both here keeps
+    that compatibility in one place.
+    """
+    curation = entry.get("curation")
+    active_locations = [
+        str(item["path"])
+        for item in entry.get("locations", [])
+        if (
+            isinstance(item, dict)
+            and item.get("state") == "active"
+            and item.get("path")
+        )
+    ]
+    return {
+        "project_id": str(entry["project_id"]),
+        "logical_name": entry.get("logical_name"),
+        "selection_state": (
+            entry.get("selection_state")
+            or (
+                curation.get("selection_state")
+                if isinstance(curation, dict)
+                else None
+            )
+        ),
+        "catalog_disposition": entry.get("catalog_disposition"),
+        "selection_eligible": eligible,
+        "activity_state": (
+            curation.get("activity_state")
+            if isinstance(curation, dict)
+            else entry.get("activity_state")
+        ),
+        "active_location_count": len(active_locations),
+        "existing_active_location_count": sum(
+            Path(path).expanduser().is_dir() for path in active_locations
+        ),
+        "current_snapshot_id": current_snapshot_id,
+        "query_status": query_status,
+        "detail": detail,
+        # This is a receipt-backed operation result, not a freshness
+        # inference from a pointer, Git status, or vendor-store mtime.
+        "source_refresh_status": (
+            refresh_observation["status"]
+            if refresh_observation is not None else "not_assessed"
+        ),
+        "refresh_observation": refresh_observation,
+    }
+
+
+def _readiness_summary(projects: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize readiness over the assessed Projects.
+
+    Coverage counts only eligible Projects, since an unselected one is not a
+    Project that failed to become ready. Refresh coverage counts all of them,
+    because a receipt can exist for a Project no longer selected.
+    """
+    eligible_projects = [item for item in projects if item["selection_eligible"]]
+    ready = sum(
+        item["query_status"] == "query_ready" for item in eligible_projects
+    )
+    total = len(eligible_projects)
+    assessed = sum(
+        item["source_refresh_status"] != "not_assessed" for item in projects
+    )
+    return {
+        "eligible_projects": total,
+        "query_ready_projects": ready,
+        "not_query_ready_projects": total - ready,
+        "query_ready_coverage": f"{ready}/{total}",
+        "all_eligible_query_ready": bool(total and ready == total),
+        "source_refresh_assessed_projects": assessed,
+        "source_refresh_coverage": f"{assessed}/{len(projects)}",
+    }
+
+
+def catalog_readiness(registry_root: Path) -> dict[str, Any]:
+    """Report per-Project query readiness without claiming source freshness.
+
+    Three steps, each a named function above: assess whether a Project can be
+    queried, compose its record, and summarize the set.
+    """
+    from codess.refresh_receipts import latest_refresh_observations
 
     registry_root = registry_root.expanduser().resolve()
     refresh_observations = latest_refresh_observations(registry_root)
@@ -379,92 +596,21 @@ def catalog_readiness(registry_root: Path) -> dict[str, Any]:
             continue
         project_id = str(entry["project_id"])
         eligible = _entry_is_query_eligible(entry)
-        active_locations = [
-            str(item["path"])
-            for item in entry.get("locations", [])
-            if (
-                isinstance(item, dict)
-                and item.get("state") == "active"
-                and item.get("path")
-            )
-        ]
-        current_id = None
-        detail = None
-        if not eligible:
-            status = "not_selected"
-        else:
-            base = durable_project_root(registry_root, project_id)
-            try:
-                current_id = _current_snapshot_id(base)
-                if current_id is None:
-                    status = "missing_current_snapshot"
-                else:
-                    snapshot_store_paths_from_base(base, current_id)
-                    status = "query_ready"
-            except (OSError, ValueError, SnapshotError) as exc:
-                detail = str(exc)
-                status = (
-                    "package_mismatch"
-                    if "package digest mismatch" in detail
-                    else "snapshot_fail"
-                )
-        curation = entry.get("curation")
-        refresh_observation = refresh_observations.get(project_id)
-        projects.append({
-            "project_id": project_id,
-            "logical_name": entry.get("logical_name"),
-            "selection_state": (
-                entry.get("selection_state")
-                or (
-                    curation.get("selection_state")
-                    if isinstance(curation, dict)
-                    else None
-                )
-            ),
-            "catalog_disposition": entry.get("catalog_disposition"),
-            "selection_eligible": eligible,
-            "activity_state": (
-                curation.get("activity_state")
-                if isinstance(curation, dict)
-                else entry.get("activity_state")
-            ),
-            "active_location_count": len(active_locations),
-            "existing_active_location_count": sum(
-                Path(path).expanduser().is_dir() for path in active_locations
-            ),
-            "current_snapshot_id": current_id,
-            "query_status": status,
-            "detail": detail,
-            # This is a receipt-backed operation result, not a freshness
-            # inference from a pointer, Git status, or vendor-store mtime.
-            "source_refresh_status": (
-                refresh_observation["status"]
-                if refresh_observation is not None else "not_assessed"
-            ),
-            "refresh_observation": refresh_observation,
-        })
-    eligible_projects = [
-        item for item in projects if item["selection_eligible"]
-    ]
-    ready = sum(
-        item["query_status"] == "query_ready" for item in eligible_projects
-    )
-    total = len(eligible_projects)
-    assessed = sum(
-        item["source_refresh_status"] != "not_assessed" for item in projects
-    )
+        status, current_id, detail = _assess_query_status(
+            registry_root, project_id, eligible=eligible,
+        )
+        projects.append(_readiness_row(
+            entry,
+            query_status=status,
+            current_snapshot_id=current_id,
+            detail=detail,
+            eligible=eligible,
+            refresh_observation=refresh_observations.get(project_id),
+        ))
     return {
         "format": "codess.catalog-readiness/1",
         "generated_at": datetime.now(UTC).isoformat(),
-        "summary": {
-            "eligible_projects": total,
-            "query_ready_projects": ready,
-            "not_query_ready_projects": total - ready,
-            "query_ready_coverage": f"{ready}/{total}",
-            "all_eligible_query_ready": bool(total and ready == total),
-            "source_refresh_assessed_projects": assessed,
-            "source_refresh_coverage": f"{assessed}/{len(projects)}",
-        },
+        "summary": _readiness_summary(projects),
         "projects": projects,
     }
 

@@ -15,7 +15,7 @@ from codess.config import (
     CURRENT_POINTER_FILE, LARGE_RAW_REVISION_BYTES, RAW_MANIFEST_FILE,
     SNAPSHOTS_DIR, STORE_DIR, WORKING_ARCHIVES_DIR,
 )
-from codess.fileio import hash_file, write_json_atomic
+from codess.fileio import hash_file, open_readonly, write_json_atomic
 from codess.resources import storage_usage
 from codess.snapshot import SnapshotError, read_manifest, current_snapshot
 
@@ -82,7 +82,7 @@ def _validate_current(
         store = snapshot / name
         if not _inside(store, snapshot) or hash_file(store) != entry.get("sha256"):
             raise RuntimeError(f"snapshot store hash mismatch: {store}")
-        conn = sqlite3.connect(store.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(store)
         try:
             result = conn.execute("PRAGMA quick_check").fetchone()[0]
             if result != "ok":
@@ -393,9 +393,14 @@ def apply_retention_plan(
         or not after["safe_to_apply"]
     ):
         raise RuntimeError("retention postcondition failed; inspect the receipt and registry")
+    # One application, one instant. The receipt's `applied_at` and the file it
+    # is written to are two renderings of the same moment; reading the clock
+    # twice would name the file a different instant than its own contents
+    # report, which is exactly the correlation a receipt exists to support.
+    applied_at = datetime.now(timezone.utc)
     receipt = {
         "format": RECEIPT_FORMAT,
-        "applied_at": datetime.now(timezone.utc).isoformat(),
+        "applied_at": applied_at.isoformat(),
         "registry": plan["registry"],
         "policy": plan["policy"],
         "plan_sha256": plan["plan_sha256"],
@@ -415,7 +420,10 @@ def apply_retention_plan(
         },
         "postcondition": {"safe_to_apply": True, "remaining_candidates": 0},
     }
-    target = receipt_path or Path(plan["registry"]) / "receipts" / "retention" / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')}.json"
+    target = receipt_path or (
+        Path(plan["registry"]) / "receipts" / "retention"
+        / f"{applied_at.strftime('%Y%m%dT%H%M%S.%fZ')}.json"
+    )
     write_json_atomic(target, receipt)
     receipt["receipt_path"] = str(target)
     return receipt

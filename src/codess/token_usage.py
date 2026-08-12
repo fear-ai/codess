@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from codess.config import MAX_TOKEN_LINE_BYTES
-from codess.fileio import read_json, write_json_atomic
+from codess.fileio import open_readonly, read_json, write_json_atomic
 
 TOKEN_OBSERVATION_FORMAT = "codess.token-observation/1"
 TOKEN_CACHE_FORMAT = "codess.token-source-set-cache/1"
@@ -297,7 +297,7 @@ def source_paths(
     selected: set[Path] = set()
     for store in store_paths:
         try:
-            conn = sqlite3.connect(store.resolve().as_uri() + "?mode=ro", uri=True)
+            conn = open_readonly(store)
             try:
                 for (uri,) in conn.execute(
                     "SELECT source_uri FROM sources WHERE source_system_id=?",
@@ -321,7 +321,7 @@ def collect_token_usage(
     for store in store_paths:
         try:
             import sqlite3
-            conn = sqlite3.connect(store.resolve().as_uri() + "?mode=ro", uri=True)
+            conn = open_readonly(store)
             try:
                 for system, uri in conn.execute(
                     "SELECT source_system_id, source_uri FROM sources"

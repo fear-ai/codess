@@ -36,7 +36,15 @@ def _raw_records(snapshot: Path | None) -> list[dict[str, Any]]:
     return records
 
 
-def _captured_object(snapshot: Path, relpath: str) -> tuple[Path | None, str]:
+def _locate_raw_object(snapshot: Path, relpath: str) -> tuple[Path | None, str]:
+    """Find one stored raw object and report how it is retained.
+
+    Named for the raw object rather than for a capture mode: `captured` is one
+    of four raw modes, so the old name only parsed for a reader who already
+    knew that vocabulary, and would have gone stale if the modes changed. The
+    returned kind stays mode-shaped because it is the disposition a caller
+    reports, not this function's subject.
+    """
     sealed = snapshot / "raw" / relpath
     if sealed.is_file():
         return sealed, "sealed"
@@ -90,7 +98,7 @@ def resolve_event(store: dict[str, Any], event_identifier: str) -> dict[str, Any
             continue
         relpath = record.get("object_relpath")
         object_path, object_kind = (
-            _captured_object(snapshot, relpath)
+            _locate_raw_object(snapshot, relpath)
             if snapshot and relpath else (None, "captured")
         )
         candidate = {

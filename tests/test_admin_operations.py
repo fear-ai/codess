@@ -840,3 +840,53 @@ def test_fixed_point_with_allowed_source_drift_does_not_recheck_live_reference(
         "value_acceptance": value_acceptance,
         "passed": True,
     }
+
+
+def test_a_working_archive_is_named_the_instant_its_manifest_reports(tmp_path):
+    """One archival event, one instant.
+
+    The archive directory name and the manifest's `archived_at` render the
+    same moment. They were separate clock reads, so the directory an operator
+    sorts by could claim a different second than the manifest inside it.
+    """
+    import json
+    from datetime import datetime
+
+    from codess.baseline_operations import archive_stale_working_stores
+    from codess.config import CURRENT_POINTER_FILE, STORE_DIR, WORKING_ARCHIVES_DIR
+    from codess.raw_store import RawStore
+    from codess.snapshot import create_snapshot
+    from codess.store import connect, init_db
+
+    project = tmp_path / "project"
+    base = project / STORE_DIR
+    store = base / "sessions_cc.db"
+    init_db(store)
+
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"type":"user"}\n', encoding="utf-8")
+    record = raw.observe(
+        source, source_system_id="anthropic.claude-code",
+        storage_format="claude-jsonl", mode="capture",
+    )
+    snapshot = create_snapshot(project, [store], [record], raw_store=raw)
+    assert (base / CURRENT_POINTER_FILE).exists(), snapshot
+
+    # Make the working store claim a package the release no longer matches,
+    # which is the condition the archival exists for.
+    conn = connect(store)
+    try:
+        conn.execute(
+            "UPDATE store_meta SET value=? WHERE key='package_digest'", ("f" * 64,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    destination = archive_stale_working_stores(project)
+    assert destination is not None
+    assert destination.parent.name == WORKING_ARCHIVES_DIR
+    manifest = json.loads((destination / "archive.json").read_text(encoding="utf-8"))
+    archived_at = datetime.fromisoformat(manifest["archived_at"])
+    assert destination.name.endswith(archived_at.strftime("%Y%m%dT%H%M%SZ"))

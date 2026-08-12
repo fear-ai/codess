@@ -4,6 +4,10 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
+from codess.fileio import open_readonly
+from codess.schema_contract import column_names, store_metadata, table_names
 from codess.store import (
     init_db,
     ingest_state_marker,
@@ -14,7 +18,10 @@ from codess.store import (
     replace_session_events,
     ensure_source,
     prune_unreferenced_source_revisions,
-    replace_source_sessions,
+    drop_sessions_absent_from_source,
+    integrity_report,
+    table_counts,
+    session_ids_for_source,
     upsert_event,
     upsert_session,
 )
@@ -454,34 +461,40 @@ class TestUpsert:
         conn.close()
 
     def test_replace_source_removes_only_orphaned_sessions(self, tmp_path):
+        """A Session another source still contributes to must survive.
+
+        One Cursor database can hold Sessions that another also wrote Events
+        for, so removing a Session outright when one source stops carrying it
+        would discard evidence that source never owned.
+        """
         db = tmp_path / "s.db"
         init_db(db)
         conn = connect(db)
-        sessions = {
-            sid: {
-                "id": sid, "source": "Cursor", "type": "IDE",
-                "started_at": 1.0,
-            }
-            for sid in ("gone", "shared")
-        }
-        replace_source_sessions(
+        for sid in ("gone", "shared"):
+            replace_session_events(
+                conn,
+                {"id": sid, "source": "Cursor", "type": "IDE", "started_at": 1.0},
+                [{"session_id": sid, "event_id": "1", "source_file": "/one.db"}],
+                session_id=sid,
+                prune=False,
+            )
+        replace_session_events(
             conn,
-            "/one.db",
-            sessions,
+            {"id": "shared", "source": "Cursor", "type": "IDE", "started_at": 1.0},
             [
-                {"session_id": "gone", "event_id": "1", "source_file": "/one.db"},
                 {"session_id": "shared", "event_id": "1", "source_file": "/one.db"},
+                {"session_id": "shared", "event_id": "2", "source_file": "/two.db"},
             ],
-        )
-        replace_source_sessions(
-            conn,
-            "/two.db",
-            {"shared": sessions["shared"]},
-            [{"session_id": "shared", "event_id": "2", "source_file": "/two.db"}],
+            session_id="shared",
+            prune=False,
         )
         conn.commit()
+        assert session_ids_for_source(conn, "/one.db") == {"gone", "shared"}
 
-        replace_source_sessions(conn, "/one.db", {}, [])
+        # `/one.db` no longer contains either Session.
+        drop_sessions_absent_from_source(
+            conn, "/one.db", session_ids_for_source(conn, "/one.db"),
+        )
         conn.commit()
         assert [
             row[0] for row in conn.execute("SELECT id FROM sessions ORDER BY id")
@@ -490,3 +503,136 @@ class TestUpsert:
             row[0] for row in conn.execute("SELECT source_file FROM events")
         ] == ["/two.db"]
         conn.close()
+
+
+class TestSharedStoreReads:
+    """Reads that several modules had each written out for themselves.
+
+    Each of these replaced two or more copies of the same statement, so the
+    tests here are what keeps the single definition honest for every caller.
+    """
+
+    def test_table_names_reports_what_the_store_has(self, tmp_path):
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            names = table_names(conn)
+            assert {"sessions", "events", "store_meta"} <= names
+            assert "not_a_table" not in names
+        finally:
+            conn.close()
+
+    def test_column_names_reports_one_table_shape(self, tmp_path):
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            columns = column_names(conn, "sessions")
+            assert {"id", "global_id", "project_id"} <= columns
+        finally:
+            conn.close()
+
+    def test_counts_cover_every_table_by_default(self, tmp_path):
+        """The list is derived, so it cannot drift from the schema."""
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            counts = table_counts(conn)
+            assert set(counts) == table_names(conn)
+            # A new store holds only its own metadata rows.
+            assert counts["sessions"] == 0 and counts["events"] == 0
+            assert counts["store_meta"] > 0
+        finally:
+            conn.close()
+
+    def test_counts_can_be_restricted_to_named_tables(self, tmp_path):
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            assert set(table_counts(conn, ("sessions", "events"))) == {
+                "sessions", "events",
+            }
+        finally:
+            conn.close()
+
+    def test_a_table_the_store_lacks_is_omitted_not_zero(self, tmp_path):
+        """A missing table is a different fact from an empty one."""
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            assert table_counts(conn, ("sessions", "absent_table")) == {
+                "sessions": 0,
+            }
+        finally:
+            conn.close()
+
+    def test_counts_follow_what_was_written(self, tmp_path):
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            replace_session_events(
+                conn,
+                {"id": "s1", "source": "Claude", "type": "Code", "started_at": 1.0},
+                [{"session_id": "s1", "event_id": "e1"}],
+                session_id="s1",
+            )
+            conn.commit()
+            counts = table_counts(conn, ("sessions", "events"))
+            assert counts == {"sessions": 1, "events": 1}
+        finally:
+            conn.close()
+
+    def test_integrity_report_states_both_structural_checks(self, tmp_path):
+        """`integrity_check` misses referential faults, so both are reported."""
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            report = integrity_report(conn)
+            assert report == {"integrity_check": "ok", "foreign_key_violations": 0}
+        finally:
+            conn.close()
+
+    def test_store_metadata_reads_the_key_value_table(self, tmp_path):
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            meta = store_metadata(conn)
+            assert meta["format_id"] == "codess.coschema"
+            assert meta["package_digest"]
+        finally:
+            conn.close()
+
+    def test_a_read_only_open_refuses_writes(self, tmp_path):
+        """Every hand-written read-only open now carries `query_only`."""
+        import sqlite3 as sqlite
+
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = open_readonly(db)
+        try:
+            with pytest.raises(sqlite.OperationalError):
+                conn.execute("INSERT INTO store_meta(key, value) VALUES ('k','v')")
+        finally:
+            conn.close()
+
+    def test_a_read_only_open_does_not_require_a_coschema_store(self, tmp_path):
+        """Its callers open files precisely because the contract may not hold."""
+        import sqlite3 as sqlite
+
+        foreign = tmp_path / "foreign.db"
+        setup = sqlite.connect(foreign)
+        setup.execute("CREATE TABLE unrelated(id INTEGER)")
+        setup.commit()
+        setup.close()
+        conn = open_readonly(foreign)
+        try:
+            assert table_names(conn) == {"unrelated"}
+        finally:
+            conn.close()

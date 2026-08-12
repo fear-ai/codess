@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import heapq
 import json
+import sqlite3
 import os
 import re
 import tempfile
@@ -12,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from codess.schema_contract import column_names
 from codess.hashing import codess_bytes_hash
 
 
@@ -430,6 +432,63 @@ def _like_literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def session_structure_counts(
+    conn: sqlite3.Connection, session_ids: Iterable[str],
+) -> dict[str, Any]:
+    """Interaction, Model Turn, relation, and initiation counts for Sessions.
+
+    The four aggregates that summarize how a set of Sessions is structured,
+    rather than what they contain. The overview and the orientation audit both
+    reported them and had written the same four statements out separately, so
+    a change to one report silently disagreed with the other.
+
+    Returns zero totals and empty breakdowns for an empty selection rather
+    than querying with an empty `IN ()`, which is not valid SQLite.
+    """
+    ids = sorted(session_ids)
+    empty = {
+        "interactions": 0, "model_turns": 0,
+        "session_relations": {}, "initiation_kinds": {},
+    }
+    if not ids:
+        return empty
+    placeholders = ",".join("?" for _ in ids)
+    return {
+        "interactions": int(conn.execute(
+            f"SELECT COUNT(*) FROM interactions WHERE session_id IN ({placeholders})",
+            ids,
+        ).fetchone()[0]),
+        "model_turns": int(conn.execute(
+            f"SELECT COUNT(*) FROM model_turns WHERE session_id IN ({placeholders})",
+            ids,
+        ).fetchone()[0]),
+        # A Session with no recorded relation is top level, named rather than
+        # left null so the breakdown sums to the Session count.
+        "session_relations": {
+            str(relation): int(count)
+            for relation, count in conn.execute(
+                f"""
+                SELECT COALESCE(session_relation_kind,'top_level'),COUNT(*)
+                FROM sessions WHERE id IN ({placeholders})
+                GROUP BY COALESCE(session_relation_kind,'top_level')
+                """,
+                ids,
+            )
+        },
+        "initiation_kinds": {
+            str(kind): int(count)
+            for kind, count in conn.execute(
+                f"""
+                SELECT initiation_kind,COUNT(*) FROM interactions
+                WHERE session_id IN ({placeholders})
+                GROUP BY initiation_kind
+                """,
+                ids,
+            )
+        },
+    }
+
+
 CONFIGURATION_FILTER_COLUMNS = {
     "models": "model_name_exact",
     "model_providers": "provider",
@@ -592,6 +651,16 @@ def _expanded_event_predicate(
     )
 
 
+def store_project_ids(conn: sqlite3.Connection) -> list[str]:
+    """The Project identities one store holds, in stable order.
+
+    A store normally holds one Project, but a merged or relocated store can
+    hold several, and both provenance and selection report them. Ordered by
+    identity so two runs over the same store agree.
+    """
+    return [str(row[0]) for row in conn.execute("SELECT id FROM projects ORDER BY id")]
+
+
 def _store_provenance(store: dict[str, Any]) -> dict[str, Any]:
     conn = store["conn"]
     meta = dict(conn.execute("SELECT key,value FROM store_meta"))
@@ -603,7 +672,7 @@ def _store_provenance(store: dict[str, Any]) -> dict[str, Any]:
     availability = dict(conn.execute(
         "SELECT availability,COUNT(*) FROM sources GROUP BY availability"
     ))
-    project_ids = [row[0] for row in conn.execute("SELECT id FROM projects ORDER BY id")]
+    project_ids = store_project_ids(conn)
     return {
         "project_ids": project_ids,
         "project_path": str(store["project_path"]),
@@ -649,12 +718,7 @@ def selected_project_snapshots(
     """Return canonical Project/snapshot observation inputs."""
     selected = []
     for store in stores:
-        project_ids = [
-            str(row[0])
-            for row in store["conn"].execute(
-                "SELECT id FROM projects ORDER BY id"
-            )
-        ]
+        project_ids = store_project_ids(store["conn"])
         snapshot_id = _store_snapshot_id(store)
         selected.extend({
             "project_id": project_id,
@@ -1004,9 +1068,7 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
     predicate = " AND ".join(where) if where else "1"
     rows = []
     for store in stores:
-        session_columns = {
-            row[1] for row in store["conn"].execute("PRAGMA table_info(sessions)")
-        }
+        session_columns = column_names(store["conn"], "sessions")
         path_obsolete = (
             "s.path_obsolete" if "path_obsolete" in session_columns
             else "0 AS path_obsolete"
@@ -1151,37 +1213,13 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
             WHERE {predicate}
         """, params)}
         totals["sessions"] += len(selected_sessions)
-        if selected_sessions:
-            placeholders = ",".join("?" for _ in selected_sessions)
-            ids = sorted(selected_sessions)
-            totals["interactions"] += conn.execute(
-                f"SELECT COUNT(*) FROM interactions WHERE session_id IN ({placeholders})", ids
-            ).fetchone()[0]
-            totals["model_turns"] += conn.execute(
-                f"SELECT COUNT(*) FROM model_turns WHERE session_id IN ({placeholders})", ids
-            ).fetchone()[0]
-            for relation, count in conn.execute(
-                f"""
-                SELECT COALESCE(session_relation_kind,'top_level'),COUNT(*)
-                FROM sessions WHERE id IN ({placeholders})
-                GROUP BY COALESCE(session_relation_kind,'top_level')
-                """,
-                ids,
-            ):
-                session_relations[relation] = (
-                    session_relations.get(relation, 0) + int(count)
-                )
-            for initiation, count in conn.execute(
-                f"""
-                SELECT initiation_kind,COUNT(*) FROM interactions
-                WHERE session_id IN ({placeholders})
-                GROUP BY initiation_kind
-                """,
-                ids,
-            ):
-                initiation_kinds[initiation] = (
-                    initiation_kinds.get(initiation, 0) + int(count)
-                )
+        structure = session_structure_counts(conn, selected_sessions)
+        totals["interactions"] += structure["interactions"]
+        totals["model_turns"] += structure["model_turns"]
+        for relation, count in structure["session_relations"].items():
+            session_relations[relation] = session_relations.get(relation, 0) + count
+        for initiation, count in structure["initiation_kinds"].items():
+            initiation_kinds[initiation] = initiation_kinds.get(initiation, 0) + count
         for row in conn.execute(f"""
             SELECT s.source_system_id,e.event_kind,COALESCE(e.event_at,e.timestamp),
                    LENGTH(COALESCE(e.content,'')),e.tool_name,e.artifact_path,

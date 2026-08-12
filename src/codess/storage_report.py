@@ -13,33 +13,25 @@ from codess.config import (
     LARGE_RAW_OBJECT_BYTES, MAX_CODESS_DB_BYTES, MAX_CURSOR_DB_BYTES,
     RAW_MANIFEST_FILE,
 )
-from codess.fileio import write_json_atomic
+from codess.fileio import open_readonly, write_json_atomic
 from codess.token_usage import collect_token_usage
 from codess.resources import allocated_bytes, file_usage, storage_usage, tree_usage
+from codess.store import table_counts, table_names
 
 REPORT_FORMAT = "codess.storage-observation/1"
 
-_TABLE_COUNT_QUERIES = {
-    "projects": 'SELECT COUNT(*) FROM "projects"',
-    "sources": 'SELECT COUNT(*) FROM "sources"',
-    "sessions": 'SELECT COUNT(*) FROM "sessions"',
-    "interactions": 'SELECT COUNT(*) FROM "interactions"',
-    "model_turns": 'SELECT COUNT(*) FROM "model_turns"',
-    "events": 'SELECT COUNT(*) FROM "events"',
-    "source_records": 'SELECT COUNT(*) FROM "source_records"',
-    "content_objects": 'SELECT COUNT(*) FROM "content_objects"',
-    "tool_invocations": 'SELECT COUNT(*) FROM "tool_invocations"',
-    "tool_results": 'SELECT COUNT(*) FROM "tool_results"',
-    "artifacts": 'SELECT COUNT(*) FROM "artifacts"',
-}
+REPORTED_TABLES = (
+    "projects", "sources", "sessions", "interactions", "model_turns", "events",
+    "source_records", "content_objects", "tool_invocations", "tool_results",
+    "artifacts",
+)
+"""The content tables this report counts.
 
+A deliberate subset: the report describes what an operator's storage holds,
+so it names the entities they reason about rather than every table. The
+counting itself is `store.table_counts`, which reads the store's own catalog
+-- this list selects, it does not restate the schema."""
 
-def _tables(conn: sqlite3.Connection) -> set[str]:
-    return {
-        str(row[0]) for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
-    }
 
 
 def inspect_sqlite(path: Path) -> dict[str, Any]:
@@ -49,8 +41,7 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
         "allocated_bytes": allocated_bytes(path),
     }
     try:
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
-        conn.execute("PRAGMA query_only = ON")
+        conn = open_readonly(path)
         try:
             page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
             page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
@@ -63,11 +54,10 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
                 "utilization_ratio": round(used_pages / page_count, 6)
                 if page_count else None,
             }
-            tables = _tables(conn)
-            counts = {}
-            for table, query in _TABLE_COUNT_QUERIES.items():
-                if table in tables:
-                    counts[table] = int(conn.execute(query).fetchone()[0])
+            tables = table_names(conn)
+            # The report describes storage, so it counts the content tables an
+            # operator reads about rather than every table in the store.
+            counts = table_counts(conn, REPORTED_TABLES)
             result["counts"] = counts
             if "events" in tables:
                 row = conn.execute(

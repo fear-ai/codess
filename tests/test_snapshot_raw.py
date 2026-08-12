@@ -548,3 +548,71 @@ def test_retained_snapshot_requires_exact_package_unless_explicitly_compatible(
     assert snapshot_store_paths(
         project, snapshot_id, allow_package_mismatch=True
     )
+
+
+# --- stat consistency at the capture site -----------------------------------
+#
+# Capture and fingerprinting share one guard (`fileio.stat_consistency`) and
+# differ only in disposition. These cover capture's: any change is a rejection,
+# because a raw object claims to be the exact bytes of one source state.
+
+def _append_after_read(source: Path, monkeypatch, extra: bytes = b"b" * 4096):
+    """Grow the source between the read and the closing stat.
+
+    Capture compares a stat taken before the read with one taken after it, so
+    the change has to land in that window; growing the file earlier would fail
+    the compressor's declared size instead of the guard under test.
+    """
+    real_stat = Path.stat
+    state = {"reads": 0}
+
+    def stat_then_grow(self, *args, **kwargs):
+        if self == source:
+            state["reads"] += 1
+            if state["reads"] == 2:
+                with open(source, "ab") as appending:
+                    appending.write(extra)
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_then_grow)
+
+
+def test_capture_rejects_a_source_that_changed_during_the_read(tmp_path, monkeypatch):
+    """A source that moved mid-capture cannot be stored as exact bytes."""
+    from codess.raw_store import _compress_file
+
+    source = tmp_path / "session.jsonl"
+    source.write_bytes(b"a" * 4096)
+    _append_after_read(source, monkeypatch)
+    with pytest.raises(RawCaptureError, match="changed during capture"):
+        _compress_file(source, tmp_path / "staged.zst", require_stable_stat=True)
+
+
+def test_capture_accepts_a_stable_source(tmp_path):
+    from codess.raw_store import _compress_file
+
+    source = tmp_path / "session.jsonl"
+    source.write_bytes(b"a" * 4096)
+    content_hash, _stored, uncompressed, _size, _stat = _compress_file(
+        source, tmp_path / "staged.zst", require_stable_stat=True,
+    )
+    assert uncompressed == 4096
+    assert content_hash
+
+
+def test_a_transactional_backup_is_exempt_from_the_stat_guard(tmp_path, monkeypatch):
+    """An SQLite backup is its own consistent copy, so its stat may move.
+
+    The size check still applies: it compares the bytes actually read against
+    the size promised, which the stat guard cannot do.
+    """
+    from codess.raw_store import _compress_file
+
+    source = tmp_path / "state.vscdb"
+    source.write_bytes(b"a" * 4096)
+    _append_after_read(source, monkeypatch)
+    content_hash, _stored, uncompressed, _size, _stat = _compress_file(
+        source, tmp_path / "staged.zst", require_stable_stat=False,
+    )
+    assert uncompressed == 4096
+    assert content_hash

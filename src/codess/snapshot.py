@@ -21,14 +21,13 @@ from codess.config import (
     RAW_MANIFEST_FILE, SNAPSHOTS_DIR, STORE_DIR,
 )
 from codess.fileio import (
-    HashMismatchError, hash_file, read_hash, verify_hash,
+    HashMismatchError, hash_file, open_readonly, read_hash, verify_hash,
 )
 from codess.raw_store import RAW_FORMAT, RawStore
 from codess.project_catalog import durable_project_root
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import (
-    APPLICATION_ID, FORMAT_ID, FORMAT_VERSION, SUPPORTED_READ_FORMATS,
-    database_identity, require_store, verify_package,
+    APPLICATION_ID, FORMAT_ID, FORMAT_VERSION, SUPPORTED_READ_FORMATS, database_identity, require_store, store_metadata, table_names, verify_package,
 )
 
 
@@ -155,7 +154,7 @@ def _backup_store(
     snapshot_id: str,
     snapshot_created_at: str,
 ) -> None:
-    source = sqlite3.connect(source_path.resolve().as_uri() + "?mode=ro", uri=True)
+    source = open_readonly(source_path)
     target = sqlite3.connect(target_path)
     try:
         require_store(source, write=False)
@@ -183,11 +182,7 @@ def _logical_counts(
 ) -> dict[str, int]:
     conn = sqlite3.connect(path)
     try:
-        available = {
-            row[0] for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        }
+        available = table_names(conn)
         requested = tuple(only) if only is not None else (
             "projects", "project_locations", "workspace_bindings", "sources",
             "sessions", "interactions", "model_turns", "events",
@@ -213,10 +208,10 @@ def _store_package_identity(
     versions: set[int] = set()
     package_digests: set[str] = set()
     for path in paths:
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(path)
         try:
             versions.add(require_store(conn, write=False))
-            meta = dict(conn.execute("SELECT key, value FROM store_meta"))
+            meta = store_metadata(conn)
             digest = meta.get("package_digest")
             if not digest:
                 raise SnapshotError(f"store lacks package_digest: {path}")
@@ -551,11 +546,11 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
     package_digest: str | None = None
     project_id: str | None = None
     for path in store_paths:
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(path)
         try:
             version = require_store(conn, write=False)
             format_version = format_version or version
-            meta = dict(conn.execute("SELECT key, value FROM store_meta"))
+            meta = store_metadata(conn)
             for key in (
                 "snapshot_id", "snapshot_created_at", "snapshot_software_version",
                 "decoder_version", "validator_version", "package_digest",
@@ -647,7 +642,7 @@ def snapshot_store_paths_from_base(
                 verify_hash(path, entry["sha256"])
             except HashMismatchError as exc:
                 raise SnapshotError(f"retained store hash mismatch: {name}") from exc
-            conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+            conn = open_readonly(path)
             try:
                 if package_matches:
                     require_store(conn, write=False)
@@ -655,7 +650,7 @@ def snapshot_store_paths_from_base(
                     application_id, version = database_identity(conn)
                     if application_id != APPLICATION_ID or version not in SUPPORTED_READ_FORMATS:
                         raise SnapshotError(f"retained store format mismatch: {name}")
-                meta = dict(conn.execute("SELECT key, value FROM store_meta"))
+                meta = store_metadata(conn)
                 if meta.get("snapshot_id") != manifest.get("snapshot_id"):
                     raise SnapshotError(f"retained store snapshot identity mismatch: {name}")
                 if meta.get("package_digest") != manifest.get("package_digest"):

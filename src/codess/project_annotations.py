@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from codess.fileio import open_readonly
 from codess.config import LARGE_EVENT_COUNT, LARGE_STORE_BYTES
 from codess.project_catalog import (
     catalog_readiness,
@@ -16,6 +17,8 @@ from codess.project_catalog import (
     load_catalog,
 )
 from codess.snapshot import SnapshotError, read_manifest, current_snapshot
+from codess.schema_contract import column_names
+from codess.store import table_counts
 
 
 ANNOTATION_REPORT_FORMAT = "codess.project-annotations/1"
@@ -66,21 +69,12 @@ def _snapshot_facts(snapshot: Path | None) -> dict[str, Any]:
     try:
         for store in sorted(snapshot.glob("*.db")):
             facts["normalized_store_bytes"] += store.stat().st_size
-            conn = sqlite3.connect(
-                store.resolve().as_uri() + "?mode=ro", uri=True
-            )
+            conn = open_readonly(store)
             try:
-                conn.execute("PRAGMA query_only = ON")
-                facts["sessions"] += int(
-                    conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-                )
-                facts["events"] += int(
-                    conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-                )
-                columns = {
-                    str(row[1])
-                    for row in conn.execute("PRAGMA table_info(sessions)")
-                }
+                counts = table_counts(conn, ("sessions", "events"))
+                facts["sessions"] += counts.get("sessions", 0)
+                facts["events"] += counts.get("events", 0)
+                columns = column_names(conn, "sessions")
                 source_column = (
                     "source_system_id"
                     if "source_system_id" in columns else "source"

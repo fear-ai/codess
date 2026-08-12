@@ -230,6 +230,39 @@ SUBAGENT = _IS_ENV_VALUES["CODESS_SUBAGENT"]
 
 # --- Ingest redaction default (CLI --redact ORs on top) ---
 INGEST_REDACT = _IS_ENV_VALUES["CODESS_REDACT"]
+RAW_MODES = ("none", "reference", "capture", "seal")
+"""How much of a Source's exact bytes a run retains, in increasing degree.
+
+A closed vocabulary: unlike `actor_kind`, `content_role`, and `origin_kind` --
+which CoSchema keeps open so vendor evidence can introduce useful new values
+-- these four are the modes Codess implements, and a fifth would be new
+behavior rather than a new observation. Written out longhand at six sites
+before W23, so a mode added here would have been accepted by some boundaries
+and rejected by others.
+
+Ordered from least to most retained, which is the order every message that
+lists them uses. `config` owns it because config is a leaf module: the
+validators that consult it live above, and `raw_store` re-exports it as a
+set for membership tests.
+"""
+
+RAW_MODE_CHOICES = RAW_MODES
+"""Alias for argparse `choices`, where the plural reads as the parameter."""
+
+
+def raw_mode_error(name: str, value: object, *, extra: tuple[str, ...] = ()) -> str:
+    """Phrase one rejection message for an invalid raw mode.
+
+    The five sites that reject a mode each spelled the valid list into their
+    own message, so adding a mode meant editing prose in five files and the
+    vocabulary in six. `extra` carries the values a particular site accepts
+    beyond the stored ones, which is `auto` for refresh.
+    """
+    allowed = tuple(extra) + RAW_MODES
+    listed = ", ".join(allowed[:-1]) + f", or {allowed[-1]}"
+    return f"{name}={value!r} must be {listed}"
+
+
 RAW_MODE = _IS_ENV_VALUES["CODESS_RAW_MODE"]
 STRICT_MAPPING = _IS_ENV_VALUES["CODESS_STRICT_MAPPING"]
 CONTENT_POLICY = _IS_ENV_VALUES["CODESS_CONTENT_POLICY"]
@@ -342,10 +375,8 @@ def validate_config() -> list[str]:
     ):
         if value <= 0:
             errs.append(f"{name}={value} must be > 0")
-    if RAW_MODE not in {"none", "reference", "capture", "seal"}:
-        errs.append(
-            f"CODESS_RAW_MODE={RAW_MODE!r} must be none, reference, capture, or seal"
-        )
+    if RAW_MODE not in RAW_MODES:
+        errs.append(raw_mode_error("CODESS_RAW_MODE", RAW_MODE))
     if not CC_PROJECTS.is_absolute():
         errs.append(f"CODESS_CC_PROJECTS must be absolute: {CC_PROJECTS}")
     if not CODEX_SESSIONS.is_absolute():

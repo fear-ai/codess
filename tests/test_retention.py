@@ -2,6 +2,8 @@
 
 import json
 import sqlite3
+from datetime import datetime
+from pathlib import Path
 
 from codess.fileio import hash_file
 from codess.retention import apply_retention_plan, build_retention_plan
@@ -168,3 +170,27 @@ def test_multiple_huge_current_revisions_require_explicit_comparison(tmp_path):
     )
     assert comparison["safe_to_apply"]
     assert comparison["large_revision_retention"]["comparison_retention_explicit"]
+
+
+def test_a_default_receipt_is_named_the_instant_it_reports(tmp_path):
+    """One application, one instant.
+
+    `applied_at` and the receipt's own filename are two renderings of the same
+    moment. They were separate clock reads, so a file could be named a
+    different instant than its contents reported -- which defeats the
+    correlation a receipt exists to support.
+    """
+    registry = tmp_path / "registry"
+    current, _keep_raw = _snapshot(registry)
+    _snapshot(registry, snapshot_id="old", raw_name="delete")
+    pointer = {
+        "snapshot_id": current.name, "path": str(current),
+        "manifest_sha256": hash_file(current / "manifest.json"),
+    }
+    (current.parents[1] / "current.json").write_text(json.dumps(pointer))
+
+    receipt = apply_retention_plan(registry)
+    written = Path(receipt["receipt_path"])
+    assert written.exists()
+    applied = datetime.fromisoformat(receipt["applied_at"])
+    assert written.stem == applied.strftime("%Y%m%dT%H%M%S.%fZ")

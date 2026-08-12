@@ -13,7 +13,6 @@ from typing import Any
 from codess.config import (
     DEFAULT_QUERY_BYTE_LIMIT, get_project_stores, validate_config,
 )
-from codess.identity import global_session_id
 from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
 from codess.project_catalog import resolve_project_query_scopes
 from codess.registry_store import merge_query_stats, update_project_entry
@@ -38,6 +37,20 @@ from codess.query_api import (
     make_request, merge_selection, save_document, selection_from_result,
     selected_project_ids, selected_project_snapshots, validate_request,
 )
+from codess.query_reports import (
+    artifact_evidence,
+    audit_events,
+    mapping_diagnostics,
+    permission_denials,
+    selected_sessions,
+    session_events,
+    store_counts,
+    task_invocations,
+    task_results,
+    tool_counts_by_session,
+    tool_lineage,
+    tool_totals,
+)
 log = logging.getLogger(__name__)
 
 # Standard (built-in) tools for grouping; others are "loaded"
@@ -56,7 +69,12 @@ QUERY_SOURCE_FILTERS = {
 
 
 class QueryScope:
-    """Read-only stores selected for one logical query."""
+    """Read-only stores selected for one logical query.
+
+    Also supplies the source predicate the reports in `codess.query_reports`
+    filter by, so a report receives the scope rather than reaching back into
+    this module for a helper.
+    """
 
     def __init__(self, source_tokens: set[str] | None = None) -> None:
         self.stores: list[dict] = []
@@ -66,6 +84,52 @@ class QueryScope:
     def close(self) -> None:
         for store in self.stores:
             store["conn"].close()
+
+    @property
+    def selected_source_ids(self) -> tuple[str, ...]:
+        """The CoSchema source systems this selection names, in stable order.
+
+        One derivation for every predicate below: the tokens are a CLI
+        vocabulary and the source-system identifiers are the stored one, and
+        translating between them is a single decision rather than one per
+        predicate shape.
+        """
+        return tuple(
+            QUERY_SOURCE_FILTERS[token] for token in sorted(self.source_tokens or ())
+        )
+
+    def source_predicate(self, alias: str = "s") -> tuple[str, tuple[str, ...]]:
+        """A source predicate over one alias, and its parameters.
+
+        Returns a bare predicate rather than a clause so callers can compose
+        it with their own conditions; `1` stands for an unfiltered selection
+        because every caller substitutes it into an existing `WHERE`.
+        """
+        source_ids = self.selected_source_ids
+        if not source_ids:
+            return "1", ()
+        placeholders = ", ".join("?" for _ in source_ids)
+        return f"{alias}.source_system_id IN ({placeholders})", source_ids
+
+    def diagnostics_predicate(self) -> tuple[str, tuple[str, ...]]:
+        """The same selection for mapping diagnostics, which join two ways.
+
+        A diagnostic can reach a source system through its Session or through
+        the Source it was recorded against, and either is sufficient evidence
+        that it belongs to the selection -- a record-level diagnostic often
+        has no Session at all. Both aliases are therefore filtered, which is
+        why this returns a whole clause: an empty selection has no `WHERE` at
+        all rather than a true predicate, since the query it lands in has no
+        other condition to attach to.
+        """
+        if not self.source_tokens:
+            return "", ()
+        session_predicate, session_params = self.source_predicate("s")
+        source_predicate, source_params = self.source_predicate("src")
+        return (
+            f"WHERE ({session_predicate} OR {source_predicate})",
+            (*session_params, *source_params),
+        )
 
 
 def _open_readable_store(path):
@@ -243,59 +307,19 @@ def _session_recency_sort_key(session: dict) -> tuple:
 
 
 def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[dict]:
-    """Return sessions across stores, globally ordered by recency."""
-    sessions = []
-    for store_index, store in enumerate(scope.stores):
-        session_columns = {
-            row[1] for row in store["conn"].execute("PRAGMA table_info(sessions)")
-        }
-        global_projection = "global_id," if "global_id" in session_columns else "NULL AS global_id,"
-        project_projection = (
-            "project_id," if "project_id" in session_columns
-            else "NULL AS project_id,"
-        )
-        predicate, params = _source_predicate(scope)
-        rows = store["conn"].execute(
-            f"""
-            SELECT id, {global_projection} {project_projection} source_system_id, vendor_session_id, source, release, started_at, ended_at,
-                   project_path, metadata
-            FROM sessions s
-            WHERE {predicate}
-            """,
-            params,
-        )
-        for row in rows:
-            source_system_id = row["source_system_id"]
-            stable_id = (
-                row["global_id"]
-                if row["global_id"]
-                else global_session_id(
-                    source_system_id, row["vendor_session_id"] or row["id"]
-                )
-            )
-            project_id = row["project_id"] or store.get("project_id")
-            sessions.append(
-                {
-                    "id": row["id"],
-                    "global_id": stable_id,
-                    "name": scope.session_names.get(
-                        (str(project_id), stable_id)
-                    ) if project_id else None,
-                    "query_id": (store_index, row["id"]),
-                    "source": row["source"],
-                    "release": row["release"],
-                    "started_at": row["started_at"],
-                    "ended_at": row["ended_at"],
-                    "project_path": row["project_path"],
-                    "metadata": row["metadata"],
-                    "query_project": str(store["project_path"]),
-                    "conn": store["conn"],
-                }
-            )
+    """Sessions across stores by recency, with any human name applied.
 
-    sessions.sort(key=_session_recency_sort_key)
-    if limit is not None:
-        return sessions[:limit]
+    The name is looked up here rather than in the query: it is a display
+    label the operator assigned, held in the scope, not something the store
+    records about the Session.
+    """
+    sessions = selected_sessions(scope, _session_recency_sort_key, limit)
+    for session in sessions:
+        project_id = session["project_id"]
+        session["name"] = (
+            scope.session_names.get((str(project_id), session["global_id"]))
+            if project_id else None
+        )
     return sessions
 
 
@@ -827,17 +851,16 @@ def _emit_jsonl(report: str, data: dict, *, project_path: str | None = None, row
 
 
 def _project_counts(scope: QueryScope, roots: list[Path]) -> dict[str, dict[str, int]]:
+    """Per-Project counts, including a zero row for each root with no store.
+
+    The domain query reports only the stores it opened; a root the user named
+    that has no readable store is still part of what was asked for, so it
+    appears here as zero rather than being omitted.
+    """
     counts = {str(root.resolve()): {"sessions": 0, "events": 0} for root in roots}
-    for store in scope.stores:
-        project = str(store["project_path"])
-        predicate, params = _source_predicate(scope)
-        counts[project]["sessions"] += store["conn"].execute(
-            f"SELECT COUNT(*) FROM sessions s WHERE {predicate}", params
-        ).fetchone()[0]
-        counts[project]["events"] += store["conn"].execute(
-            f"SELECT COUNT(*) FROM events e JOIN sessions s ON s.id=e.session_id "
-            f"WHERE {predicate}", params
-        ).fetchone()[0]
+    for project, totals in store_counts(scope).items():
+        counts[project]["sessions"] += totals["sessions"]
+        counts[project]["events"] += totals["events"]
     return counts
 
 
@@ -964,64 +987,9 @@ def _stats(
     return 0
 
 
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    ).fetchone() is not None
-
-
 def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
     """Print structured mapping loss/ambiguity without hiding source values."""
-    rows: list[dict] = []
-    for store_index, store in enumerate(scope.stores):
-        conn = store["conn"]
-        if not _has_table(conn, "mapping_diagnostics"):
-            continue
-        diagnostic_columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(mapping_diagnostics)")
-        }
-        severity_projection = (
-            "d.severity" if "severity" in diagnostic_columns
-            else "'warn' AS severity"
-        )
-        where = ""
-        params: tuple[str, ...] = ()
-        if scope.source_tokens:
-            session_predicate, session_params = _source_predicate(scope)
-            source_ids = tuple(
-                QUERY_SOURCE_FILTERS[token]
-                for token in sorted(scope.source_tokens)
-            )
-            placeholders = ",".join("?" for _ in source_ids)
-            where = (
-                f"WHERE ({session_predicate} OR "
-                f"src.source_system_id IN ({placeholders}))"
-            )
-            params = (*session_params, *source_ids)
-        for row in conn.execute(
-            f"""
-            SELECT d.level, {severity_projection}, d.reason_code,
-                   d.source_field, d.source_value,
-                   d.mapping_rule, d.detail, d.created_at, d.session_id,
-                   e.event_id
-            FROM mapping_diagnostics d
-            LEFT JOIN events e ON e.id = d.event_id
-            LEFT JOIN sessions s ON s.id = COALESCE(d.session_id, e.session_id)
-            LEFT JOIN sources src ON src.id = d.source_id
-            {where}
-            """,
-            params,
-        ):
-            item = dict(row)
-            item["project_path"] = str(store["project_path"])
-            item["store_index"] = store_index
-            rows.append(item)
-    rows.sort(key=lambda row: (
-        row["created_at"], row["project_path"], row["store_index"],
-        row["session_id"] or "", row["event_id"] or "",
-    ))
-    rows = _limited(rows, limit)
+    rows = mapping_diagnostics(scope, limit)
     if not rows:
         return 0
     print("project_path\tsession_id\tevent_id\tlevel\tseverity\treason_code\tsource_field\tsource_value\tmapping_rule\tdetail")
@@ -1035,62 +1003,7 @@ def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
 
 def _artifacts(scope: QueryScope, limit: int | None = None) -> int:
     """Aggregate evidence for artifacts touched by one or more coding systems."""
-    grouped: dict[tuple[str, str, str], dict] = {}
-    for store in scope.stores:
-        conn = store["conn"]
-        if not _has_table(conn, "artifacts") or not _has_table(conn, "event_artifacts"):
-            continue
-        correlations = {}
-        if _has_table(conn, "correlation_assertions"):
-            for assertion in conn.execute(
-                "SELECT object_id, relation_kind, evidence, confidence FROM correlation_assertions "
-                "WHERE subject_kind='artifact' AND object_kind='project'"
-            ):
-                evidence = _json_metadata(assertion["evidence"])
-                uri = evidence.get("artifact_uri")
-                if uri:
-                    correlations.setdefault(uri, []).append(
-                        (assertion["object_id"], assertion["relation_kind"], assertion["confidence"])
-                    )
-        predicate, params = _source_predicate(scope)
-        rows = conn.execute(
-            f"""
-            SELECT a.artifact_kind,
-                   COALESCE(a.relative_path, a.uri, a.observed_absolute_path) AS locator,
-                   ea.operation, s.source, e.session_id
-            FROM artifacts a
-            JOIN event_artifacts ea ON ea.artifact_id = a.id
-            JOIN events e ON e.id = ea.event_id
-            JOIN sessions s ON s.id = e.session_id
-            WHERE COALESCE(a.relative_path, a.uri, a.observed_absolute_path) IS NOT NULL
-              AND {predicate}
-            """,
-            params,
-        )
-        project = str(store["project_path"])
-        for row in rows:
-            key = (project, row["artifact_kind"], row["locator"])
-            item = grouped.setdefault(key, {"sources": set(), "operations": set(), "sessions": set(), "evidence": 0, "correlations": set()})
-            item["sources"].add(row["source"])
-            item["operations"].add(row["operation"])
-            item["sessions"].add(row["session_id"])
-            item["evidence"] += 1
-            item["correlations"].update(correlations.get(row["locator"], []))
-    rows = []
-    for (project, kind, locator), item in grouped.items():
-        rows.append({
-            "project_path": project, "kind": kind, "locator": locator,
-            "sources": ",".join(sorted(item["sources"])),
-            "source_count": len(item["sources"]),
-            "operations": ",".join(sorted(item["operations"])),
-            "session_count": len(item["sessions"]), "evidence": item["evidence"],
-            "correlations": ",".join(
-                f"{project_id}|{relation}|{confidence:g}"
-                for project_id, relation, confidence in sorted(item["correlations"])
-            ),
-        })
-    rows.sort(key=lambda row: (-row["source_count"], -row["evidence"], row["project_path"], row["locator"]))
-    rows = _limited(rows, limit)
+    rows = artifact_evidence(scope, limit)
     if not rows:
         return 0
     print("project_path\tartifact_kind\tlocator\tsources\tsource_count\toperations\tsession_count\tevidence_count\tproject_correlations")
@@ -1134,19 +1047,7 @@ def _tool_table(scope: QueryScope, recent: int) -> int:
 
     # Per-session tool counts: {session_id: {tool_name: count}}
     sess_ids = [r["query_id"] for r in sessions]
-    sess_counts = {}
-    for session in sessions:
-        sid = session["query_id"]
-        cur = session["conn"].execute(
-            """
-            SELECT tool_name, COUNT(*) as cnt
-            FROM events
-            WHERE event_type = 'tool_call' AND tool_name IS NOT NULL AND session_id = ?
-            GROUP BY tool_name
-            """,
-            (session["id"],),
-        )
-        sess_counts[sid] = {row["tool_name"]: row["cnt"] for row in cur}
+    sess_counts = tool_counts_by_session(sessions)
 
     # All tools, totals, sorted by total desc
     all_tools = {}
@@ -1222,17 +1123,7 @@ def _show_session(
     show_tool = "tool" in modes
     show_perm = "perm" in modes
 
-    cur = session["conn"].execute(
-        """
-        SELECT event_type, subtype, role, content, tool_name, tool_input
-        FROM events
-        WHERE session_id = ?
-        ORDER BY CASE WHEN sequence_no IS NULL THEN 1 ELSE 0 END,
-                 sequence_no, COALESCE(event_at, timestamp), id
-        """,
-        (session["id"],),
-    )
-    for row in cur:
+    for row in session_events(session):
         etype, subtype, _role, content, tool_name, tool_input = (
             row["event_type"], row["subtype"], row["role"],
             row["content"], row["tool_name"], row["tool_input"],
@@ -1345,92 +1236,7 @@ def _lineage_id(raw) -> str:
 
 def _lineage(scope: QueryScope, limit: int | None = None) -> int:
     """Print tool calls joined to results using vendor lineage identifiers."""
-    rows = []
-    for store_index, store in enumerate(scope.stores):
-        predicate, params = _source_predicate(scope)
-        events = [
-            dict(row)
-            for row in store["conn"].execute(
-                f"""
-                SELECT e.session_id, e.event_id, e.event_type, e.subtype,
-                       e.tool_name, e.content_len, e.timestamp, e.metadata
-                FROM events e JOIN sessions s ON s.id=e.session_id
-                WHERE (e.event_type = 'tool_call'
-                   OR e.subtype IN ('tool_result', 'permission_denied', 'tool_failure'))
-                  AND {predicate}
-                ORDER BY e.timestamp, e.id
-                """,
-                params,
-            )
-        ]
-        results: dict[tuple[str, str], list[dict]] = {}
-        unlinked_results = []
-        calls = []
-        for event in events:
-            lineage_id = _lineage_id(event["metadata"])
-            event["lineage_id"] = lineage_id
-            if event["event_type"] == "tool_call":
-                calls.append(event)
-            elif lineage_id:
-                results.setdefault(
-                    (event["session_id"], lineage_id), []
-                ).append(event)
-            else:
-                unlinked_results.append(event)
-
-        for call in calls:
-            key = (call["session_id"], call["lineage_id"])
-            matched = results.get(key, []) if call["lineage_id"] else []
-            result = matched.pop(0) if matched else None
-            call_metadata = _json_metadata(call["metadata"])
-            if result is None:
-                outcome = (
-                    "missing_result" if call["lineage_id"] else "unlinked_call"
-                )
-                result_len = ""
-            else:
-                outcome = {
-                    "permission_denied": "permission_denied",
-                    "tool_failure": "tool_failure",
-                }.get(result["subtype"], "result")
-                result_len = result["content_len"] or 0
-            rows.append({
-                "store_index": store_index,
-                "project_path": str(store["project_path"]),
-                "session_id": call["session_id"],
-                "timestamp": call["timestamp"],
-                "tool_name": call["tool_name"] or (
-                    result["tool_name"] if result else ""
-                ),
-                "lineage_id": call["lineage_id"],
-                "status": call_metadata.get("status", ""),
-                "outcome": outcome,
-                "result_len": result_len,
-            })
-
-        for remaining in results.values():
-            unlinked_results.extend(remaining)
-        for result in unlinked_results:
-            rows.append({
-                "store_index": store_index,
-                "project_path": str(store["project_path"]),
-                "session_id": result["session_id"],
-                "timestamp": result["timestamp"],
-                "tool_name": result["tool_name"] or "",
-                "lineage_id": result.get("lineage_id", ""),
-                "status": "",
-                "outcome": {
-                    "permission_denied": "permission_denied",
-                    "tool_failure": "tool_failure",
-                }.get(result["subtype"], "unlinked_result"),
-                "result_len": result["content_len"] or 0,
-            })
-
-    rows.sort(key=lambda row: _timestamp_last_sort_key(
-        row["timestamp"], row["project_path"], row["store_index"],
-        row["session_id"], row["lineage_id"],
-    ))
-    rows = _limited(rows, limit)
+    rows = tool_lineage(scope, _lineage_id, _timestamp_last_sort_key, limit)
     if not rows:
         return 0
     print(
@@ -1451,24 +1257,7 @@ def _lineage(scope: QueryScope, limit: int | None = None) -> int:
 
 def _task_review(scope: QueryScope) -> int:
     """Review Task and Web* tool invocations: counts, descriptions, outcomes."""
-    # Tool counts by category
-    all_tools = {}
-    for store in scope.stores:
-        predicate, params = _source_predicate(scope)
-        cur = store["conn"].execute(
-            f"""
-            SELECT e.tool_name, COUNT(*) as cnt
-            FROM events e JOIN sessions s ON s.id=e.session_id
-            WHERE e.event_type = 'tool_call' AND e.tool_name IS NOT NULL
-              AND {predicate}
-            GROUP BY e.tool_name
-            """,
-            params,
-        )
-        for row in cur:
-            all_tools[row["tool_name"]] = (
-                all_tools.get(row["tool_name"], 0) + row["cnt"]
-            )
+    all_tools = tool_totals(scope)
 
     task_tools = {k: v for k, v in all_tools.items() if k and ("Task" in k or k in ("mcp_task", "Task"))}
     web_tools = {k: v for k, v in all_tools.items() if k and ("Web" in k or "web" in k.lower())}
@@ -1486,27 +1275,7 @@ def _task_review(scope: QueryScope) -> int:
         print(f"  {sanitize_tabular(name)}\t{cnt}")
 
     # Task/Agent invocations: description, prompt, outcome
-    task_calls = []
-    for store in scope.stores:
-        predicate, params = _source_predicate(scope)
-        cur = store["conn"].execute(
-            f"""
-            SELECT e.session_id, e.event_id, e.tool_name, e.tool_input, e.timestamp
-            FROM events e JOIN sessions s ON s.id=e.session_id
-            WHERE e.event_type = 'tool_call'
-              AND (e.tool_name LIKE '%Task%' OR e.tool_name IN ('mcp_task', 'Task'))
-              AND {predicate}
-            """,
-            params,
-        )
-        task_calls.extend(dict(row) for row in cur)
-    task_calls.sort(
-        key=lambda row: (
-            float(row["timestamp"]) if row["timestamp"] is not None else float("inf"),
-            row["session_id"],
-            row["event_id"],
-        )
-    )
+    task_calls = task_invocations(scope)
 
     if task_calls:
         print("\n=== Task/Agent invocations (description, prompt) ===")
@@ -1530,22 +1299,7 @@ def _task_review(scope: QueryScope) -> int:
             print("  " + " | ".join(parts))
 
     # Tool results (outcomes): match by session + tool_name, infer outcome from content
-    results = []
-    for store in scope.stores:
-        predicate, params = _source_predicate(scope)
-        cur = store["conn"].execute(
-            f"""
-            SELECT e.session_id, e.tool_name, e.content, e.content_len
-            FROM events e JOIN sessions s ON s.id=e.session_id
-            WHERE e.event_type = 'user_message' AND e.subtype = 'tool_result'
-              AND e.tool_name IS NOT NULL
-              AND (e.tool_name LIKE '%Task%' OR e.tool_name IN ('mcp_task', 'Task'))
-              AND {predicate}
-            ORDER BY e.session_id, e.id
-            """,
-            params,
-        )
-        results.extend(dict(row) for row in cur)
+    results = task_results(scope)
     if results:
         outcomes = {}
         for row in results:
@@ -1567,30 +1321,7 @@ def _task_review(scope: QueryScope) -> int:
 
 def _permissions(scope: QueryScope, limit: int | None = None) -> int:
     """Print permission_denied events."""
-    rows = []
-    for store in scope.stores:
-        predicate, params = _source_predicate(scope)
-        cur = store["conn"].execute(
-            f"""
-            SELECT e.session_id, e.timestamp, e.tool_name
-            FROM events e JOIN sessions s ON s.id=e.session_id
-            WHERE e.subtype = 'permission_denied' AND {predicate}
-            """,
-            params,
-        )
-        for row in cur:
-            item = dict(row)
-            item["project_path"] = str(store["project_path"])
-            rows.append(item)
-    rows.sort(
-        key=lambda row: (
-            float(row["timestamp"]) if row["timestamp"] is not None else float("inf"),
-            row["project_path"],
-            row["session_id"],
-            row["tool_name"] or "",
-        )
-    )
-    rows = _limited(rows, limit)
+    rows = permission_denials(scope, limit)
     if not rows:
         return 0
     print("session_id\tproject_path\ttimestamp\ttool_name")
@@ -1605,38 +1336,7 @@ def _permissions(scope: QueryScope, limit: int | None = None) -> int:
 
 def _audit(scope: QueryScope, limit: int | None = None) -> int:
     """Print only normalized, evidence-backed audit events."""
-    rows = []
-    supported = (
-        "permission_denied",
-        "tool_failure",
-        "turn_aborted",
-        "context_compaction",
-        "context_compaction_summary",
-    )
-    placeholders = ",".join("?" for _ in supported)
-    for store_index, store in enumerate(scope.stores):
-        predicate, source_params = _source_predicate(scope)
-        cur = store["conn"].execute(
-            f"""
-            SELECT e.session_id, e.event_id, e.timestamp, e.subtype,
-                   e.tool_name, e.content_len, e.metadata, s.source
-            FROM events e
-            JOIN sessions s ON s.id = e.session_id
-            WHERE e.subtype IN ({placeholders}) AND {predicate}
-            """,
-            (*supported, *source_params),
-        )
-        for row in cur:
-            item = dict(row)
-            item["project_path"] = str(store["project_path"])
-            item["store_index"] = store_index
-            rows.append(item)
-
-    rows.sort(key=lambda row: _timestamp_last_sort_key(
-        row["timestamp"], row["project_path"], row["store_index"],
-        row["session_id"], row["event_id"],
-    ))
-    rows = _limited(rows, limit)
+    rows = audit_events(scope, _timestamp_last_sort_key, limit)
     if not rows:
         return 0
     print(

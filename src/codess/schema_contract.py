@@ -175,6 +175,45 @@ def database_identity(conn: sqlite3.Connection) -> tuple[int, int]:
     )
 
 
+def table_names(conn: sqlite3.Connection) -> set[str]:
+    """The tables a store actually has.
+
+    Readers that must tolerate an older store ask this rather than catching
+    an error per table, and it is also what keeps `table_counts` from having
+    to carry a hand-maintained list of the schema.
+    """
+    return {
+        str(row[0]) for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+
+
+def column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Which columns one table has.
+
+    Readers project a literal in place of a column an older store predates --
+    `NULL AS global_id` rather than a failing query -- and each asked SQLite
+    for the column list itself. The identifier is quoted because it cannot be
+    a bound parameter; callers pass a table name from the schema, not input.
+    """
+    return {
+        str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')
+    }
+
+
+def store_metadata(conn: sqlite3.Connection) -> dict[str, str]:
+    """Read a store's own metadata as a mapping.
+
+    `store_meta` is a key/value table, so every reader wrote the same
+    `dict(conn.execute(...))` and then picked one key out of it. Naming the
+    read here puts it beside the other store-identity checks and gives the
+    table one place to be queried, which is what a column rename would
+    otherwise have to find at five call sites.
+    """
+    return dict(conn.execute("SELECT key, value FROM store_meta"))
+
+
 def validate_database_contract(conn: sqlite3.Connection) -> list[str]:
     """Return two-way layout/JSON omissions against the logical contract.
 
@@ -191,19 +230,12 @@ def validate_database_contract(conn: sqlite3.Connection) -> list[str]:
         table: set(fields)
         for table, fields in physical.get("excluded_fields", {}).items()
     }
-    tables = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
-    }
+    tables = table_names(conn)
     for entity, definition in entities.items():
         if entity not in tables:
             errors.append(f"missing table {entity}")
             continue
-        columns = {
-            row[1] for row in conn.execute(f'PRAGMA table_info("{entity}")')
-        }
+        columns = column_names(conn, entity)
         expected_fields = set(definition.get("fields", {}))
         expected_fields.update(definition.get("identity", ()))
         expected_fields.update(definition.get("order", ()))
@@ -225,9 +257,7 @@ def validate_database_contract(conn: sqlite3.Connection) -> list[str]:
         if table not in entities:
             errors.append(f"uncontracted table {table}")
             continue
-        columns = {
-            row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')
-        }
+        columns = column_names(conn, table)
         definition = entities[table]
         contracted = set(definition.get("fields", {}))
         contracted.update(definition.get("identity", ()))
@@ -255,7 +285,7 @@ def require_store(conn: sqlite3.Connection, *, write: bool) -> int:
         raise UnsupportedStoreError(
             f"unsupported CoSchema format {version}; supported={sorted(supported)}"
         )
-    meta = dict(conn.execute("SELECT key, value FROM store_meta"))
+    meta = store_metadata(conn)
     if meta.get("format_id") != FORMAT_ID or int(meta.get("format_version", -1)) != version:
         raise UnsupportedStoreError("store_meta disagrees with SQLite format identity")
     if write and meta.get("package_digest") != verify_package():

@@ -10,6 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cursor_fixtures import create_bubble_table, create_header_table, put_headers
+
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
@@ -83,16 +85,9 @@ def test_scan_exact_root_honors_approved_remote_cursor_source_link(tmp_path):
     global_dir = cursor / "globalStorage"
     global_dir.mkdir()
     conn = sqlite3.connect(global_dir / "state.vscdb")
-    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
-    conn.execute(
-        "CREATE TABLE composerHeaders ("
-        "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-        "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-    )
-    conn.execute(
-        "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
-        ("composer", workspace_id, 1_000, 2_000, 0, 0),
-    )
+    create_bubble_table(conn)
+    create_header_table(conn)
+    put_headers(conn, [("composer", workspace_id, 1_000, 2_000, 0, 0)])
     conn.execute(
         "INSERT INTO cursorDiskKV VALUES (?, ?)",
         ("bubbleId:composer:bubble", json.dumps({"type": 1, "text": "prompt"})),
@@ -135,7 +130,7 @@ def test_scan_coalesces_nested_workspace_into_observed_git_project(tmp_path):
     ws.mkdir(parents=True)
     (ws / "workspace.json").write_text(json.dumps({"folder": str(child)}))
     conn = sqlite3.connect(ws / "state.vscdb")
-    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    create_bubble_table(conn)
     conn.commit()
     conn.close()
     env = _scan_env(
@@ -502,7 +497,7 @@ def test_scan_cursor_invalid_key_is_reported_but_nonfatal(tmp_path):
     ws.mkdir(parents=True)
     (ws / "workspace.json").write_text(json.dumps({"folder": str(proj)}))
     conn = sqlite3.connect(ws / "state.vscdb")
-    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    create_bubble_table(conn)
     conn.execute("INSERT INTO cursorDiskKV VALUES ('bubbleId:broken', '{}')")
     conn.commit()
     conn.close()
@@ -723,7 +718,7 @@ def test_scan_cursor_central_db():
         gs.mkdir(parents=True)
         db = gs / "state.vscdb"
         conn = sqlite3.connect(db)
-        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        create_bubble_table(conn)
         conn.execute(
             "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
             ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "hi", "timingInfo": {}})),
@@ -758,20 +753,13 @@ def test_scan_days_filters_cursor_global_with_header_timestamps(tmp_path):
     global_dir.mkdir(parents=True)
     db = global_dir / "state.vscdb"
     conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
-    conn.execute(
-        "CREATE TABLE composerHeaders ("
-        "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-        "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-    )
+    create_bubble_table(conn)
+    create_header_table(conn)
     conn.execute(
         "INSERT INTO cursorDiskKV VALUES (?, ?)",
         ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "old"})),
     )
-    conn.execute(
-        "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
-        ("c1", "ws", 1_000_000_000_000, 1_000_000_001_000, 0, 0),
-    )
+    put_headers(conn, [("c1", "ws", 1_000_000_000_000, 1_000_000_001_000, 0, 0)])
     conn.commit()
     conn.close()
     cc = tmp_path / "cc"

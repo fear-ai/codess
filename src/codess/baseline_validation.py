@@ -17,14 +17,14 @@ from codess.raw_store import (
     RAW_FORMAT, RawCaptureError, RawStore, verify_raw,
 )
 from codess.fileio import (
-    check_policy_format, hash_file, load_versioned_policy, source_fingerprint,
-    write_json_atomic,
+    check_policy_format, hash_file, load_versioned_policy, open_readonly, source_fingerprint, write_json_atomic,
 )
 from codess.config import (
-    CURRENT_POINTER_FILE, MANIFEST_FILE, RAW_MANIFEST_FILE, STORE_DIR,
+    CURRENT_POINTER_FILE, MANIFEST_FILE, RAW_MANIFEST_FILE, RAW_MODES, STORE_DIR,
 )
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import FORMAT_VERSION, require_store, verify_package
+from codess.store import integrity_report, table_counts
 from codess.snapshot import (
     SnapshotError, current_stores, read_manifest, current_snapshot,
     snapshot_store_paths_from_base,
@@ -33,30 +33,6 @@ from codess.snapshot import (
 
 REPORT_FORMAT = "codess.validation-report/1"
 
-_TABLE_COUNT_QUERIES = {
-    "projects": "SELECT COUNT(*) FROM projects",
-    "project_locations": "SELECT COUNT(*) FROM project_locations",
-    "workspace_bindings": "SELECT COUNT(*) FROM workspace_bindings",
-    "sources": "SELECT COUNT(*) FROM sources",
-    "sessions": "SELECT COUNT(*) FROM sessions",
-    "interactions": "SELECT COUNT(*) FROM interactions",
-    "model_turns": "SELECT COUNT(*) FROM model_turns",
-    "events": "SELECT COUNT(*) FROM events",
-    "source_records": "SELECT COUNT(*) FROM source_records",
-    "content_objects": "SELECT COUNT(*) FROM content_objects",
-    "event_content": "SELECT COUNT(*) FROM event_content",
-    "source_record_content": "SELECT COUNT(*) FROM source_record_content",
-    "tool_result_content": "SELECT COUNT(*) FROM tool_result_content",
-    "artifact_content": "SELECT COUNT(*) FROM artifact_content",
-    "processing_runs": "SELECT COUNT(*) FROM processing_runs",
-    "content_derivations": "SELECT COUNT(*) FROM content_derivations",
-    "tool_invocations": "SELECT COUNT(*) FROM tool_invocations",
-    "tool_results": "SELECT COUNT(*) FROM tool_results",
-    "artifacts": "SELECT COUNT(*) FROM artifacts",
-    "event_artifacts": "SELECT COUNT(*) FROM event_artifacts",
-    "mapping_diagnostics": "SELECT COUNT(*) FROM mapping_diagnostics",
-    "correlation_assertions": "SELECT COUNT(*) FROM correlation_assertions",
-}
 
 _GLOBAL_IDENTITY_DUPLICATE_QUERIES = (
     ("sources.global_id", "SELECT COUNT(*)-COUNT(DISTINCT global_id) FROM sources"),
@@ -136,7 +112,9 @@ def load_policy(path: Path | None) -> dict[str, Any]:
             for key, count in value.items()
         ):
             raise ValueError(f"validation policy {field} must map sources to nonnegative integers")
-    if policy.get("raw_mode") not in {None, "none", "reference", "capture", "seal"}:
+    # None is accepted here and nowhere else: a validation policy that states
+    # no mode validates whatever the snapshot was built under.
+    if policy.get("raw_mode") not in (None, *RAW_MODES):
         raise ValueError("validation policy raw_mode is invalid")
     diagnostics = policy.get("allowed_diagnostics", {})
     if not isinstance(diagnostics, dict):
@@ -350,7 +328,7 @@ def semantic_digest(
 ) -> str:
     digest = codess_digest()
     for path in sorted(store_paths, key=lambda item: item.name):
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(path)
         conn.row_factory = sqlite3.Row
         try:
             require_store(conn, write=False)
@@ -387,7 +365,7 @@ def _validate_store(
     expected: dict[str, Any],
     report: dict[str, Any],
 ) -> tuple[dict[str, int], dict[str, int]]:
-    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    conn = open_readonly(path)
     conn.row_factory = sqlite3.Row
     counts: dict[str, int] = {}
     diagnostic_counts: dict[str, int] = {}
@@ -399,15 +377,18 @@ def _validate_store(
         except Exception as exc:
             _add_check(report, f"{prefix}.format", False, str(exc))
             return counts, diagnostic_counts
-        integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-        _add_check(report, f"{prefix}.integrity", integrity == "ok", integrity)
-        fk_rows = conn.execute("PRAGMA foreign_key_check").fetchall()
-        _add_check(report, f"{prefix}.foreign_keys", not fk_rows, len(fk_rows))
+        structure = integrity_report(conn)
+        _add_check(
+            report, f"{prefix}.integrity",
+            structure["integrity_check"] == "ok", structure["integrity_check"],
+        )
+        _add_check(
+            report, f"{prefix}.foreign_keys",
+            not structure["foreign_key_violations"],
+            structure["foreign_key_violations"],
+        )
 
-        counts = {
-            table: int(conn.execute(query).fetchone()[0])
-            for table, query in _TABLE_COUNT_QUERIES.items()
-        }
+        counts = table_counts(conn)
         manifest_counts = expected.get("counts", {})
         _add_check(
             report,
@@ -647,7 +628,7 @@ def _validate_policy(
         if cursor_path is None:
             _add_check(report, "policy.cursor_turns", False, "Cursor store missing")
         else:
-            conn = sqlite3.connect(cursor_path.resolve().as_uri() + "?mode=ro", uri=True)
+            conn = open_readonly(cursor_path)
             try:
                 invalid = int(
                     conn.execute(
@@ -771,7 +752,7 @@ def validate_project(
         report["stores"][path.name] = counts
         for reason, count in diagnostic_counts.items():
             diagnostics[reason] = diagnostics.get(reason, 0) + count
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(path)
         try:
             for source, sessions, events in conn.execute(
                 """

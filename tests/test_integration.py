@@ -6,9 +6,9 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
+from cursor_fixtures import create_bubble_table, create_header_table, put_headers
 from codess.project import path_to_slug, slug_to_path
 from codess.snapshot import current_raw_records
 
@@ -387,7 +387,7 @@ def test_cursor_ingest_and_query(durable_tmp_path):
     (ws / "workspace.json").write_text(f'{{"folder":{{"path":"{proj}"}}}}')
     db = ws / "state.vscdb"
     conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    create_bubble_table(conn)
     conn.execute(
         "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
         ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "hi", "createdAt": "2026-07-10T00:00:01Z"})),
@@ -438,7 +438,7 @@ def test_cursor_force_reingest_removes_sessions_deleted_from_source(durable_tmp_
     )
     db = workspace / "state.vscdb"
     conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    create_bubble_table(conn)
     conn.executemany(
         "INSERT INTO cursorDiskKV VALUES (?, ?)",
         [
@@ -504,14 +504,10 @@ def test_cursor_global_ingest_is_scoped_by_composer_headers(durable_tmp_path):
     global_dir.mkdir(parents=True)
     global_db = global_dir / "state.vscdb"
     conn = sqlite3.connect(global_db)
-    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
-    conn.execute(
-        "CREATE TABLE composerHeaders ("
-        "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-        "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-    )
-    conn.executemany(
-        "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+    create_bubble_table(conn)
+    create_header_table(conn)
+    put_headers(
+            conn,
         [
             ("mapped", "ws-project", 1, 2, 0, 0),
             ("other", "ws-other", 1, 2, 0, 0),
@@ -611,9 +607,7 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(durable_tmp_p
             workspace_db = workspace / "state.vscdb"
             with sqlite3.connect(workspace_db) as conn:
                 conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute(
-                    "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
-                )
+                create_bubble_table(conn)
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             Path(str(workspace_db) + "-wal").unlink(missing_ok=True)
             Path(str(workspace_db) + "-shm").unlink(missing_ok=True)
@@ -621,17 +615,10 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(durable_tmp_p
     global_dir.mkdir(parents=True)
     global_db = global_dir / "state.vscdb"
     with sqlite3.connect(global_db) as conn:
-        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
-        conn.execute(
-            "CREATE TABLE composerHeaders ("
-            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-        )
+        create_bubble_table(conn)
+        create_header_table(conn)
         for index in (1, 2):
-            conn.execute(
-                "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
-                (f"composer-{index}", f"ws-{index}", 1, 2, 0, 0),
-            )
+            put_headers(conn, [(f"composer-{index}", f"ws-{index}", 1, 2, 0, 0)])
             conn.execute(
                 "INSERT INTO cursorDiskKV VALUES (?, ?)",
                 (
@@ -761,12 +748,8 @@ def test_cursor_capture_upgrades_an_unchanged_reference_snapshot(durable_tmp_pat
     global_dir.mkdir(parents=True)
     global_db = global_dir / "state.vscdb"
     with sqlite3.connect(global_db) as conn:
-        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
-        conn.execute(
-            "CREATE TABLE composerHeaders ("
-            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-        )
+        create_bubble_table(conn)
+        create_header_table(conn)
         conn.execute(
             "INSERT INTO composerHeaders VALUES ('composer', 'ws-project', 1, 2, 0, 0)"
         )

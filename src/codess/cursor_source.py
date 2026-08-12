@@ -1,8 +1,23 @@
 """Cursor installation discovery and read-only SQLite access.
 
-This module owns vendor storage layout and selective SQL.  The Cursor adapter
-owns decoding and normalization; project/scan code should not contain Cursor
-paths, table names, or key-range details.
+**Owns selection.** Vendor storage layout, connections, table names, key
+ranges, and every selective SQL statement live here, for the ingest path and
+for the feature audit alike. Callers receive selected records and counted
+observations; they never open a Cursor database themselves.
+
+Cursor needs more modules than the other vendors because it stores Sessions
+in shared SQLite databases rather than per-session files, so selection,
+caching, and decode are genuinely separate concerns rather than one read:
+
+| Module | Owns |
+|---|---|
+| `cursor_source` | Selection: where Cursor stores data and which rows to read |
+| `cursor_cohort` | Caching: a reusable, transactionally consistent capture |
+| `adapters/cursor` | Decode: selected records to common Events |
+| `cursor_feature_audit` | Reporting: which counted evidence an audit states |
+
+No module holds two of these. The adapter in particular keeps no storage
+dependency: it imports record accessors from here and no `sqlite3`.
 """
 
 from __future__ import annotations
@@ -621,6 +636,204 @@ def has_bubble_rows(db_path: Path) -> bool:
             "SELECT 1 FROM cursorDiskKV "
             "WHERE key >= 'bubbleId:' AND key < 'bubbleId;' LIMIT 1"
         ).fetchone() is not None
+
+
+_BUBBLE_ROWS = "key LIKE 'bubbleId:%' AND json_valid(value)"
+_BUBBLE_ROWS_JOINED = "kv.key LIKE 'bubbleId:%' AND json_valid(kv.value)"
+_REQUEST_CONTEXT_ROWS = (
+    "key >= 'messageRequestContext:' AND key < 'messageRequestContext;' "
+    "AND json_valid(value)"
+)
+
+
+def _count(conn: sqlite3.Connection, predicate: str) -> int:
+    return conn.execute(
+        f"SELECT COUNT(*) FROM cursorDiskKV WHERE {predicate}"
+    ).fetchone()[0]
+
+
+def _shape_rows(conn: sqlite3.Connection, query: str) -> list[dict[str, Any]]:
+    return [dict(row) for row in conn.execute(query)]
+
+
+def read_feature_evidence(db_path: Path) -> dict[str, Any]:
+    """Count Cursor tool, model, and context evidence without reading values.
+
+    Structure only: every query counts records or reports field names and JSON
+    types, so no message, argument, result, or attachment text is read. That
+    boundary is what lets the audit run over a personal store, and it is
+    enforced here rather than restated by each caller.
+
+    Lives with source access rather than beside the audit because these are
+    vendor table names and key ranges, which this module owns. The audit
+    composes the report; deciding how to open the database and which rows
+    exist is selection.
+    """
+    with closing(connect_readonly(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        if not table_columns(conn, "composerHeaders"):
+            # Workspace databases hold bubbles but no Composer headers, so
+            # the per-workspace grouping below has nothing to join against.
+            # Reject by name rather than letting SQLite report a missing
+            # table: the audit is scoped to the global store, and the caller
+            # chose the file.
+            raise ValueError(
+                f"not a Cursor global store (no composerHeaders table): {db_path}"
+            )
+        evidence: dict[str, Any] = {
+            "bubble_records": _count(conn, _BUBBLE_ROWS),
+            "tool_former_records": _count(
+                conn,
+                f"{_BUBBLE_ROWS} "
+                "AND json_type(value,'$.toolFormerData')='object' "
+                "AND COALESCE(json_extract(value,'$.toolFormerData.name'), "
+                "json_extract(value,'$.toolFormerData.toolCallId'), "
+                "json_extract(value,'$.toolFormerData.status'), "
+                "json_extract(value,'$.toolFormerData.rawArgs'), "
+                "json_extract(value,'$.toolFormerData.params'), "
+                "json_extract(value,'$.toolFormerData.result')) IS NOT NULL",
+            ),
+            "tool_results_records": _count(
+                conn,
+                f"{_BUBBLE_ROWS} AND json_type(value,'$.toolResults')='array' "
+                "AND json_array_length(json_extract(value,'$.toolResults'))>0",
+            ),
+            "model_name_records": _count(
+                conn,
+                f"{_BUBBLE_ROWS} "
+                "AND json_type(value,'$.modelInfo.modelName')='text'",
+            ),
+            "conversation_summary_records": _count(
+                conn,
+                f"{_BUBBLE_ROWS} "
+                "AND json_type(value,'$.conversationSummary')='text'",
+            ),
+            "context_window_records": _count(
+                conn,
+                f"{_BUBBLE_ROWS} "
+                "AND json_type(value,'$.contextWindowStatusAtCreation')='object'",
+            ),
+            "request_context_records": _count(conn, _REQUEST_CONTEXT_ROWS),
+            "request_context_bytes": conn.execute(
+                "SELECT COALESCE(SUM(length(value)),0) FROM cursorDiskKV "
+                f"WHERE {_REQUEST_CONTEXT_ROWS}"
+            ).fetchone()[0],
+        }
+        evidence["conversation_summary_stats"] = dict(conn.execute(
+            "SELECT "
+            "COALESCE(SUM(length(json_extract("
+            "json_extract(value,'$.conversationSummary'),'$.summary'))),0) "
+            "AS summary_characters, "
+            "COALESCE(MAX(length(json_extract("
+            "json_extract(value,'$.conversationSummary'),'$.summary'))),0) "
+            "AS maximum_summary_characters, "
+            "SUM(CASE WHEN json_type(json_extract("
+            "value,'$.conversationSummary'),"
+            "'$.truncationLastBubbleIdInclusive') IS NOT NULL "
+            "THEN 1 ELSE 0 END) AS truncation_boundary_records, "
+            "SUM(CASE WHEN json_type(json_extract("
+            "value,'$.conversationSummary'),"
+            "'$.clientShouldStartSendingFromInclusiveBubbleId') IS NOT NULL "
+            "THEN 1 ELSE 0 END) AS restart_boundary_records "
+            f"FROM cursorDiskKV WHERE {_BUBBLE_ROWS} "
+            "AND json_type(value,'$.conversationSummary')='text' "
+            "AND json_valid(json_extract(value,'$.conversationSummary'))"
+        ).fetchone())
+        evidence["context_window_ranges"] = dict(conn.execute(
+            "SELECT "
+            "MIN(json_extract(value,'$.contextWindowStatusAtCreation.tokensUsed')) "
+            "AS minimum_tokens_used, "
+            "MAX(json_extract(value,'$.contextWindowStatusAtCreation.tokensUsed')) "
+            "AS maximum_tokens_used, "
+            "MIN(json_extract(value,'$.contextWindowStatusAtCreation.tokenLimit')) "
+            "AS minimum_token_limit, "
+            "MAX(json_extract(value,'$.contextWindowStatusAtCreation.tokenLimit')) "
+            "AS maximum_token_limit "
+            f"FROM cursorDiskKV WHERE {_BUBBLE_ROWS} "
+            "AND json_type(value,'$.contextWindowStatusAtCreation')='object'"
+        ).fetchone())
+        evidence["request_context_field_shapes"] = _shape_rows(conn, """
+            SELECT fields.key AS field, fields.type AS value_type,
+                   COUNT(*) AS observations
+            FROM cursorDiskKV kv, json_each(kv.value) fields
+            WHERE kv.key >= 'messageRequestContext:'
+              AND kv.key < 'messageRequestContext;'
+              AND json_valid(kv.value)
+            GROUP BY fields.key, fields.type
+            ORDER BY fields.key, fields.type
+        """)
+        evidence["workspace_evidence"] = _shape_rows(conn, f"""
+            SELECT h.workspaceId AS workspace_id,
+              SUM(CASE WHEN json_type(kv.value,'$.toolFormerData')='object'
+                AND COALESCE(json_extract(kv.value,'$.toolFormerData.name'),
+                  json_extract(kv.value,'$.toolFormerData.toolCallId'),
+                  json_extract(kv.value,'$.toolFormerData.status')) IS NOT NULL
+                THEN 1 ELSE 0 END) AS tool_former_records,
+              SUM(CASE WHEN json_type(kv.value,'$.toolResults')='array'
+                AND json_array_length(json_extract(kv.value,'$.toolResults'))>0
+                THEN 1 ELSE 0 END) AS nonempty_tool_results_records,
+              SUM(CASE WHEN json_type(kv.value,'$.modelInfo.modelName')='text'
+                THEN 1 ELSE 0 END) AS model_name_records,
+              COUNT(DISTINCT h.composerId) AS composers
+            FROM cursorDiskKV kv JOIN composerHeaders h
+              ON h.composerId=substr(kv.key,10,instr(substr(kv.key,10),':')-1)
+            WHERE {_BUBBLE_ROWS_JOINED}
+            GROUP BY h.workspaceId
+            HAVING tool_former_records>0 OR model_name_records>0
+            ORDER BY tool_former_records DESC, model_name_records DESC
+        """)
+        evidence["tool_names"] = _shape_rows(conn, f"""
+            SELECT json_extract(value,'$.toolFormerData.name') AS tool_name,
+                   COUNT(*) AS observations
+            FROM cursorDiskKV WHERE {_BUBBLE_ROWS}
+              AND json_type(value,'$.toolFormerData')='object'
+              AND json_type(value,'$.toolFormerData.name')='text'
+            GROUP BY json_extract(value,'$.toolFormerData.name')
+            ORDER BY observations DESC, tool_name LIMIT 50
+        """)
+        evidence["tool_statuses"] = _shape_rows(conn, f"""
+            SELECT COALESCE(json_extract(value,'$.toolFormerData.status'),'[absent]')
+                     AS source_status,
+                   COUNT(*) AS observations
+            FROM cursorDiskKV WHERE {_BUBBLE_ROWS}
+              AND json_type(value,'$.toolFormerData')='object'
+            GROUP BY COALESCE(json_extract(value,'$.toolFormerData.status'),'[absent]')
+            ORDER BY observations DESC, source_status
+        """)
+        evidence["tool_user_decisions"] = _shape_rows(conn, f"""
+            SELECT json_extract(value,'$.toolFormerData.userDecision') AS decision,
+                   json_extract(value,'$.toolFormerData.status') AS source_status,
+                   COUNT(*) AS observations
+            FROM cursorDiskKV WHERE {_BUBBLE_ROWS}
+              AND json_type(value,'$.toolFormerData.userDecision')='text'
+            GROUP BY decision, source_status
+            ORDER BY observations DESC, decision, source_status
+        """)
+        evidence["model_name_values"] = _shape_rows(conn, f"""
+            SELECT json_extract(value,'$.modelInfo.modelName') AS model_selection,
+                   COUNT(*) AS observations
+            FROM cursorDiskKV WHERE {_BUBBLE_ROWS}
+              AND json_type(value,'$.modelInfo.modelName')='text'
+            GROUP BY json_extract(value,'$.modelInfo.modelName')
+            ORDER BY observations DESC, model_selection
+        """)
+        evidence["model_field_shapes"] = _shape_rows(conn, f"""
+            SELECT fields.key AS field, fields.type AS value_type,
+                   COUNT(*) AS observations
+            FROM cursorDiskKV kv, json_each(kv.value,'$.modelInfo') fields
+            WHERE {_BUBBLE_ROWS_JOINED}
+              AND json_type(kv.value,'$.modelInfo')='object'
+            GROUP BY fields.key, fields.type ORDER BY fields.key, fields.type
+        """)
+        evidence["tool_field_shapes"] = _shape_rows(conn, f"""
+            SELECT fields.key AS field, fields.type AS value_type,
+                   COUNT(*) AS observations
+            FROM cursorDiskKV kv, json_each(kv.value,'$.toolFormerData') fields
+            WHERE {_BUBBLE_ROWS_JOINED}
+              AND json_type(kv.value,'$.toolFormerData')='object'
+            GROUP BY fields.key, fields.type ORDER BY fields.key, fields.type
+        """)
+    return evidence
 
 
 def get_db_metrics(db_path: Path, composer_ids: set[str] | None = None) -> dict:

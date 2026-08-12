@@ -450,27 +450,31 @@ def test_empty_run_reports_zero_rather_than_failing():
 
 def test_catalog_resync_skips_stores_that_do_not_exist():
     """Resync reconciles existing stores; it must not provision new ones."""
-    from cli.ingest_cmd import ProjectOutcome, _resync_project_catalog
+    from codess.ingest_publication import resync_project_catalog
 
     import tempfile
     from pathlib import Path as P
 
     tmp = P(tempfile.mkdtemp())
     cfg = config(tmp)
-    project = ProjectOutcome()
-    _resync_project_catalog(cfg, tmp, entry(), project)
-    assert project.catalog_changed_vendors == set()
+    changed = resync_project_catalog(
+        cfg, tmp, entry(),
+        create_store=lambda key, item: cfg.vendor_store(tmp, key).create(item),
+    )
+    assert changed == set()
     assert not any(cfg.vendor_store(tmp, k).exists() for k in ("cc", "codex", "cursor"))
 
 
 def test_catalog_resync_records_vendors_whose_entry_changed(tmp_path):
-    from cli.ingest_cmd import ProjectOutcome, _resync_project_catalog
+    from codess.ingest_publication import resync_project_catalog
 
     cfg = config(tmp_path)
     cfg.vendor_store(tmp_path, "cc").create(entry())
-    project = ProjectOutcome()
-    _resync_project_catalog(cfg, tmp_path, entry(), project)
-    assert project.catalog_changed_vendors <= {"Claude"}
+    changed = resync_project_catalog(
+        cfg, tmp_path, entry(),
+        create_store=lambda key, item: cfg.vendor_store(tmp_path, key).create(item),
+    )
+    assert changed <= {"Claude"}
 
 
 def test_ingest_command_no_longer_decodes_sources():
@@ -481,3 +485,73 @@ def test_ingest_command_no_longer_decodes_sources():
         assert not hasattr(command, name) or getattr(
             command, name
         ).__module__ == "codess.ingest_sources"
+
+
+# --- query scope predicates -------------------------------------------------
+#
+# The two predicates are one selection expressed twice: a bare predicate over
+# one alias, and a whole clause filtering both aliases a mapping diagnostic
+# can reach a source system through. They were separately derived, which is
+# how they came to disagree on placeholder spelling in one statement.
+
+def scope(*tokens):
+    from cli.query_cmd import QueryScope
+
+    return QueryScope(set(tokens) if tokens else None)
+
+
+def test_an_unfiltered_selection_matches_every_row():
+    """`1` rather than an empty string: callers substitute into a WHERE."""
+    assert scope().source_predicate() == ("1", ())
+
+
+def test_an_unfiltered_selection_has_no_diagnostics_clause():
+    """The diagnostics query has no other condition to attach a predicate to."""
+    assert scope().diagnostics_predicate() == ("", ())
+
+
+def test_the_predicate_binds_one_parameter_per_selected_source():
+    predicate, params = scope("cc", "codex").source_predicate()
+    assert predicate == "s.source_system_id IN (?, ?)"
+    assert params == ("anthropic.claude-code", "openai.codex")
+
+
+def test_the_predicate_names_the_alias_it_was_asked_for():
+    predicate, _params = scope("cc").source_predicate("src")
+    assert predicate.startswith("src.source_system_id")
+
+
+def test_source_identifiers_are_ordered_deterministically():
+    """Two runs of one selection must produce the same statement and bindings."""
+    first = scope("cursor", "cc", "codex").source_predicate()
+    second = scope("codex", "cursor", "cc").source_predicate()
+    assert first == second
+
+
+def test_the_diagnostics_clause_filters_both_aliases():
+    """A record-level diagnostic often has no Session, only a Source."""
+    clause, _params = scope("cc").diagnostics_predicate()
+    assert "s.source_system_id" in clause
+    assert "src.source_system_id" in clause
+    assert clause.startswith("WHERE (") and " OR " in clause
+
+
+def test_the_diagnostics_clause_reuses_one_derivation():
+    """Both halves come from the same predicate, so they cannot drift apart.
+
+    They were derived separately before, which produced two spellings of the
+    placeholder list inside one statement.
+    """
+    selection = scope("cc", "codex")
+    predicate, params = selection.source_predicate()
+    clause, clause_params = selection.diagnostics_predicate()
+    assert clause.count(predicate.split(".", 1)[1]) == 2
+    assert clause_params == params + params
+
+
+def test_the_selected_source_identifiers_are_translated_once():
+    """The CLI token vocabulary and the stored one meet in a single place."""
+    assert scope("cc", "cursor").selected_source_ids == (
+        "anthropic.claude-code", "cursor.composer",
+    )
+    assert scope().selected_source_ids == ()

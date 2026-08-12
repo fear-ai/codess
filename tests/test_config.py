@@ -1,6 +1,9 @@
 """Tests for config paths and options."""
 
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from codess.project import (
     build_ingest_run_options,
@@ -165,3 +168,110 @@ class TestRegistryArgResolution:
         other = tmp_path / "other"
         args = SimpleNamespace(registry=str(other))
         assert resolve_registry_directory(args) == other
+
+
+# --- closed vocabulary: raw modes -------------------------------------------
+#
+# W23's criterion is that closed-vocabulary literals are replaced and an
+# invalid value fails at the boundary. Raw modes were written out longhand at
+# nine sites, so a mode added at one would have been accepted by some
+# boundaries and rejected by others.
+
+def test_raw_modes_are_ordered_by_how_much_is_retained():
+    """Every message that lists them uses this order."""
+    from codess.config import RAW_MODES
+
+    assert RAW_MODES == ("none", "reference", "capture", "seal")
+
+
+def test_the_raw_store_set_matches_the_vocabulary():
+    """Two spellings of one vocabulary would disagree on a new mode."""
+    from codess.config import RAW_MODES
+    from codess.raw_store import RAW_MODES as STORE_MODES
+
+    assert STORE_MODES == frozenset(RAW_MODES)
+
+
+def test_no_module_writes_the_raw_mode_set_out_longhand():
+    """The duplication W23 removed must not come back."""
+    from pathlib import Path
+
+    import codess.config as config_module
+
+    root = Path(config_module.__file__).resolve().parent.parent
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        if path.name == "config.py":
+            continue
+        text = path.read_text(encoding="utf-8")
+        if '"reference", "capture", "seal"' in text:
+            offenders.append(path.name)
+    assert offenders == []
+
+
+def test_an_invalid_raw_mode_is_refused_by_the_raw_store():
+    from codess.raw_store import RawCaptureError, RawStore
+    from pathlib import Path
+    import tempfile
+
+    store = RawStore(Path(tempfile.mkdtemp()))
+    with pytest.raises(RawCaptureError, match="invalid raw mode"):
+        store.observe(
+            Path(__file__), source_system_id="x", storage_format="y", mode="archive",
+        )
+
+
+def test_an_invalid_raw_mode_is_refused_by_refresh():
+    from codess.refresh_operations import resolve_refresh_selection
+
+    with pytest.raises(ValueError, match="must be auto"):
+        resolve_refresh_selection(
+            Path("/nonexistent"), designator="core", source="all",
+            raw_mode="archive",
+        )
+
+
+def test_refresh_accepts_its_own_auto_mode():
+    """`auto` means keep what the snapshot was built under; only refresh has it."""
+    from codess.config import RAW_MODES
+
+    assert "auto" not in RAW_MODES
+
+
+def test_an_invalid_raw_mode_is_refused_by_validation_policy(tmp_path):
+    import json
+
+    from codess.baseline_validation import POLICY_FORMAT, load_policy
+
+    path = tmp_path / "policy.json"
+    path.write_text(
+        json.dumps({"policy_format": POLICY_FORMAT, "raw_mode": "archive"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="raw_mode is invalid"):
+        load_policy(path)
+
+
+def test_a_validation_policy_may_state_no_raw_mode(tmp_path):
+    """Absent means validate whatever the snapshot was built under."""
+    import json
+
+    from codess.baseline_validation import POLICY_FORMAT, load_policy
+
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps({"policy_format": POLICY_FORMAT}), encoding="utf-8")
+    assert load_policy(path)["policy_format"] == POLICY_FORMAT
+
+
+def test_the_rejection_message_lists_every_valid_mode():
+    from codess.config import RAW_MODES, raw_mode_error
+
+    message = raw_mode_error("CODESS_RAW_MODE", "archive")
+    assert all(mode in message for mode in RAW_MODES)
+    assert "archive" in message
+
+
+def test_the_rejection_message_includes_a_site_specific_value():
+    from codess.config import raw_mode_error
+
+    assert "auto" in raw_mode_error("raw_mode", "x", extra=("auto",))

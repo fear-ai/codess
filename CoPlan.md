@@ -30,7 +30,6 @@ Normal items that precede it numerically.
 | W03 | Critical | **Under review** | Separate exact package integrity from store write compatibility, and reduce runtime integrity checking to what a local development environment needs -- one digest spans the executable contract and the validation fixtures alike, so a fixture edit can make an unchanged store layout unwritable. Blocked on confirming which runtime checks survive and whether they become optional. |
 | W04 | High | Planned | Shared candidate-record contract and runtime mapping-profile enforcement. |
 | W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. |
-| W06 | High | **WIP** | Move domain SQL and workflows out of command modules. Vendor decode and store writing now live in `codess/ingest_sources.py`; `ingest_cmd` fell from about two thousand lines to fifteen hundred and no longer ingests a source itself. Remaining: snapshot creation and promotion are still inline in the Project loop, and `query_cmd`'s report SQL is partly converted (13.4.1). |
 | W07 | High | Planned | Bound ancillary reads that can encounter large source or repository content. |
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. |
 | W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. |
@@ -44,8 +43,6 @@ Normal items that precede it numerically.
 | W34 | Normal | **Under review** | Contain the digest algorithm in `codess/hashing.py`; `sha256` is named ~144 times elsewhere. Blocked on approving where an algorithm name may appear at all. |
 | W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES`. |
 | W25 | Normal | Planned | Strengthen CoSchema time columns: encode representation in the name and resolve `started_at` denoting both TEXT and REAL. |
-| W26 | Normal | Planned | Reevaluate and repartition the four Cursor modules now that the source boundary is closed. |
-| W23 | Normal | Planned | Decomposition and naming cleanups found by the 3.5 audits: over-large catalog functions, raw-object naming (`materialize`/`_captured_object`), the duplicated stat-consistency guard, and closed-vocabulary constants. |
 | W11 | Normal | TODO | Improve search reports and structured-query examples. |
 | W12 | Normal | TODO | Report source-to-common coverage, loss, and unknown shapes. |
 | W13 | Normal | TODO | Mechanically enforce architecture/contract paths; observe child-process coverage. Query-request validation-library adoption is Postponed (13.4.2). |
@@ -191,7 +188,7 @@ the authorities for functional meaning rather than code ownership.
 | Component | Implementation location | Behavioral authority |
 |---|---|---|
 | Interface layer | `codess.project`, `cli.*_cmd` | Parse the public CLI, adapt arguments, render output, and return exit status. |
-| Application operations | `scan`, `query_api`, `refresh_operations`, `baseline_operations`, and currently parts of `cli.ingest_cmd` | Coordinate one use case without defining vendor formats or physical schemas. |
+| Application operations | `scan`, `query_api`, `refresh_operations`, `baseline_operations`, `ingest_sources`, `ingest_publication`, and currently parts of `cli.ingest_cmd` | Coordinate one use case without defining vendor formats or physical schemas. |
 | Project catalog | `project_catalog`, `catalog_operations`, `project_annotations`, `registry_store` | Project identity, locations, workspace bindings, selection, and observations. |
 | Source access | `bounded_jsonl`, `codex_source`, `cursor_source`, plus Claude selection in `scan` and ingest coordination | Locate and read attributable source records with stable locators and bounds. |
 | Vendor decode | `adapters.cc`, `adapters.codex`, `adapters.cursor` | Interpret one selected source family and emit source-annotated candidate Sessions and Events. |
@@ -219,6 +216,16 @@ the authorities for functional meaning rather than code ownership.
 Focused evidence audits may inspect a vendor store directly when the source
 shape itself is the subject of the audit. That exception is read-only,
 explicitly bounded, and prohibited from becoming an alternate ingest path.
+
+The exception is a permission, not a preference, and it should be taken only
+where a source-access module does not already own the storage in question.
+`cursor_feature_audit` relied on it and should not have: `cursor_source`
+already owned Cursor connections and key ranges, so the audit's own
+connection was a second, weaker implementation of a solved problem rather
+than access the exception was needed for. Its queries now live with the rest
+of Cursor selection (6.4), and the audit owns the report. Where the exception
+does still apply -- an audit over a vendor shape no ingest path reads -- the
+bound is the same: read-only, structure-only, and not a second decode.
 
 Cross-cutting utilities remain content-neutral unless their stated purpose is
 content processing. Logging, progress, resource observation, and catalog code
@@ -496,6 +503,66 @@ the contract, not the implementation. This is the reverse of the hashing
 case, where every site wanted the same thing and just had no common place to
 get it.
 
+**A fourth cluster: literal SQL.** The same criterion applied to SQL
+statements found the same shape again, and the same already-diverged
+outcome. Statements duplicated across modules fell by roughly two thirds
+once the shared ones had an owner; what the survey found is more useful than
+the count:
+
+| Duplicated read | Sites | Divergence found |
+|---|---|---|
+| `store_meta` as a mapping | 5 | None; every site wrote the identical expression and picked one key |
+| Table-to-count-query map | 2 modules | Yes: one quoted the table name and one did not, one listed eleven tables and the other twenty-two, and the DDL declares twenty-four -- so both were incomplete and neither knew it |
+| Read-only connection URI | 19 | Yes: only some also set `query_only`, so whether a read could accidentally write varied by call site rather than by intent |
+| Structural checks (`integrity_check`, `foreign_key_check`) | 3 | None, but each assembled the pair by hand |
+| Column list of one table | 3 | None; each tolerated an older store by asking SQLite itself |
+| Session structure aggregates | 2 | None yet -- but the overview and the orientation audit reported the same four counts from separately written statements, so a change to one would have silently disagreed with the other |
+| Source-selection predicate | 2 | Yes: the diagnostics clause re-derived the identifier tuple the predicate had already computed, and spelled the placeholder list differently, so one statement contained `IN (?, ?)` and `IN (?,?)` |
+
+The count map is the sharpest instance of the general point. Two modules
+each maintained a list of the schema by hand, both drifted from the DDL, and
+neither could detect it, because a hand-written list has nothing to be
+checked against. Deriving the tables from the store removed the list, the
+drift, and the second spelling together. The read-only URI is the sharpest
+*consequence*: a missing `query_only` is not a maintenance hazard but a
+weaker guarantee, and it was weaker at some sites and not others for no
+stated reason.
+
+The source-selection predicate is the instructive case, because it was
+introduced by this very consolidation rather than found by it. Lifting the
+command module's `_source_predicate` onto `QueryScope` gave the diagnostics
+variant a method to call, and it did call it -- then recomputed the
+identifier tuple it had just been handed, because the second half of the
+clause needed "the same thing for a different alias" and the parameter was
+not there to ask for. Two spellings of the placeholder list followed, in one
+statement. The fix was to make the alias a parameter and compose the clause
+from two calls, which is what the method should have taken in the first
+place. The lesson is narrow and worth stating: extracting a helper does not
+by itself remove duplication if the helper cannot express the second
+caller's variation, and the second caller will then reimplement it
+alongside.
+
+One further finding is a boundary rather than a duplication:
+`store.replace_source_sessions` had no production caller at all. The Cursor
+streaming path had replaced it and reimplemented its removal logic inline,
+so the function survived only because a test still called it -- a test that
+therefore verified nothing the software did. Extracting the shared removal
+and deleting the dead function kept the behavior its test asserted while
+removing the copy.
+
+**The same pattern in test fixtures, surveyed separately.** Test SQL is not
+production SQL and was reviewed on its own terms: a fixture may legitimately
+build an odd shape, since that shape is often the subject of the test. What
+is not legitimate is building the *ordinary* shape differently in each file.
+The Cursor vendor tables were created in five modules, the key/value insert
+appeared in three spellings, and the header table in four column variants of
+which three were incidental. These now come from shared builders, with the
+deliberate variants -- a reduced header, an unexpected future column, a BLOB
+value -- passing their shape explicitly so the intent is visible rather than
+implied by a hand-written statement. The builders are themselves tested
+against the vendor module that reads them, because a fixture that lies makes
+every test agree with the others and disagree with Cursor.
+
 Two conclusions carry back to the constant method. First, applying it to
 calls is worthwhile precisely because a call hides a decision that a
 literal exposes -- `1024 * 1024` is visibly a number to agree on, while
@@ -554,6 +621,34 @@ Closed vocabularies are the opposite. Their values are enumerated in
 CoSchema and validated at the store boundary, so a wrong literal is a
 correctness defect rather than a typo, and the set is small enough that
 naming it is genuinely clarifying. These are the ones worth extracting.
+
+**Which vocabularies are actually closed, on inspection.** The examples this
+table originally listed -- Actor kinds, origin kinds, content roles -- are
+not among them. `contract.json` declares all three `open_vocabulary`, and
+CoSchema 6 states the rule directly: "Common classifications remain open
+where vendor evidence can introduce useful new values. Closed taxonomies are
+used only where stable query behavior requires a bounded vocabulary."
+Extracting them as enumerations would have contradicted the design and
+rejected the new vendor evidence they exist to admit. The premise was right
+and the examples were wrong, which is worth recording because the examples
+are what an implementer would have acted on.
+
+The genuinely closed sets are the ones the DDL enforces with a `CHECK`, and
+of those only **raw modes** were duplicated: `none`, `reference`, `capture`,
+`seal` were written out longhand at nine sites, including one already named
+`RAW_MODES` in `raw_store`. That is exactly the stated failure mode -- a mode
+added at one site would have been accepted by some boundaries and rejected by
+others -- and it now has one owner in `config`, with `raw_store` re-exporting
+it as a set. The five rejection messages that each spelled the valid list
+into their own prose share one formatter, so adding a mode is one edit rather
+than eleven.
+
+`normalized_status` is the instructive non-case. Its eight values look like
+the same shape, but the literals in `store._normalized_status` are *source*
+values being mapped -- `complete`, `success`, `error` as vendors write them
+-- not the closed vocabulary, and the normalized outputs are already enforced
+by the column's `CHECK`. Extracting there would have named a vendor's
+spelling as if it were Codess's own.
 
 **Vendor keys are a third case, and the strongest.** The three-vendor key
 set appears across command modules, discovery, refresh, review, and Project
@@ -614,6 +709,12 @@ arguments, call a domain operation, and render a result; these run ingest
 workflows and report SQL directly. This is W06, and the size measurement is
 the argument for prioritizing it: the two largest modules in the codebase
 are both in the layer that should hold the least.
+
+W06 has since closed on exactly this reading. `ingest_cmd` is about 1,400
+lines and `query_cmd` about 1,350, with the workflows in `ingest_sources`,
+`ingest_publication`, and `query_reports`; neither command module decodes a
+source, opens a publication transaction, or writes a report query. The
+measurement above is retained as the state that motivated the work.
 
 *Two modules mix a store with its policy.* `store.py` combines connection
 and transaction handling, per-vendor profile data, and event-mapping rules;
@@ -704,7 +805,7 @@ layer concentration W06 tracks.
 knowledge from them. The 17 enumerate files should drop to near zero vendor
 references, since almost all of what they name is description rather than
 behavior. The 4 dispatch files retain argument validation only, and shrink
-much further once W06 moves their workflows into domain modules. The 8
+much further now that W06 has moved their workflows into domain modules. The 8
 decode files and 3 incidental ones are unaffected. So the count of files
 naming a vendor should fall from 32 to roughly 11 -- the decode layer plus
 the vendor table itself -- and the count that must change to add a vendor from
@@ -729,13 +830,17 @@ evidence, which is correct.
 
 That leaves W24 free of interference: W10 pushed vendor-specific *access*
 down into the source layer, while W24 pulls vendor-specific *description*
-out of unrelated modules. The Cursor module partitioning that the closed
-boundary now makes assessable is W26.
+out of unrelated modules. The Cursor module partitioning the closed boundary
+made assessable was W26, now settled: the four-way split holds, and the one
+module that spanned two concerns was corrected (6.4).
 
-**Sequencing.** W24 is unblocked. W06 is complementary rather than blocking: the vendor table reduces what command modules *know* about
-vendors, while W06 reduces what they *do* at all. Running W24 before W06
-still helps, since `cli.ingest_cmd`'s 138 vendor references are the largest
-single concentration in the codebase.
+**Sequencing.** W24 is unblocked. W06 was complementary rather than
+blocking -- the vendor table reduces what command modules *know* about
+vendors, while W06 reduced what they *do* at all -- and is now complete, so
+W24 runs against a command layer that no longer holds the workflows. The
+vendor references remain, since moving a workflow does not remove a name:
+`ingest_publication` carries its own vendor table, which is one of the
+partial views W24 consolidates.
 
 What it must not become is a home for vendor *behavior*. Decoding differences
 belong in the adapters, and a vendor table that starts holding decode callbacks
@@ -754,8 +859,9 @@ concerns collect:
 | `cli.ingest_cmd` | Nearly as high | All three vendors by name, plus transactions, raw capture, and publication |
 | `cli.query_cmd` | Third | Report SQL alongside argument adaptation |
 
-This is the same finding as **W06**, now with a measurement behind it rather
-than an impression. The vendor mixing is the sharper half: `cli.ingest_cmd`
+This is the same finding as **W06**, recorded here with a measurement behind
+it rather than an impression; the workflow half is now resolved, and the
+vendor-naming half is W24's. The vendor mixing is the sharper half: `cli.ingest_cmd`
 names Claude Code, Codex, and Cursor throughout, so adding or changing a
 vendor means editing a command module. `store` and `walk_sessions` mix
 vendors too, but for a defensible reason -- they implement the common model
@@ -769,13 +875,50 @@ shape, and their prominence is evidence the dependency direction is right
 even where the command layer is not.
 
 **What this does not justify.** Neither pass is an argument for splitting
-modules by size. `project_catalog` is large and contains two functions over
+modules by size. `project_catalog` is large and contained two functions over
 a hundred lines each (`ensure_project_binding`, `catalog_readiness`), which
-is worth reducing -- but by extracting the steps those functions perform,
+was worth reducing -- but by extracting the steps those functions perform,
 not by dividing the module, since catalog identity, locations, and readiness
 are one concern. The failure mode to avoid is the one 3.5.3 records for
 constants: rearranging structure without removing a shared decision leaves
 the same coupling with more files to read.
+
+Both are now reduced to their named steps, extracted within the module as
+that reasoning requires. `ensure_project_binding` reads any retained binding,
+resolves the identity, rebuilds the entry from the observation, and persists;
+`catalog_readiness` assesses whether a Project can be queried, composes its
+record, and summarizes. Each step is separately testable, which is what made
+the identity-resolution order -- binding first, then a catalog entry already
+claiming the path, then a new identity -- assertable rather than implied.
+
+The decomposition also exposed a defect the length had concealed. The
+function called `datetime.now(UTC)` three times while recording one
+observation, so a single logical event could be stamped at three different
+instants; the value is now computed once and applied to the entry, the
+location, and the catalog together. This is the same failure the removal of
+the `_now` wrappers found in this module's other write paths (14.4), which is
+evidence for the general point rather than a coincidence: a hundred-line
+function hides repeated calls that a four-step one does not.
+
+**Swept for elsewhere, and found twice more.** Because the same defect had
+now appeared in two unrelated places, the codebase was checked for functions
+that read the clock more than once. Most such functions are correct -- a
+started/completed pair, a created/updated pair, and a per-item stamp inside a
+loop are genuinely different instants, and collapsing them would be the
+opposite error. Two were not:
+
+| Site | What was stamped twice | Why it matters |
+|---|---|---|
+| `baseline_operations.archive_stale_working_stores` | The archive directory name and the manifest's `archived_at` | The directory is what an operator sorts by, and it could name a different second than the manifest inside it |
+| `retention.apply_retention_plan` | The receipt's `applied_at` and the receipt's own filename | A receipt exists to correlate an action with its record; a file named a different instant than its contents defeats that |
+
+Both now compute the instant once and render it twice, and both have a test
+asserting the name and the contents agree. The shape is worth naming: the
+defect appears wherever one event is written to two places, because the
+second write is usually added later and reaches for the clock again rather
+than for the value the first write used. The rule that follows is narrow --
+*one recorded event, one clock read* -- and it does not extend to intervals
+or to per-item stamps, where two reads are the point.
 
 ## 4. CoSchema Read and Write Path
 
@@ -1088,6 +1231,42 @@ retained as source evidence.
 
 `cursor_feature_audit` performs the structure-only inventory. W09 verifies that
 selection remains bounded as unrelated global-database content grows.
+
+**The four-module split, confirmed and corrected.** Cursor needs more modules
+than the other vendors because it stores Sessions in shared SQLite databases
+rather than per-session files, so selection, caching, and decode are genuinely
+separate concerns. Reviewed against the closed source-access boundary, the
+split holds, but one module spanned two concerns and now does not:
+
+| Module | Owns |
+|---|---|
+| `cursor_source` | Selection: storage layout, connections, key ranges, and every selective SQL statement |
+| `cursor_cohort` | Caching: when a captured cohort is still valid, and restoring it |
+| `adapters/cursor` | Decode: selected records to common Events |
+| `cursor_feature_audit` | Reporting: which counted evidence an audit states, and what each shape is taken to mean |
+
+`cursor_feature_audit` had kept its own connection and fifteen vendor SQL
+statements -- the same violation W10 closed for the adapter, left in place
+because the audit is not on the ingest path. The queries are now
+`cursor_source.read_feature_evidence`, and the audit composes the report and
+joins the catalog, which is Codess state rather than vendor storage. Output
+is byte-identical.
+
+The move removed a defect the boundary had concealed rather than only
+tidying ownership. The audit's hand-rolled connection was weaker than the
+shared one: no `query_only` pragma, no busy timeout, and no fallback for the
+sidecar-free workspace shape that `connect_readonly` handles. A second,
+pre-existing fault became visible once the queries sat beside the accessors
+that state their preconditions -- a workspace database has no
+`composerHeaders` table, so pointing the audit at one produced a bare SQLite
+"no such table" rather than saying the audit is scoped to the global store.
+Selection now rejects it by name.
+
+The cohort cache stays where it is. It was worth asking whether it belongs
+with source access, since both concern the shared database, but they answer
+different questions: `cursor_source` decides which rows exist, and
+`cursor_cohort` decides whether a capture may be reused across Projects. The
+cache holds no vendor SQL, which is the test that would have shown otherwise.
 
 ### 6.5 Evidence Audits
 
@@ -2022,7 +2201,7 @@ developer's live harness data.
 | Vendor separation | Compliant | Source traversal is separated from decode for all three vendors. `cursor_source` owns every vendor-table query and connection; no adapter has a SQLite dependency. |
 | Mapping and classification | Partially compliant | Mapping profiles, traces, field diagnostics, and representative adapter fixtures exist. Common runtime conformance and strict behavior are not yet enforced uniformly across vendors. |
 | CoSchema persistence | Compliant in the principal path | The released package is hash-checked, the DDL is centralized, logical and physical contracts are compared, foreign keys are enabled, and source replacement commits or rolls back atomically. |
-| Query | Partially compliant | The typed executor provides bounded, deterministic, multi-store results with provenance and stable identities. Several report modes still execute separate SQL inside the command renderer. |
+| Query | Partially compliant | The typed executor provides bounded, deterministic, multi-store results with provenance and stable identities. The fixed reports are in `query_reports` rather than the command renderer, but remain outside the request contract, so query-contract parity is still incomplete. |
 | Publication and evidence | Largely compliant | SQLite backup, manifest hashes, atomic pointer replacement, content-addressed raw objects, and read-time verification implement reproducible publication. Raw-mode semantics remain unresolved under W15. |
 | Derived values | Compliant in construction | Every digest routes through `codess/hashing.py`, which fixes the algorithm, the canonical JSON form, and the supported widths. What each value should identify, and how long it must live, remains under review in W20. |
 | Configuration | Compliant | Scan, ingest, and query validate resolved configuration before source work; built-ins, environment, command arguments, and JSON policies have explicit ownership. |
@@ -2034,9 +2213,8 @@ developer's live harness data.
 
 | Finding | Impact | Related work |
 |---|---|---|
-| Command boundaries | CLI coordinators own SQL or workflow outside their intended layer; the Cursor half is resolved | W06 |
 | Runtime mapping conformance | Released profiles do not govern every emitted vendor candidate uniformly | W04 |
-| Query path fragmentation | Some reports bypass the typed executor and query-contract parity is incomplete | W05, W06, W13 |
+| Query path fragmentation | Query-contract parity is incomplete; the fixed reports now have a domain home but remain outside the typed executor by design (13.4.1) | W05, W13 |
 | Ancillary unbounded reads | Tool output and worktree identity can materialize large bodies | W07 |
 | Project identity fallback | Direct library writes can create unrelated provisional Project IDs | W14 |
 | Raw mode ambiguity | `none` has no bytes but still creates a raw-manifest observation | W15 |
@@ -2057,23 +2235,27 @@ The Cursor source-access boundary violation is resolved: **W10** is complete
 and described in 6.4. `cursor_source` owns all vendor SQL and connections;
 the adapter receives selected records by path and has no SQLite dependency.
 
-Command-layer separation is tracked by **W06**. `cli.ingest_cmd` contains
-source workflows, transactions, raw-record handling, and publication
-coordination. `cli.query_cmd` contains direct report queries that do not use the
-typed executor. Vendor ingest coordinators and specialized read-only analyses
-belong in `codess` modules. Command modules should retain argument adaptation,
-presentation, and exit status. The few maintenance scripts that still perform
-catalog or pruning workflows require the same treatment.
+Command-layer separation was tracked by **W06**, which is complete. Vendor
+ingest coordinators are in `codess/ingest_sources.py`, publication in
+`codess/ingest_publication.py`, and the report queries in
+`codess/query_reports.py`. The command modules retain argument adaptation,
+presentation, and exit status, and neither decodes a source, opens a
+publication transaction, nor writes a report query. The few maintenance
+scripts that still perform catalog or pruning workflows require the same
+treatment, and are not part of this item.
 
-**What actually blocks it.** Nothing external. W06 has no dependency on
-another item, no undecided design question, and no missing contract -- it has
-been open because the change is large and has had no safe increment.
-`ingest_cmd.run()` is roughly a thousand lines, half the module, holding 53
-top-level statements and three nested closures. It opens transactions,
-handles raw records, coordinates publication, and renders results in one
-scope, so any edit touches everything and no test covers a part of it in
-isolation. That is the obstacle: not difficulty in knowing what to do, but
-the absence of a first step that cannot break ingest.
+**What had blocked it.** Nothing external. W06 had no dependency on another
+item, no undecided design question, and no missing contract -- it stayed open
+because the change was large and had no safe increment. `ingest_cmd.run()`
+was roughly a thousand lines, half the module, holding 53 top-level
+statements and three nested closures. It opened transactions, handled raw
+records, coordinated publication, and rendered results in one scope, so any
+edit touched everything and no test covered a part of it in isolation. That
+was the obstacle: not difficulty in knowing what to do, but the absence of a
+first step that could not break ingest. The six increments below are the
+answer that worked, and are retained because the sequencing is the reusable
+part -- each preserved behavior, each was verifiable on its own, and none
+depended on a later one.
 
 **Increments that are individually safe.** Each step below preserves
 behavior, is verifiable by the existing suite passing unchanged, and leaves
@@ -2305,20 +2487,66 @@ without `nonlocal` are candidates for the same treatment already applied in
 step 1, and are noted here rather than done immediately because they sit
 inside functions that step 4 will move.
 
-**Progress.** Steps 1 to 4 are complete, step 5 is partly done, and step 6
-has begun. `run()` is
-down from about a thousand lines to under nine hundred, and its top-level
-statement count from 53 to 37, with every increment landing on an unchanged
-suite.
+**Progress.** Steps 1 to 5 are complete and step 6 has begun. `run()` is down
+from about a thousand lines to 684, and its top-level statement count from 53
+to 35, with every increment landing on an unchanged suite.
 
 | Step | State | What moved |
 |---|---|---|
 | 1 | Done | Two of three closures lifted to module level. `cleanup_cursor_cohort` stays: it rebinds an enclosing variable through `nonlocal` at four sites, so lifting it means introducing shared state, which belongs with step 4 rather than before it |
 | 2 | Done | Request resolution, the completion report, the preflight report, the repeated vendor store-open, and the post-ingest store totals are named functions. The store-open and store-totals cases were verbatim duplication across all three vendors, differing only in the display name |
 | 3 | Done | `tests/test_ingest_phases.py` covers source-selector expansion, argument rejection, store-path resolution under preflight and rebuild staging, and vendor store creation -- paths that previously required running a whole ingest to reach |
-| 4 | Moved, not yet validated | The three vendor coordinators and the nine helpers they share are in `codess/ingest_sources.py`, and `ingest_cmd` no longer decodes a source or writes a store during ingest. The move is covered only by the existing suite passing unchanged and by preflight runs over 24 real Projects; the new module has no tests of its own, and no published store has been rebuilt through it |
-| 5 | Two phases of four | Catalog resync and Artifact correlation are named functions. Snapshot creation and promotion remain inline in the Project loop, so the transactions W06 is about are still in the command module. Deferred until the snapshot-identity decisions in W03 and W20 settle, since extracting them now would fix the current derivation in place |
-| 6 | Begun | `query_cmd`'s duplicated store-readability probe is one helper; the diagnostics report SQL remains |
+| 4 | Done | The three vendor coordinators and the nine helpers they share are in `codess/ingest_sources.py`, and `ingest_cmd` no longer decodes a source or writes a store during ingest. Validated as the step required: `tests/test_ingest_sources.py` calls the module directly (46 cases over the helpers and all three coordinators, each against a Project fixture carrying one Session for its vendor), and one Project of each vendor was rebuilt through the moved code, publishing stores and reproducing identical Session and Event counts |
+| 5 | Done | Snapshot creation, rebuild promotion, catalog resync, Artifact correlation, and content-processing records are in `codess/ingest_publication.py`; the command module retains `_publish_project`, which orders the phases and translates the run's state into their parameters. `create_snapshot` and `os.replace` no longer appear in `cli/`. The extraction is behavior-preserving and does not decide the W03/W20 identity questions: it moves the derivation without changing it, which is why it no longer waits on them |
+| 6 | Done | Every report query is in `codess/query_reports.py`: mapping diagnostics, Artifact evidence, tool lineage, permission denials, audit events, tool totals and per-Session counts, Task invocations and results, Session selection, Session Events, and store counts. `query_cmd` retains its column headers and terminal formatting; the only `execute` left in the module is the store-readability probe, which is a connection check rather than a report |
+
+**Why step 5 no longer waited on W20.** The step was held for the decision on
+whether `snapshot_id` is a creation or a content identity, on the ground that
+extracting first would fix the current derivation in place. That applies to
+*changing* the derivation, not to moving the block: `publish_snapshot` calls
+`create_snapshot` with the same arguments the inline code did, so whichever
+way W20 settles, the edit lands in one function in the domain module rather
+than in a 230-line block inside a Project loop. Moving it first makes that
+decision cheaper to apply, not harder.
+
+One boundary was clarified while extracting. `snapshot_required` and
+`derived_changed` had been separate locals whose difference was implicit:
+the first is why a snapshot is due, the second only records that correlation
+or content processing wrote a store. The evidence summary is reused across
+runs when the first is false, so folding them together would have reused a
+summary for a Project whose stores had in fact changed. `PublicationOutcome`
+now carries both, with the distinction stated on the field.
+
+**What step 6 turned out to be.** The step was written as "replace
+`query_cmd`'s direct report SQL with typed-executor calls", which assumed the
+typed executor could answer these reports. It cannot, and should not: it
+executes a validated request over the four structured actions -- sessions,
+overview, events, search -- while these are fixed analyses with their own
+shapes, and forcing mapping diagnostics or an Artifact histogram through a
+request contract would either distort the contract or produce a request no
+caller could construct.
+
+The layering goal was nonetheless exactly right, so the reports moved to
+`codess/query_reports.py` in the same shape as `ingest_publication`: the
+domain owns the query and the ordering, and the command owns the column
+headers and terminal formatting. Ordering travels with the query rather than
+the renderer, because it is part of what a report *is* -- a caller that
+sorted differently would produce a different report under the same name.
+
+Two decisions came out of the move. `QueryScope` gained `source_predicate`
+and `diagnostics_predicate` as methods, so a report receives the scope
+instead of reaching back into the command module for a helper; the second
+exists because a mapping diagnostic reaches a source system through either
+its Session or its Source, and a record-level diagnostic often has no Session
+at all. And `_project_counts` kept its zero-filling in the command layer:
+the domain reports the stores it opened, while whether a named root with no
+readable store should appear as a zero row is a question about what the user
+asked for.
+
+Verification was byte-identity rather than the suite alone. All ten reports
+were captured before and after over a three-vendor Project, then compared
+again under each source filter and with a row limit -- thirty comparisons,
+all identical.
 
 One observation from doing the work: an attempt to introduce a per-Project
 state object *before* extracting the vendor blocks was reverted. The
@@ -2326,9 +2554,12 @@ container looked reasonable in isolation but had no consumer yet, so it
 would have been scaffolding committed ahead of the change it was meant to
 serve. The increments hold only if each one is complete on its own.
 
-The measurement that makes this urgent rather than tidy: `ingest_cmd` and
-`query_cmd` are the largest and third-largest modules in the codebase, and
-both sit in the layer that should hold the least logic.
+The measurement that made this urgent rather than tidy: `ingest_cmd` and
+`query_cmd` were the largest and third-largest modules in the codebase, both
+in the layer that should hold the least logic. `ingest_cmd` is now about
+fourteen hundred lines and `query_cmd` about thirteen hundred and fifty, with
+the domain work in `ingest_sources`, `ingest_publication`, and
+`query_reports`.
 
 #### 13.4.2 Mapping and Query Contracts
 
@@ -3105,10 +3336,16 @@ The read side has no comparable organizing verb. `verify_raw` and
 and `RawStore.resolve` returns a path without reading anything, so the
 public surface reads as four unrelated verbs. A closer correspondence would
 name the read operations after what they do with a prior observation --
-`RawStore.observe` writes one, and the read path re-examines it. Deferring
-the specific names to W23 with the rest of the raw-object renaming, since
-the useful constraint is that they be recognizable as the inverse of
-`observe` rather than any particular word.
+`RawStore.observe` writes one, and the read path re-examines it.
+
+W23 carried the renaming that removed the mode vocabulary and the borrowed
+database term, and closed there. This further idea -- naming the read
+operations as a matched set against `observe` -- was not part of it and is
+not scheduled: the current names are accurate, so the change would buy
+symmetry at the cost of another wire-visible rename. It is recorded here as
+a considered option rather than as pending work, and belongs with 14.4's
+vocabulary maintenance if a reader ever finds the four verbs confusing in
+practice.
 
 The migration is complete except for three sites whose truncation widths the
 shared module does not offer; those wait on the width decisions in this
@@ -3787,20 +4024,37 @@ that suppression is per-file with the rationale recorded there rather than
 in source. This section records only what the audit adds: how many sites
 there now are.
 
-Twelve modules carry a per-file `S608` ignore, covering 56 findings --
-`cursor_feature_audit` 15, `query_cmd` 11, `query_api` 9,
+Twelve modules originally carried a per-file `S608` ignore, covering 56
+findings -- `cursor_feature_audit` 15, `query_cmd` 11, `query_api` 9,
 `configuration_audit` 8, the rest one to four each. Every one matches a
 pattern 10.4.2 classifies as safe, so the count is not a defect list.
 
 It is still a measurement worth acting on. Fifty-six interpolation sites is
-more SQL assembly than the layering intends, and W06 already says most of
-the query paths belong behind the typed executor. The four shapes -- 
-placeholder runs, column projections, predicate fragments, fixed table
-names -- each have a natural home in a helper, so concentrating them reduces
-the count and the maintenance surface together, and leaves a smaller set of
-files where a per-file ignore names a module rather than covering one.
-Tracked as part of W29, starting with `cursor_feature_audit`, which holds
-the most and whose queries are assembled once from constants.
+more SQL assembly than the layering intends. The four shapes -- placeholder
+runs, column projections, predicate fragments, fixed table names -- each have
+a natural home in a helper, so concentrating them reduces the count and the
+maintenance surface together, and leaves a smaller set of files where a
+per-file ignore names a module rather than covering one. Tracked as part of
+W29.
+
+**What W26 and W06 already moved.** Both boundary changes relocated
+interpolation rather than adding it, and the current count is 52 across ten
+modules:
+
+| Module | Before | Now | Why |
+|---|---|---|---|
+| `cursor_feature_audit` | 15 | 0 | Its queries are `cursor_source.read_feature_evidence` (6.4) |
+| `cli.query_cmd` | 11 | 0 | Its report queries are `codess/query_reports.py` (13.4.1) |
+| `cursor_source` | 8 | 23 | Received the audit's queries |
+| `query_reports` | — | 11 | Received the command module's reports |
+| `session_names` | 1 | 0 | No interpolated statement remains |
+
+The exemption list in `pyproject.toml` was corrected to match: two modules no
+longer need one, and the new module does. The point is not the total, which
+barely moved, but that no command module and no audit module is on the list
+any more -- every remaining exemption names a source-access, query, or store
+module, which is where SQL assembly belongs. What W29 still owes is reducing
+the sites within those modules, not relocating them further.
 
 The exemptions do their job whenever the rule runs: selecting `S` reports 73
 findings without them and 17 with. What is missing is that `pyproject.toml`
@@ -3821,7 +4075,7 @@ as separate work:
 | Mechanical check | Owning item |
 |---|---|
 | Import-boundary test for adapter, source, store, query, and CLI layers | W13 |
-| SQL-ownership check recognizing the narrow focused-audit exception | W13, with W06 supplying the remaining boundary |
+| SQL-ownership check recognizing the narrow focused-audit exception | W13; W06 and W26 have supplied the boundary, so every module holding SQL is now a source-access, query, or store module |
 | Mapping-profile conformance over every emitted adapter fixture | W04 |
 | Query-request vectors covering every rejection path, with a check that no path lacks a vector | W13 (13.4.2) |
 | Transaction-failure tests at each source replacement and publication edge | W03, since publication identity is under review |
@@ -3855,67 +4109,135 @@ group the items are largely independent; between groups the order matters.
 |---|---|---|---|
 | Decode correctness | W01, W02 | Stored evidence is wrong or missing, and nothing downstream can detect it | Low: additive, verified against real Sources |
 | Store identity and integrity | W03, W14, W15, W20, W25, W31, W32, W33, W34 | A store cannot be written, or an identity means two things | High: changes force a rebuild, and W25 changes column names |
-| Structure and boundaries | W06, W19, W21, W23, W24, W26 | Nothing breaks; the code stays hard to change | Medium: behavior-preserving, but wide diffs |
+| Structure and boundaries | W19, W21, W24 | Nothing breaks; the code stays hard to change | Medium: behavior-preserving, but wide diffs |
 | Query and contract surface | W04, W05, W11, W12, W13, W17 | Results are unclear or unverifiable | Low to medium |
 | Operations and reporting | W16, W18, W27, W28, W29 | Operators cannot see what happened or scope what runs | Low: mostly additive |
 | Performance and bounding | W07, W08, W09 | Large inputs are slow or unbounded; Cursor work may depend on unrelated shared content | Low |
 
-**W06 steps 4 and 5, in execution order.** These are the two items with
-work already begun and a defined remainder, so they are stated here in
-enough detail to pick up without re-deriving the analysis in 13.4.1.
+Each group is described below with what state it is actually in, what has to
+happen next inside it, and what it waits on. Status vocabulary is 14's:
+**WIP**, **Planned**, **TODO**, **Under review**.
 
-*Step 4 -- finish validating the move.* The coordinators are in
-`codess/ingest_sources.py`, but the move rests on the existing suite passing
-and on preflight runs. Two things are missing:
+#### 14.1.1 Decode Correctness
 
-1. Direct tests for `ingest_sources`. Every function there is currently
-   reached only through a full ingest. `_collect_bounded_events`,
-   `_record_raw`, and `_observe_resource` take explicit parameters and are
-   testable as they stand; the three coordinators need a Project fixture with
-   one Session per vendor.
-2. One real rebuild. No published store has been written through the moved
-   code -- preflight discards its stores, so the publication path has not
-   run. Rebuild one Project of each vendor and compare Session and Event
-   counts against its retained `last-ingest-report.json`.
+**W01, W02. Both WIP, both Critical.** The only group whose failure mode is
+silently wrong data: a misclassified Actor or a dropped tool result is stored
+as fact, and no later query can tell. They are Critical for that reason
+rather than because they are urgent.
 
-*Step 5 -- extract snapshot publication.* One block remains in the Project
-loop, about 230 lines, holding snapshot creation, candidate promotion, and
-the pointer update. It is the last domain workflow in a command module.
+Neither is blocked. What each needs is validation breadth rather than a
+decision: representative real Sessions per vendor, checked against fixtures,
+with the disagreements recorded. The infrastructure for that now exists --
+`ingest_sources` is directly testable and the three coordinators have per
+vendor fixtures (13.4.1) -- so the work is running the comparison and acting
+on it, not building a way to run it.
 
-1. Wait for W20 to settle whether `snapshot_id` is a creation or content
-   identity, and for W03 to decide whether `package_digest` stays in its
-   derivation. Extracting first would fix the current derivation in place.
-2. Extract in the same shape as the two phases already done: a function
-   taking `config`, the Project outcome, and the store paths, returning the
-   published snapshot identity or `None`. Both existing phases return a value
-   the caller records rather than mutating shared state.
-3. Move it to `codess/` once it no longer references command-layer locals.
-   `_resync_project_catalog` and `_correlate_project_artifacts` should move
-   with it; they are domain operations that stayed in the command module only
-   because they were extracted before the module existed.
+Sequence within the group does not matter; W01 is the wider net and W02 the
+deeper one over the families W01 would flag.
 
-Neither step changes behavior. Both are complete when the existing suite
-passes unchanged and one Project of each vendor rebuilds to matching counts.
+#### 14.1.2 Store Identity and Integrity
 
-**Do first, because everything else assumes them.** W03 is Critical and
-blocks ordinary work: any packaged-file edit currently makes every published
-store unwritable, so it is paid on every schema change. W20 decides what
-`snapshot_id` means, which W06 step 5 waits on. W29 is cheap and makes every
-later change measurable rather than assumed.
+**W03, W14, W15, W20, W25, W31, W32, W33, W34. The largest group and the
+most blocked.** Three items are Under review rather than merely unscheduled
+-- W03, W15, W34 -- which means an established problem with no accepted
+resolution, so scheduling them before the decision is scheduling an argument.
 
-**Then the decode work.** W01 and W02 are the only items whose failure mode
-is silently wrong data. They are Critical for that reason, not because they
-are urgent.
+Two decisions unblock most of it:
 
-**Structure last, in dependency order.** W06 steps 4 and 5 need W20; W24
-needs W26 to settle the Cursor split; W23 and W19 are independent and can
-proceed whenever. None of them changes behavior, so they are safe to defer
-and expensive to interleave with the identity work.
+| Decision | Frees | Why it gates |
+|---|---|---|
+| What the write gate must actually check (W03) | W33, and the retained-check question in W34 | `package_digest` is the value W33 renames and the gate W03 narrows; deciding the gate first means renaming once |
+| What `snapshot_id` identifies -- creation or content (W20) | The remaining `snapshot_id` defect, and W31/W32's ordering | An identity that changes meaning changes every store written under it |
 
-**Two items should be reconsidered rather than scheduled.** W16 evaluates
-interfaces no consumer has asked for, and W17 waits on a consumer that has
-not appeared. Both have been open without a requester; if none emerges they
-belong in 14.4 rather than in the active list.
+W03 is the one that costs on every ordinary change: any packaged-file edit
+currently makes every published store unwritable, so it is paid on each
+schema change whether or not anyone is working on identity. That is the
+argument for doing it first, ahead of items with higher apparent value.
+
+W25 is the expensive one and should go last in the group: renaming every time
+column is a breaking schema change, and doing it before W03 and W20 settle
+would mean regenerating stores twice. W31 and W32 land together, since both
+change the emitted identity string. W14 and W15 are small and independent.
+
+#### 14.1.3 Structure and Boundaries
+
+**W19, W21, W24. Nearly closed.** W06, W23, and W26 completed, which
+discharged W24's stated dependency: the Cursor split is settled (6.4) and the
+command modules no longer hold the workflows W24's vendor table was competing
+with (13.4.1).
+
+W24 is now the substantial one. Its subject is unchanged -- one vendor
+description replacing partial views re-derived from bare keys -- but the
+inventory shifted: `ingest_publication` and `query_reports` each carry their
+own vendor mapping, which are new instances of exactly what W24
+consolidates, created by moving code rather than by adding knowledge.
+
+W19 is independent and can proceed whenever. W21 waits on two things, not
+one: W19's extraction, and W18's reporting contract to route the statements
+into. It cannot start before both.
+
+Nothing in this group changes behavior, which is what makes it safe to defer
+and expensive to interleave with identity work -- a wide behavior-preserving
+diff landing in the middle of a store rebuild makes both harder to verify.
+
+#### 14.1.4 Query and Contract Surface
+
+**W04, W05, W11, W12, W13, W17.** Mixed maturity: W04 and W05 are Planned
+with clear scope, W11 through W13 are TODO, and W17 is Under review awaiting
+a consumer.
+
+W04 is the structural one -- a shared candidate-record contract enforced at
+the decode boundary -- and it should precede W12, which reports coverage and
+loss against exactly those profiles. W05 wants real investigations to review
+predicates against, so it pairs naturally with the decode validation in
+14.1.1 rather than running on its own.
+
+W13's mechanical checks are partly cheaper than when written: 13.5 records
+that each check was waiting on the item that would otherwise fix its target
+in place, and the SQL-ownership check is one of those -- every module that
+now holds SQL is a source-access, query, or store module, so the rule it
+would enforce is already true and the check would lock it in rather than
+force a migration.
+
+#### 14.1.5 Operations and Reporting
+
+**W16, W18, W27, W28, W29. Mostly additive, low risk.** W18 is the anchor:
+it defines the reporting contract W21 needs, and it is the only item here
+with a dependent.
+
+W29 is cheap and worth doing early for a reason unrelated to its own value --
+it makes every later change measurable rather than asserted, since without a
+declared rule set a clean run means only that nobody ran the rules. Its
+static-analysis half also shrank: the SQL-interpolation exemptions no longer
+cover any command or audit module, and the modules still needing one are the
+source-access, query, and store modules where SQL assembly belongs
+(13.4.10). What remains is choosing the rule set and reducing sites within
+those modules.
+
+W27 and W28 are independent operator-facing fixes with no blockers: scoping
+discovery to something other than one developer's directory layout, and
+giving the registry a retention policy so a test run cannot enlarge it
+indefinitely.
+
+#### 14.1.6 Performance and Bounding
+
+**W07, W08, W09.** W09 is WIP; W07 and W08 are Planned. W08 should precede
+W07, because bounding a read without a repeatable workload means bounding by
+argument rather than by measurement -- the limit chosen would have no
+evidence behind it.
+
+W09 is narrower than it looks: it asks whether selective Cursor work stays
+independent as unrelated shared-database content grows, which the closed
+source boundary (6.4) makes answerable by measuring one module rather than
+auditing three.
+
+#### 14.1.7 Two Items to Reconsider Rather Than Schedule
+
+W16 evaluates external interfaces no consumer has asked for, and W17 waits on
+a consumer that has not appeared. Both have been open without a requester.
+They are carried here because they are accepted work, but if no consumer
+emerges they belong in 14.4 as maintenance directions rather than in an
+active list, where they read as work someone intends to start.
 
 ### 14.2 Immediate Core Work
 
@@ -3926,14 +4248,12 @@ belong in 14.4 rather than in the active list.
 | W03 | Critical | Under review | Separate exact package integrity from store write compatibility, and reduce runtime integrity checking to what a local development environment demonstrably needs. One digest spans the executable contract and the validation fixtures alike; the fixtures are a development-lifecycle concern that the test suite already settles. The write gate and snapshot creation both consult the combined value, so a fixture edit makes published stores unwritable although layout, decoder, and data are unchanged. Because mismatch is resolved by regenerating the store from vendor sources, the gate needs only to prevent mixing records written under different rules. Blocked on confirming which runtime checks survive that standard and whether they become optional; see 13.4.4. | The write gate consults only the executable contract and directs regeneration on mismatch; retained runtime checks each cite a demonstrated failure they prevent; exact package verification remains available as a release and diagnostic operation. |
 | W04 | High | Planned | Define the shared candidate-record contract and enforce released mapping profiles at the runtime decode boundary. | All three adapters satisfy the typed and runtime candidate contract, pass the same post-decode conformance check, and share strict/diagnostic semantics. |
 | W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. | Bounded deterministic results and complete requested expansions agree with focused direct queries. |
-| W06 | High | **WIP** | Move domain SQL and workflows out of command modules. Vendor decode and store writing now live in `codess/ingest_sources.py`; `ingest_cmd` fell from about two thousand lines to fifteen hundred and no longer ingests a source itself. Remaining: snapshot creation and promotion are still inline in the Project loop, and `query_cmd`'s report SQL is partly converted (13.4.1). |
 | W07 | High | Planned | Bound ancillary reads that can encounter large source or repository content. | Persisted tool output, worktree fingerprinting, and growing manifests stream or reject by explicit policy without first materializing the complete body. |
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. | Small correctness and representative scale cases report timing, query plans, rows, memory, and stable result identities. |
 | W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. | Selection, fingerprinting, decode, and query remain bounded as unrelated Cursor content grows. |
 | W20 | High | WIP | Establish what each derived value identifies, how long it must live, and what must be able to recompute it (13.4.8). No site uses content-addressed retrieval, so these are naming and comparison values. Delivered: `codess/hashing.py` with four modes and declared widths, and the `path_key` naming correction. Remaining: migrate the call sites, and correct two defects -- `snapshot_id` is written into `store_meta` and the manifest, both of which are then hashed, so a derived name sits inside the structure whose digest it depends on; and `sha256` is embedded in stored identity and key prefixes that no reader recomputes, making an algorithm change a wire-format change. Blocked on two decisions: whether `path_key` names a location or a Project when a reviewed directory moves or is used from another machine, and whether snapshot identity stays a creation identity (recommended) or becomes a content identity. | Each site states its lifetime and resilience requirement; key derivation routes through `codess_hash` with a declared width; no derived identity is an input to a digest recorded over the structure containing it; the two transient hashes are removed or justified; path-derived values are documented as machine-local; the relational key retains the full digest and keeps repeat invocations distinct. |
 | W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES` so discovery, refresh, review, Project handling, and the command modules stop re-deriving partial vendor views from bare keys (3.5.5). The vendor table describes vendors; adapters interpret them, and decode behavior must not migrate into it. Do not name it a registry -- that term already denotes the central `~/.codess` store. | One vendor description supplies keys, display names, identity fields, paths, and store filenames; no module repeats the vendor key set or a key-to-name mapping; adding a vendor touches the vendor table and its adapter, not the command layer. |
 | W25 | Normal | Planned | Strengthen CoSchema time representation. Every time column carries `_at` regardless of type, so a reader cannot tell RFC 3339 text from Unix milliseconds without the DDL, and `started_at` currently denotes `REAL` in `sessions` and `TEXT` in `processing_runs` -- one name, two representations, in one schema. Adopt `_time` for recorded text and `_atms` for source-reported numerics (CoSchema 5.1). Breaking schema change; regenerate stores rather than migrate. | No column name denotes more than one representation; the suffix states the type at every use; the DDL, contract, and query paths agree. |
-| W26 | Normal | Planned | Reevaluate the Cursor module partitioning now that W10 has closed the source-access boundary. Four modules are Cursor-specific -- `cursor_source`, `adapters/cursor`, `cursor_cohort`, `cursor_feature_audit` -- more than any other vendor, because Cursor stores sessions in shared SQLite databases rather than per-session files, so selection, caching, and decode are genuinely separate. Confirm that split is still the right one against the closed boundary, and check whether the cohort cache belongs with source access rather than beside the adapter. | Each Cursor module states which of selection, caching, and decode it owns; no module spans two; the adapter keeps no storage dependency. |
 | W27 | Normal | Planned | Make discovery scoping configurable and documented. `AGGREGATORS` (directories that group Projects rather than being one) and `EXCLUDE_REVIEW_DIRS` (review and backup trees) are frozen sets in `config.py` naming one developer's directories, with no override and no mention outside the source. Another user's grouping directories would be reported as Projects, and their review trees scanned. Exclusion matching was also root-dependent until this session, so the same directory was included or excluded depending on where the scan started. | Both sets are configurable and documented; a scan of an unfamiliar tree can be scoped without editing source; exclusion is a property of the directory rather than of the invocation. |
 | W28 | Normal | Planned | Give the central registry a retention policy. `ingested_projects.json` gains an entry for every Project ever scanned and drops none: an observed registry held 1,452 entries of which 1,424 were temporary directories from test runs and 28 were live. `tools/prune_project_catalog.py` prunes temporary paths from the reviewed catalog but nothing prunes the registry. | Entries for paths that no longer exist are reported and removable; a test run cannot silently enlarge a developer's registry; retention is stated rather than implied. |
 | W29 | High | Planned | Own the static-analysis configuration as one concern rather than three. `pyproject.toml` declares twelve per-file `S608` ignores with a rationale in 10.4 but never declares `select`, so ruff runs its default set: the `S` rules are off unless selected explicitly, and import sorting, function complexity, line length, and annotation coverage are never reported. Mypy has no configuration and runs only by hand. The work is one decision with four parts -- choose the rule set, settle what the `S608` exemptions become, reduce the interpolation sites they cover so fewer modules need exempting (13.4.10), and record lint and type counts alongside test results. Splitting these produced three items that could not be scheduled independently. | `[tool.ruff.lint] select` names the intended rules; every exemption names a module that still needs one after the reduction; a clean run means the selected rules passed; lint and type counts are reported with test results. |
@@ -3956,7 +4276,6 @@ belong in 14.4 rather than in the active list.
 | W18 | Normal | Planned | Implement and transition to the structured operational-reporting subsystem defined in Section 9.6.1. | One event contract and its renderers govern status, progress, warnings, and command-boundary errors; stdout results remain clean, retained events remain bounded, and all command families pass channel, privacy, and failure-path tests. |
 | W19 | Normal | Planned | Decompose `walk_sessions()` so Project canonicalization is testable independently of vendor filesystem discovery. Designs A/B/C and their sequencing are in 13.4.7; A is the recommended first step and C should follow W10. | Existing discovery tests pass unchanged, and Git-root attribution, parent-versus-child selection, and aggregator exclusion have direct unit tests that do not invoke vendor discovery. |
 | W21 | Normal | Planned | Route the `walk_sessions` inline `debug` print statements through the reporting contract W18 defines, rather than the module-local diagnostics dictionary. Starts after W19's extraction and W18's contract; excluded from W19 so the extraction stays behavior-preserving (13.4.7). | The statements emit through the shared contract with tests asserting channel and content; no direct `print` for operational status remains in the module. |
-| W23 | Normal | Planned | Apply the decomposition and naming findings from 3.5.4 and 3.5.5. Reduce `project_catalog.ensure_project_binding` and `catalog_readiness` to their named steps, extracting within the module rather than splitting it. Rename the raw-object operations so they do not depend on mode vocabulary or a borrowed database term: `verify_raw_object` and `restore_raw_object` for today's `verify_captured_object` and `materialize_captured_object`. Extract the stat-consistency guard duplicated between `fileio.source_fingerprint` and `raw_store._compress_file`. Extract the closed vocabularies (Actor kinds, origin kinds, content roles, statuses, raw modes) as named values, leaving CoSchema field names as literals. | Each named step is separately readable and tested; renamed operations have no callers using the old names; one stat guard serves both sites with callers choosing to raise or record; closed-vocabulary literals are replaced and an invalid value fails at the boundary. |
 
 ### 14.4 Secondary Maintenance
 

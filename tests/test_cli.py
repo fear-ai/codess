@@ -10,6 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cursor_fixtures import create_bubble_table
 from codess.project import path_to_slug
 from codess.raw_store import RawStore
 from codess.snapshot import create_snapshot
@@ -695,7 +696,7 @@ def test_ingest_cursor_global(durable_tmp_path):
     global_dir.mkdir(parents=True)
     db = global_dir / "state.vscdb"
     conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    create_bubble_table(conn)
     conn.execute(
         "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
         ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "hi", "timingInfo": {}})),
@@ -731,9 +732,7 @@ def test_cursor_container_limit_is_distinct_from_transcript_limit():
         )
         db = workspace / "state.vscdb"
         conn = sqlite3.connect(db)
-        conn.execute(
-            "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
-        )
+        create_bubble_table(conn)
         conn.execute(
             "INSERT INTO cursorDiskKV VALUES (?, ?)",
             (

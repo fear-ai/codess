@@ -1,4 +1,12 @@
-"""Reusable, transactionally consistent Cursor capture cohorts."""
+"""Reusable, transactionally consistent Cursor capture cohorts.
+
+**Owns caching.** One Cursor database backs many Projects, so capturing it
+once per run and reusing that copy is what keeps a multi-Project ingest from
+re-reading the same shared store. This module decides when a cached cohort is
+still valid, records the selection it was captured under, and restores it;
+it does not choose which rows to read, which is `cursor_source`'s concern
+(see the ownership table there).
+"""
 
 from __future__ import annotations
 

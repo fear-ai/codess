@@ -8,13 +8,13 @@ import sqlite3
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from codess.hashing import (
     codess_bytes_hash, codess_canonical_hash, codess_text_hash,
 )
 from codess import __version__
-from codess.fileio import source_fingerprint
+from codess.fileio import open_readonly, source_fingerprint
 from codess.identity import (
     global_event_id,
     global_session_id,
@@ -28,6 +28,7 @@ from codess.schema_contract import (
     FORMAT_VERSION,
     load_ddl,
     require_store,
+    table_names,
     verify_package,
 )
 from codess.tool_identity import bounded_source_call_id
@@ -181,7 +182,7 @@ def init_db(db_path: Path) -> None:
 def connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
     """Open and validate a CoSchema store."""
     if read_only:
-        conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(db_path)
     else:
         conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -192,6 +193,47 @@ def connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
         conn.close()
         raise
     return conn
+
+
+def table_counts(
+    conn: sqlite3.Connection, tables: Iterable[str] | None = None,
+) -> dict[str, int]:
+    """Row counts per table, over the tables the store actually has.
+
+    Two modules kept their own table-to-count-query maps, one quoting the
+    table name and one not, and both had drifted: the shorter listed eleven
+    tables, the longer twenty-two, and the DDL declares twenty-four. Deriving
+    the list from the store removes the drift and the second spelling at once.
+
+    `tables` restricts the result to a caller's tables of interest; names not
+    present in the store are omitted rather than reported as zero, since a
+    missing table is a different fact from an empty one.
+    """
+    present = table_names(conn)
+    selected = present if tables is None else [
+        name for name in tables if name in present
+    ]
+    # The table name cannot be a parameter, so it is quoted as an identifier;
+    # every name comes from the store's own catalog rather than from a caller.
+    return {
+        name: int(conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0])
+        for name in sorted(selected)
+    }
+
+
+def integrity_report(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Run the two structural checks a store is verified with.
+
+    `integrity_check` reports page and index consistency; `foreign_key_check`
+    reports referential violations, which the first does not cover. Three
+    call sites ran both and assembled the same pair of facts.
+    """
+    return {
+        "integrity_check": conn.execute("PRAGMA integrity_check").fetchone()[0],
+        "foreign_key_violations": len(
+            conn.execute("PRAGMA foreign_key_check").fetchall()
+        ),
+    }
 
 
 def _ensure_project(conn: sqlite3.Connection, session: dict[str, Any]) -> str | None:
@@ -962,31 +1004,39 @@ def record_processing_run(
             json.dumps(actions, separators=(",", ":")), rejection, now, now,
         ),
     )
-    for sequence, action in enumerate(actions, 1):
-        input_hash = action.get("input_sha256")
-        if not input_hash:
-            continue
-        input_id = f"codess:content:sha256:{input_hash}"
+    def record_policy_content(
+        content_hash: str | None, length: Any, privacy_class: str,
+    ) -> str | None:
+        """Record one policy input or output as a not-retained content object.
+
+        Content processed under a policy is identified but not stored: the
+        digest and length are evidence that a value existed and was acted on,
+        which is what a later reader needs without retaining the value itself.
+        """
+        if not content_hash:
+            return None
+        content_id = f"codess:content:sha256:{content_hash}"
         conn.execute(
             """
             INSERT OR IGNORE INTO content_objects(
               id, content_sha256, storage_class, character_length, privacy_class)
             VALUES (?, ?, 'not_retained', ?, ?)
             """,
-            (input_id, input_hash, action.get("original_length"), "policy_input"),
+            (content_id, content_hash, length, privacy_class),
         )
-        output_id = None
-        output_hash = action.get("output_sha256")
-        if output_hash:
-            output_id = f"codess:content:sha256:{output_hash}"
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO content_objects(
-                  id, content_sha256, storage_class, character_length, privacy_class)
-                VALUES (?, ?, 'not_retained', ?, ?)
-                """,
-                (output_id, output_hash, action.get("output_length"), "policy_output"),
-            )
+        return content_id
+
+    for sequence, action in enumerate(actions, 1):
+        input_id = record_policy_content(
+            action.get("input_sha256"), action.get("original_length"),
+            "policy_input",
+        )
+        if input_id is None:
+            continue
+        output_id = record_policy_content(
+            action.get("output_sha256"), action.get("output_length"),
+            "policy_output",
+        )
         conn.execute(
             """
             INSERT OR REPLACE INTO content_derivations(
@@ -1442,35 +1492,43 @@ def prune_unreferenced_records(conn: sqlite3.Connection) -> None:
     prune_unreferenced_source_revisions(conn)
 
 
-def replace_source_sessions(
-    conn: sqlite3.Connection,
-    source_file: str,
-    sessions: dict[str, dict[str, Any]],
-    events: list[dict[str, Any]],
-) -> None:
-    """Replace events owned by one multi-session source such as a Cursor DB."""
-    old_session_ids = {
-        row[0]
+def session_ids_for_source(
+    conn: sqlite3.Connection, source_file: str,
+) -> set[str]:
+    """Which Sessions one multi-session source currently owns Events for."""
+    return {
+        str(row[0])
         for row in conn.execute(
-            "SELECT DISTINCT session_id FROM events WHERE source_file=?", (source_file,)
+            "SELECT DISTINCT session_id FROM events WHERE source_file=?",
+            (source_file,),
         )
     }
-    grouped: dict[str, list[dict[str, Any]]] = {sid: [] for sid in sessions}
-    for event in events:
-        grouped.setdefault(str(event["session_id"]), []).append(event)
-    for session_id, session in sessions.items():
-        replace_session_events(
-            conn, session, grouped.get(session_id, []), session_id=session_id,
-            prune=False,
+
+
+def drop_sessions_absent_from_source(
+    conn: sqlite3.Connection, source_file: str, removed_session_ids: Iterable[str],
+) -> None:
+    """Remove one source's Events for Sessions it no longer contains.
+
+    A Session is deleted only when no Event from any other source still
+    references it: one Cursor database can hold Sessions that another also
+    contributed to, so removing the Session outright would discard evidence
+    this source never owned.
+
+    Callers pass the difference themselves because the two of them compute it
+    differently -- a streaming read knows which Sessions it saw, and a
+    buffered one knows which it was given -- but the removal is identical and
+    was written out twice before.
+    """
+    for session_id in removed_session_ids:
+        conn.execute(
+            "DELETE FROM events WHERE session_id=? AND source_file=?",
+            (session_id, source_file),
         )
-    for session_id in old_session_ids - set(sessions):
-        conn.execute("DELETE FROM events WHERE session_id=? AND source_file=?", (session_id, source_file))
-        remaining = conn.execute(
+        if conn.execute(
             "SELECT 1 FROM events WHERE session_id=? LIMIT 1", (session_id,)
-        ).fetchone()
-        if remaining is None:
+        ).fetchone() is None:
             conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
-    prune_unreferenced_records(conn)
 
 
 def load_ingest_state(state_path: Path) -> dict[str, Any]:

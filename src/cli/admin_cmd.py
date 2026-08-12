@@ -19,7 +19,8 @@ from codess.review_project import record_decision, refresh_candidates, validate_
 from codess.catalog_operations import onboard_catalog, relocate_project, retire_location
 from codess.config import (
     CC_PROJECTS, CODEX_ARCHIVED_SESSIONS, CODEX_SESSIONS, CURSOR_DATA, GB,
-    LARGE_EVENT_COUNT, LARGE_STORE_BYTES, MAX_RECORD_BYTES, REGISTRY,
+    LARGE_EVENT_COUNT, LARGE_STORE_BYTES, MAX_RECORD_BYTES, RAW_MODE_CHOICES,
+    REGISTRY,
 )
 from codess.codex_parent_audit import audit_parentage
 from codess.cursor_feature_audit import audit_cursor_features
@@ -141,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     refresh.add_argument(
         "--raw-mode",
-        choices=("auto", "none", "reference", "capture", "seal"),
+        choices=("auto", *RAW_MODE_CHOICES),
         default="auto",
     )
     refresh.add_argument(
@@ -224,7 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument("--registry", type=Path, default=REGISTRY)
     onboard.add_argument("--review-decision", default="approved")
     onboard.add_argument("--source", choices=("cc", "codex", "cursor", "all"), default="all")
-    onboard.add_argument("--raw-mode", choices=("none", "reference", "capture", "seal"), default="reference")
+    onboard.add_argument("--raw-mode", choices=RAW_MODE_CHOICES, default="reference")
     onboard_mode = onboard.add_mutually_exclusive_group()
     onboard_mode.add_argument("--validate-only", action="store_true")
     onboard_mode.add_argument("--apply", action="store_true")
@@ -389,7 +390,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _apply_arguments(parser) -> None:
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--source", choices=("cc", "codex", "cursor", "all"), default="all")
-    parser.add_argument("--raw-mode", choices=("none", "reference", "capture", "seal"), default="reference")
+    parser.add_argument("--raw-mode", choices=RAW_MODE_CHOICES, default="reference")
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--report", type=Path)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -22,6 +23,51 @@ SOURCE_SAMPLE_WINDOWS = 8
 
 class HashMismatchError(RuntimeError):
     """A file's content did not match the hash a caller expected."""
+
+
+def open_readonly(db_path: Path) -> sqlite3.Connection:
+    """Open any SQLite file read-only, without asserting it is a CoSchema store.
+
+    `store.connect(read_only=True)` additionally validates the store contract,
+    which is right for querying but wrong for the readers that must open a
+    file precisely because its contract may not hold -- a snapshot under a
+    package mismatch, an archived store being fingerprinted, a vendor
+    database. Those readers had each written the URI by hand, and only some
+    also set `query_only`, so the guarantee varied by call site rather than by
+    intent.
+
+    `query_only` is set for all of them: a read that opens a file it does not
+    own must not be able to write to it even by mistake. This lives beside the
+    other durable-file primitives rather than in `store`, since the callers
+    include source access and raw storage, which must not depend on the store
+    layer.
+    """
+    conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
+    conn.execute("PRAGMA query_only = ON")
+    return conn
+
+
+def stat_consistency(
+    before: os.stat_result, after: os.stat_result,
+) -> str:
+    """Classify what happened to a file between two stats of it.
+
+    Both readers of a source compare the same pair of facts around a read --
+    modification time and size -- and differed only in what they do with the
+    answer. `source_fingerprint` records it, because its digest covers a
+    defined prefix and an appending session file is ordinary rather than an
+    error; raw capture rejects it, because a raw object claims to be the exact
+    bytes of one source state. Deciding is therefore shared and the
+    disposition is the caller's.
+
+    Returns `stable`, `appended` when the file only grew, or `rewritten` for
+    any other change. A rewrite that restores both values is indistinguishable
+    from no change here, which is why capture also compares the bytes it
+    actually read against the size it was promised.
+    """
+    if (before.st_mtime_ns, before.st_size) == (after.st_mtime_ns, after.st_size):
+        return "stable"
+    return "appended" if after.st_size > before.st_size else "rewritten"
 
 
 def _no_hash_active() -> bool:
@@ -198,18 +244,9 @@ def source_fingerprint(
     # present when the read began. Report the change as advisory rather than
     # discarding a usable revision -- an appending session file is ordinary,
     # not an error.
-    file_changed = (before.st_mtime_ns, before.st_size) != (
-        after.st_mtime_ns, after.st_size
-    )
-    grew = after.st_size > before.st_size
     mtime = after.st_mtime * 1000
     size = before.st_size
-    consistency = (
-        "stable"
-        if not file_changed
-        else "appended" if grew
-        else "rewritten"
-    )
+    consistency = stat_consistency(before, after)
     wal_path = Path(str(path) + "-wal")
     if _include_sidecars and wal_path.is_file():
         wal_revision, wal_mtime, wal_size, wal_method, wal_consistency = (

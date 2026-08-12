@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 import sys
 import hashlib
 import tempfile
@@ -49,12 +48,19 @@ from codess.store import (
 )
 from codess.raw_store import RawStore
 from codess.project_catalog import ensure_project_binding, get_project_entry
-from codess.project_catalog import load_catalog
-from codess.artifact_correlation import correlate_external_artifacts
-from codess.snapshot import (
-    create_snapshot, current_raw_records, read_manifest, current_snapshot,
+from codess.snapshot import current_raw_records
+from codess.ingest_publication import (
+    VENDOR_DISPLAY_NAMES,
+    PublicationOutcome,
+    correlate_project_artifacts,
+    current_snapshot_id,
+    current_snapshot_is_sealed,
+    promote_rebuilt_stores,
+    publish_snapshot,
+    record_content_processing,
+    resync_project_catalog,
 )
-from codess.store import record_processing_run, sync_project_catalog
+from codess.store import integrity_report, sync_project_catalog, table_counts
 from codess.resources import (
     peak_rss_bytes,
     summarize_project_resources,
@@ -134,30 +140,8 @@ def _load_runtime_report(project_path: Path) -> dict:
         return {}
 
 
-def _current_snapshot_id(project_path: Path) -> str | None:
-    resolved = current_snapshot(project_path / STORE_DIR)
-    if resolved is None:
-        return None
-    _snapshot_path, pointer = resolved
-    snapshot_id = pointer.get("snapshot_id")
-    return str(snapshot_id) if snapshot_id else None
-
-
 def _evidence_summary(paths: list[Path]) -> dict:
     return summarize_store_evidence(paths)
-
-
-def _current_snapshot_is_sealed(project_path: Path) -> bool:
-    """Return whether the verified current snapshot already embeds raw objects."""
-    resolved = current_snapshot(project_path / STORE_DIR)
-    if resolved is None:
-        return False
-    snapshot_path, _pointer = resolved
-    return read_manifest(snapshot_path).get("sealed") is True
-
-
-VENDOR_DISPLAY_NAMES = {"cc": "Claude", "codex": "Codex", "cursor": "Cursor"}
-VENDOR_SOURCE_KEYS = {display: key for key, display in VENDOR_DISPLAY_NAMES.items()}
 
 PROJECT_SCOPED_OPTIONS = (
     "project_id",
@@ -433,9 +417,10 @@ class VendorStore:
             return None
         conn = connect(self.path)
         try:
+            counts = table_counts(conn, ("sessions", "events"))
             return {
-                "sessions": conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0],
-                "events": conn.execute("SELECT COUNT(*) FROM events").fetchone()[0],
+                "sessions": counts.get("sessions", 0),
+                "events": counts.get("events", 0),
                 "last_ingestion": datetime.now(UTC).isoformat(),
             }
         finally:
@@ -592,12 +577,12 @@ def _print_preflight_report(
     for path in sorted(staging_root.rglob("*.db")):
         conn = connect(path, read_only=True)
         try:
+            counts = table_counts(conn, ("sessions", "events"))
             store_checks.append({
                 "store": path.name,
-                "integrity_check": conn.execute("PRAGMA integrity_check").fetchone()[0],
-                "foreign_key_violations": len(conn.execute("PRAGMA foreign_key_check").fetchall()),
-                "sessions": conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0],
-                "events": conn.execute("SELECT COUNT(*) FROM events").fetchone()[0],
+                **integrity_report(conn),
+                "sessions": counts.get("sessions", 0),
+                "events": counts.get("events", 0),
             })
         finally:
             conn.close()
@@ -640,82 +625,96 @@ def _print_preflight_report(
     if temporary:
         temporary.cleanup()
 
-def _resync_project_catalog(
-    config: "IngestConfig",
-    project_path: Path,
-    project_entry: dict,
-    project: ProjectOutcome,
-) -> None:
-    """Re-sync every existing vendor store's catalog entry after ingest.
-
-    The Project entry can change while sources are read -- a new location, a
-    renamed workspace -- so each store is brought back into agreement before
-    publication decides what to republish. Stores that do not exist are
-    skipped rather than created: this reconciles, it does not provision.
-    """
-    for source_key, display in VENDOR_DISPLAY_NAMES.items():
-        store = config.vendor_store(project_path, source_key)
-        if not store.exists():
-            continue
-        if store.create(project_entry):
-            project.catalog_changed_vendors.add(display)
-
-
-def _correlate_project_artifacts(
+def _publish_project(
     config: "IngestConfig",
     project_path: Path,
     project: ProjectOutcome,
-    registry_root: Path,
     *,
+    project_entry: dict,
+    binding: dict,
+    registry_root: Path,
+    opts: dict,
+    raw_records: list[dict],
+    raw_store: "RawStore",
+    min_size: int,
+    force: bool,
+    seal_upgrade: bool,
+    rebuild_had_existing_store: bool,
     diagnostics: dict[str, int],
     progress_trace,
-) -> bool:
-    """Correlate external Artifacts in every store this run touched.
+) -> PublicationOutcome:
+    """Sequence the publication phases for one Project and report the result.
 
-    Runs only for vendors whose store or catalog entry changed, since
-    correlation is derived from content that did not move otherwise. Returns
-    whether any store was written, which publication uses to decide if a new
-    snapshot is warranted.
+    The phases themselves are in `codess.ingest_publication`; this orders them
+    and translates between the run's state and their parameters. The order is
+    a dependency, not a preference: promotion must precede the snapshot, or
+    the snapshot would record the stores the rebuild replaced.
+
+    A failed rebuild over an existing store is the one case that withdraws
+    work already recorded -- the staged stores are discarded, so the vendors
+    this run believed it changed did not in fact change, and their marks are
+    cleared before the snapshot decision reads them.
     """
-    derived_changed = False
-    correlation_vendors = project.changed_vendors | project.catalog_changed_vendors
-    if correlation_vendors:
-        catalog = load_catalog(registry_root)
-    for vendor in sorted(correlation_vendors):
-        source_key = VENDOR_SOURCE_KEYS[vendor]
-        path = config.store_path(project_path, source_key)
-        if not path.exists():
-            continue
-        correlation_started = time.monotonic()
-        progress_trace(
-            "artifact_correlation.start",
-            project=str(project_path), vendor=vendor,
+    published = PublicationOutcome()
+    project.catalog_changed_vendors |= resync_project_catalog(
+        config, project_path, project_entry,
+        create_store=lambda source_key, entry: config.vendor_store(
+            project_path, source_key,
+        ).create(entry),
+    )
+    published.derived_changed = correlate_project_artifacts(
+        config, project_path,
+        project.changed_vendors | project.catalog_changed_vendors,
+        registry_root,
+        diagnostics=diagnostics, progress_trace=progress_trace,
+    )
+    if opts.get("content_policy_data"):
+        if record_content_processing(
+            config, project_path, project.changed_vendors,
+            project_id=binding["project_id"],
+            policy=opts["content_policy_data"],
+            actions=opts.get("content_actions", []),
+        ):
+            published.derived_changed = True
+
+    if force and not config.validate_only:
+        staged_project = config.staged_store_roots.pop(project_path)
+        retain_prior = project.tally.failed and rebuild_had_existing_store
+        published.promoted_stores = promote_rebuilt_stores(
+            project_path, staged_project, config.sources,
+            retain_prior=retain_prior,
         )
-        conn = connect(path)
-        try:
-            correlation_counts = correlate_external_artifacts(
-                conn, catalog,
-            )
-            conn.commit()
-            derived_changed = True
-        finally:
-            conn.close()
-        for key, value in correlation_counts.items():
-            diagnostics[f"artifact_correlation_{key}"] = (
-                diagnostics.get(f"artifact_correlation_{key}", 0) + value
-            )
+        if retain_prior:
+            project.changed_vendors.clear()
+            project.catalog_changed_vendors.clear()
+            published.derived_changed = False
         progress_trace(
-            "artifact_correlation.done",
-            project=str(project_path), vendor=vendor,
-            external_artifacts=correlation_counts.get("external_artifacts", 0),
-            matched=correlation_counts.get("matched", 0),
-            ambiguous=correlation_counts.get("ambiguous", 0),
-            unmatched=correlation_counts.get("unmatched", 0),
-            phase_seconds=round(
-                time.monotonic() - correlation_started, 3
-            ),
+            "fresh_rebuild.promoted", project=str(project_path),
+            stores=published.promoted_stores,
+            retained_prior=(project.tally.errors and rebuild_had_existing_store),
         )
-    return derived_changed
+
+    published.snapshot_required = (
+        bool(project.changed_vendors)
+        or bool(project.catalog_changed_vendors)
+        or published.derived_changed
+        or opts["raw_records_changed"]
+        or seal_upgrade
+    )
+    if config.validate_only:
+        published.snapshot_id = current_snapshot_id(project_path)
+        return published
+    published.snapshot_id, published.candidate_path = publish_snapshot(
+        config, project_path, raw_records,
+        raw_store=raw_store,
+        registry_root=registry_root,
+        project_id=binding["project_id"],
+        sources=config.sources,
+        minimum_source_size=min_size,
+        required=published.snapshot_required,
+        progress_trace=progress_trace,
+    )
+    return published
 
 
 def run(args) -> int:
@@ -1114,7 +1113,7 @@ def run(args) -> int:
             )
             seal_upgrade = (
                 settings["raw_mode"] == "seal"
-                and not _current_snapshot_is_sealed(project_path)
+                and not current_snapshot_is_sealed(project_path)
             )
 
             if "cc" in sources:
@@ -1247,134 +1246,26 @@ def run(args) -> int:
             if project.store_totals:
                 if not settings["validate_only"]:
                     project_entry = get_project_entry(registry_root, binding["project_id"])
-                _resync_project_catalog(config, project_path, project_entry, project)
-                derived_changed = _correlate_project_artifacts(
-                    config, project_path, project, registry_root,
-                    diagnostics=diagnostics, progress_trace=progress_trace,
+                published = _publish_project(
+                    config,
+                    project_path,
+                    project,
+                    project_entry=project_entry,
+                    binding=binding,
+                    registry_root=registry_root,
+                    opts=opts,
+                    raw_records=project_raw_records,
+                    raw_store=raw_store,
+                    min_size=min_size,
+                    force=force,
+                    seal_upgrade=seal_upgrade,
+                    rebuild_had_existing_store=rebuild_had_existing_store,
+                    diagnostics=diagnostics,
+                    progress_trace=progress_trace,
                 )
-                if opts.get("content_policy_data"):
-                    for vendor in sorted(project.changed_vendors):
-                        source_key = VENDOR_SOURCE_KEYS[vendor]
-                        path = config.store_path(project_path, source_key)
-                        if not path.exists():
-                            continue
-                        conn = connect(path)
-                        try:
-                            vendor_actions = [
-                                action for action in opts.get("content_actions", [])
-                                if action.get("vendor") == vendor
-                            ]
-                            record_processing_run(
-                                conn,
-                                project_id=binding["project_id"],
-                                policy=opts["content_policy_data"],
-                                actions=vendor_actions,
-                            )
-                            conn.commit()
-                            derived_changed = True
-                        finally:
-                            conn.close()
-                if force and not settings["validate_only"]:
-                    staged_project = staged_store_roots.pop(project_path)
-                    promoted = []
-                    if not project.tally.failed or not rebuild_had_existing_store:
-                        for source_key, vendor in (
-                            ("cc", "Claude"),
-                            ("codex", "Codex"),
-                            ("cursor", "Cursor"),
-                        ):
-                            if source_key not in sources:
-                                continue
-                            staged_path = get_store_path(
-                                staged_project, vendor
-                            )
-                            if not staged_path.exists():
-                                continue
-                            target = get_store_path(project_path, vendor)
-                            target.parent.mkdir(parents=True, exist_ok=True)
-                            os.replace(staged_path, target)
-                            for suffix in ("-journal", "-wal", "-shm"):
-                                Path(str(target) + suffix).unlink(
-                                    missing_ok=True
-                                )
-                            promoted.append(target.name)
-                        staged_state = get_state_path(staged_project)
-                        if staged_state.exists():
-                            target_state = get_state_path(project_path)
-                            target_state.parent.mkdir(
-                                parents=True, exist_ok=True
-                            )
-                            os.replace(staged_state, target_state)
-                    else:
-                        project.changed_vendors.clear()
-                        project.catalog_changed_vendors.clear()
-                        derived_changed = False
-                    progress_trace(
-                        "fresh_rebuild.promoted",
-                        project=str(project_path),
-                        stores=promoted,
-                        retained_prior=(
-                            project.tally.errors
-                            and rebuild_had_existing_store
-                        ),
-                    )
-                snapshot_required = (
-                    bool(project.changed_vendors)
-                    or bool(project.catalog_changed_vendors)
-                    or derived_changed
-                    or opts["raw_records_changed"]
-                    or seal_upgrade
-                )
-                snapshot_id = _current_snapshot_id(project_path)
-                candidate_snapshot_path = None
-                if (
-                    project_raw_records
-                    and not settings["validate_only"]
-                    and snapshot_required
-                ):
-                    working_stores = [
-                        get_store_path(project_path, vendor)
-                        for vendor in ("Claude", "Codex", "Cursor")
-                    ]
-                    snapshot_started = time.monotonic()
-                    progress_trace(
-                        "snapshot.start", project=str(project_path),
-                        stores=len([path for path in working_stores if path.exists()]),
-                        raw_records=len(project_raw_records),
-                        sealed=settings["raw_mode"] == "seal",
-                    )
-                    snapshot_path = create_snapshot(
-                        project_path,
-                        [path for path in working_stores if path.exists()],
-                        project_raw_records,
-                        raw_store=raw_store,
-                        seal=settings["raw_mode"] == "seal",
-                        build_policy={
-                            "raw_mode": settings["raw_mode"],
-                            "selected_sources": list(sources),
-                            "minimum_source_size": min_size,
-                            "redaction_enabled": settings["redact"],
-                        },
-                        registry_root=registry_root,
-                        project_id=binding["project_id"],
-                        publish=not settings["candidate_snapshot"],
-                    )
-                    snapshot_id = snapshot_path.name
-                    if settings["candidate_snapshot"]:
-                        candidate_snapshot_path = str(snapshot_path)
-                    progress_trace(
-                        "snapshot.done", project=str(project_path),
-                        snapshot_id=snapshot_path.name,
-                        publication=(
-                            "candidate" if settings["candidate_snapshot"] else "current"
-                        ),
-                        phase_seconds=round(time.monotonic() - snapshot_started, 3),
-                    )
-                elif project_raw_records and not settings["validate_only"]:
-                    progress_trace(
-                        "snapshot.skip", project=str(project_path),
-                        reason="unchanged",
-                    )
+                snapshot_id = published.snapshot_id
+                candidate_snapshot_path = published.candidate_path
+                snapshot_required = published.snapshot_required
                 evidence_summary = None
                 evidence_summary_reused = False
                 if not settings["validate_only"]:

@@ -15,6 +15,7 @@ from typing import Any
 from codess import __version__
 from codess.config import (
     CC_PROJECTS,
+    RAW_MODE_CHOICES,
     SOURCE_LINKS_FILE,
     SOURCE_LINKS_FORMAT,
     STORE_DIR,
@@ -463,7 +464,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--raw-mode",
-        choices=("none", "reference", "capture", "seal"),
+        choices=RAW_MODE_CHOICES,
         default=None,
         help="ingest: raw evidence mode [CODESS_RAW_MODE] (default reference)",
     )

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from codess.project_catalog import catalog_readiness, durable_project_root
-from codess.query_api import execute, make_request
+from codess.query_api import execute, make_request, session_structure_counts
 from codess.snapshot import snapshot_store_paths_from_base
 from codess.store import connect
 
@@ -88,39 +88,11 @@ def _sqlite_observations(
             )
         }
         totals["sessions"] += len(session_ids)
-        if session_ids:
-            placeholders = ",".join("?" for _ in session_ids)
-            ids = sorted(session_ids)
-            totals["interactions"] += int(conn.execute(
-                f"SELECT COUNT(*) FROM interactions "
-                f"WHERE session_id IN ({placeholders})", ids,
-            ).fetchone()[0])
-            totals["model_turns"] += int(conn.execute(
-                f"SELECT COUNT(*) FROM model_turns "
-                f"WHERE session_id IN ({placeholders})", ids,
-            ).fetchone()[0])
-            relations.update({
-                str(relation): int(count)
-                for relation, count in conn.execute(
-                    f"""
-                    SELECT COALESCE(session_relation_kind,'top_level'),COUNT(*)
-                    FROM sessions WHERE id IN ({placeholders})
-                    GROUP BY COALESCE(session_relation_kind,'top_level')
-                    """,
-                    ids,
-                )
-            })
-            initiations.update({
-                str(kind): int(count)
-                for kind, count in conn.execute(
-                    f"""
-                    SELECT initiation_kind,COUNT(*) FROM interactions
-                    WHERE session_id IN ({placeholders})
-                    GROUP BY initiation_kind
-                    """,
-                    ids,
-                )
-            })
+        structure = session_structure_counts(conn, session_ids)
+        totals["interactions"] += structure["interactions"]
+        totals["model_turns"] += structure["model_turns"]
+        relations.update(structure["session_relations"])
+        initiations.update(structure["initiation_kinds"])
 
         rows = conn.execute(
             """

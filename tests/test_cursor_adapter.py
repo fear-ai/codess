@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from cursor_fixtures import (
+    build_cursor_db, create_bubble_table, create_header_table, put_headers,
+)
 from codess.adapters.cursor import (
     _bubble_timestamp,
     _bubble_to_events,
@@ -31,20 +34,7 @@ from codess.schema_contract import validate_mapped_event
 
 def _make_cursor_db(tmp_path: Path, bubbles: list[tuple[str, str, dict]]) -> Path:
     """Create a temp state.vscdb with cursorDiskKV table and bubbleId entries."""
-    db = tmp_path / "state.vscdb"
-    conn = sqlite3.connect(db)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
-    )
-    for composer_id, bubble_id, data in bubbles:
-        key = f"bubbleId:{composer_id}:{bubble_id}"
-        conn.execute(
-            "INSERT OR REPLACE INTO cursorDiskKV (key, value) VALUES (?, ?)",
-            (key, json.dumps(data)),
-        )
-    conn.commit()
-    conn.close()
-    return db
+    return build_cursor_db(tmp_path / "state.vscdb", bubbles=bubbles)
 
 
 def test_workspace_composer_index_recovers_missing_global_headers(tmp_path):
@@ -83,7 +73,7 @@ def test_workspace_composer_index_recovers_missing_global_headers(tmp_path):
     global_dir.mkdir()
     global_db = global_dir / "state.vscdb"
     with sqlite3.connect(global_db) as conn:
-        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        create_bubble_table(conn)
         conn.executemany(
             "INSERT INTO cursorDiskKV VALUES (?, ?)",
             [
@@ -91,15 +81,8 @@ def test_workspace_composer_index_recovers_missing_global_headers(tmp_path):
                 ("bubbleId:current:one", json.dumps({"type": 1, "text": "new"})),
             ],
         )
-        conn.execute(
-            "CREATE TABLE composerHeaders ("
-            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-        )
-        conn.execute(
-            "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
-            ("current", "workspace-one", 1700000002000, 1700000003000, 0, 0),
-        )
+        create_header_table(conn)
+        put_headers(conn, [("current", "workspace-one", 1700000002000, 1700000003000, 0, 0)])
 
     fallback = get_workspace_composer_headers(project, cursor_data)
     assert fallback["legacy"] == {
@@ -160,9 +143,8 @@ def test_workspace_composer_index_reports_ambiguous_fallback_once(
     global_dir.mkdir()
     global_db = global_dir / "state.vscdb"
     with sqlite3.connect(global_db) as conn:
-        conn.execute(
-            "CREATE TABLE composerHeaders ("
-            "composerId TEXT PRIMARY KEY, workspaceId TEXT)"
+        create_header_table(
+            conn, ("composerId TEXT PRIMARY KEY", "workspaceId TEXT"),
         )
 
     diagnostics = {}
@@ -204,7 +186,7 @@ class TestGetComposerData:
     def test_empty_db(self, tmp_path):
         db = tmp_path / "state.vscdb"
         conn = sqlite3.connect(db)
-        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        create_bubble_table(conn)
         conn.commit()
         conn.close()
         out = get_composer_data(db)
@@ -213,7 +195,7 @@ class TestGetComposerData:
     def test_decodes_composer_data(self, tmp_path):
         db = tmp_path / "state.vscdb"
         conn = sqlite3.connect(db)
-        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        create_bubble_table(conn)
         conn.execute(
             "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
             ("composerData:c1", json.dumps({"conversation": [{"type": 1, "text": "hi"}], "workspaceRoot": "/proj"})),
@@ -238,13 +220,9 @@ class TestGetComposerHeaders:
     def test_filters_by_workspace(self, tmp_path):
         db = tmp_path / "state.vscdb"
         conn = sqlite3.connect(db)
-        conn.execute(
-            "CREATE TABLE composerHeaders ("
-            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-        )
-        conn.executemany(
-            "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+        create_header_table(conn)
+        put_headers(
+            conn,
             [
                 ("c1", "ws1", 1, 2, 0, 0),
                 ("c2", "ws2", 3, 4, 1, 1),
@@ -266,9 +244,9 @@ class TestGetComposerHeaders:
     def test_tolerates_missing_optional_columns_and_new_columns(self, tmp_path):
         db = tmp_path / "state.vscdb"
         conn = sqlite3.connect(db)
-        conn.execute(
-            "CREATE TABLE composerHeaders ("
-            "composerId TEXT PRIMARY KEY, workspaceId TEXT, futureField TEXT)"
+        create_header_table(
+            conn,
+            ("composerId TEXT PRIMARY KEY", "workspaceId TEXT", "futureField TEXT"),
         )
         conn.execute(
             "INSERT INTO composerHeaders VALUES (?, ?, ?)",
@@ -294,16 +272,10 @@ class TestSelectionMarker:
     def test_ignores_unselected_state_and_detects_selected_changes(self, tmp_path):
         db = tmp_path / "state.vscdb"
         with sqlite3.connect(db) as conn:
-            conn.execute(
-                "CREATE TABLE composerHeaders ("
-                "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-                "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-            )
-            conn.execute(
-                "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
-            )
-            conn.executemany(
-                "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+            create_header_table(conn)
+            create_bubble_table(conn)
+            put_headers(
+            conn,
                 [
                     ("selected", "ws1", 1700000000000, 1700000001000, 0, 0),
                     ("other", "ws2", 1700000000000, 1700000001000, 0, 0),
@@ -356,9 +328,8 @@ class TestSelectionMarker:
             ("c2", "one", {"type": 1, "text": "second"}),
         ])
         with sqlite3.connect(db) as conn:
-            conn.execute(
-                "CREATE TABLE composerHeaders ("
-                "composerId TEXT PRIMARY KEY, workspaceId TEXT)"
+            create_header_table(
+                conn, ("composerId TEXT PRIMARY KEY", "workspaceId TEXT"),
             )
             conn.executemany(
                 "INSERT INTO composerHeaders VALUES (?, ?)",
@@ -383,9 +354,7 @@ class TestSelectionMarker:
         db = tmp_path / "state.vscdb"
         with sqlite3.connect(db) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute(
-                "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
-            )
+            create_bubble_table(conn)
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         Path(str(db) + "-wal").unlink(missing_ok=True)
         Path(str(db) + "-shm").unlink(missing_ok=True)
@@ -412,7 +381,7 @@ class TestGetDbMetrics:
     def test_empty_db(self, tmp_path):
         db = tmp_path / "state.vscdb"
         conn = sqlite3.connect(db)
-        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        create_bubble_table(conn)
         conn.commit()
         conn.close()
         m = get_db_metrics(db)
@@ -447,13 +416,9 @@ class TestGetDbMetrics:
     def test_uses_composer_header_time_range(self, tmp_path):
         db = _make_cursor_db(tmp_path, [("c1", "b1", {"type": 1, "text": "hi"})])
         conn = sqlite3.connect(db)
-        conn.execute(
-            "CREATE TABLE composerHeaders ("
-            "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-            "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-        )
-        conn.executemany(
-            "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
+        create_header_table(conn)
+        put_headers(
+            conn,
             [
                 ("c1", "ws", 1_700_000_000_000, 1_700_000_100_000, 0, 0),
                 ("c2", "ws", 1_600_000_000_000, 1_800_000_000_000, 0, 0),
@@ -472,9 +437,7 @@ class TestGetDbMetrics:
             tmp_path, [("c1", "b1", {"type": 1, "text": "hi"})]
         )
         conn = sqlite3.connect(db)
-        conn.execute(
-            "CREATE TABLE composerHeaders (composerId TEXT, workspaceId TEXT)"
-        )
+        create_header_table(conn, ("composerId TEXT", "workspaceId TEXT"))
         conn.execute("INSERT INTO composerHeaders VALUES ('c1', 'ws1')")
         conn.commit()
         conn.close()
@@ -714,9 +677,7 @@ class TestIterBubbles:
         db = tmp_path / "state.vscdb"
         writer = sqlite3.connect(db)
         assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
-        writer.execute(
-            "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)"
-        )
+        create_bubble_table(writer)
         writer.commit()
         writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         writer.execute(

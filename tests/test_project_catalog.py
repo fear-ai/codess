@@ -14,6 +14,7 @@ import pytest
 from codess.project_annotations import build_project_annotations
 from codess.project_catalog import (
     add_project_location,
+    load_catalog,
     catalog_readiness,
     durable_project_root,
     ensure_project_binding,
@@ -652,3 +653,322 @@ def test_project_set_rejects_duplicate_or_unknown_inputs(tmp_path):
     }), encoding="utf-8")
     with pytest.raises(ValueError, match="unsupported"):
         load_project_set(unknown)
+
+
+# --- extracted binding steps -------------------------------------------------
+#
+# `ensure_project_binding` and `catalog_readiness` were each over a hundred
+# lines. W23 reduced them to their named steps, extracted within this module
+# because catalog identity, locations, and readiness are one concern. These
+# call the steps directly; the composed behavior is covered above.
+
+def test_a_missing_binding_file_reads_as_no_binding(tmp_path):
+    from codess.project_catalog import _read_existing_binding
+
+    assert _read_existing_binding(tmp_path / "absent.json") is None
+
+
+def test_a_binding_in_an_unsupported_format_is_refused(tmp_path):
+    """Ignoring it would mint a second identity for a Project that has one."""
+    from codess.project_catalog import _read_existing_binding
+
+    path = tmp_path / "project.json"
+    path.write_text(json.dumps({"binding_format": "something/else"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported project binding format"):
+        _read_existing_binding(path)
+
+
+def test_a_retained_binding_is_the_first_authority():
+    from codess.project_catalog import _resolve_project_id
+
+    binding = {"project_id": "codess:project:from-binding"}
+    entries = {"codess:project:from-catalog": {
+        "project_id": "codess:project:from-catalog",
+        "locations": [{"path": "/projects/p"}],
+    }}
+    assert _resolve_project_id(binding, entries, "/projects/p") == (
+        "codess:project:from-binding"
+    )
+
+
+def test_a_catalog_entry_claiming_the_path_is_the_second_authority():
+    """A deleted binding file must not split one Project across two identities."""
+    from codess.project_catalog import _resolve_project_id
+
+    entries = {"codess:project:known": {
+        "project_id": "codess:project:known",
+        "locations": [{"path": "/projects/p"}],
+    }}
+    assert _resolve_project_id(None, entries, "/projects/p") == "codess:project:known"
+
+
+def test_an_unknown_location_mints_a_new_identity():
+    from codess.project_catalog import _resolve_project_id
+
+    minted = _resolve_project_id(None, {}, "/projects/new")
+    assert minted.startswith("codess:project:")
+    assert minted != _resolve_project_id(None, {}, "/projects/new")
+
+
+def test_the_observed_location_is_recorded_as_active():
+    from codess.project_catalog import _merged_locations
+
+    [location] = _merged_locations(
+        {}, "codess:location:a",
+        machine_id="m1", resolved_path="/projects/p", observed_at="2026-01-01T00:00:00+00:00",
+    )
+    assert location["state"] == "active"
+    assert location["path_obsolete"] is False
+    assert location["observed_at"] == "2026-01-01T00:00:00+00:00"
+
+
+def test_other_locations_keep_their_state():
+    """Observing one location must not retire the Project's other ones."""
+    from codess.project_catalog import _merged_locations
+
+    entry = {"locations": [
+        {"location_id": "codess:location:old", "path": "/old", "state": "active"},
+    ]}
+    locations = _merged_locations(
+        entry, "codess:location:new",
+        machine_id="m1", resolved_path="/new", observed_at="2026-01-01T00:00:00+00:00",
+    )
+    retained = next(
+        item for item in locations if item["location_id"] == "codess:location:old"
+    )
+    assert retained["state"] == "active"
+    assert len(locations) == 2
+
+
+def test_a_retired_location_defaults_to_obsolete():
+    """Entries predating the field must not read as current locations."""
+    from codess.project_catalog import _merged_locations
+
+    entry = {"locations": [
+        {"location_id": "codess:location:old", "path": "/old", "state": "retired"},
+    ]}
+    locations = _merged_locations(
+        entry, "codess:location:new",
+        machine_id="m1", resolved_path="/new", observed_at="2026-01-01T00:00:00+00:00",
+    )
+    retired = next(
+        item for item in locations if item["location_id"] == "codess:location:old"
+    )
+    assert retired["path_obsolete"] is True
+
+
+def test_locations_are_ordered_deterministically():
+    from codess.project_catalog import _merged_locations
+
+    entry = {"locations": [
+        {"location_id": "codess:location:z", "path": "/z", "state": "active"},
+        {"location_id": "codess:location:a", "path": "/a", "state": "active"},
+    ]}
+    locations = _merged_locations(
+        entry, "codess:location:m",
+        machine_id="m1", resolved_path="/m", observed_at="2026-01-01T00:00:00+00:00",
+    )
+    ids = [item["location_id"] for item in locations]
+    assert ids == sorted(ids)
+
+
+def test_only_an_approved_source_link_binds_a_workspace(tmp_path):
+    """A proposed link records a decision pending, not authority to bind."""
+    from codess.config import SOURCE_LINKS_FILE, SOURCE_LINKS_FORMAT, STORE_DIR
+    from codess.project_catalog import _apply_source_links
+
+    project = tmp_path / "project"
+    (project / STORE_DIR).mkdir(parents=True)
+    (project / STORE_DIR / SOURCE_LINKS_FILE).write_text(json.dumps({
+        "format": SOURCE_LINKS_FORMAT,
+        "links": [{
+            "source_system_id": "cursor.composer",
+            "source_identity": {"workspace_id": "ws-1"},
+            "selection_state": "proposed",
+        }],
+    }), encoding="utf-8")
+    bindings, _aliases = _apply_source_links(
+        {}, project, "codess:location:a", str(project),
+    )
+    assert bindings == []
+
+
+def test_an_approved_link_binds_its_workspace(tmp_path):
+    from codess.config import SOURCE_LINKS_FILE, SOURCE_LINKS_FORMAT, STORE_DIR
+    from codess.project_catalog import _apply_source_links
+
+    project = tmp_path / "project"
+    (project / STORE_DIR).mkdir(parents=True)
+    (project / STORE_DIR / SOURCE_LINKS_FILE).write_text(json.dumps({
+        "format": SOURCE_LINKS_FORMAT,
+        "links": [{
+            "source_system_id": "cursor.composer",
+            "source_identity": {"workspace_id": "ws-1"},
+            "selection_state": "approved",
+            "source_project_path": str(project),
+        }],
+    }), encoding="utf-8")
+    bindings, _aliases = _apply_source_links(
+        {}, project, "codess:location:a", str(project),
+    )
+    assert [item["workspace_id"] for item in bindings] == ["ws-1"]
+    assert bindings[0]["path_obsolete"] is False
+
+
+def test_a_link_from_another_path_marks_that_path_obsolete(tmp_path):
+    """A moved Project stops claiming its former location."""
+    from codess.config import SOURCE_LINKS_FILE, SOURCE_LINKS_FORMAT, STORE_DIR
+    from codess.project_catalog import _apply_source_links
+
+    project = tmp_path / "project"
+    (project / STORE_DIR).mkdir(parents=True)
+    (project / STORE_DIR / SOURCE_LINKS_FILE).write_text(json.dumps({
+        "format": SOURCE_LINKS_FORMAT,
+        "links": [{
+            "source_system_id": "cursor.composer",
+            "source_identity": {"workspace_id": "ws-1"},
+            "selection_state": "approved",
+            "source_project_path": "/former/location",
+        }],
+    }), encoding="utf-8")
+    bindings, aliases = _apply_source_links(
+        {"path_aliases": ["/former/location"]}, project,
+        "codess:location:a", str(project),
+    )
+    assert bindings[0]["path_obsolete"] is True
+    assert "/former/location" not in aliases
+
+
+def test_the_observed_path_is_always_an_alias(tmp_path):
+    from codess.project_catalog import _apply_source_links
+
+    project = tmp_path / "project"
+    project.mkdir()
+    _bindings, aliases = _apply_source_links(
+        {}, project, "codess:location:a", str(project),
+    )
+    assert aliases == [str(project)]
+
+
+# --- extracted readiness steps -----------------------------------------------
+
+def test_an_unselected_project_is_not_a_failure(tmp_path):
+    """`not_selected` means none was asked for, not that one broke."""
+    from codess.project_catalog import _assess_query_status
+
+    status, snapshot_id, detail = _assess_query_status(
+        tmp_path, "codess:project:x", eligible=False,
+    )
+    assert (status, snapshot_id, detail) == ("not_selected", None, None)
+
+
+def test_a_selected_project_without_a_snapshot_reports_it(tmp_path):
+    from codess.project_catalog import _assess_query_status
+
+    status, snapshot_id, _detail = _assess_query_status(
+        tmp_path, "codess:project:x", eligible=True,
+    )
+    assert status == "missing_current_snapshot"
+    assert snapshot_id is None
+
+
+def test_readiness_counts_only_eligible_projects_as_coverage():
+    """An unselected Project is not one that failed to become ready."""
+    from codess.project_catalog import _readiness_summary
+
+    summary = _readiness_summary([
+        {"selection_eligible": True, "query_status": "query_ready",
+         "source_refresh_status": "completed"},
+        {"selection_eligible": False, "query_status": "not_selected",
+         "source_refresh_status": "not_assessed"},
+    ])
+    assert summary["eligible_projects"] == 1
+    assert summary["query_ready_coverage"] == "1/1"
+    assert summary["all_eligible_query_ready"] is True
+
+
+def test_readiness_reports_refresh_coverage_over_every_project():
+    """A receipt can exist for a Project no longer selected."""
+    from codess.project_catalog import _readiness_summary
+
+    summary = _readiness_summary([
+        {"selection_eligible": True, "query_status": "query_ready",
+         "source_refresh_status": "completed"},
+        {"selection_eligible": False, "query_status": "not_selected",
+         "source_refresh_status": "completed"},
+    ])
+    assert summary["source_refresh_coverage"] == "2/2"
+
+
+def test_an_empty_catalog_is_not_reported_as_fully_ready():
+    """Zero of zero must not read as success."""
+    from codess.project_catalog import _readiness_summary
+
+    assert _readiness_summary([])["all_eligible_query_ready"] is False
+
+
+def test_a_readiness_row_reads_curation_or_the_entry():
+    """Curation was added later, so older entries carry the values inline."""
+    from codess.project_catalog import _readiness_row
+
+    curated = _readiness_row(
+        {"project_id": "p", "curation": {"selection_state": "selected",
+                                         "activity_state": "active"}},
+        query_status="query_ready", current_snapshot_id="s1", detail=None,
+        eligible=True, refresh_observation=None,
+    )
+    legacy = _readiness_row(
+        {"project_id": "p", "selection_state": "selected",
+         "activity_state": "active"},
+        query_status="query_ready", current_snapshot_id="s1", detail=None,
+        eligible=True, refresh_observation=None,
+    )
+    assert curated["selection_state"] == legacy["selection_state"] == "selected"
+    assert curated["activity_state"] == legacy["activity_state"] == "active"
+
+
+def test_a_readiness_row_counts_only_active_locations_that_exist(tmp_path):
+    from codess.project_catalog import _readiness_row
+
+    existing = tmp_path / "here"
+    existing.mkdir()
+    row = _readiness_row(
+        {"project_id": "p", "locations": [
+            {"path": str(existing), "state": "active"},
+            {"path": str(tmp_path / "gone"), "state": "active"},
+            {"path": str(existing), "state": "retired"},
+        ]},
+        query_status="query_ready", current_snapshot_id="s1", detail=None,
+        eligible=True, refresh_observation=None,
+    )
+    assert row["active_location_count"] == 2
+    assert row["existing_active_location_count"] == 1
+
+
+def test_an_unassessed_project_says_so_rather_than_claiming_freshness():
+    from codess.project_catalog import _readiness_row
+
+    row = _readiness_row(
+        {"project_id": "p"}, query_status="query_ready",
+        current_snapshot_id="s1", detail=None, eligible=True,
+        refresh_observation=None,
+    )
+    assert row["source_refresh_status"] == "not_assessed"
+
+
+def test_one_observation_carries_one_timestamp(tmp_path):
+    """A single logical event must not be stamped at three different instants.
+
+    `ensure_project_binding` called `now()` separately for the entry, the
+    location, and the catalog, so one observation could record three times.
+    """
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    project = tmp_path / "project"
+    project.mkdir()
+    ensure_project_binding(registry, project)
+    entry = get_project_entry(registry, load_catalog(registry)["projects"][0]["project_id"])
+    stamps = {entry["updated_at"]} | {
+        location["observed_at"] for location in entry["locations"]
+    }
+    assert len(stamps) == 1

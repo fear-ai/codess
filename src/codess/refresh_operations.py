@@ -12,7 +12,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from codess.config import LARGE_STORE_BYTES, LAST_INGEST_REPORT_FILE, STORE_DIR
+from codess.config import (
+    LARGE_STORE_BYTES, LAST_INGEST_REPORT_FILE, RAW_MODES, STORE_DIR,
+    raw_mode_error,
+)
 from codess.hashing import codess_canonical_hash, codess_text_hash
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.project_annotations import build_project_annotations
@@ -134,7 +137,7 @@ def _automatic_raw_mode(registry: Path, project_id: str) -> str:
         snapshot, _pointer = resolved
         manifest = read_manifest(snapshot)
         mode = manifest.get("build_policy", {}).get("raw_mode")
-        if mode in {"none", "reference", "capture", "seal"}:
+        if mode in RAW_MODES:
             return str(mode)
     except (SnapshotError, OSError, KeyError, TypeError, json.JSONDecodeError):
         pass
@@ -170,10 +173,10 @@ def resolve_refresh_selection(
         )
     if source not in {"all", "cc", "codex", "cursor"}:
         raise ValueError("source must be all, cc, codex, or cursor")
-    if raw_mode not in {"auto", "none", "reference", "capture", "seal"}:
-        raise ValueError(
-            "raw_mode must be auto, none, reference, capture, or seal"
-        )
+    # `auto` is refresh's own value: it means "keep whatever the current
+    # snapshot was built under", which only a refresh can resolve.
+    if raw_mode not in ("auto", *RAW_MODES):
+        raise ValueError(raw_mode_error("raw_mode", raw_mode, extra=("auto",)))
 
     catalog_path = registry / "projects.json"
     catalog = load_catalog(registry)

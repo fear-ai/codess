@@ -10,8 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from codess.config import RAW_CAPTURE_CHUNK_BYTES
-from codess.fileio import hash_file, source_fingerprint
+from codess.config import RAW_CAPTURE_CHUNK_BYTES, RAW_MODES as RAW_MODE_VALUES
+from codess.fileio import hash_file, open_readonly, source_fingerprint, stat_consistency
 from codess.hashing import codess_digest, codess_text_hash
 
 try:
@@ -21,7 +21,8 @@ except ImportError:  # pragma: no cover - exercised as a user-facing error
 
 
 RAW_FORMAT = "codess.raw/1"
-RAW_MODES = frozenset({"none", "reference", "capture", "seal"})
+RAW_MODES = frozenset(RAW_MODE_VALUES)
+"""The raw modes as a set, for membership tests. `config` owns the vocabulary."""
 CAPTURE_CHUNK_SIZE = RAW_CAPTURE_CHUNK_BYTES
 CAPTURE_ZSTD_LEVEL = 3
 
@@ -138,7 +139,7 @@ def _sqlite_backup(
     progress: Callable[..., Any] | None = None,
 ) -> os.stat_result:
     """Write one transactionally consistent backup without loading it."""
-    source = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    source = open_readonly(path)
     target = sqlite3.connect(backup_path)
     backup_start_tick = last_progress_tick = time.monotonic()
 
@@ -154,7 +155,6 @@ def _sqlite_backup(
             last_progress_tick = now_tick
 
     try:
-        source.execute("PRAGMA query_only = ON")
         source.backup(
             target, pages=256, sleep=0.01, progress=backup_progress,
         )
@@ -209,13 +209,12 @@ def _compress_file(
     except OSError as exc:
         raise RawCaptureError(f"raw capture failed for {source_path}: {exc}") from exc
     # A raw object claims to be the exact bytes of one source state, so a
-    # source that moved during the copy cannot be stored. Comparing size and
-    # mtime around the read detects ordinary concurrent writing; it cannot
-    # detect a rewrite that restores both, so the size check below is the
+    # source that moved during the copy cannot be stored. The shared guard
+    # decides what changed; capture differs from fingerprinting only in
+    # rejecting any change rather than recording it. It cannot detect a
+    # rewrite that restores both values, so the size check below is the
     # stronger guarantee and this is the cheap first rejection.
-    if require_stable_stat and (before.st_mtime_ns, before.st_size) != (
-        after.st_mtime_ns, after.st_size
-    ):
+    if require_stable_stat and stat_consistency(before, after) != "stable":
         raise RawCaptureError(f"source changed during capture: {source_path}")
     if uncompressed_size != before.st_size:
         raise RawCaptureError(

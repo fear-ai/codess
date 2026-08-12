@@ -1,4 +1,10 @@
-"""Cursor SQLite parser and normalizer. Extracts bubbleId messages from state.vscdb."""
+"""Cursor record decoder: bubbleId messages to common Events.
+
+**Owns decode.** Normalization, field mapping, truncation, and content
+processing for Cursor records. It holds no storage dependency: rows arrive
+through `cursor_source` accessors, so this module names no database, table,
+or key range (see the ownership table in `cursor_source`).
+"""
 
 import json
 import logging

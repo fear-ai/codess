@@ -27,7 +27,7 @@ from codess.ingest_review import record_ingest_review
 from codess.project import get_cc_session_dir
 from codess.project_catalog import register_workspace_bindings
 from codess.resources import ResourceLimitError, check_events, check_source, peak_rss_bytes, searchable_event_payload, summarize_event_payload
-from codess.store import SOURCE_PROFILES, connect, ingest_state_marker, load_ingest_state, replace_session_events, prune_unreferenced_records, save_ingest_state, should_ingest
+from codess.store import SOURCE_PROFILES, connect, drop_sessions_absent_from_source, ingest_state_marker, load_ingest_state, replace_session_events, prune_unreferenced_records, save_ingest_state, session_ids_for_source, should_ingest
 from functools import partial
 from pathlib import Path
 import gc
@@ -556,12 +556,7 @@ def _ingest_cursor(
     ) -> tuple[int, int]:
         """Replace one Cursor source while retaining only one session buffer."""
         source_file = source_file or str(db_path.resolve())
-        old_session_ids = {
-            row[0] for row in conn.execute(
-                "SELECT DISTINCT session_id FROM events WHERE source_file=?",
-                (source_file,),
-            )
-        }
+        old_session_ids = session_ids_for_source(conn, source_file)
         seen: set[str] = set()
         current_id: str | None = None
         current_events: list[dict] = []
@@ -662,15 +657,9 @@ def _ingest_cursor(
                 )
             current_events.append(event)
         flush()
-        for session_id in old_session_ids - seen:
-            conn.execute(
-                "DELETE FROM events WHERE session_id=? AND source_file=?",
-                (session_id, source_file),
-            )
-            if conn.execute(
-                "SELECT 1 FROM events WHERE session_id=? LIMIT 1", (session_id,)
-            ).fetchone() is None:
-                conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        drop_sessions_absent_from_source(
+            conn, source_file, old_session_ids - seen,
+        )
         prune_unreferenced_records(conn)
         project_marker = (
             opts.get("cursor_project_markers", {}).get(proj_str)

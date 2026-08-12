@@ -140,3 +140,69 @@ def test_read_exactly_stops_at_the_announced_size():
 
     short = io.BytesIO(b"abc")
     assert b"".join(read_exactly(short, 10, 2)) == b"abc"
+
+
+# --- stat consistency -------------------------------------------------------
+#
+# One guard serves fingerprinting, which records the answer, and raw capture,
+# which rejects on it. The classification is tested here; the two dispositions
+# are tested at their own call sites.
+
+def _stat_for(path, data: bytes, mtime_ns: int):
+    """Write `data` and stamp a chosen modification time, then stat it."""
+    import os
+
+    path.write_bytes(data)
+    os.utime(path, ns=(mtime_ns, mtime_ns))
+    return path.stat()
+
+
+def test_an_untouched_file_is_stable(tmp_path):
+    from codess.fileio import stat_consistency
+
+    before = _stat_for(tmp_path / "a", b"hello", 1_000_000_000)
+    after = (tmp_path / "a").stat()
+    assert stat_consistency(before, after) == "stable"
+
+
+def test_a_file_that_only_grew_is_appended(tmp_path):
+    """An appending session file is ordinary, not a fault."""
+    from codess.fileio import stat_consistency
+
+    path = tmp_path / "a"
+    before = _stat_for(path, b"hello", 1_000_000_000)
+    after = _stat_for(path, b"hello world", 2_000_000_000)
+    assert stat_consistency(before, after) == "appended"
+
+
+def test_a_file_that_shrank_is_rewritten(tmp_path):
+    from codess.fileio import stat_consistency
+
+    path = tmp_path / "a"
+    before = _stat_for(path, b"hello world", 1_000_000_000)
+    after = _stat_for(path, b"hi", 2_000_000_000)
+    assert stat_consistency(before, after) == "rewritten"
+
+
+def test_a_same_size_change_is_rewritten(tmp_path):
+    """Equal size with a new mtime is a replacement, not an append."""
+    from codess.fileio import stat_consistency
+
+    path = tmp_path / "a"
+    before = _stat_for(path, b"aaaaa", 1_000_000_000)
+    after = _stat_for(path, b"bbbbb", 2_000_000_000)
+    assert stat_consistency(before, after) == "rewritten"
+
+
+def test_a_restored_stat_reads_as_stable(tmp_path):
+    """The known limit: this guard cannot see a rewrite that restores both.
+
+    Capture therefore also compares the bytes it read against the size it was
+    promised; this test records that the cheap check alone is not sufficient.
+    """
+    from codess.fileio import stat_consistency
+
+    path = tmp_path / "a"
+    before = _stat_for(path, b"aaaaa", 1_000_000_000)
+    after = _stat_for(path, b"bbbbb", 1_000_000_000)
+    assert stat_consistency(before, after) == "stable"

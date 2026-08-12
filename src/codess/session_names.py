@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from codess.fileio import write_json_atomic
+from codess.fileio import open_readonly, write_json_atomic
 from codess.identity import global_session_id
 from codess.project_catalog import resolve_project_query_scopes
 from codess.snapshot import snapshot_store_paths_from_base
@@ -100,7 +100,7 @@ def resolve_session_id(
     )
     matches: set[str] = set()
     for path in paths:
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(path)
         conn.row_factory = sqlite3.Row
         try:
             for row in conn.execute(

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 from codess import field_state
+from codess.fileio import open_readonly
 from codess.baseline_validation import canonical_rows
 from codess.schema_contract import require_store
 
@@ -100,7 +101,7 @@ _NORMALIZED_SESSION_FIELDS = frozenset({"observation_id", "ended_at"})
 
 
 def _open_tables(path: Path, stack: ExitStack) -> dict[str, Iterable[sqlite3.Row]]:
-    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    conn = open_readonly(path)
     stack.callback(conn.close)
     conn.row_factory = sqlite3.Row
     require_store(conn, write=False)
