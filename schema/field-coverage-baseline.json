@@ -44,6 +44,13 @@
       "reason": "By design, not a gap. field_state.diagnostic withholds source_value for the malformed state so a malformed value is never echoed into a diagnostic; a vendor whose diagnostics are all malformed-type therefore has none. No adapter sets the field directly.",
       "evidence": "src/codess/field_state.py:152",
       "work_item": null
+    },
+    {
+      "column": "model_turns.source_turn_id",
+      "empty_for": "cursor",
+      "reason": "Checked. Cursor records `requestId` on its bubbles, but every value is unique to one bubble -- 881 identifiers across 881 groups in a 12,000-bubble sample -- so it identifies a request, not a Model Turn spanning several records. Claude and Codex both state a turn identity that groups records, which is why theirs is 100 percent populated. Using `requestId` here would assert a grouping the vendor does not make. Cursor turns are therefore derived, and `model_turns.boundary_source` records `inferred` for all of them, which is the honest statement of the same fact.",
+      "evidence": "cursorDiskKV bubbleId records: 881 requestId values in 881 distinct (composer, requestId) groups; model_turns.boundary_source='inferred'",
+      "work_item": null
     }
   ]
 }

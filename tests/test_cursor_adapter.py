@@ -18,10 +18,12 @@ from codess.adapters.cursor import (
     _bubble_to_events,
     _iter_bubbles,
     _parse_timestamp,
+    _tool_file_path,
     process_db,
 )
 from codess.cursor_source import (
     connect_readonly,
+    get_client_version,
     get_composer_headers,
     get_db_metrics,
     get_project_composer_headers,
@@ -1015,3 +1017,100 @@ class TestSubagentLineage:
 
         lineage = subagent_lineage(self.header().encode("utf-8"))
         assert lineage["parent_composer_id"] == "parent-1"
+
+
+class TestClientVersion:
+    """Cursor records its client version; nothing read it until W37.
+
+    `sessions.harness_version` was null for every Cursor Session while Claude
+    and Codex filled 425 of 426, so a Cursor decode gap could not be
+    attributed to a release -- the evidence every "vendor formats evolve
+    independently" claim depends on.
+    """
+
+    def _global_db(self, tmp_path, items):
+        database = tmp_path / "state.vscdb"
+        conn = sqlite3.connect(database)
+        conn.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)")
+        conn.executemany("INSERT INTO ItemTable VALUES (?, ?)", items)
+        conn.commit()
+        conn.close()
+        return database
+
+    def test_startup_metrics_key(self, tmp_path):
+        database = self._global_db(
+            tmp_path, [("cursor.startupMetrics.lastVersion", "3.15.6")],
+        )
+        assert get_client_version(database) == "3.15.6"
+
+    def test_falls_back_through_the_key_order(self, tmp_path):
+        """The launch-time key is preferred; the others are consulted after."""
+        database = self._global_db(
+            tmp_path, [("releaseNotes/lastVersion", "3.14.0")],
+        )
+        assert get_client_version(database) == "3.14.0"
+
+    def test_quoted_json_value_is_unwrapped(self, tmp_path):
+        database = self._global_db(
+            tmp_path, [("cursor.startupMetrics.lastVersion", '"3.15.6"')],
+        )
+        assert get_client_version(database) == "3.15.6"
+
+    def test_absent_database(self, tmp_path):
+        assert get_client_version(tmp_path / "missing.vscdb") is None
+
+    def test_no_version_key(self, tmp_path):
+        database = self._global_db(tmp_path, [("unrelated", "x")])
+        assert get_client_version(database) is None
+
+    def test_database_without_item_table(self, tmp_path):
+        """A workspace store has no ItemTable; that is not an error."""
+        database = tmp_path / "workspace.vscdb"
+        conn = sqlite3.connect(database)
+        conn.execute("CREATE TABLE cursorDiskKV (key TEXT, value BLOB)")
+        conn.commit()
+        conn.close()
+        assert get_client_version(database) is None
+
+
+class TestToolFilePath:
+    """Cursor names the file a tool operates on, under four spellings.
+
+    `events.file_path` was null for every Cursor Event while 2,873 of 4,530
+    real tool calls carried a path in their arguments. The keys differ per
+    tool -- `read_file` and `edit_file` use `target_file`, `search_replace`
+    uses `file_path`, `list_dir` uses `relative_workspace_path` -- which is
+    why one field read found none of them (W39).
+    """
+
+    @pytest.mark.parametrize(
+        ("arguments", "expected"),
+        [
+            ({"target_file": "src/a.py"}, "src/a.py"),
+            ({"file_path": "src/b.py"}, "src/b.py"),
+            ({"relative_workspace_path": "src"}, "src"),
+            ({"path": "src/c.py"}, "src/c.py"),
+        ],
+    )
+    def test_each_spelling(self, arguments, expected):
+        assert _tool_file_path({"rawArgs": json.dumps(arguments)}) == expected
+
+    def test_most_specific_key_wins(self):
+        """A call naming both a target and a workspace records the target."""
+        arguments = {"relative_workspace_path": ".", "target_file": "src/a.py"}
+        assert _tool_file_path({"rawArgs": json.dumps(arguments)}) == "src/a.py"
+
+    def test_params_when_raw_args_absent(self):
+        assert _tool_file_path({"params": {"target_file": "src/a.py"}}) == "src/a.py"
+
+    def test_several_paths_record_none(self):
+        """One column, so a multi-path call names none rather than a first."""
+        assert _tool_file_path({"rawArgs": json.dumps({"paths": ["a", "b"]})}) is None
+
+    @pytest.mark.parametrize(
+        "tool_former",
+        [{}, {"rawArgs": "not json"}, {"rawArgs": json.dumps(["a"])},
+         {"rawArgs": json.dumps({"target_file": "   "})}],
+    )
+    def test_no_usable_path(self, tool_former):
+        assert _tool_file_path(tool_former) is None

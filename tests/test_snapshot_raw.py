@@ -721,7 +721,7 @@ def test_copy_gated_before_stamp(tmp_path, monkeypatch):
     from codess import snapshot as snapshot_module
     from codess.schema_contract import UnsupportedStoreError
 
-    backup_store = snapshot_module._backup_store  # noqa: SLF001 -- the unit under test
+    backup_store = snapshot_module._backup_store
 
     source = tmp_path / "sessions_cc.db"
     init_db(source)

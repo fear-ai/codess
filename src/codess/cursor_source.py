@@ -134,6 +134,57 @@ def get_global_db(cursor_data: Path | None = None) -> Path | None:
     return db if db.exists() else None
 
 
+# Keys the Cursor client writes its own version under, in the order they are
+# consulted. `startupMetrics.lastVersion` is written at launch and is the most
+# direct statement; the other two are maintained by the update and release-notes
+# paths and agree with it in every store observed.
+_CLIENT_VERSION_KEYS = (
+    "cursor.startupMetrics.lastVersion",
+    "cursor/localLastActivityClientVersion",
+    "releaseNotes/lastVersion",
+)
+
+
+def get_client_version(db_path: Path) -> str | None:
+    """The Cursor client version recorded in the global store, or None.
+
+    **What this attests, and what it does not.** Cursor writes its current
+    version, not a per-Session one, so this is the version observed when the
+    Source was read -- not proof that a given Session ran under it. A Session
+    decoded today from a Composer written months ago carries today's client
+    version. That is still the best available evidence for attributing a
+    decode gap to a release, which is why `harness_version` records it, but a
+    reader comparing versions across Sessions in one store will find them
+    identical by construction.
+
+    Claude and Codex differ here: both state a version per Session, so their
+    `harness_version` is per-Session evidence. Cursor's is per-observation.
+    """
+    if not db_path.exists():
+        return None
+    try:
+        with closing(connect_readonly(db_path)) as conn:
+            columns = table_columns(conn, "ItemTable")
+            key_column = quoted_column(columns, "key")
+            value_column = quoted_column(columns, "value")
+            if key_column is None or value_column is None:
+                return None
+            for key in _CLIENT_VERSION_KEYS:
+                row = conn.execute(
+                    f"SELECT {value_column} FROM ItemTable "
+                    f"WHERE {key_column}=? LIMIT 1",
+                    (key,),
+                ).fetchone()
+                if row is None or row[0] is None:
+                    continue
+                value = str(row[0]).strip().strip('"')
+                if value:
+                    return value
+    except sqlite3.Error:
+        return None
+    return None
+
+
 def get_workspace_ids(
     project_path: Path, cursor_data: Path | None = None,
 ) -> list[str]:

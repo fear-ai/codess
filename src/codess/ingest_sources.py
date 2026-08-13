@@ -29,6 +29,7 @@ from codess.adapters.cursor import process_db as process_cursor_db
 from codess.codex_source import get_session_files as get_codex_session_files
 from codess.codex_source import session_archive_evidence as get_codex_archive_evidence
 from codess.cursor_cohort import cohort_state_key
+from codess.cursor_source import get_client_version as get_cursor_client_version
 from codess.cursor_source import get_composer_headers
 from codess.cursor_source import get_global_db as get_cursor_global_db
 from codess.cursor_source import get_workspace_dbs as get_cursor_workspace_dbs
@@ -599,6 +600,10 @@ def _ingest_cursor(
     ) -> tuple[int, int]:
         """Replace one Cursor source while retaining only one session buffer."""
         source_file = source_file or str(db_path.resolve())
+        # Read once per Source, not per Session: Cursor records one current
+        # client version for the whole store, so this attests the version
+        # observed at read time rather than a per-Session fact (W37).
+        client_version = get_cursor_client_version(db_path)
         old_session_ids = session_ids_for_source(conn, source_file)
         seen: set[str] = set()
         current_id: str | None = None
@@ -628,7 +633,7 @@ def _ingest_cursor(
                 })
             session = {
                 "id": current_id, "source": "Cursor", "type": "IDE",
-                "release": None,
+                "release": client_version,
                 "started_at": min(timestamps) if timestamps else None,
                 "ended_at": max(timestamps) if timestamps else None,
                 "source_mtime": mtime * 1000,

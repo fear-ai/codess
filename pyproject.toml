@@ -97,7 +97,10 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # A test asserts; that is what it is for. Test doubles and progress sinks
 # also take arguments they deliberately ignore, to match a real signature.
-"tests/*" = ["S101", "ARG001", "ARG002", "ARG004", "ARG005"]
+# SLF001: a private function is often exactly the unit under test -- the
+# ingest phases and adapter helpers are private because no other module
+# should call them, not because their behaviour is unchecked.
+"tests/*" = ["S101", "ARG001", "ARG002", "ARG004", "ARG005", "SLF001"]
 # S608 rationale and per-site pattern: CoPlan.md 10.4.
 "src/codess/baseline_validation.py" = ["S608"]
 "src/codess/configuration_audit.py" = ["S608"]

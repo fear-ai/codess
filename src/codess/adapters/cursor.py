@@ -37,6 +37,45 @@ _PROGRESS_ROWS = 1000
 _PROGRESS_SECONDS = 5.0
 
 
+# Cursor names the file a tool operates on differently per tool: `read_file`
+# and `edit_file` use `target_file`, `search_replace` uses `file_path`,
+# `list_dir` uses `relative_workspace_path`. Ordered by how specific the key
+# is, so a call carrying both a target and a workspace root records the
+# target.
+_TOOL_PATH_KEYS = (
+    "target_file",
+    "file_path",
+    "relative_workspace_path",
+    "path",
+)
+
+
+def _tool_file_path(tool_former: dict) -> str | None:
+    """The file a Cursor tool call operates on, or None.
+
+    `events.file_path` was null for every Cursor Event while 2,873 of 4,530
+    real tool calls named a file in their arguments -- the paths were there,
+    under four spellings, and nothing read them (W39).
+
+    Only a single path is returned, because the column holds one; a call
+    naming several (`paths`) records none rather than an arbitrary first,
+    and `tool_input` retains the whole argument object either way.
+    """
+    raw = tool_former.get("rawArgs") or tool_former.get("params")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    for key in _TOOL_PATH_KEYS:
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _bubble_timestamp(data: dict) -> float | None:
     """Use event creation time, with an epoch-only legacy timing fallback."""
     timestamp = _parse_timestamp(data.get("createdAt"))
@@ -691,6 +730,7 @@ def _bubble_to_events(
                 call["event_id"] = f"{event_id}:tool-call"
                 call["tool_name"] = str(tool_name or "unknown")
                 call["tool_input"] = structured_json(input_text)
+                call["file_path"] = _tool_file_path(tool_former)
                 call["metadata"] = metadata
                 call["source_status"] = status
                 call["normalized_status"] = normalized
