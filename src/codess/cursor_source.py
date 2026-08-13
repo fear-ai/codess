@@ -366,6 +366,17 @@ def _composer_settings(conn: sqlite3.Connection, composer_ids: set[str]) -> dict
             max_mode = model_config.get("maxMode")
             if isinstance(max_mode, bool):
                 observed["max_mode"] = max_mode
+            # The composer states the model for every composer, where the bubble
+            # `modelInfo` the adapter reads carries one on 3,044 of 188,904 records. The
+            # richer labels appear only here: `composer-2-fast` and
+            # `cursor-grok-4.5-high-fast` name a speed variant no bubble records.
+            name = model_config.get("modelName")
+            if isinstance(name, str) and name.strip():
+                observed["model_selection"] = name.strip()
+                # `default` records the absence of an explicit choice, which is not an
+                # unknown model, so it is retained as the selection and withheld as one.
+                if name.strip().casefold() != "default":
+                    observed["model"] = name.strip()
         if observed:
             settings[composer_id] = observed
     return settings

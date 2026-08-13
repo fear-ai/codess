@@ -1,0 +1,204 @@
+{
+  "format_id": "codess.model-aliases",
+  "format_version": 1,
+  "purpose": "Resolves a vendor model string to its API name, family, generation, and strength. Data rather than code so a vendor's new model name does not require a release. A name absent from here is recorded unresolved, never guessed: the harness label is retained verbatim in every case, and only the derived fields are left null.",
+  "matching": "Case-folded exact match on the whole string. Not a substring or prefix match -- 'claude' appears inside Cursor's model names as well as Anthropic's, so a token match cannot tell provider from family.",
+  "families": {
+    "vocabulary": [
+      "opus",
+      "sonnet",
+      "haiku",
+      "fable",
+      "mython"
+    ],
+    "reserved": [
+      "mythos"
+    ],
+    "note": "Mythos exists but is not generally available, so it is declared and unobserved. A family outside this list resolves unresolved rather than being accepted as new."
+  },
+  "sentinels": {
+    "<synthetic>": {
+      "vendor": "Claude",
+      "meaning": "Claude's own placeholder where no model answered; observed on 62 real records. Recorded as a sentinel rather than parsed, so it never yields a family or generation.",
+      "resolves": false
+    },
+    "default": {
+      "vendor": "Cursor",
+      "meaning": "Cursor records the absence of an explicit model choice. Different from an unknown model, and not resolvable to one.",
+      "resolves": false
+    }
+  },
+  "aliases": [
+    {
+      "label": "claude-opus-5",
+      "api": "claude-opus-5",
+      "provider": "anthropic",
+      "family": "opus",
+      "generation": "5"
+    },
+    {
+      "label": "claude-sonnet-5",
+      "api": "claude-sonnet-5",
+      "provider": "anthropic",
+      "family": "sonnet",
+      "generation": "5"
+    },
+    {
+      "label": "claude-fable-5",
+      "api": "claude-fable-5",
+      "provider": "anthropic",
+      "family": "fable",
+      "generation": "5"
+    },
+    {
+      "label": "claude-opus-4-8",
+      "api": "claude-opus-4-8",
+      "provider": "anthropic",
+      "family": "opus",
+      "generation": "4.8"
+    },
+    {
+      "label": "claude-opus-4-7",
+      "api": "claude-opus-4-7",
+      "provider": "anthropic",
+      "family": "opus",
+      "generation": "4.7"
+    },
+    {
+      "label": "claude-sonnet-4-6",
+      "api": "claude-sonnet-4-6",
+      "provider": "anthropic",
+      "family": "sonnet",
+      "generation": "4.6"
+    },
+    {
+      "label": "claude-haiku-4-5-20251001",
+      "api": "claude-haiku-4-5-20251001",
+      "provider": "anthropic",
+      "family": "haiku",
+      "generation": "4.5",
+      "revision": "20251001"
+    },
+    {
+      "label": "gpt-5.6-sol",
+      "api": "gpt-5.6-sol",
+      "provider": "openai",
+      "generation": "5.6",
+      "variant": "sol"
+    },
+    {
+      "label": "gpt-5.6-terra",
+      "api": "gpt-5.6-terra",
+      "provider": "openai",
+      "generation": "5.6",
+      "variant": "terra"
+    },
+    {
+      "label": "gpt-5.5",
+      "api": "gpt-5.5",
+      "provider": "openai",
+      "generation": "5.5"
+    },
+    {
+      "label": "gpt-5.4",
+      "api": "gpt-5.4",
+      "provider": "openai",
+      "generation": "5.4"
+    },
+    {
+      "label": "gpt-5.3-codex",
+      "api": "gpt-5.3-codex",
+      "provider": "openai",
+      "generation": "5.3",
+      "variant": "codex"
+    },
+    {
+      "label": "gpt-5.2-codex",
+      "api": "gpt-5.2-codex",
+      "provider": "openai",
+      "generation": "5.2",
+      "variant": "codex"
+    },
+    {
+      "label": "gpt-5.1-codex-max",
+      "api": "gpt-5.1-codex-max",
+      "provider": "openai",
+      "generation": "5.1",
+      "variant": "codex-max"
+    },
+    {
+      "label": "claude-4.6-opus-high-thinking",
+      "api": "claude-opus-4-6",
+      "provider": "anthropic",
+      "family": "opus",
+      "generation": "4.6",
+      "strength": "high"
+    },
+    {
+      "label": "claude-4.6-sonnet-medium-thinking",
+      "api": "claude-sonnet-4-6",
+      "provider": "anthropic",
+      "family": "sonnet",
+      "generation": "4.6",
+      "strength": "medium"
+    },
+    {
+      "label": "grok-4.6",
+      "api": "grok-4.6",
+      "provider": "xai",
+      "generation": "4.6"
+    },
+    {
+      "label": "grok-4.5",
+      "api": "grok-4.5",
+      "provider": "xai",
+      "generation": "4.5"
+    },
+    {
+      "label": "cursor-grok-4.5-high-fast",
+      "api": "grok-4.5",
+      "provider": "xai",
+      "generation": "4.5",
+      "strength": "high",
+      "speed": "fast"
+    },
+    {
+      "label": "composer-2.5",
+      "api": "composer-2.5",
+      "provider": "anysphere",
+      "generation": "2.5"
+    },
+    {
+      "label": "composer-2.5-fast",
+      "api": "composer-2.5",
+      "provider": "anysphere",
+      "generation": "2.5",
+      "speed": "fast"
+    },
+    {
+      "label": "composer-2",
+      "api": "composer-2",
+      "provider": "anysphere",
+      "generation": "2"
+    },
+    {
+      "label": "composer-2-fast",
+      "api": "composer-2",
+      "provider": "anysphere",
+      "generation": "2",
+      "speed": "fast"
+    },
+    {
+      "label": "composer-1.5",
+      "api": "composer-1.5",
+      "provider": "anysphere",
+      "generation": "1.5"
+    },
+    {
+      "label": "composer-1",
+      "api": "composer-1",
+      "provider": "anysphere",
+      "generation": "1"
+    }
+  ]
+}

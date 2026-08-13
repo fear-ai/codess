@@ -370,7 +370,7 @@ Codess uses the following concepts consistently across source systems.
 | **harness** | A program that runs on a laptop or server and mediates coding work, native or invoked from a shell: Claude Code, Codex, Cursor. It is not a Codess entity; a Session is evidence one produced. |
 | **vendor** | The company a harness originates from -- Anthropic, OpenAI, Anysphere. Names the company, never the program. |
 | **provider** | The company whose model was engaged for a Model Turn -- Anthropic, OpenAI, xAI, Anysphere. The same as the vendor when a harness runs its own models, and different when it does not. |
-| **Model** | One evidenced configuration a Model Turn ran under: the exact name the harness recorded, plus provider, family, generation, and strength where stated or derivable. |
+| **Model** | One evidenced set of model parameters a Model Turn ran under: the exact name the harness recorded, plus provider, family, generation, and strength where stated or derivable. The parameters are independent and separately selected, not a configuration Codess composes, and they belong to the Model Turn rather than the Session: one Session commonly runs several. |
 | **Event** | One ordered normalized observation within a Session. |
 | **Artifact** | File, URI, repository object, or other durable object operated on or mentioned by an Event. |
 | **Source-system store** | One CoSchema SQLite database for one source system and Project observation. |

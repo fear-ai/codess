@@ -27,6 +27,7 @@ from codess.identity import (
     source_observation_id,
 )
 from codess.mapping import canonical_json, structured_json
+from codess.model_names import resolve as resolve_model_name
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import (
     APPLICATION_ID,
@@ -470,17 +471,30 @@ def ensure_source(
 
 
 def _ensure_model_configuration(
-    conn: sqlite3.Connection, metadata: dict[str, Any]
+    conn: sqlite3.Connection, metadata: dict[str, Any], adapter_key: str | None = None
 ) -> int | None:
     exact = metadata.get("model") or metadata.get("model_name")
     provider = metadata.get("model_provider")
     family = metadata.get("model_family")
+    revision = metadata.get("model_revision")
     effort = metadata.get("reasoning_effort") or metadata.get("effort")
     speed = metadata.get("speed") or metadata.get("speed_tier")
     service = metadata.get("service_tier")
     mode = metadata.get("mode")
     if not any((exact, provider, family, effort, speed, service, mode)):
         return None
+    # Derived from the name only where the vendor did not state the value; a stated one
+    # always wins. An unresolved name leaves these null rather than guessed, so "not
+    # recognized" stays distinct from "has none". Speed and strength are separate
+    # columns because Cursor states both in one label: `cursor-grok-4.5-high-fast` is a
+    # high reasoning strength at a fast speed tier, and collapsing them would lose one.
+    if exact:
+        resolved = resolve_model_name(exact, adapter_key)
+        provider = provider or resolved.provider
+        family = family or resolved.family
+        revision = revision or resolved.revision
+        speed = speed or resolved.speed
+        effort = effort or resolved.strength
     existing = conn.execute(
         """
         SELECT id FROM model_configurations
@@ -491,7 +505,7 @@ def _ensure_model_configuration(
         ORDER BY id LIMIT 1
         """,
         (
-            provider, exact, metadata.get("model_revision"), family,
+            provider, exact, revision, family,
             effort, speed, service, mode,
         ),
     ).fetchone()
@@ -508,7 +522,7 @@ def _ensure_model_configuration(
             provider,
             family,
             exact,
-            metadata.get("model_revision"),
+            revision,
             effort,
             speed,
             service,
@@ -531,7 +545,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         else raw_metadata
     )
     project_id = _ensure_project(conn, session)
-    model_config_id = _ensure_model_configuration(conn, metadata)
+    model_config_id = _ensure_model_configuration(conn, metadata, source)
     parent = session.get("parent_session_id") or metadata.get("parent_session_id")
     relation = session.get("session_relation_kind")
     if relation is None and (
@@ -1352,7 +1366,7 @@ def _prepare_event_groups(
             )
             prompt_metadata = _json_dict(event.get("metadata"))
             prompt_model_config_id = _ensure_model_configuration(
-                conn, prompt_metadata
+                conn, prompt_metadata, session_source
             )
             if prompt_model_config_id is not None:
                 current_model_config_id = prompt_model_config_id
@@ -1373,7 +1387,7 @@ def _prepare_event_groups(
         if semantics["actor_kind"] == "model":
             event_metadata = _json_dict(event.get("metadata"))
             observed_model_config_id = _ensure_model_configuration(
-                conn, event_metadata
+                conn, event_metadata, session_source
             )
             if observed_model_config_id is not None:
                 observed_provenance = event_metadata.get(

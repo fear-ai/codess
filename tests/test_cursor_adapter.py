@@ -1187,3 +1187,23 @@ class TestComposerSettings:
         headers = get_composer_headers(self.build(tmp_path, kv=False), {"ws1"})
         assert set(headers) == {"c1"}
         assert "interaction_mode" not in headers["c1"]
+
+    def test_model_from_composer(self, tmp_path):
+        """The composer states a model for every composer, where bubble
+        `modelInfo` carries one on 3,044 of 188,904 real records. The richer
+        labels appear only here: `composer-2-fast` names a speed variant."""
+        headers = get_composer_headers(
+            self.build(tmp_path, {"modelConfig": {"modelName": "composer-2-fast"}}),
+            {"ws1"},
+        )
+        assert headers["c1"]["model_selection"] == "composer-2-fast"
+        assert headers["c1"]["model"] == "composer-2-fast"
+
+    def test_model_default(self, tmp_path):
+        """`default` is the absence of a choice, so it is kept as the selection
+        and withheld as a model."""
+        headers = get_composer_headers(
+            self.build(tmp_path, {"modelConfig": {"modelName": "default"}}), {"ws1"},
+        )
+        assert headers["c1"]["model_selection"] == "default"
+        assert "model" not in headers["c1"]

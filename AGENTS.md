@@ -46,8 +46,8 @@ duplicating its content elsewhere.
 - Do NOT cite work-item identifiers (`W54`, `W12`); completed items are removed from
   CoPlan, so the reference resolves to nothing for a later reader
 - Keep measured evidence that justifies a constant or a mapping; drop the narrative around it
-- Wrap to the configured line length, not to 80; service calls like `log.warning` belong
-  on one line and may extend to 120
+- Wrap to at least 80 characters, up to 120 where keeping a call on one line needs it;
+  do not wrap narrower than 80
 - A comment restating the line below it is noise; delete it
 
 ## Security

@@ -208,6 +208,7 @@ capture. Storage deletion remains a reviewed maintenance operation.
 | [Functional Design](Designs.md) | Decided functional behavior, rationale, invariants, and explicitly optional directions |
 | [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, current state, code review, and task list |
 | [CoSchema](CoSchema.md) | Common entities, relationships, fields, vocabularies, and query/store contracts |
+| [CoNames](CoNames.md) | What each vendor, harness, surface, and provider designator is called in the database, the code, and the CLI |
 | [Claude Code Source Schema](CCSchema.md) | Claude Code storage, records, selective access, mapping, and limitations |
 | [Codex Source Schema](CodexSchema.md) | Codex storage, records, selective access, mapping, and limitations |
 | [Cursor Source Schema](CursorSchema.md) | Cursor storage, records, selective access, mapping, and limitations |
