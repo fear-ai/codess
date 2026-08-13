@@ -128,24 +128,6 @@ def open_message_request_context_rows(
         yield from iter_message_request_context_rows(conn, composer_ids)
 
 
-def read_composer_data(db_path: Path) -> list[tuple[str, Any]]:
-    """Return the `composerData:` key/value rows from one Cursor database.
-
-    Vendor table access belongs in this module, not in the adapter: the
-    adapter decides what a record means, this decides how to get it. Returns
-    an empty list when the database is absent so a caller can treat a missing
-    Cursor installation as no data rather than an error.
-    """
-    if not db_path.exists():
-        return []
-    with closing(connect_readonly(db_path)) as conn:
-        return list(conn.execute(
-            "SELECT key, value FROM cursorDiskKV "
-            "WHERE key >= ? AND key < ? ORDER BY key",
-            ("composerData:", "composerData;"),
-        ))
-
-
 def get_global_db(cursor_data: Path | None = None) -> Path | None:
     data_root = cursor_data or CURSOR_DATA
     db = data_root / "globalStorage" / "state.vscdb"

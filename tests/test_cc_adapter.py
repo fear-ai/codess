@@ -266,6 +266,35 @@ class TestNormalizeUser:
         evs = normalize_user(rec, 1, "s1", "/f", {"t1": "Read"}, {"redact": False})
         assert evs[0]["subtype"] == "tool_failure"
 
+    def test_is_error_is_kept_as_source_status(self):
+        """The vendor's own flag is source evidence, not only a subtype.
+
+        `source_status` recorded a text-pattern inference used for MCP
+        results and nothing else, so it was null on all 470 Claude failure
+        and denial Events while Claude had stated the outcome directly
+        (W39.1). `normalized_status` was already correct; what was lost was
+        the exact source value the schema exists to retain.
+        """
+        record = {"message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "<tool_use_error>File missing.</tool_use_error>",
+             "is_error": True},
+        ]}}
+        events = normalize_user(
+            record, 1, "s1", "/f", {"t1": "Read"}, {"redact": False},
+        )
+        assert events[0]["source_status"] == "is_error"
+
+    def test_successful_result_has_no_source_status(self):
+        record = {"message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "ok", "is_error": False},
+        ]}}
+        events = normalize_user(
+            record, 1, "s1", "/f", {"t1": "Read"}, {"redact": False},
+        )
+        assert events[0]["source_status"] is None
+
     def test_mcp_error_body_overrides_false_is_error_flag(self):
         rec = {"message": {"role": "user", "content": [
             {

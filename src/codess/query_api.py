@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import heapq
+import itertools
 import json
 import os
 import re
@@ -17,7 +18,6 @@ from typing import Any
 
 from codess.hashing import codess_bytes_hash
 from codess.schema_contract import column_names
-import itertools
 
 REQUEST_FORMAT = "codess.query-request/1"
 RESULT_FORMAT = "codess.query-result/1"

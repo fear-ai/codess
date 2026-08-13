@@ -18,7 +18,6 @@ from codess.adapters.cursor import (
     _bubble_to_events,
     _iter_bubbles,
     _parse_timestamp,
-    get_composer_data,
     process_db,
 )
 from codess.cursor_source import (
@@ -176,46 +175,6 @@ def test_cursor_structured_tool_input_is_json_with_mapping_evidence():
     )
     assert json.loads(call["tool_input"]) == {"path": "README.md"}
     assert validate_mapped_event("cursor", call) == []
-
-
-class TestGetComposerData:
-    """get_composer_data unit tests."""
-
-    def test_missing_db(self, tmp_path):
-        out = get_composer_data(tmp_path / "nonexistent.vscdb")
-        assert out == []
-
-    def test_empty_db(self, tmp_path):
-        db = tmp_path / "state.vscdb"
-        conn = sqlite3.connect(db)
-        create_bubble_table(conn)
-        conn.commit()
-        conn.close()
-        out = get_composer_data(db)
-        assert out == []
-
-    def test_decodes_composer_data(self, tmp_path):
-        db = tmp_path / "state.vscdb"
-        conn = sqlite3.connect(db)
-        create_bubble_table(conn)
-        conn.execute(
-            "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
-            ("composerData:c1", json.dumps({"conversation": [{"type": 1, "text": "hi"}], "workspaceRoot": "/proj"})),
-        )
-        conn.execute(
-            "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
-            ("composerData:c2", None),
-        )
-        conn.commit()
-        conn.close()
-        out = get_composer_data(db)
-        assert len(out) == 2
-        c1 = next(e for e in out if e["composer_id"] == "c1")
-        assert c1["has_conversation"] is True
-        assert "conversation" in c1["top_keys"]
-        assert c1.get("workspaceRoot") == "/proj"
-        c2 = next(e for e in out if e["composer_id"] == "c2")
-        assert c2["value_null"] is True
 
 
 class TestGetComposerHeaders:

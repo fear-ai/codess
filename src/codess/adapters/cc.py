@@ -1210,8 +1210,16 @@ def normalize_user(
                 "tool_name": tool_name,
                 "tool_input": None,
                 "tool_output": truncated,
+                # What the source said, not what was inferred from it.
+                # `result_failure` is a text-pattern inference used only for
+                # MCP results; `is_error` is Claude's own flag on the result
+                # block. Recording only the inference left `source_status`
+                # null on all 470 failure and denial Events while the vendor
+                # had stated the outcome directly (W39.1).
                 "source_status": (
-                    "application_error" if result_failure else None
+                    "application_error" if result_failure
+                    else "is_error" if is_error
+                    else None
                 ),
                 "normalized_status": (
                     "succeeded" if subtype == "tool_result"

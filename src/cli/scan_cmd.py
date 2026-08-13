@@ -196,60 +196,50 @@ def run(args) -> int:
 
     out_path = getattr(args, "out", "codess_walk.csv")
     reg_cols = registry_entries is not None
+
+    def report_headers() -> list[str]:
+        headers = (
+            ["path", "dir_path", "vendor", "sess", "mb", "span_weeks"]
+            if opts["debug"]
+            else ["path", "vendor", "sess", "mb", "span_weeks"]
+        )
+        if reg_cols:
+            headers.extend(["reg_path", "reg_updated", "reg_sources"])
+        return headers
+
+    def report_row(full: str, r: dict) -> list:
+        """One report row, for either destination.
+
+        The stdout and file paths built this and the header list separately,
+        so a column added to one reached the other only if someone edited
+        both. They differ in where a row goes, which is the loop, not in what
+        a row is.
+        """
+        row = (
+            [r["path"], r["dir_path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
+            if opts["debug"]
+            else [r["path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
+        )
+        if reg_cols:
+            ent = registry_entries[full]
+            row.extend([
+                ent.get("path", full),
+                _registry_display_ts(ent),
+                json.dumps(ent.get("sources") or {}, separators=(",", ":")),
+            ])
+        return row
+
     if out_path == "-":
         w = csv.writer(sys.stdout)
-        headers = (
-            ["path", "dir_path", "vendor", "sess", "mb", "span_weeks"]
-            if opts["debug"]
-            else ["path", "vendor", "sess", "mb", "span_weeks"]
-        )
-        if reg_cols:
-            headers.extend(["reg_path", "reg_updated", "reg_sources"])
-        w.writerow(headers)
+        w.writerow(report_headers())
         for full, r in merged:
-            row = (
-                [r["path"], r["dir_path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
-                if opts["debug"]
-                else [r["path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
-            )
-            if reg_cols:
-                ent = registry_entries[full]
-                sources = ent.get("sources") or {}
-                row.extend(
-                    [
-                        ent.get("path", full),
-                        _registry_display_ts(ent),
-                        json.dumps(sources, separators=(",", ":")),
-                    ]
-                )
-            w.writerow(protect_csv_row(row))
+            w.writerow(protect_csv_row(report_row(full, r)))
     else:
-        headers = (
-            ["path", "dir_path", "vendor", "sess", "mb", "span_weeks"]
-            if opts["debug"]
-            else ["path", "vendor", "sess", "mb", "span_weeks"]
+        write_csv(
+            Path(out_path),
+            [report_row(full, r) for full, r in merged],
+            headers=report_headers(),
         )
-        if reg_cols:
-            headers.extend(["reg_path", "reg_updated", "reg_sources"])
-        data = []
-        for full, r in merged:
-            row = (
-                [r["path"], r["dir_path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
-                if opts["debug"]
-                else [r["path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
-            )
-            if reg_cols:
-                ent = registry_entries[full]
-                sources = ent.get("sources") or {}
-                row.extend(
-                    [
-                        ent.get("path", full),
-                        _registry_display_ts(ent),
-                        json.dumps(sources, separators=(",", ":")),
-                    ]
-                )
-            data.append(row)
-        write_csv(Path(out_path), data, headers=headers)
         print(f"Wrote {len(merged)} rows to {out_path}")
 
     _print_scan_diagnostics(diagnostics)

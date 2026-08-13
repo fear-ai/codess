@@ -23,6 +23,7 @@ from codess.config import (
 )
 from codess.content_processing import ContentPolicy, ContentProcessor
 from codess.cursor_cohort import (
+    CursorSelection,
     cohort_needed,
     combine_selection_markers,
     load_selection_marker_cache,
@@ -74,7 +75,11 @@ from codess.project import (
     get_cc_session_dir,
     resolve_cli_roots,
 )
-from codess.project_catalog import ensure_project_binding, get_project_entry
+from codess.project_catalog import (
+    ensure_project_binding,
+    get_project_entry,
+    read_project_binding,
+)
 from codess.raw_store import RawStore
 from codess.resource_policy import ResourcePolicyError
 from codess.resources import (
@@ -275,6 +280,28 @@ class IngestOutcome:
         return sum(stats["events"] for stats in self.source_stats.values())
 
 
+@dataclass
+class RunTotals:
+    """What accumulates across Projects, in one place.
+
+    `IngestConfig` holds what a run was configured to do and does not change;
+    this holds what the run has produced so far and changes constantly. The
+    two together are the read-only and mutable halves of ingest state, which
+    the phase functions previously took as separate parameters -- five
+    accumulators and twelve inputs, seventeen in all, where a call site could
+    silently mis-order them.
+
+    Every field here is mutated in place by whichever phase is running, which
+    is why they are passed as one object rather than returned: a Project
+    folds into `outcome` in a `finally`, so a Project that fails partway
+    still reports exactly once.
+    """
+
+    outcome: "IngestOutcome"
+    diagnostics: dict[str, int]
+    opts: dict
+
+
 @dataclass(frozen=True)
 class IngestConfig:
     """Resolved, unchanging settings for one ingest run.
@@ -472,14 +499,28 @@ def _begin_project(
     `content_actions` list would attribute one Project's evidence to the next.
     Setting them together makes that a single, checkable step rather than
     seven assignments a future edit could partly forget.
+
+    The values are built against `PROJECT_SCOPED_OPTIONS` rather than
+    assigned one by one, so the tuple that names the per-Project keys and the
+    code that resets them cannot disagree. They previously could: the tuple
+    was read by nothing outside a test, which asserted the two agreed without
+    making them.
     """
-    opts["project_id"] = binding["project_id"]
-    opts["location_id"] = binding["location_id"]
-    opts["content_actions"] = []
-    opts["raw_records"] = raw_records
-    opts["raw_store"] = raw_store
-    opts["raw_records_changed"] = False
-    opts["external_sources"] = []
+    fresh = {
+        "project_id": binding["project_id"],
+        "location_id": binding["location_id"],
+        "content_actions": [],
+        "raw_records": raw_records,
+        "raw_store": raw_store,
+        "raw_records_changed": False,
+        "external_sources": [],
+    }
+    missing = set(PROJECT_SCOPED_OPTIONS) - set(fresh)
+    if missing:
+        raise KeyError(
+            f"per-Project options not reset: {', '.join(sorted(missing))}"
+        )
+    opts.update({key: fresh[key] for key in PROJECT_SCOPED_OPTIONS})
 
 
 def _resolve_ingest_request(
@@ -648,20 +689,15 @@ def _print_preflight_report(
 
 def _publish_project(
     config: "IngestConfig",
+    run_totals: "RunTotals",
     project_path: Path,
     project: ProjectOutcome,
     *,
     project_entry: dict,
-    binding: dict,
-    registry_root: Path,
-    opts: dict,
-    raw_records: list[dict],
-    raw_store: "RawStore",
     min_size: int,
     force: bool,
     seal_upgrade: bool,
     rebuild_had_existing_store: bool,
-    diagnostics: dict[str, int],
     progress_trace,
 ) -> PublicationOutcome:
     """Sequence the publication phases for one Project and report the result.
@@ -676,6 +712,15 @@ def _publish_project(
     this run believed it changed did not in fact change, and their marks are
     cleared before the snapshot decision reads them.
     """
+    registry_root = config.registry_root
+    opts = run_totals.opts
+    diagnostics = run_totals.diagnostics
+    # `_begin_project` already placed these in `opts` as per-Project state,
+    # so taking them as parameters passed the same objects twice and let a
+    # call site disagree with the dict every adapter reads (W45).
+    raw_records = opts["raw_records"]
+    raw_store = opts["raw_store"]
+    project_id = opts["project_id"]
     published = PublicationOutcome()
     project.catalog_changed_vendors |= resync_project_catalog(
         config, project_path, project_entry,
@@ -691,7 +736,7 @@ def _publish_project(
     )
     if opts.get("content_policy_data") and record_content_processing(
         config, project_path, project.changed_vendors,
-        project_id=binding["project_id"],
+        project_id=project_id,
         policy=opts["content_policy_data"],
         actions=opts.get("content_actions", []),
     ):
@@ -728,7 +773,7 @@ def _publish_project(
         config, project_path, raw_records,
         raw_store=raw_store,
         registry_root=registry_root,
-        project_id=binding["project_id"],
+        project_id=project_id,
         sources=config.sources,
         minimum_source_size=min_size,
         required=published.snapshot_required,
@@ -737,122 +782,38 @@ def _publish_project(
     return published
 
 
-def run(args) -> int:
-    """Run session-ingest. Returns exit code."""
-    resolved = _resolve_ingest_request(args)
-    if isinstance(resolved, int):
-        return resolved
-    roots, registry_root, sources, settings = resolved
-    diagnostics: dict[str, int] = {}
-    # Decoder options, passed to every adapter. Distinct from `settings`
-    # above: `settings` is what the run was configured to do, `opts` is what
-    # the decoders need while doing it. The two share only `raw_mode`.
-    #
-    # Three lifetimes are mixed here, which is why W06 step 4 replaces it:
-    #
-    #   run-wide inputs     -- debug, redact, strict_mapping, validate_only,
-    #                          and the max_* bounds, copied from `settings`
-    #   run-wide collectors -- diagnostics, resource_observations,
-    #                          content_failure_reviews, claude_session_kinds:
-    #                          accumulate across every Project
-    #   per-Project state   -- PROJECT_SCOPED_OPTIONS, reset by _begin_project
-    #                          on each loop iteration
-    #
-    # Adapters take the whole dict, so splitting it changes their signatures;
-    # that is the step-4 interface change, not something to do piecemeal.
-    opts = {
-        "debug": settings["debug"],
-        "redact": settings["redact"],
-        "diagnostics": diagnostics,
-        "raw_mode": settings["raw_mode"],
-        "strict_mapping": settings["strict_mapping"],
-        "validate_only": settings["validate_only"],
-        "max_source_bytes": settings["max_source_bytes"],
-        "max_cursor_container_bytes": settings["max_cursor_container_bytes"],
-        "max_events_per_source": settings["max_events_per_source"],
-        "max_events_per_session": settings["max_events_per_session"],
-        "max_context_content_chars": settings["max_context_content_chars"],
-        "resource_observations": [],
-        "content_failure_reviews": [],
-        "claude_session_kinds": {"main": 0, "subagent": 0},
-    }
-    progress_trace = ProgressTrace(enabled=settings["live_progress"])
-    opts["progress"] = progress_trace
-    opts["registry_root"] = str(registry_root)
-    progress_trace(
-        "ingest.start", projects=len(roots), sources=",".join(sources),
-        validate_only=settings["validate_only"], raw_mode=settings["raw_mode"],
-    )
-    if settings["content_policy"]:
-        policy_path = Path(settings["content_policy"]).expanduser()
-        try:
-            policy_data = json.loads(policy_path.read_text(encoding="utf-8"))
-            if not isinstance(policy_data, dict):
-                raise ValueError("policy root must be a JSON object")
-            opts["content_processor"] = ContentProcessor(
-                ContentPolicy.from_mapping(policy_data)
-            )
-            opts["content_policy_data"] = policy_data
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
-            print(f"codess: invalid content policy {policy_path}: {exc}", file=sys.stderr)
-            return 1
-    force = True if settings["validate_only"] else settings["force"]
-    min_size = settings["min_size"]
+def _cursor_preflight(
+    *,
+    config: "IngestConfig",
+    run_totals: "RunTotals",
+    cursor: "CursorSelection",
+    raw_records_cache: dict,
+    force: bool,
+    progress_trace,
+) -> tuple[int | None, tempfile.TemporaryDirectory | None]:
+    """Fingerprint and, when configured, capture the Cursor cohort once.
 
-    outcome = IngestOutcome()
-    source_stats = outcome.source_stats
+    This ran as a 213-line `if` inside `run`, which with the Project loop
+    made two statements 90% of that function. It is one phase with one
+    precondition -- Cursor roots exist and this is not a validate-only run --
+    so it reads as a function and was only ever inline.
 
-    staged_store_roots: dict[Path, Path] = {}
-
-    temporary = tempfile.TemporaryDirectory(prefix="codess-preflight-") if settings["validate_only"] else None
-    staging_root = Path(temporary.name) if temporary else None
-    config = IngestConfig.from_options(
-        settings, sources, registry_root,
-        staging_root=staging_root, staged_store_roots=staged_store_roots,
-    )
-    if settings["validate_only"]:
-        opts["raw_mode"] = "none"
-    if "codex" in sources:
-        index_started = time.monotonic()
-        progress_trace("codex.index.start")
-        opts["codex_session_index"] = build_codex_session_index(
-            cache_path=(
-                None if settings["validate_only"] else
-                registry_root / "cache" / "codex-session-index-v1.json"
-            )
-        )
-        progress_trace(
-            "codex.index.done",
-            sessions=len(opts["codex_session_index"]),
-            phase_seconds=round(time.monotonic() - index_started, 3),
-        )
-
+    Returns `(exit_code, cohort_temp)`. An exit code is a failure `run`
+    should return immediately; `cohort_temp` is the temporary directory the
+    caller must clean up, returned rather than assigned because it outlives
+    this call.
+    """
+    # From the two run-state halves rather than as separate parameters
+    # (W45): the registry is fixed for the run, `opts` accumulates.
+    registry_root = config.registry_root
+    cursor_roots = cursor.roots
+    cursor_workspace_ids = cursor.workspace_ids
+    live_cursor_global = cursor.global_db
+    cursor_project_headers = cursor.project_headers
+    opts = run_totals.opts
     cursor_cohort_temp = None
-    raw_records_cache: dict[Path, list[dict]] = {}
 
-    def cleanup_cursor_cohort() -> None:
-        nonlocal cursor_cohort_temp
-        if cursor_cohort_temp is not None:
-            cursor_cohort_temp.cleanup()
-            cursor_cohort_temp = None
-
-    cursor_workspace_ids = {
-        root.resolve(): set(workspace_ids)
-        for root in roots
-        if "cursor" in sources
-        and (workspace_ids := get_cursor_workspace_ids(root))
-    }
-    cursor_roots = list(cursor_workspace_ids)
-    live_cursor_global = get_cursor_global_db() if cursor_roots else None
-    cursor_project_headers = {
-        str(root): get_cursor_project_composer_headers(
-            live_cursor_global, root, diagnostics=diagnostics
-        )
-        for root in cursor_roots
-        if live_cursor_global is not None
-    }
-    opts["cursor_project_headers"] = cursor_project_headers
-    if cursor_roots and not settings["validate_only"]:
+    if cursor_roots and not config.validate_only:
         live_global = live_cursor_global
         if live_global is not None:
             try:
@@ -868,14 +829,43 @@ def run(args) -> int:
                 selection_cache_path = (
                     registry_root / "cache" / "cursor-selection-v1.json"
                 )
-                container_marker = {
-                    "global": get_cursor_container_marker(live_global),
-                    "workspace_indexes": {
-                        str(path.resolve()): get_cursor_container_marker(path)
-                        for root in cursor_roots
-                        for path in get_cursor_workspace_dbs(root)
-                    },
-                }
+                def observe_containers() -> dict:
+                    """The Cursor container state -- main and WAL -- read now.
+
+                    *Why here.* Cursor owns these databases and writes to them
+                    while Codess reads: the global store carries a live WAL,
+                    30 MB on the development machine. `get_selection_markers`
+                    holds one read transaction, so the markers it returns are
+                    internally consistent, but SQLite's snapshot ends when
+                    that transaction does. Nothing stops Cursor committing a
+                    new composer between the transaction closing and the
+                    markers being cached, which would persist a fingerprint
+                    for a state no longer on disk and let a later run skip a
+                    Project whose evidence had in fact changed.
+
+                    Bracketing the read is what detects that: inode, size, and
+                    mtime of main and WAL before and after. Equal means no
+                    write landed across the read and the markers may be
+                    cached; unequal retries once, then records
+                    `scanned-unstable` rather than caching a marker it cannot
+                    vouch for. The check is a cheap prefilter, not an
+                    authentication -- it catches a concurrent writer, not a
+                    deliberate forgery, which is 8.4's boundary.
+
+                    Written out four times before, of which one compared a
+                    fresh reading against another taken with nothing in
+                    between -- a check that could not fail.
+                    """
+                    return {
+                        "global": get_cursor_container_marker(live_global),
+                        "workspace_indexes": {
+                            str(path.resolve()): get_cursor_container_marker(path)
+                            for root in cursor_roots
+                            for path in get_cursor_workspace_dbs(root)
+                        },
+                    }
+
+                container_marker = observe_containers()
                 project_markers = None
                 marker_status = "scanned"
                 if not force:
@@ -885,43 +875,17 @@ def run(args) -> int:
                         container_marker=container_marker,
                         selections=selections,
                     )
-                    if (
-                        project_markers is not None
-                        and {
-                            "global": get_cursor_container_marker(live_global),
-                            "workspace_indexes": {
-                                str(path.resolve()): get_cursor_container_marker(path)
-                                for root in cursor_roots
-                                for path in get_cursor_workspace_dbs(root)
-                            },
-                        } != container_marker
-                    ):
-                        project_markers = None
-                    elif project_markers is not None:
+                    if project_markers is not None:
                         marker_status = "reused"
                 if project_markers is None:
                     for _attempt in range(2):
-                        container_before = {
-                            "global": get_cursor_container_marker(live_global),
-                            "workspace_indexes": {
-                                str(path.resolve()): get_cursor_container_marker(path)
-                                for root in cursor_roots
-                                for path in get_cursor_workspace_dbs(root)
-                            },
-                        }
+                        container_before = observe_containers()
                         project_markers = get_cursor_selection_markers(
                             live_global,
                             selections,
                             supplemental_headers=cursor_project_headers,
                         )
-                        container_after = {
-                            "global": get_cursor_container_marker(live_global),
-                            "workspace_indexes": {
-                                str(path.resolve()): get_cursor_container_marker(path)
-                                for root in cursor_roots
-                                for path in get_cursor_workspace_dbs(root)
-                            },
-                        }
+                        container_after = observe_containers()
                         if container_before == container_after:
                             save_selection_marker_cache(
                                 selection_cache_path,
@@ -946,7 +910,7 @@ def run(args) -> int:
                     "cursor_project_markers": project_markers,
                 })
                 if (
-                    settings["raw_mode"] in {"capture", "seal"}
+                    config["raw_mode"] in {"capture", "seal"}
                 ):
                     # Keep timing out of diagnostics: that map contains only
                     # integer counters consumed by existing reports.
@@ -1055,157 +1019,160 @@ def run(args) -> int:
                     "cursor.cohort.failed", source=str(live_global.resolve()),
                     error_type=type(exc).__name__,
                 )
-                cleanup_cursor_cohort()
+                if cursor_cohort_temp is not None:
+                    cursor_cohort_temp.cleanup()
+                    cursor_cohort_temp = None
                 progress_trace(
                     "ingest.failed", stage="cursor.cohort",
                     error_type=type(exc).__name__,
                 )
                 print(f"codess: Cursor cohort capture failed: {exc}", file=sys.stderr)
-                return 1
+                # The caller cleans up on a returned code, so the temporary is
+                # released here and reported as absent rather than handed back
+                # already-cleaned.
+                return 1, None
 
-    for project_index, project_path in enumerate(roots):
-        rebuild_temporary = None
-        rebuild_had_existing_store = False
-        # Bound before the try so the finally can always absorb: a Project
-        # that fails during setup still contributes its (empty) outcome
-        # rather than raising a second error while handling the first.
-        project = ProjectOutcome()
-        try:
-            resource_start = len(opts["resource_observations"])
-            review_start = len(opts["content_failure_reviews"])
-            diagnostic_start = dict(diagnostics)
-            project_path = project_path.resolve()
-            if force and not settings["validate_only"]:
-                rebuild_parent = project_path / STORE_DIR
-                rebuild_parent.mkdir(parents=True, exist_ok=True)
-                rebuild_temporary = tempfile.TemporaryDirectory(
-                    prefix=".rebuild-", dir=rebuild_parent
+    return None, cursor_cohort_temp
+
+
+def _ingest_project(
+    project_path: Path,
+    project_index: int,
+    *,
+    config: "IngestConfig",
+    run_totals: "RunTotals",
+    settings: dict,
+    project_total: int,
+    raw_records_cache: dict,
+    force: bool,
+    min_size: int | None,
+    progress_trace,
+) -> int | None:
+    """Ingest one Project. Returns an exit code only when the run must stop.
+
+    This was `run`'s 353-line loop body, half that function. It is extracted
+    as the body rather than the loop so `run` keeps iteration and the
+    early-exit decision visible at its own level: a returned code here means
+    `stop_on_error` fired or the Project raised, and `run` returns it.
+
+    `outcome`, `diagnostics`, `source_stats`, `staged_store_roots`, and
+    `opts` are mutated in place -- they accumulate across Projects, which is
+    why they are passed rather than returned. `ProjectOutcome` is folded into
+    `outcome` here, in the `finally`, so a Project that fails partway still
+    contributes exactly once.
+    """
+    # Unpacked once: `config` owns what the run was configured to do,
+    # `totals` what it has produced. Both were previously spread across
+    # the signature as separate parameters (W45).
+    outcome = run_totals.outcome
+    diagnostics = run_totals.diagnostics
+    opts = run_totals.opts
+    source_stats = outcome.source_stats
+    sources = list(config.sources)
+    registry_root = config.registry_root
+    staging_root = config.staging_root
+    staged_store_roots = config.staged_store_roots
+    rebuild_temporary = None
+    rebuild_had_existing_store = False
+    # Bound before the try so the finally can always absorb: a Project
+    # that fails during setup still contributes its (empty) outcome
+    # rather than raising a second error while handling the first.
+    project = ProjectOutcome()
+    try:
+        resource_start = len(opts["resource_observations"])
+        review_start = len(opts["content_failure_reviews"])
+        diagnostic_start = dict(diagnostics)
+        project_path = project_path.resolve()
+        if force and not settings["validate_only"]:
+            rebuild_parent = project_path / STORE_DIR
+            rebuild_parent.mkdir(parents=True, exist_ok=True)
+            rebuild_temporary = tempfile.TemporaryDirectory(
+                prefix=".rebuild-", dir=rebuild_parent
+            )
+            staged_store_roots[project_path] = (
+                Path(rebuild_temporary.name) / "project"
+            )
+            selected_targets = [
+                get_store_path(project_path, vendor)
+                for source_key, vendor in (
+                    ("cc", "Claude"),
+                    ("codex", "Codex"),
+                    ("cursor", "Cursor"),
                 )
-                staged_store_roots[project_path] = (
-                    Path(rebuild_temporary.name) / "project"
-                )
-                selected_targets = [
-                    get_store_path(project_path, vendor)
-                    for source_key, vendor in (
-                        ("cc", "Claude"),
-                        ("codex", "Codex"),
-                        ("cursor", "Cursor"),
-                    )
-                    if source_key in sources
-                ]
-                rebuild_had_existing_store = any(
-                    path.exists() for path in selected_targets
-                )
-                for path in selected_targets:
-                    if not path.exists():
-                        init_db(path)
-            project_started = time.monotonic()
+                if source_key in sources
+            ]
+            rebuild_had_existing_store = any(
+                path.exists() for path in selected_targets
+            )
+            for path in selected_targets:
+                if not path.exists():
+                    init_db(path)
+        project_started = time.monotonic()
+        progress_trace(
+            "project.start", project=str(project_path),
+            project_index=project_index + 1, project_total=project_total,
+        )
+        if settings["validate_only"]:
+            # A within-run label for a Project preflight never persists.
+            # 128 bits keeps the width the previous 24-hex value had
+            # headroom at, now declared rather than ad hoc (13.4.8).
+            digest = codess_hash(256, 128, [str(project_path)])
+            binding = {"project_id": f"codess:preflight-project:{digest}", "location_id": f"preflight:{digest}"}
+            project_entry = {
+                "project_id": binding["project_id"], "logical_name": project_path.name,
+                "locations": [{"location_id": binding["location_id"], "machine_id": "preflight", "path": str(project_path), "state": "active", "platform": sys.platform}],
+                "workspace_bindings": [], "path_aliases": [str(project_path)],
+            }
+        else:
+            binding = ensure_project_binding(registry_root, project_path)
+            project_entry = get_project_entry(registry_root, binding["project_id"])
+        if staging_root:
+            # Register the preflight staging directory so store paths and
+            # the state path resolve through one mapping rather than each
+            # deriving a location of its own.
+            staged_store_roots[project_path.resolve()] = (
+                staging_root / str(project_index)
+            )
+        work_root = staged_store_roots.get(
+            project_path.resolve(), project_path,
+        )
+        state_path = get_state_path(work_root)
+        project_raw_records: list[dict] = (
+            [] if settings["validate_only"]
+            else _current_raw_records_cached(project_path, raw_records_cache)
+        )
+        raw_store = RawStore((staging_root / "raw") if staging_root else registry_root / "raw")
+        _begin_project(
+            opts, binding,
+            raw_records=project_raw_records,
+            raw_store=None if settings["validate_only"] else raw_store,
+        )
+        seal_upgrade = (
+            settings["raw_mode"] == "seal"
+            and not current_snapshot_is_sealed(project_path)
+        )
+
+        if "cc" in sources:
+            vendor_started = time.monotonic()
             progress_trace(
-                "project.start", project=str(project_path),
-                project_index=project_index + 1, project_total=len(roots),
+                "vendor.start", project=str(project_path), vendor="Claude",
             )
-            if settings["validate_only"]:
-                # A within-run label for a Project preflight never persists.
-                # 128 bits keeps the width the previous 24-hex value had
-                # headroom at, now declared rather than ad hoc (13.4.8).
-                digest = codess_hash(256, 128, [str(project_path)])
-                binding = {"project_id": f"codess:preflight-project:{digest}", "location_id": f"preflight:{digest}"}
-                project_entry = {
-                    "project_id": binding["project_id"], "logical_name": project_path.name,
-                    "locations": [{"location_id": binding["location_id"], "machine_id": "preflight", "path": str(project_path), "state": "active", "platform": sys.platform}],
-                    "workspace_bindings": [], "path_aliases": [str(project_path)],
-                }
-            else:
-                binding = ensure_project_binding(registry_root, project_path)
-                project_entry = get_project_entry(registry_root, binding["project_id"])
-            if staging_root:
-                # Register the preflight staging directory so store paths and
-                # the state path resolve through one mapping rather than each
-                # deriving a location of its own.
-                staged_store_roots[project_path.resolve()] = (
-                    staging_root / str(project_index)
-                )
-            work_root = staged_store_roots.get(
-                project_path.resolve(), project_path,
-            )
-            state_path = get_state_path(work_root)
-            project_raw_records: list[dict] = (
-                [] if settings["validate_only"]
-                else _current_raw_records_cached(project_path, raw_records_cache)
-            )
-            raw_store = RawStore((staging_root / "raw") if staging_root else registry_root / "raw")
-            _begin_project(
-                opts, binding,
-                raw_records=project_raw_records,
-                raw_store=None if settings["validate_only"] else raw_store,
-            )
-            seal_upgrade = (
-                settings["raw_mode"] == "seal"
-                and not current_snapshot_is_sealed(project_path)
-            )
-
-            if "cc" in sources:
-                vendor_started = time.monotonic()
-                progress_trace(
-                    "vendor.start", project=str(project_path), vendor="Claude",
-                )
-                store = config.vendor_store(project_path, "cc")
-                if store.create(project_entry):
-                    project.catalog_changed_vendors.add(store.display_name)
-                store_path = store.path
-                cc_dir = get_cc_session_dir(project_path)
-                if cc_dir is None and sources == ["cc"]:
-                    print(f"No CC project dir for {project_path}", file=sys.stderr)
-                    project.tally.note_error()
-                    if settings["stop_on_error"]:
-                        cleanup_cursor_cohort()
-                        progress_trace(
-                            "ingest.failed", stage="project.source_selection",
-                            project=str(project_path), error_type="SourceNotFound",
-                        )
-                        return 1
-                if cc_dir is not None:
-                    n, e, failed, store_changed = _ingest_cc(
-                        project_path,
-                        store_path,
-                        state_path,
-                        opts,
-                        force,
-                        min_size,
-                        stop_on_error=settings["stop_on_error"],
+            store = config.vendor_store(project_path, "cc")
+            if store.create(project_entry):
+                project.catalog_changed_vendors.add(store.display_name)
+            store_path = store.path
+            cc_dir = get_cc_session_dir(project_path)
+            if cc_dir is None and sources == ["cc"]:
+                print(f"No CC project dir for {project_path}", file=sys.stderr)
+                project.tally.note_error()
+                if settings["stop_on_error"]:
+                    progress_trace(
+                        "ingest.failed", stage="project.source_selection",
+                        project=str(project_path), error_type="SourceNotFound",
                     )
-                    project.record_vendor(
-                        "Claude", sessions=n, events=e,
-                        failed_sources=failed, store_changed=store_changed,
-                    )
-                    if failed:
-                        diagnostics["failed_sources"] = (
-                            diagnostics.get("failed_sources", 0) + failed
-                        )
-                else:
-                    n = e = failed = 0
-                totals = store.totals()
-                if totals is not None:
-                    project.store_totals["Claude"] = totals
-                progress_trace(
-                    "vendor.done", project=str(project_path), vendor="Claude",
-                    processed_sessions=n, processed_events=e,
-                    failed_sources=failed,
-                    stored_sessions=project.store_totals.get("Claude", {}).get("sessions", 0),
-                    stored_events=project.store_totals.get("Claude", {}).get("events", 0),
-                    phase_seconds=round(time.monotonic() - vendor_started, 3),
-                )
-
-            if "codex" in sources:
-                vendor_started = time.monotonic()
-                progress_trace(
-                    "vendor.start", project=str(project_path), vendor="Codex",
-                )
-                store = config.vendor_store(project_path, "codex")
-                if store.create(project_entry):
-                    project.catalog_changed_vendors.add(store.display_name)
-                store_path = store.path
-                n, e, failed, store_changed = _ingest_codex(
+                    return 1
+            if cc_dir is not None:
+                n, e, failed, store_changed = _ingest_cc(
                     project_path,
                     store_path,
                     state_path,
@@ -1215,207 +1182,450 @@ def run(args) -> int:
                     stop_on_error=settings["stop_on_error"],
                 )
                 project.record_vendor(
-                    "Codex", sessions=n, events=e,
+                    "Claude", sessions=n, events=e,
                     failed_sources=failed, store_changed=store_changed,
                 )
                 if failed:
                     diagnostics["failed_sources"] = (
                         diagnostics.get("failed_sources", 0) + failed
                     )
-                totals = store.totals()
-                if totals is not None:
-                    project.store_totals["Codex"] = totals
-                progress_trace(
-                    "vendor.done", project=str(project_path), vendor="Codex",
-                    processed_sessions=n, processed_events=e,
-                    failed_sources=failed,
-                    stored_sessions=project.store_totals.get("Codex", {}).get("sessions", 0),
-                    stored_events=project.store_totals.get("Codex", {}).get("events", 0),
-                    phase_seconds=round(time.monotonic() - vendor_started, 3),
-                )
-
-            if "cursor" in sources:
-                vendor_started = time.monotonic()
-                progress_trace(
-                    "vendor.start", project=str(project_path), vendor="Cursor",
-                )
-                store = config.vendor_store(project_path, "cursor")
-                if store.create(project_entry):
-                    project.catalog_changed_vendors.add(store.display_name)
-                store_path = store.path
-                n, e, failed, store_changed = _ingest_cursor(
-                    project_path,
-                    store_path,
-                    state_path,
-                    opts,
-                    force,
-                    stop_on_error=settings["stop_on_error"],
-                )
-                project.record_vendor(
-                    "Cursor", sessions=n, events=e,
-                    failed_sources=failed, store_changed=store_changed,
-                )
-                if failed:
-                    diagnostics["failed_sources"] = (
-                        diagnostics.get("failed_sources", 0) + failed
-                    )
-                totals = store.totals()
-                if totals is not None:
-                    project.store_totals["Cursor"] = totals
-                progress_trace(
-                    "vendor.done", project=str(project_path), vendor="Cursor",
-                    processed_sessions=n, processed_events=e,
-                    failed_sources=failed,
-                    stored_sessions=project.store_totals.get("Cursor", {}).get("sessions", 0),
-                    stored_events=project.store_totals.get("Cursor", {}).get("events", 0),
-                    phase_seconds=round(time.monotonic() - vendor_started, 3),
-                )
-
-            if project.store_totals:
-                if not settings["validate_only"]:
-                    project_entry = get_project_entry(registry_root, binding["project_id"])
-                published = _publish_project(
-                    config,
-                    project_path,
-                    project,
-                    project_entry=project_entry,
-                    binding=binding,
-                    registry_root=registry_root,
-                    opts=opts,
-                    raw_records=project_raw_records,
-                    raw_store=raw_store,
-                    min_size=min_size,
-                    force=force,
-                    seal_upgrade=seal_upgrade,
-                    rebuild_had_existing_store=rebuild_had_existing_store,
-                    diagnostics=diagnostics,
-                    progress_trace=progress_trace,
-                )
-                snapshot_id = published.snapshot_id
-                candidate_snapshot_path = published.candidate_path
-                snapshot_required = published.snapshot_required
-                evidence_summary = None
-                evidence_summary_reused = False
-                if not settings["validate_only"]:
-                    _save_stats(project_path, registry_root, project.store_totals)
-                    evidence_paths = [config.store_path(project_path, key) for key in ("cc", "codex", "cursor")]
-                    previous_report = _load_runtime_report(project_path)
-                    previous_summary = previous_report.get("evidence_summary")
-                    if (
-                        not snapshot_required
-                        and snapshot_id is not None
-                        and previous_report.get("report_format")
-                        == "codess.ingest-runtime/1"
-                        and previous_report.get("project") == str(project_path)
-                        and previous_report.get("snapshot_id") == snapshot_id
-                        and isinstance(previous_summary, dict)
-                    ):
-                        evidence_summary = previous_summary
-                        evidence_summary_reused = True
-                        progress_trace(
-                            "evidence_summary.reused",
-                            project=str(project_path), snapshot_id=snapshot_id,
-                        )
-                    else:
-                        evidence_started = time.monotonic()
-                        progress_trace(
-                            "evidence_summary.start", project=str(project_path),
-                            stores=len([path for path in evidence_paths if path.exists()]),
-                        )
-                        evidence_summary = _evidence_summary(evidence_paths)
-                        progress_trace(
-                            "evidence_summary.done", project=str(project_path),
-                            phase_seconds=round(
-                                time.monotonic() - evidence_started, 3
-                            ),
-                        )
-                    raw_object_paths = {
-                        path
-                        for record in project_raw_records
-                        if (path := raw_store.resolve(record)) is not None
-                        and path.is_file()
-                    }
-                    project_resource_summary = summarize_project_resources(
-                        opts["resource_observations"][resource_start:],
-                        normalized_store_paths=[
-                            path for path in evidence_paths if path.exists()
-                        ],
-                        raw_object_paths=raw_object_paths,
-                    )
-                progress_trace(
-                    "project.done", project=str(project_path),
-                    status=("completed_with_errors" if project.tally.errors else "accepted"),
-                    processed_sessions=project.tally.sessions,
-                    processed_events=project.tally.events,
-                    stored_sessions=sum(value["sessions"] for value in project.store_totals.values()),
-                    stored_events=sum(value["events"] for value in project.store_totals.values()),
-                    phase_seconds=round(time.monotonic() - project_started, 3),
-                )
-                if not settings["validate_only"]:
-                    _write_runtime_report(project_path, {
-                        "report_format": "codess.ingest-runtime/1",
-                        "progress_format": "codess.progress/1",
-                        "progress_live": settings["live_progress"],
-                        "status": (
-                            "completed_with_errors" if project.tally.errors else "accepted"
-                        ),
-                        "project": str(project_path), "sources": project.store_totals,
-                        "snapshot_id": snapshot_id,
-                        "snapshot_publication": (
-                            "candidate"
-                            if candidate_snapshot_path is not None
-                            else "current_or_unchanged"
-                        ),
-                        "candidate_snapshot_path": candidate_snapshot_path,
-                        "decoder_version": DECODER_VERSION,
-                        "validator_version": VALIDATOR_VERSION,
-                        "evidence_summary_reused": evidence_summary_reused,
-                        "diagnostics": {
-                            key: value - diagnostic_start.get(key, 0)
-                            for key, value in diagnostics.items()
-                            if value != diagnostic_start.get(key, 0)
-                        },
-                        "content_failure_reviews": opts["content_failure_reviews"][review_start:],
-                        "resource_observations": opts["resource_observations"][resource_start:],
-                        "resource_summary": project_resource_summary,
-                        "cursor_cohort": opts.get("cursor_cohort"),
-                        "progress_events": progress_trace.records_for(
-                            str(project_path)
-                        ),
-                        "evidence_summary": evidence_summary,
-                        "resource_policy": settings["resource_policy"],
-                        "limits": _resource_limits_report(settings),
-                    })
-                for k, v in project.store_totals.items():
-                    if k not in source_stats:
-                        source_stats[k] = {"sessions": 0, "events": 0}
-                    source_stats[k]["sessions"] += v["sessions"]
-                    source_stats[k]["events"] += v["events"]
-        except Exception:
+            else:
+                n = e = failed = 0
+            totals = store.totals()
+            if totals is not None:
+                project.store_totals["Claude"] = totals
             progress_trace(
-                "project.failed", project=str(project_path),
-                error_type=sys.exc_info()[0].__name__ if sys.exc_info()[0] else None,
+                "vendor.done", project=str(project_path), vendor="Claude",
+                processed_sessions=n, processed_events=e,
+                failed_sources=failed,
+                stored_sessions=project.store_totals.get("Claude", {}).get("sessions", 0),
+                stored_events=project.store_totals.get("Claude", {}).get("events", 0),
+                phase_seconds=round(time.monotonic() - vendor_started, 3),
             )
-            log.exception("Ingest failed for project root %s", project_path)
-            outcome.tally.note_error()
-            if settings["stop_on_error"]:
-                cleanup_cursor_cohort()
-                progress_trace(
-                    "ingest.failed", stage="project",
-                    project=str(project_path),
-                    error_type=(
-                        sys.exc_info()[0].__name__ if sys.exc_info()[0] else None
-                    ),
+
+        if "codex" in sources:
+            vendor_started = time.monotonic()
+            progress_trace(
+                "vendor.start", project=str(project_path), vendor="Codex",
+            )
+            store = config.vendor_store(project_path, "codex")
+            if store.create(project_entry):
+                project.catalog_changed_vendors.add(store.display_name)
+            store_path = store.path
+            n, e, failed, store_changed = _ingest_codex(
+                project_path,
+                store_path,
+                state_path,
+                opts,
+                force,
+                min_size,
+                stop_on_error=settings["stop_on_error"],
+            )
+            project.record_vendor(
+                "Codex", sessions=n, events=e,
+                failed_sources=failed, store_changed=store_changed,
+            )
+            if failed:
+                diagnostics["failed_sources"] = (
+                    diagnostics.get("failed_sources", 0) + failed
                 )
-                return 1
-        finally:
-            # Fold this Project into the run exactly once, whether it
-            # completed or failed, so run totals reflect every Project
-            # attempted and cannot double-count a retry path.
-            outcome.absorb(project)
-            staged_store_roots.pop(project_path.resolve(), None)
-            if rebuild_temporary is not None:
-                rebuild_temporary.cleanup()
+            totals = store.totals()
+            if totals is not None:
+                project.store_totals["Codex"] = totals
+            progress_trace(
+                "vendor.done", project=str(project_path), vendor="Codex",
+                processed_sessions=n, processed_events=e,
+                failed_sources=failed,
+                stored_sessions=project.store_totals.get("Codex", {}).get("sessions", 0),
+                stored_events=project.store_totals.get("Codex", {}).get("events", 0),
+                phase_seconds=round(time.monotonic() - vendor_started, 3),
+            )
+
+        if "cursor" in sources:
+            vendor_started = time.monotonic()
+            progress_trace(
+                "vendor.start", project=str(project_path), vendor="Cursor",
+            )
+            store = config.vendor_store(project_path, "cursor")
+            if store.create(project_entry):
+                project.catalog_changed_vendors.add(store.display_name)
+            store_path = store.path
+            n, e, failed, store_changed = _ingest_cursor(
+                project_path,
+                store_path,
+                state_path,
+                opts,
+                force,
+                stop_on_error=settings["stop_on_error"],
+            )
+            project.record_vendor(
+                "Cursor", sessions=n, events=e,
+                failed_sources=failed, store_changed=store_changed,
+            )
+            if failed:
+                diagnostics["failed_sources"] = (
+                    diagnostics.get("failed_sources", 0) + failed
+                )
+            totals = store.totals()
+            if totals is not None:
+                project.store_totals["Cursor"] = totals
+            progress_trace(
+                "vendor.done", project=str(project_path), vendor="Cursor",
+                processed_sessions=n, processed_events=e,
+                failed_sources=failed,
+                stored_sessions=project.store_totals.get("Cursor", {}).get("sessions", 0),
+                stored_events=project.store_totals.get("Cursor", {}).get("events", 0),
+                phase_seconds=round(time.monotonic() - vendor_started, 3),
+            )
+
+        if project.store_totals:
+            if not settings["validate_only"]:
+                # Check the identity; refresh the entry.
+                #
+                # The two are different concerns and only the second is a
+                # re-read. `store.create` above synced this Project's catalog
+                # entry into each vendor store, and `resync_project_catalog`
+                # below reports which entries *changed*; handing it the copy
+                # read before ingest makes it re-sync work already done and
+                # report a false change, which is a spurious correlation pass
+                # on an unchanged run. So the refresh is load-bearing rather
+                # than defensive -- it reads the state this run itself wrote.
+                #
+                # The identity is checked instead of re-read, because a fresh
+                # read cannot help there: a concurrent writer can change the
+                # binding after this point as easily as before it, so a newer
+                # copy proves nothing about the moment it is used. And unlike
+                # the entry, a changed `project_id` is not recoverable within
+                # this Project -- stores were opened, events written, and a
+                # snapshot is about to be published under the old one.
+                #
+                # It is not a reason to abandon the *run*, though. The other
+                # Projects are unaffected, so this one is set aside the way
+                # any other per-Project failure is: report it, count it, and
+                # continue unless the operator asked to stop. What is
+                # withheld is publication -- the decoded stores stay as they
+                # are, unpublished, so a later run rebuilds them under
+                # whichever identity is then current rather than this run
+                # publishing work under an identity that no longer names it.
+                current = read_project_binding(project_path)
+                if current and current["project_id"] != opts["project_id"]:
+                    print(
+                        f"codess: Project identity changed during ingest of "
+                        f"{project_path}: {opts['project_id']} became "
+                        f"{current['project_id']}; not publishing this Project",
+                        file=sys.stderr,
+                    )
+                    progress_trace(
+                        "project.identity_changed", project=str(project_path),
+                        was=opts["project_id"], now=current["project_id"],
+                    )
+                    project.tally.note_error()
+                    if settings["stop_on_error"]:
+                        progress_trace(
+                            "ingest.failed", stage="project.identity",
+                            project=str(project_path),
+                            error_type="ProjectIdentityChanged",
+                        )
+                        return 1
+                    return None
+                project_entry = get_project_entry(
+                    registry_root, opts["project_id"],
+                )
+            published = _publish_project(
+                config,
+                run_totals,
+                project_path,
+                project,
+                project_entry=project_entry,
+                min_size=min_size,
+                force=force,
+                seal_upgrade=seal_upgrade,
+                rebuild_had_existing_store=rebuild_had_existing_store,
+                progress_trace=progress_trace,
+            )
+            snapshot_id = published.snapshot_id
+            candidate_snapshot_path = published.candidate_path
+            snapshot_required = published.snapshot_required
+            evidence_summary = None
+            evidence_summary_reused = False
+            if not settings["validate_only"]:
+                _save_stats(project_path, registry_root, project.store_totals)
+                evidence_paths = [config.store_path(project_path, key) for key in ("cc", "codex", "cursor")]
+                previous_report = _load_runtime_report(project_path)
+                previous_summary = previous_report.get("evidence_summary")
+                if (
+                    not snapshot_required
+                    and snapshot_id is not None
+                    and previous_report.get("report_format")
+                    == "codess.ingest-runtime/1"
+                    and previous_report.get("project") == str(project_path)
+                    and previous_report.get("snapshot_id") == snapshot_id
+                    and isinstance(previous_summary, dict)
+                ):
+                    evidence_summary = previous_summary
+                    evidence_summary_reused = True
+                    progress_trace(
+                        "evidence_summary.reused",
+                        project=str(project_path), snapshot_id=snapshot_id,
+                    )
+                else:
+                    evidence_started = time.monotonic()
+                    progress_trace(
+                        "evidence_summary.start", project=str(project_path),
+                        stores=len([path for path in evidence_paths if path.exists()]),
+                    )
+                    evidence_summary = _evidence_summary(evidence_paths)
+                    progress_trace(
+                        "evidence_summary.done", project=str(project_path),
+                        phase_seconds=round(
+                            time.monotonic() - evidence_started, 3
+                        ),
+                    )
+                raw_object_paths = {
+                    path
+                    for record in project_raw_records
+                    if (path := raw_store.resolve(record)) is not None
+                    and path.is_file()
+                }
+                project_resource_summary = summarize_project_resources(
+                    opts["resource_observations"][resource_start:],
+                    normalized_store_paths=[
+                        path for path in evidence_paths if path.exists()
+                    ],
+                    raw_object_paths=raw_object_paths,
+                )
+            progress_trace(
+                "project.done", project=str(project_path),
+                status=("completed_with_errors" if project.tally.errors else "accepted"),
+                processed_sessions=project.tally.sessions,
+                processed_events=project.tally.events,
+                stored_sessions=sum(value["sessions"] for value in project.store_totals.values()),
+                stored_events=sum(value["events"] for value in project.store_totals.values()),
+                phase_seconds=round(time.monotonic() - project_started, 3),
+            )
+            if not settings["validate_only"]:
+                _write_runtime_report(project_path, {
+                    "report_format": "codess.ingest-runtime/1",
+                    "progress_format": "codess.progress/1",
+                    "progress_live": settings["live_progress"],
+                    "status": (
+                        "completed_with_errors" if project.tally.errors else "accepted"
+                    ),
+                    "project": str(project_path), "sources": project.store_totals,
+                    "snapshot_id": snapshot_id,
+                    "snapshot_publication": (
+                        "candidate"
+                        if candidate_snapshot_path is not None
+                        else "current_or_unchanged"
+                    ),
+                    "candidate_snapshot_path": candidate_snapshot_path,
+                    "decoder_version": DECODER_VERSION,
+                    "validator_version": VALIDATOR_VERSION,
+                    "evidence_summary_reused": evidence_summary_reused,
+                    "diagnostics": {
+                        key: value - diagnostic_start.get(key, 0)
+                        for key, value in diagnostics.items()
+                        if value != diagnostic_start.get(key, 0)
+                    },
+                    "content_failure_reviews": opts["content_failure_reviews"][review_start:],
+                    "resource_observations": opts["resource_observations"][resource_start:],
+                    "resource_summary": project_resource_summary,
+                    "cursor_cohort": opts.get("cursor_cohort"),
+                    "progress_events": progress_trace.records_for(
+                        str(project_path)
+                    ),
+                    "evidence_summary": evidence_summary,
+                    "resource_policy": settings["resource_policy"],
+                    "limits": _resource_limits_report(settings),
+                })
+            for k, v in project.store_totals.items():
+                if k not in source_stats:
+                    source_stats[k] = {"sessions": 0, "events": 0}
+                source_stats[k]["sessions"] += v["sessions"]
+                source_stats[k]["events"] += v["events"]
+    except Exception:
+        progress_trace(
+            "project.failed", project=str(project_path),
+            error_type=sys.exc_info()[0].__name__ if sys.exc_info()[0] else None,
+        )
+        log.exception("Ingest failed for project root %s", project_path)
+        outcome.tally.note_error()
+        if settings["stop_on_error"]:
+            progress_trace(
+                "ingest.failed", stage="project",
+                project=str(project_path),
+                error_type=(
+                    sys.exc_info()[0].__name__ if sys.exc_info()[0] else None
+                ),
+            )
+            return 1
+    finally:
+        # Fold this Project into the run exactly once, whether it
+        # completed or failed, so run totals reflect every Project
+        # attempted and cannot double-count a retry path.
+        outcome.absorb(project)
+        staged_store_roots.pop(project_path.resolve(), None)
+        if rebuild_temporary is not None:
+            rebuild_temporary.cleanup()
+    # No code: this Project is finished and the run continues. Stated rather
+    # than left to fall off the end, so "continue" and "stop" are both
+    # visible decisions.
+    return None
+
+
+def run(args) -> int:
+    """Run session-ingest. Returns exit code."""
+    resolved = _resolve_ingest_request(args)
+    if isinstance(resolved, int):
+        return resolved
+    roots, registry_root, sources, settings = resolved
+    diagnostics: dict[str, int] = {}
+    # Decoder options, passed to every adapter. Distinct from `settings`
+    # above: `settings` is what the run was configured to do, `opts` is what
+    # the decoders need while doing it. The two share only `raw_mode`.
+    #
+    # Three lifetimes are mixed here, which is why W06 step 4 replaces it:
+    #
+    #   run-wide inputs     -- debug, redact, strict_mapping, validate_only,
+    #                          and the max_* bounds, copied from `settings`
+    #   run-wide collectors -- diagnostics, resource_observations,
+    #                          content_failure_reviews, claude_session_kinds:
+    #                          accumulate across every Project
+    #   per-Project state   -- PROJECT_SCOPED_OPTIONS, reset by _begin_project
+    #                          on each loop iteration
+    #
+    # Adapters take the whole dict, so splitting it changes their signatures;
+    # that is the step-4 interface change, not something to do piecemeal.
+    opts = {
+        "debug": settings["debug"],
+        "redact": settings["redact"],
+        "diagnostics": diagnostics,
+        "raw_mode": settings["raw_mode"],
+        "strict_mapping": settings["strict_mapping"],
+        "validate_only": settings["validate_only"],
+        "max_source_bytes": settings["max_source_bytes"],
+        "max_cursor_container_bytes": settings["max_cursor_container_bytes"],
+        "max_events_per_source": settings["max_events_per_source"],
+        "max_events_per_session": settings["max_events_per_session"],
+        "max_context_content_chars": settings["max_context_content_chars"],
+        "resource_observations": [],
+        "content_failure_reviews": [],
+        "claude_session_kinds": {"main": 0, "subagent": 0},
+    }
+    progress_trace = ProgressTrace(enabled=settings["live_progress"])
+    opts["progress"] = progress_trace
+    opts["registry_root"] = str(registry_root)
+    progress_trace(
+        "ingest.start", projects=len(roots), sources=",".join(sources),
+        validate_only=settings["validate_only"], raw_mode=settings["raw_mode"],
+    )
+    if settings["content_policy"]:
+        policy_path = Path(settings["content_policy"]).expanduser()
+        try:
+            policy_data = json.loads(policy_path.read_text(encoding="utf-8"))
+            if not isinstance(policy_data, dict):
+                raise ValueError("policy root must be a JSON object")
+            opts["content_processor"] = ContentProcessor(
+                ContentPolicy.from_mapping(policy_data)
+            )
+            opts["content_policy_data"] = policy_data
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            print(f"codess: invalid content policy {policy_path}: {exc}", file=sys.stderr)
+            return 1
+    force = True if settings["validate_only"] else settings["force"]
+    min_size = settings["min_size"]
+
+    outcome = IngestOutcome()
+    source_stats = outcome.source_stats
+
+    staged_store_roots: dict[Path, Path] = {}
+
+    temporary = tempfile.TemporaryDirectory(prefix="codess-preflight-") if settings["validate_only"] else None
+    staging_root = Path(temporary.name) if temporary else None
+    config = IngestConfig.from_options(
+        settings, sources, registry_root,
+        staging_root=staging_root, staged_store_roots=staged_store_roots,
+    )
+    # The two halves of run state: `config` is what was decided and does not
+    # change, `totals` is what the run has produced and changes constantly.
+    totals = RunTotals(outcome=outcome, diagnostics=diagnostics, opts=opts)
+    if settings["validate_only"]:
+        opts["raw_mode"] = "none"
+    if "codex" in sources:
+        index_started = time.monotonic()
+        progress_trace("codex.index.start")
+        opts["codex_session_index"] = build_codex_session_index(
+            cache_path=(
+                None if settings["validate_only"] else
+                registry_root / "cache" / "codex-session-index-v1.json"
+            )
+        )
+        progress_trace(
+            "codex.index.done",
+            sessions=len(opts["codex_session_index"]),
+            phase_seconds=round(time.monotonic() - index_started, 3),
+        )
+
+    cursor_cohort_temp = None
+    raw_records_cache: dict[Path, list[dict]] = {}
+
+    def cleanup_cursor_cohort() -> None:
+        nonlocal cursor_cohort_temp
+        if cursor_cohort_temp is not None:
+            cursor_cohort_temp.cleanup()
+            cursor_cohort_temp = None
+
+    cursor_workspace_ids = {
+        root.resolve(): set(workspace_ids)
+        for root in roots
+        if "cursor" in sources
+        and (workspace_ids := get_cursor_workspace_ids(root))
+    }
+    live_cursor_global = get_cursor_global_db() if cursor_workspace_ids else None
+    # One object rather than four parallel values: they are derived together
+    # and every following step uses all of them (W46).
+    cursor = CursorSelection(
+        workspace_ids=cursor_workspace_ids,
+        global_db=live_cursor_global,
+        project_headers={
+            str(root): get_cursor_project_composer_headers(
+                live_cursor_global, root, diagnostics=diagnostics
+            )
+            for root in cursor_workspace_ids
+            if live_cursor_global is not None
+        },
+    )
+    opts["cursor_project_headers"] = cursor.project_headers
+    preflight_code, cursor_cohort_temp = _cursor_preflight(
+        config=config,
+        run_totals=totals,
+        cursor=cursor,
+        raw_records_cache=raw_records_cache,
+        force=force,
+        progress_trace=progress_trace,
+    )
+    if preflight_code is not None:
+        cleanup_cursor_cohort()
+        return preflight_code
+
+
+    for project_index, project_path in enumerate(roots):
+        project_code = _ingest_project(
+            project_path,
+            project_index,
+            config=config,
+            run_totals=totals,
+            settings=settings,
+            project_total=len(roots),
+            raw_records_cache=raw_records_cache,
+            force=force,
+            min_size=min_size,
+            progress_trace=progress_trace,
+        )
+        if project_code is not None:
+            cleanup_cursor_cohort()
+            return project_code
+
 
 
     if settings["validate_only"]:

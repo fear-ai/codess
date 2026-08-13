@@ -537,6 +537,30 @@ def _failed_status(payload: dict) -> bool:
     }
 
 
+_EXIT_CODE = re.compile(r'\\?"exit_code\\?":\s*(-?\d+)')
+
+
+def _exit_code_status(payload: dict) -> str | None:
+    """The shell exit code Codex reports inside its output text, or None.
+
+    Codex states no `status` field on most tool outputs, so 26,917 of 30,415
+    real results carried neither a source nor a normalized outcome. It does
+    report `exit_code` -- but inside the output body, as JSON embedded in
+    text, which is why no field read reached it. About 11% of sampled
+    outputs carry one.
+
+    Returned as the exact source spelling (`exit_code:0`) so
+    `store._normalized_status` maps it and the raw value is retained. Where
+    no code is present the result stays unknown, which is the honest answer:
+    Codex did not say.
+    """
+    raw = payload.get("output")
+    if not isinstance(raw, str):
+        raw = json.dumps(raw) if raw is not None else ""
+    match = _EXIT_CODE.search(raw)
+    return f"exit_code:{match.group(1)}" if match else None
+
+
 def _compaction_events(
     payload: dict,
     *,
@@ -1060,7 +1084,14 @@ def process_file(
                     tool_output=truncated,
                     metadata=_merge_metadata(payload, { **current_configuration, **({ "application_status": "failed", "result_status_evidence": application_failure, } if application_failure else {}), }),
                     source_raw=source_raw,
-                    source_status="application_error" if application_failure else payload.get("status"),
+                    # Codex states `status` on few outputs, so the exit code
+                    # it embeds in the output body is the fallback; where
+                    # neither exists the result stays unknown rather than
+                    # being assumed successful (W39.1).
+                    source_status=(
+                        "application_error" if application_failure
+                        else payload.get("status") or _exit_code_status(payload)
+                    ),
                     normalized_status="failed" if application_failure else None,
                 ), rtype, payload, line_num)
                 continue

@@ -19,7 +19,6 @@ from codess.context_content import bound_context_content, truncate_content
 from codess.cursor_source import (
     open_bubble_rows,
     open_message_request_context_rows,
-    read_composer_data,
 )
 from codess.cursor_source import (
     parse_timestamp as _parse_timestamp,
@@ -173,41 +172,6 @@ def _request_context_event(
         mapping_rule="cursor.request-context",
         source_path="$",
     )
-
-
-def get_composer_data(db_path: Path) -> list[dict]:
-    """Decode composerData keys from cursorDiskKV. Returns list of {composer_id, keys, has_conversation, ...}.
-    Based on: legel gist, Cursor forum; composerData can be None for some entries."""
-    import base64
-
-    out = []
-    try:
-        for key, value in read_composer_data(db_path):
-            composer_id = key.split(":", 1)[1] if ":" in key else key
-            entry = {"composer_id": composer_id, "key": key, "value_null": value is None}
-            if value is None:
-                out.append(entry)
-                continue
-            try:
-                data = json.loads(value)
-            except json.JSONDecodeError:
-                try:
-                    data = json.loads(base64.b64decode(value).decode("utf-8", errors="replace"))
-                except Exception:
-                    entry["decode_error"] = True
-                    out.append(entry)
-                    continue
-            if isinstance(data, dict):
-                entry["top_keys"] = list(data.keys())
-                entry["has_conversation"] = "conversation" in data and len(data.get("conversation") or []) > 0
-                # Known/possible fields from forums, OSS: conversation, workspaceRoot?, ...
-                for k in ("workspaceRoot", "workspace", "folder", "projectPath"):
-                    if k in data:
-                        entry[k] = data[k]
-            out.append(entry)
-    except Exception as exc:
-        log.warning("Cannot read Cursor composer data from %s: %s", db_path, exc)
-    return out
 
 
 def _iter_bubbles(

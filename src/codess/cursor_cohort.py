@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,40 @@ from codess.store import ingest_state_marker, load_ingest_state
 
 CACHE_FORMAT = "codess.cursor-cohort-cache/1"
 SELECTION_CACHE_FORMAT = "codess.cursor-selection-cache/2"
+
+
+@dataclass(frozen=True)
+class CursorSelection:
+    """Which Cursor rows one run will read, and from where.
+
+    The four values are derived together from the Project roots and are used
+    together by every step that follows -- fingerprinting, cache validation,
+    and cohort capture -- so they travelled as four separate parameters
+    through the whole preflight. They are one fact: the Cursor scope of this
+    run.
+
+    `global_db` is None when no root has Cursor workspaces, which is also
+    when `roots` is empty; `empty` reads that as the single question callers
+    actually ask.
+    """
+
+    workspace_ids: Mapping[Path, set[str]]
+    global_db: Path | None
+    project_headers: Mapping[str, Any]
+
+    @property
+    def roots(self) -> list[Path]:
+        """Project roots with Cursor workspaces, in discovery order."""
+        return list(self.workspace_ids)
+
+    @property
+    def empty(self) -> bool:
+        """Whether this run reads any Cursor data at all."""
+        return not self.workspace_ids or self.global_db is None
+
+    def selections(self) -> dict[str, set[str]]:
+        """Workspace IDs per Project root, keyed as the cache records them."""
+        return {str(root): ids for root, ids in self.workspace_ids.items()}
 
 
 def _canonical_selections(

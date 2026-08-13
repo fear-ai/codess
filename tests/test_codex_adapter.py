@@ -900,3 +900,47 @@ class TestPatchedFile:
             tmp_path, "apply_patch", "not json at all",
         )
         assert event["file_path"] is None
+
+
+class TestExitCodeStatus:
+    """Codex reports outcomes as an exit code inside the output body.
+
+    Most `function_call_output` records carry no `status` field, so 26,917 of
+    30,415 real results had neither a source nor a normalized outcome. The
+    exit code is there but embedded as JSON in text, which no field read
+    reaches (W39.1).
+    """
+
+    def _result(self, tmp_path, output):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(json.dumps({
+            "timestamp": "2026-07-10T00:00:00Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output", "call_id": "c1",
+                "output": output,
+            },
+        }) + "\n")
+        results = [
+            event for event in process_file(path, "s1", "/p", {})
+            if event.get("subtype") == "tool_result"
+        ]
+        assert len(results) == 1
+        return results[0]
+
+    def test_zero_exit_code(self, tmp_path):
+        event = self._result(
+            tmp_path, '[{"text": "{\\"exit_code\\":0,\\"output\\":\\"ok\\"}"}]',
+        )
+        assert event["source_status"] == "exit_code:0"
+
+    def test_nonzero_exit_code(self, tmp_path):
+        event = self._result(
+            tmp_path, '[{"text": "{\\"exit_code\\":2,\\"output\\":\\"bad\\"}"}]',
+        )
+        assert event["source_status"] == "exit_code:2"
+
+    def test_no_exit_code_stays_unknown(self, tmp_path):
+        """Codex did not say, so neither does the store."""
+        event = self._result(tmp_path, "plain output with no code")
+        assert event["source_status"] is None

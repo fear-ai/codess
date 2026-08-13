@@ -235,6 +235,20 @@ def _apply_source_links(
     )
 
 
+def read_project_binding(project_path: Path) -> dict[str, Any] | None:
+    """Return a Project's retained binding without creating or rewriting one.
+
+    `ensure_project_binding` resolves an identity and persists it, which is
+    right when a caller needs a Project to have one. A caller that only wants
+    to *check* the identity it is already working under must not write:
+    verifying by calling `ensure_*` would rewrite the catalog as a side
+    effect of the check.
+
+    Returns None when the Project has no binding yet.
+    """
+    return _read_existing_binding(_binding_path(project_path))
+
+
 def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str, Any]:
     """Return and persist one stable project identity for an observed location.
 

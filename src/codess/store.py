@@ -706,6 +706,15 @@ def _normalized_status(event: dict[str, Any], metadata: dict[str, Any]) -> tuple
         return source_status, "incomplete"
     if value in {"completed", "complete", "success", "succeeded"}:
         return source_status, "succeeded"
+    if value.startswith("exit_code:"):
+        # A shell exit code, which Codex reports instead of a status word.
+        # Zero succeeded, anything else failed; an unparseable code is left
+        # unknown rather than guessed.
+        code = value.removeprefix("exit_code:")
+        try:
+            return source_status, "succeeded" if int(code) == 0 else "failed"
+        except ValueError:
+            return source_status, event.get("normalized_status")
     return source_status, event.get("normalized_status")
 
 

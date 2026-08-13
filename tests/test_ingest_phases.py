@@ -306,22 +306,47 @@ def test_begin_project_isolates_successive_projects(tmp_path):
     assert opts["raw_records"] is not first_records
 
 
-def test_project_scoped_options_list_matches_what_is_reset():
-    """The declared key set and the reset must not drift apart."""
-    import ast
-    import inspect
+def test_project_scoped_options_reset():
+    """Every declared per-Project key is replaced when the loop advances.
 
+    This asserted the same property by parsing `_begin_project`'s AST for
+    subscript assignments, which was necessary only because the function did
+    not use `PROJECT_SCOPED_OPTIONS`. It does now and raises if a declared key
+    has no fresh value, so the check is behavioural: add a key to the tuple
+    without a value and this fails.
+    """
     from cli.ingest_cmd import PROJECT_SCOPED_OPTIONS, _begin_project
 
-    tree = ast.parse(inspect.getsource(_begin_project))
-    written = {
-        node.slice.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Subscript)
-        and isinstance(node.ctx, ast.Store)
-        and isinstance(node.slice, ast.Constant)
-    }
-    assert written == set(PROJECT_SCOPED_OPTIONS)
+    sentinel = object()
+    opts = dict.fromkeys(PROJECT_SCOPED_OPTIONS, sentinel)
+    opts["run_wide"] = sentinel
+    _begin_project(
+        opts,
+        {"project_id": "p1", "location_id": "l1"},
+        raw_records=[],
+        raw_store=None,
+    )
+    assert not [key for key in PROJECT_SCOPED_OPTIONS if opts[key] is sentinel]
+    assert opts["run_wide"] is sentinel  # run-wide options are untouched
+
+
+def test_project_scoped_options_declared_key_without_a_value_is_refused(
+    monkeypatch,
+):
+    """The tuple and the reset cannot drift: a declared key needs a value."""
+    import cli.ingest_cmd as ingest_cmd
+
+    monkeypatch.setattr(
+        ingest_cmd, "PROJECT_SCOPED_OPTIONS",
+        (*ingest_cmd.PROJECT_SCOPED_OPTIONS, "added_but_not_reset"),
+    )
+    with pytest.raises(KeyError, match="added_but_not_reset"):
+        ingest_cmd._begin_project(
+            {},
+            {"project_id": "p1", "location_id": "l1"},
+            raw_records=[],
+            raw_store=None,
+        )
 
 
 # --- tallies ----------------------------------------------------------------
@@ -586,3 +611,282 @@ def test_the_selected_source_identifiers_are_translated_once():
         "anthropic.claude-code", "cursor.composer",
     )
     assert scope().selected_source_ids == ()
+
+
+# --- cursor preflight -------------------------------------------------------
+
+class TestCursorPreflight:
+    """The phase runs once, before any Project, and owns its own temporary.
+
+    It was a 213-line `if` inside `run`; with the Project loop those two
+    statements were 90% of that function. Extracting it made the failure path
+    checkable, which it had not been: nothing exercised the cohort-capture
+    exception, and the block called `run`'s closure to clean up.
+    """
+
+    def _preflight(self, *, registry_root=None, opts=None, **overrides):
+        from cli.ingest_cmd import (
+            IngestConfig,
+            IngestOutcome,
+            RunTotals,
+            _cursor_preflight,
+        )
+        from codess.cursor_cohort import CursorSelection
+
+        registry_root = registry_root or Path("/nonexistent")
+        settings = overrides.pop(
+            "settings", {"validate_only": False, "raw_mode": "reference"},
+        )
+        config = IngestConfig.from_options(
+            {**settings, "raw_mode": settings.get("raw_mode", "reference")},
+            ["cursor"],
+            registry_root,
+        )
+        totals = RunTotals(
+            outcome=IngestOutcome(),
+            diagnostics={},
+            opts={} if opts is None else opts,
+        )
+        cursor = overrides.pop("cursor", None) or CursorSelection(
+            workspace_ids=overrides.pop("workspace_ids", {}),
+            global_db=overrides.pop("global_db", None),
+            project_headers={},
+        )
+        arguments = {
+            "config": config,
+            "run_totals": totals,
+            "cursor": cursor,
+            "raw_records_cache": {},
+            "force": False,
+            "progress_trace": lambda *a, **k: None,
+        }
+        arguments.update(overrides)
+        return _cursor_preflight(**arguments)
+
+    def test_no_cursor_roots(self):
+        """Nothing to fingerprint, so no exit code and no temporary."""
+        assert self._preflight() == (None, None)
+
+    def test_validate_only(self, tmp_path):
+        code, temporary = self._preflight(
+            settings={"validate_only": True, "raw_mode": "reference"},
+            workspace_ids={tmp_path: {"ws1"}},
+            global_db=tmp_path / "state.vscdb",
+        )
+        assert (code, temporary) == (None, None)
+
+    def test_cohort_failure_releases_its_temporary(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """A failed capture returns the code and no temporary to clean twice.
+
+        The extracted function returned a bare `1` here, not the
+        `(code, temporary)` pair its caller unpacks, and called `run`'s
+        cleanup closure which is no longer in scope. Both were invisible
+        while the block was inline.
+        """
+        import cli.ingest_cmd as ingest_cmd
+
+        database = tmp_path / "state.vscdb"
+        database.write_bytes(b"")
+        monkeypatch.setattr(
+            ingest_cmd, "get_cursor_selection_markers",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("injected")),
+        )
+        code, temporary = self._preflight(
+            workspace_ids={tmp_path: {"ws1"}},
+            global_db=database,
+        )
+        assert code == 1
+        assert temporary is None
+        assert "Cursor cohort capture failed" in capsys.readouterr().err
+
+    def _cursor_db(self, tmp_path):
+        """A global store: bubbles plus the Composer headers a scan needs."""
+        import json as json_module
+
+        from cursor_fixtures import build_cursor_db
+
+        return build_cursor_db(
+            tmp_path / "state.vscdb",
+            bubbles=[("c1", "b1", {"type": 1, "text": "hi"})],
+            headers=[("c1", "ws1")],
+            records={"composerData:c1": json_module.dumps({"workspaceId": "ws1"})},
+        )
+
+    def test_markers_are_scanned_then_reused(self, tmp_path):
+        """The cache path, which every CLI test skips by passing `--force`.
+
+        `test_cli.py` exercises Cursor ingest only with `--force`, so the
+        `not force` branch -- load the cache, and on a hit report `reused`
+        instead of rescanning -- had no coverage at all. That is the branch
+        the container bracket exists to make safe.
+        """
+        database = self._cursor_db(tmp_path)
+        registry = tmp_path / "registry"
+        registry.mkdir()
+        arguments = {
+            "workspace_ids": {tmp_path: {"ws1"}},
+            "global_db": database,
+            "registry_root": registry,
+        }
+
+        code, temporary = self._preflight(force=True, **arguments)
+        assert (code, temporary) == (None, None)
+        cache = registry / "cache" / "cursor-selection-v1.json"
+        assert cache.exists(), "a stable scan caches its markers"
+
+        opts: dict = {}
+        code, temporary = self._preflight(force=False, opts=opts, **arguments)
+        assert (code, temporary) == (None, None)
+        assert opts.get("cursor_cohort_marker") is not None
+
+    def test_unstable_container_is_not_cached(self, tmp_path, monkeypatch):
+        """A container changing across the read must not persist a marker.
+
+        This is what the before/after bracket is for: Cursor commits while
+        Codess reads, so a marker cached for a state already replaced would
+        let a later run skip a Project whose evidence had changed.
+        """
+        import cli.ingest_cmd as ingest_cmd
+
+        database = self._cursor_db(tmp_path)
+        registry = tmp_path / "registry"
+        registry.mkdir()
+        readings = iter(range(100))
+        monkeypatch.setattr(
+            ingest_cmd, "get_cursor_container_marker",
+            lambda path: {"changes_every_call": next(readings)},
+        )
+        code, temporary = self._preflight(
+            workspace_ids={tmp_path: {"ws1"}},
+            global_db=database,
+            registry_root=registry,
+            force=False,
+        )
+        assert (code, temporary) == (None, None)
+        assert not (registry / "cache" / "cursor-selection-v1.json").exists()
+
+
+def test_begin_project_is_the_only_writer_of_project_id():
+    """`opts["project_id"]` is set from `binding` and never rewritten.
+
+    `_publish_project` used to take `binding` and read `binding["project_id"]`;
+    it now reads `opts["project_id"]`, which is the same value because
+    `_begin_project` copies it there and nothing else assigns it. That
+    equivalence is what makes the parameter removable, so it is asserted
+    rather than left to inspection.
+    """
+    import ast
+    import inspect
+    import pathlib
+
+    import cli.ingest_cmd as ingest_cmd
+
+    source = pathlib.Path(inspect.getfile(ingest_cmd)).read_text()
+    writers = {
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Subscript)
+        and isinstance(node.ctx, ast.Store)
+        and isinstance(node.slice, ast.Constant)
+        and node.slice.value == "project_id"
+    }
+    begin = next(
+        node for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "_begin_project"
+    )
+    inside = {
+        line for line in writers
+        if begin.lineno <= line <= (begin.end_lineno or begin.lineno)
+    }
+    assert writers == inside, (
+        f"opts['project_id'] written outside _begin_project at {sorted(writers - inside)}"
+    )
+
+
+def test_publish_reads_the_project_id_begin_project_set(tmp_path, monkeypatch):
+    """The value reaching `_publish_project` is the one `_begin_project` wrote."""
+    import cli.ingest_cmd as ingest_cmd
+
+    opts: dict = {}
+    ingest_cmd._begin_project(
+        opts,
+        {"project_id": "codess:project:abc", "location_id": "loc-1"},
+        raw_records=[],
+        raw_store=None,
+    )
+    assert opts["project_id"] == "codess:project:abc"
+
+
+class TestProjectIdentityChange:
+    """A Project whose identity shifts mid-run is set aside, not fatal.
+
+    The stores decoded in this run are keyed to the identity the run began
+    with, so publishing them under a new one would attribute work to a
+    Project that did not produce it. That is unrecoverable *for this
+    Project* -- but the others in the run are unaffected, so it is reported
+    and counted like any other per-Project failure rather than raised.
+
+    Driven through the CLI rather than by calling `_ingest_project`: the
+    guard sits after decode and only runs for a Project that produced store
+    totals, so a hand-built `opts` fails earlier and passes the assertions
+    for the wrong reason -- which an earlier version of this test did.
+    """
+
+    def test_shifted_identity_is_reported_and_the_run_continues(
+        self, durable_tmp_path, monkeypatch, capsys,
+    ):
+        import cli.ingest_cmd as ingest_cmd
+        from codess.project_catalog import ensure_project_binding
+
+        project = durable_tmp_path / "project"
+        (project / ".claude").mkdir(parents=True)
+        registry = durable_tmp_path / "registry"
+        registry.mkdir()
+        real = ensure_project_binding(registry, project)
+
+        # After decode, the binding on disk names a different Project than the
+        # run began under -- what a relocation or re-registration between
+        # phases looks like.
+        monkeypatch.setattr(
+            ingest_cmd, "read_project_binding",
+            lambda path: {"project_id": real["project_id"] + "-shifted"},
+        )
+        published: list[str] = []
+        monkeypatch.setattr(
+            ingest_cmd, "_publish_project",
+            lambda *a, **k: published.append("published"),
+        )
+
+        code = ingest_cmd.run(_ingest_args(project, registry))
+
+        # Exit 1 because a Project failed, not because the run aborted: the
+        # loop completed and the failure is one Project's, which is the
+        # distinction that matters when several Projects are ingested.
+        assert code == 1
+        assert not published, "a shifted Project is not published"
+        # The store set survives unpublished, which is the recovery path: a
+        # later run rebuilds it under whichever identity is then current.
+        # A raised exception reaches the same exit code and message, so this
+        # is what distinguishes "set aside" from "crashed".
+        assert (project / ".codess").exists()
+        assert not (project / ".codess" / "current.json").exists()
+        # The message and trace name the identity change specifically. A
+        # raised exception would also be caught, counted, and printed, so
+        # asserting only "the run reported a failure" cannot tell the two
+        # apart -- which an earlier version of this test could not.
+        captured = capsys.readouterr()
+        assert "identity changed during ingest" in captured.err
+        assert "not publishing this Project" in captured.err
+        assert "Traceback" not in captured.err
+
+
+def _ingest_args(project, registry):
+    """Parsed `ingest` arguments for one Project, as the CLI would build them."""
+    from codess.project import build_parser
+
+    return build_parser().parse_args([
+        "ingest", "--dir", str(project), "--registry", str(registry),
+        "--source", "cc", "--force", "--no-progress",
+    ])
