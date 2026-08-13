@@ -1,22 +1,29 @@
 """Scan: discover projects with session data from CC, Codex, Cursor."""
 
+import contextlib
 import json
 import logging
 import time
 from datetime import datetime
 from pathlib import Path
 
+from codess.codex_source import build_session_index as build_codex_session_index
+from codess.codex_source import get_session_files as get_codex_session_files
 from codess.config import AGGREGATORS, BMB, CC_PROJECTS, CURSOR_WS
 from codess.cursor_source import (
     get_db_metrics,
-    get_global_db as get_cursor_global_db,
     get_project_composer_headers,
+)
+from codess.cursor_source import (
+    get_global_db as get_cursor_global_db,
+)
+from codess.cursor_source import (
     get_workspace_dbs as get_cursor_workspace_dbs,
+)
+from codess.cursor_source import (
     get_workspace_ids as get_cursor_workspace_ids,
 )
 from codess.helpers import is_excluded, local_path_from_uri, slug_to_path
-from codess.codex_source import build_session_index as build_codex_session_index
-from codess.codex_source import get_session_files as get_codex_session_files
 from codess.project import get_cc_session_dir
 
 log = logging.getLogger(__name__)
@@ -113,10 +120,8 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool 
                         sess_dir = cc_dir / sid
                         if sess_dir.exists():
                             for jf in sess_dir.rglob("*.jsonl"):
-                                try:
+                                with contextlib.suppress(OSError):
                                     total_bytes += jf.stat().st_size
-                                except OSError:
-                                    pass
             except (json.JSONDecodeError, OSError, KeyError):
                 pass
         if count == 0:
@@ -163,7 +168,7 @@ def _session_metrics_codex(
                 ts_ms = ts * 1000 if ts < 1e12 else ts
             elif isinstance(ts, str):
                 try:
-                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(ts)
                     ts_ms = dt.timestamp() * 1000
                 except (ValueError, TypeError):
                     ts_ms = 0
@@ -282,7 +287,7 @@ def walk_sessions(
     debug: print each dir visited with findings; include all projects regardless of filters."""
     import sys
     work_root = work_root.resolve()
-    vendors = frozenset((vendor_filter or ["cc", "codex", "cursor"]))
+    vendors = frozenset(vendor_filter or ["cc", "codex", "cursor"])
     cc_paths, codex_paths, cursor_paths = set(), set(), set()
 
     def in_work_root(raw_path: str) -> bool:

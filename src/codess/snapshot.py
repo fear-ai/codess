@@ -9,24 +9,41 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from codess.hashing import codess_canonical_hash, codess_digest, codess_hash
 from codess import __version__
 from codess.config import (
-    CURRENT_POINTER_FILE, MANIFEST_BACKUP_FILE, MANIFEST_FILE,
-    RAW_MANIFEST_FILE, SNAPSHOTS_DIR, STORE_DIR,
+    CURRENT_POINTER_FILE,
+    MANIFEST_BACKUP_FILE,
+    MANIFEST_FILE,
+    RAW_MANIFEST_FILE,
+    SNAPSHOTS_DIR,
+    STORE_DIR,
 )
 from codess.fileio import (
-    HashMismatchError, hash_file, open_readonly, read_hash, verify_hash,
+    HashMismatchError,
+    hash_file,
+    open_readonly,
+    read_hash,
+    verify_hash,
 )
-from codess.raw_store import RAW_FORMAT, RawStore
-from codess.project_catalog import durable_project_root
+from codess.hashing import codess_canonical_hash, codess_digest, codess_hash
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
+from codess.project_catalog import durable_project_root
+from codess.raw_store import RAW_FORMAT, RawStore
 from codess.schema_contract import (
-    APPLICATION_ID, FORMAT_ID, FORMAT_VERSION, SUPPORTED_READ_FORMATS, contract_digest, database_identity, require_store, store_metadata, table_names,
+    APPLICATION_ID,
+    FORMAT_ID,
+    FORMAT_VERSION,
+    SUPPORTED_READ_FORMATS,
+    contract_digest,
+    database_identity,
+    require_store,
+    store_metadata,
+    table_names,
 )
 
 
@@ -166,6 +183,10 @@ def _backup_store(
     try:
         require_store(source, write=False)
         source.backup(target)
+        # The copy is a store the moment `backup` returns, and the stamp below
+        # writes to it, so it is gated as a write before that happens rather
+        # than only verified afterward.
+        require_store(target, write=True)
         target.executemany(
             "INSERT OR REPLACE INTO store_meta(key, value) VALUES (?, ?)",
             (
@@ -420,7 +441,7 @@ def create_snapshot(
         raise SnapshotError(
             "current-format store package differs from the current package"
         )
-    created_at = datetime.now(timezone.utc)
+    created_at = datetime.now(UTC)
     created_at_text = created_at.isoformat()
     policy = build_policy or {"raw_mode": "seal" if seal else "unspecified"}
     policy_digest = codess_canonical_hash(256, 256, policy)

@@ -29,6 +29,10 @@ class TestShouldSkip:
     def test_file_history_snapshot(self):
         assert should_skip({"type": "file-history-snapshot"})
 
+    def test_file_history_delta(self):
+        """Known product state, not an unsupported record (13.4.9)."""
+        assert should_skip({"type": "file-history-delta"})
+
     def test_queue_operation(self):
         assert should_skip({"type": "queue-operation"})
 
@@ -57,7 +61,7 @@ def test_claude_events_carry_declared_exact_mapping_evidence(tmp_path):
             "role": "assistant", "content": [{"type": "text", "text": "hi"}],
         },
     }) + "\n", encoding="utf-8")
-    event = list(process_file(path, "s1", {}))[0]
+    event = next(iter(process_file(path, "s1", {})))
     assert event["source_record_type"] == "assistant"
     assert validate_mapped_event("claude", event) == []
 
@@ -476,7 +480,7 @@ class TestProcessFile:
                 "<local-command-stdout>Kept model as Sonnet</local-command-stdout>"
             ),
         }) + "\n")
-        event = list(process_file(path, "s1", {"redact": False}))[0]
+        event = next(iter(process_file(path, "s1", {"redact": False})))
         assert event["event_type"] == "system_event"
         assert event["subtype"] == "local_command_output"
         assert event["actor_kind"] == "harness"
@@ -493,7 +497,7 @@ class TestProcessFile:
                 "content": [{"type": "text", "text": "hello"}],
             },
         }) + "\n")
-        event = list(process_file(path, "s1", {}))[0]
+        event = next(iter(process_file(path, "s1", {})))
         metadata = json.loads(event["metadata"])
         assert metadata["model"] == "claude-test"
         assert metadata["service_tier"] == "standard"
@@ -556,10 +560,10 @@ class TestProcessFile:
             "parentUuid": "boundary",
             "message": {"role": "user", "content": "0123456789abcdef"},
         }) + "\n")
-        event = list(process_file(
+        event = next(iter(process_file(
             path, "s1",
             {"redact": False, "max_context_content_chars": 8},
-        ))[0]
+        )))
         assert event["content"] == "0123456…"
         assert event["content_len"] == 16
         assert json.loads(event["metadata"])["content_truncated"] is True
@@ -582,10 +586,10 @@ class TestProcessFile:
                 }],
             }],
         }))
-        event = list(process_file(path, "s1", {
+        event = next(iter(process_file(path, "s1", {
             "max_context_content_chars": 5,
             "content_processor": processor,
-        }))[0]
+        })))
         assert event["content"] == "YYYY…"
         assert event["content_len"] == 4
         assert json.loads(event["metadata"])["content_truncated"] is True
@@ -600,7 +604,7 @@ class TestProcessFile:
         assert events
         assert all(event["source_raw"] is None for event in events)
 
-    def test_nonsemantic_reasoning_state_and_image_only_input_are_explicit(
+    def test_nonsemantic_state_is_dropped_and_image_input_is_retained(
         self, tmp_path
     ):
         path = tmp_path / "session.jsonl"
@@ -630,15 +634,21 @@ class TestProcessFile:
             "".join(json.dumps(record) + "\n" for record in records)
         )
         diagnostics = {}
-        assert list(process_file(
-            path, "s1", {"diagnostics": diagnostics}
-        )) == []
+        events = list(process_file(path, "s1", {"diagnostics": diagnostics}))
+        # The two non-semantic assistant states remain state-only: an empty
+        # thinking block and a fallback notice carry no communication.
         assert diagnostics["empty_reasoning_state_records"] == 1
         assert diagnostics["fallback_state_records"] == 1
         assert diagnostics["known_ignored_records"] == 2
-        assert diagnostics["attachment_only_records"] == 1
-        assert diagnostics["unsupported_records"] == 1
         assert diagnostics.get("ignored_records", 0) == 0
+        # The image-only user record now decodes. It was counted unsupported
+        # and emitted nothing, so a human prompt existed in the Session and
+        # not in the store (W02, 13.4.9).
+        assert diagnostics.get("unsupported_records", 0) == 0
+        [event] = events
+        assert event["subtype"] == "attachment"
+        assert event["actor_kind"] == "human"
+        assert event["content"] is None
 
     def test_multiple_blocks_on_one_line_have_unique_stable_ids(self, tmp_path):
         path = tmp_path / "session.jsonl"
@@ -820,12 +830,180 @@ def test_hostile_prompt_origin_is_advisory_and_prompt_is_retained(tmp_path):
         "type": "user", "origin": 42,
         "message": {"role": "user", "content": "keep me"},
     }) + "\n")
-    event = list(process_file(
+    event = next(iter(process_file(
         transcript, "session-id", {"redact": False, "diagnostics": {}}
-    ))[0]
+    )))
     assert event["content"] == "keep me"
     assert any(
         row["source_field"] == "origin"
         and row["reason_code"] == "field_malformed"
         for row in event["field_diagnostics"]
     )
+
+
+class TestFileHistoryDelta:
+    """A tracked file's backup, linked to the snapshot it extends.
+
+    Real Claude Code Sessions emit 369 of these across the observed Projects,
+    and every one was counted as an unsupported record before W02 handled it
+    -- the count matched exactly, which is what made the gap actionable
+    rather than a suspicion (13.4.9).
+    """
+
+    def record(self, **overrides) -> dict:
+        value = {
+            "type": "file-history-delta",
+            "messageId": "msg-1",
+            "snapshotMessageId": "msg-0",
+            "timestamp": "2026-07-10T00:00:01.000Z",
+            "trackingPath": "/projects/p/main.py",
+            "backup": {
+                "backupFileName": "main.py.bak",
+                "backupTime": "2026-07-10T00:00:02.000Z",
+                "version": 3,
+            },
+        }
+        value.update(overrides)
+        return value
+
+    def decode(self, record: dict) -> dict:
+        from codess.adapters.cc import normalize_product_state
+
+        event = normalize_product_state(record, 1, "s1", "/sources/a.jsonl", {})
+        assert event is not None, "the record decoded to nothing"
+        return event
+
+    def test_it_is_product_state_rather_than_a_message(self):
+        event = self.decode(self.record())
+        assert event["event_type"] == "product_state"
+        assert event["subtype"] == "file_history_delta"
+        assert event["role"] == "harness"
+
+    def test_it_retains_the_vendor_identifiers_it_links_through(self):
+        """The delta names the message it belongs to and the snapshot it extends."""
+        import json
+
+        event = self.decode(self.record())
+        metadata = json.loads(event["metadata"])
+        assert metadata["message_id"] == "msg-1"
+        assert metadata["snapshot_message_id"] == "msg-0"
+        assert metadata["backup_version"] == 3
+
+    def test_it_records_the_tracked_path_as_presence_not_a_copy(self):
+        """The path is an Artifact locator elsewhere; this Event is structural."""
+        import json
+
+        event = self.decode(self.record())
+        metadata = json.loads(event["metadata"])
+        assert metadata["has_tracking_path"] is True
+        assert "/projects/p/main.py" not in event["metadata"]
+
+    def test_a_delta_without_a_backup_still_decodes(self):
+        """Vendor shapes vary; a missing sub-object is absence, not a failure.
+
+        The absent version is omitted rather than stored as null, which is
+        this module's convention: a key that is not there was not recorded.
+        """
+        import json
+
+        event = self.decode(self.record(backup=None))
+        metadata = json.loads(event["metadata"])
+        assert metadata["has_backup"] is False
+        assert "backup_version" not in metadata
+
+    def test_a_delta_is_a_known_record_rather_than_unsupported(self):
+        """The defect W02 closed: 44 of these were reported unsupported.
+
+        `should_skip` is what the record loop consults before falling through
+        to the unsupported counter, so membership there is the fix.
+        """
+        from codess.adapters.cc import SKIP_TYPES, should_skip
+
+        assert should_skip({"type": "file-history-delta"})
+        assert "file-history-delta" in SKIP_TYPES
+
+
+class TestImageOnlyPrompt:
+    """A human pasting a screenshot with no accompanying text.
+
+    Before W02 these produced no Event and were counted unsupported, so the
+    prompt existed in the Session and not in the store -- 48 of them in one
+    observed Project, 107 image blocks, 19.8 MB of base64 (13.4.9). The
+    payload is deliberately not retained: the `attachment` record's bounded
+    treatment is this adapter's established pattern.
+    """
+
+    def record(self, blocks=None) -> dict:
+        return {
+            "type": "user",
+            "message": {"role": "user", "content": blocks if blocks is not None else [
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": "image/jpeg", "data": "A" * 400,
+                }},
+            ]},
+        }
+
+    def decode(self, record: dict, opts: dict | None = None) -> list[dict]:
+        from codess.adapters.cc import normalize_user
+
+        return normalize_user(record, 1, "s1", "/sources/a.jsonl", {}, opts or {})
+
+    def test_it_is_a_human_prompt(self):
+        [event] = self.decode(self.record())
+        assert event["actor_kind"] == "human"
+        assert event["content_role"] == "prompt"
+        assert event["origin_kind"] == "direct_user_input"
+        assert event["subtype"] == "attachment"
+
+    def test_the_payload_is_not_retained(self):
+        """These average ~185 KB of base64; the store records the reference."""
+        [event] = self.decode(self.record())
+        assert event["content"] is None
+        assert event["content_len"] == 0
+        assert "A" * 400 not in (event["metadata"] or "")
+
+    def test_it_records_what_the_attachment_was(self):
+        import json
+
+        [event] = self.decode(self.record())
+        metadata = json.loads(event["metadata"])
+        assert metadata["attachment_type"] == "image"
+        assert metadata["media_type"] == "image/jpeg"
+        assert metadata["attachment_source"] == "base64"
+        assert metadata["encoded_length"] == 400
+
+    def test_each_image_in_one_record_becomes_its_own_event(self):
+        """Observed records carry up to seven images; none may be lost."""
+        blocks = [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "B"}}
+            for _ in range(7)
+        ]
+        events = self.decode(self.record(blocks))
+        assert len(events) == 7
+        assert len({event["event_id"] for event in events}) == 7
+
+    def test_an_image_beside_text_keeps_both(self):
+        """A screenshot with a caption is two Events, not one or none."""
+        blocks = [
+            {"type": "text", "text": "look at this"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "C"}},
+        ]
+        subtypes = [event["subtype"] for event in self.decode(self.record(blocks))]
+        assert "attachment" in subtypes
+        assert len(subtypes) == 2
+
+    def test_a_malformed_image_block_still_decodes(self):
+        """A missing source is absence, not a decode failure."""
+        import json
+
+        [event] = self.decode(self.record([{"type": "image"}]))
+        metadata = json.loads(event["metadata"])
+        assert metadata["encoded_length"] == 0
+        assert "media_type" not in metadata
+
+    def test_it_is_no_longer_counted_unsupported(self):
+        diagnostics: dict = {}
+        events = self.decode(self.record(), {"diagnostics": diagnostics})
+        assert events
+        assert diagnostics.get("unsupported_records", 0) == 0
+        assert diagnostics.get("attachment_only_records", 0) == 0

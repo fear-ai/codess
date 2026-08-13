@@ -59,6 +59,30 @@ Every configured Source root must be absolute. Pointing Codess at copied test
 data is a useful way to diagnose source interpretation without touching live
 application state.
 
+### 3.1 Scan Scoping
+
+Scan treats some directories as groupings that contain Projects rather than
+as Projects themselves, and skips others as review or backup trees. Both
+lists default to one set of names and are replaced wholesale:
+
+```bash
+# Directories that group Projects rather than being one.
+export CODESS_AGGREGATORS='WP,ZK,Claw,Claude,Cursor,Github,CodingTools'
+
+# Path prefixes, relative to the work root, skipped as review/backup trees.
+export CODESS_EXCLUDE_REVIEW_DIRS='CodingTools,MCP/MCPs,ZK/ZKs'
+```
+
+Entries are comma-separated and relative to the work root; an absolute entry
+is reported by configuration validation, because it would never match. An
+empty value means an empty list, which is how a tree with no grouping
+directories says so -- `CODESS_AGGREGATORS=''` makes every directory a
+candidate Project.
+
+Set these when scanning an unfamiliar tree. The defaults describe one
+developer's layout, so on another machine they may both group directories
+that are Projects and scan trees that should be skipped.
+
 ## 4. Regenerating After a Schema or Package Change
 
 Read this first if `ingest` reports:
@@ -359,11 +383,60 @@ operation (an interrupted publish, manual editing, or a restored backup are
 the ordinary causes). `codess baseline` commands can rebuild or verify a
 snapshot from its retained stores.
 
-`--no-hash` (or `CODESS_NO_HASH=1`) skips this verification and trusts the
-retained manifest as-is. It is a recovery and debugging option, not a
-routine flag: every bypassed check is logged as a warning, and using it
-does not repair the underlying inconsistency. Prefer identifying and fixing
-the cause of the mismatch over routinely suppressing the check.
+`--no-hash` skips this verification; see
+[Integrity Check Overrides](#106-integrity-check-overrides) for its behavior
+and the conditions under which it is appropriate.
+
+### 10.6 Integrity Check Overrides
+
+Two checks guard reads and writes, and each has one escape. Both are recovery
+and test options rather than routine flags. Each accepts a command-line flag
+or an environment variable, and the environment variable is what the checking
+code reads: a flag is parsed after configuration constants resolve, so the
+flag's effect is to set the variable.
+
+The two answer different questions and are not interchangeable.
+
+| Override | Environment | Question the check answers | What it covers |
+|---|---|---|---|
+| `--no-hash` | `CODESS_NO_HASH=1` | Is this file the bytes we recorded? | Content verification of an individual retained file against a hash stored beside it: snapshot manifests, pointer documents, and raw-capture objects. |
+| `--no-check` | `CODESS_NO_CONTRACT_CHECK=1` | Were these records written under the rules in force now? | Verification of the released CoSchema package -- DDL, contract, mapping profiles -- and comparison of a store's recorded `package_digest` against the current one before a write. |
+
+The distinction that matters operationally: `--no-hash` concerns **one file's
+integrity**, and a mismatch means the file changed since it was recorded.
+`--no-check` concerns **agreement between a store and the schema package**,
+and a mismatch means the rules changed since the store was written. A store
+can pass every hash check and still fail the contract check, which is the
+ordinary case after a schema change; the reverse means a file was altered.
+
+Their scope differs accordingly. `--no-hash` affects reads throughout, since
+hashes are verified wherever a recorded file is loaded. `--no-check` gates
+store creation and writes; reads of an already-written store are not blocked
+by a contract mismatch.
+
+Neither override is the default, and both warn. Every bypassed hash check
+logs the path. Every bypassed contract check logs the store and each failure
+it passed over, and a store created under `--no-check` records
+`contract_override` in its `store_meta`, so a later reader observes the
+override directly rather than inferring it from a failing check. `--no-check`
+does not weaken the identity checks around it: a store whose SQLite
+`application_id`, format version, decoder version, or validator version
+disagrees is still refused.
+
+Neither override repairs the underlying inconsistency. Two situations justify
+one:
+
+- **Recovery.** A store whose recorded contract disagrees with the installed
+  one, whose vendor Sources are gone, and whose released files cannot be
+  reconstructed is unreadable under a mandatory gate. The check would then
+  withhold retained evidence rather than protect anything.
+- **Tests.** Exercising a deliberately mismatched store, or a deliberately
+  corrupted manifest, without regenerating the released set.
+
+Outside those, identify and fix the cause. For a contract mismatch, [Schema
+Maintenance](#11-schema-maintenance) covers comparing the two contracts; for a
+hash mismatch, the investigation steps are in
+[10.5](#105-current-snapshot-manifest-hash-mismatch).
 
 ## 11. Schema Maintenance
 
@@ -382,7 +455,62 @@ Choose `same`, `compatible`, `breaking`, or `manual` only after reviewing the
 reported contract changes. Then run the full test suite and the smallest real
 source-system example that exercises the changed translation.
 
-## 12. Maintenance Boundaries
+## 12. Repository Tools
+
+The `codess` command is the supported interface. The scripts under `tools/`
+are development and diagnosis aids that are not installed as commands and are
+run with the repository's Python. They are grouped here by what they answer.
+
+### 12.1 Decode and Evidence Audits
+
+These read ingested stores or vendor Sources and report structure, counts, and
+classifications. They report record shapes and never message, prompt,
+argument, or result content, so a finding names a source record type or field
+and can be acted on without reproducing what a Session said.
+
+| Tool | Answers |
+|---|---|
+| `decode_audit.py` | Do classification, relation, and decode coverage hold across ingested stores? Reports Actor, role, origin, and Event-kind distributions, tool and model linkage, Session relations, context Events, and nine pairings that should not co-occur. Exits nonzero when any inconsistency is found. |
+| `audit_claude_features.py` | Which Claude Code record features appear in local Sources? |
+| `audit_codex_parentage.py` | What parent-Session evidence do Codex rollouts carry? |
+| `audit_cursor_features.py` | Which Cursor tool and model structures appear in the selected workspaces? |
+| `field_coverage.py` | Which CoSchema columns hold no data, and for which vendors? Classifies every column as empty for one vendor, populated for only one, or empty for all -- three different findings. `--fail-on-gap` exits nonzero on the first class, where a column is demonstrably decodable and one adapter does not fill it. |
+| `gather_evidence.py` | What compatibility evidence is currently available across all three vendors and the registry? |
+| `demo_model_metrics.py` | What model latency and prompt/response measures does one store hold over a bounded period? |
+
+```bash
+python tools/decode_audit.py --dir "$PROJECT" --out audit.json
+```
+
+`--dir` is repeatable, so several Projects can be audited as one report.
+
+### 12.2 Contract and Quality Checks
+
+| Tool | Answers |
+|---|---|
+| `quality_report.py` | What are the current lint, type, and test counts? Reports all three so a change is compared against the state before it. Only the test suite gates the exit status; lint and type counts have a nonzero baseline being reduced against named work items. |
+| `coschema_gate.py` | Is a CoSchema contract change compatible with its declared rank? Fail-closed; this is what `codess schema compare` wraps. |
+| `report_sql_suppressions.py` | Which files currently hold a Ruff `S608` exemption, and does the exemption list still match the code? |
+
+```bash
+python tools/quality_report.py
+python tools/quality_report.py --skip-tests
+```
+
+### 12.3 Snapshot and Catalog Maintenance
+
+These operate on published state. Review their reports before applying a
+change, and see [Maintenance Boundaries](#13-maintenance-boundaries).
+
+| Tool | Answers |
+|---|---|
+| `validate_snapshot.py` | Does one Project's current snapshot verify, and does a smoke query succeed against it? |
+| `build_review_catalog.py` | What reviewable catalog seed does a scan candidate CSV produce? |
+| `prune_project_catalog.py` | Which catalog Projects no longer exist on disk? Reports by default; quarantines only with `--apply`. |
+| `project_status.sh` | What state is a Project in before any large vendor extraction? Content-free orientation over the Project directory and the registry. |
+| `retire_project.py`, `apply_and_verify.py`, `freeze_reviewed_baselines.py`, `verify_reviewed_baselines.py` | Validated Project relocation, and reviewed-baseline apply, freeze, and verification. Each is a compatibility wrapper over the corresponding `codess baseline` or `codess catalog` operation; prefer the command. |
+
+## 13. Maintenance Boundaries
 
 Snapshots, raw objects, catalogs, and receipts support repeatable operation but
 are not the primary product surface. Before deleting any of them:

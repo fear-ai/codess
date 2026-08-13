@@ -7,6 +7,16 @@ from pathlib import Path
 
 from codess.resource_policy import BUILTIN_MAXIMUMS
 
+# Re-exported: `config` expresses limits in these units and callers have long
+# imported them from here, so the path is kept working. `codess.units` owns
+# the conversion itself. The aliases are what make the re-export explicit to
+# a reader and to lint, rather than an import that appears unused.
+from codess.units import BGB as BGB
+from codess.units import BKB as BKB
+from codess.units import BMB as BMB
+from codess.units import GB as GB
+from codess.units import KB as KB
+from codess.units import MB as MB
 
 _CONFIG_ERRORS: list[str] = []
 
@@ -28,36 +38,6 @@ def env_bool(key: str, default: str = "0") -> bool:
     return os.environ.get(key, default).lower() in ("1", "true", "yes")
 
 
-def KB(count: float) -> int:
-    """`count` kibibytes as bytes (`count * 1024`)."""
-    return int(count * 1024)
-
-
-def MB(count: float) -> int:
-    """`count` mebibytes as bytes (`count * 1024**2`)."""
-    return int(count * 1024**2)
-
-
-def GB(count: float) -> int:
-    """`count` gibibytes as bytes (`count * 1024**3`)."""
-    return int(count * 1024**3)
-
-
-def BKB(count: float) -> float:
-    """`count` bytes as kibibytes (`count / 1024`); inverse of `KB`."""
-    return count / 1024
-
-
-def BMB(count: float) -> float:
-    """`count` bytes as mebibytes (`count / 1024**2`); inverse of `MB`."""
-    return count / 1024**2
-
-
-def BGB(count: float) -> float:
-    """`count` bytes as gibibytes (`count / 1024**3`); inverse of `GB`."""
-    return count / 1024**3
-
-
 def env_str(key: str, default: str | None) -> str | None:
     """Read a string env value, or ``default`` (including ``None``) if unset."""
     return os.environ.get(key, default)
@@ -71,6 +51,21 @@ def env_path(key: str, default: str) -> Path:
 def env_raw_mode(key: str, default: str) -> str:
     """Read CODESS_RAW_MODE, normalized like the hand-written form it replaces."""
     return os.environ.get(key, default).strip().lower()
+
+
+def env_path_list(key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Read a comma-separated list of directory names or relative prefixes.
+
+    An empty value means an empty list, which is distinct from an unset
+    variable meaning the default: an operator whose tree has no aggregating
+    directories sets the variable empty rather than being unable to say so.
+    """
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    return tuple(
+        part.strip() for part in raw.split(",") if part.strip()
+    )
 
 
 def env_expanded_path(key: str, default: str) -> Path:
@@ -172,11 +167,19 @@ CURSOR_WS = CURSOR_DATA / "workspaceStorage"
 
 # --- Discovery ---
 # Top-level folder names under a work root treated as “aggregator” parents (skip as leaf projects in scan canonicalize).
-AGGREGATORS = frozenset(
-    {"WP", "ZK", "Claw", "Claude", "Cursor", "Github", "CodingTools"}
+DEFAULT_AGGREGATORS = (
+    "WP", "ZK", "Claw", "Claude", "Cursor", "Github", "CodingTools",
 )
-# Path prefixes (relative to work root) excluded as review/backup-style trees in `is_excluded`.
-EXCLUDE_REVIEW_DIRS = (
+"""Directory names that group Projects rather than being one.
+
+A default rather than a rule: these are one developer's grouping
+directories, and another operator's tree will have different ones -- or
+none. `CODESS_AGGREGATORS` replaces the list, and setting it empty says
+that every directory is a candidate Project, which is a statement the
+frozen set could not make.
+"""
+
+DEFAULT_EXCLUDE_REVIEW_DIRS = (
     "CodingTools",
     "Code/CodingTools",
     "MCP/MCPs",
@@ -184,6 +187,20 @@ EXCLUDE_REVIEW_DIRS = (
     "ZK/ZKs",
     "Spank/sOSS",
     "Claude/Claudes",
+)
+"""Path prefixes, relative to a work root, excluded as review or backup trees.
+
+Same reasoning as the aggregators: a default derived from one tree, replaced
+wholesale by `CODESS_EXCLUDE_REVIEW_DIRS`. Matching is on the prefix
+relative to the work root, so a directory is excluded by where it sits
+rather than by where a scan happened to start.
+"""
+
+AGGREGATORS = frozenset(
+    env_path_list("CODESS_AGGREGATORS", DEFAULT_AGGREGATORS)
+)
+EXCLUDE_REVIEW_DIRS = env_path_list(
+    "CODESS_EXCLUDE_REVIEW_DIRS", DEFAULT_EXCLUDE_REVIEW_DIRS
 )
 CODESS_DAYS = _IS_ENV_VALUES["CODESS_DAYS"]
 
@@ -222,7 +239,6 @@ MIN_SIZE = _IS_ENV_VALUES["CODESS_MIN_SIZE"]
 
 # --- Vendor feature audits: cap on files scanned per run (evidence.py,
 # vendor_audits.claude_features, vendor_audits.codex_features) ---
-DEFAULT_AUDIT_MAX_FILES = 200
 FORCE = _IS_ENV_VALUES["CODESS_FORCE"]
 
 # --- Subagent (CC scan) ---
@@ -305,7 +321,12 @@ DEFAULT_QUERY_BYTE_LIMIT = MB(16)
 # --- I/O chunk sizes (streaming buffer tuning, not a policy limit or
 # threshold; grouped here for one place to look, not because these values
 # are duplicated anywhere) ---
-DEFAULT_HASH_CHUNK_BYTES = MB(1)
+# Read-size constants are named for what is being read, not for being a
+# default: `MAX_*` bounds what is admitted, `LARGE_*` marks what a report
+# calls large, and `*_CHUNK_BYTES` sets a streaming read size. One of these
+# was `DEFAULT_HASH_CHUNK_BYTES`, the only `DEFAULT_` byte constant in the
+# codebase, which read as "the default among several" when there is one.
+HASH_CHUNK_BYTES = MB(1)
 SOURCE_SAMPLE_CHUNK_BYTES = MB(1)
 RAW_CAPTURE_CHUNK_BYTES = MB(1)
 
@@ -324,9 +345,9 @@ TRUNCATE_PROMPT = 2000
 
 # --- Redaction ---
 REDACT_PATTERNS = [
-    re.compile(r'sk-[a-zA-Z0-9]{20,}', re.I),
-    re.compile(r'api[_-]?key["\']?\s*[:=]\s*["\']?[a-zA-Z0-9_\-]{20,}', re.I),
-    re.compile(r'bearer\s+[a-zA-Z0-9_\-\.]{20,}', re.I),
+    re.compile(r'sk-[a-zA-Z0-9]{20,}', re.IGNORECASE),
+    re.compile(r'api[_-]?key["\']?\s*[:=]\s*["\']?[a-zA-Z0-9_\-]{20,}', re.IGNORECASE),
+    re.compile(r'bearer\s+[a-zA-Z0-9_\-\.]{20,}', re.IGNORECASE),
 ]
 
 
@@ -364,6 +385,17 @@ def validate_config() -> list[str]:
         errs.append(f"CODESS_DAYS={CODESS_DAYS} out of range [0, 3650]")
     if MIN_SIZE < 0:
         errs.append(f"CODESS_MIN_SIZE={MIN_SIZE} must be >= 0")
+    for name, values in (
+        ("CODESS_AGGREGATORS", sorted(AGGREGATORS)),
+        ("CODESS_EXCLUDE_REVIEW_DIRS", EXCLUDE_REVIEW_DIRS),
+    ):
+        for value in values:
+            # An absolute path would silently never match, since both are
+            # compared against a path relative to the work root.
+            if Path(value).is_absolute():
+                errs.append(
+                    f"{name} entry {value!r} must be relative to the work root"
+                )
     for name, value in (
         ("CODESS_MAX_TRANSCRIPT_BYTES", MAX_TRANSCRIPT_BYTES),
         ("CODESS_MAX_CURSOR_CONTAINER_BYTES", MAX_CURSOR_CONTAINER_BYTES),

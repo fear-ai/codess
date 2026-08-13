@@ -11,8 +11,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from codess.baseline_operations import apply_project  # noqa: E402
-from codess.fileio import write_json_atomic  # noqa: E402
+from codess.baseline_operations import apply_project
+from codess.fileio import write_json_atomic
 
 
 def main(argv: list[str] | None = None) -> int:

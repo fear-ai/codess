@@ -7,9 +7,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from codess.codex_source import build_session_index as build_codex_session_index
 from codess.config import CODESS_DAYS, get_stats_path
 from codess.helpers import unsafe_traversal_root_reason, write_csv
-from codess.sanitize import protect_csv_row
 from codess.project import (
     RootsWhenEmpty,
     build_scan_run_options,
@@ -17,10 +17,12 @@ from codess.project import (
     resolve_registry_directory,
     validate_scan_source_for_cli,
 )
-from codess.codex_source import build_session_index as build_codex_session_index
 from codess.registry_store import (
-    merge_scan_rows, prune_legacy_cursor_global_entries, update_project_entry,
+    merge_scan_rows,
+    prune_legacy_cursor_global_entries,
+    update_project_entry,
 )
+from codess.sanitize import protect_csv_row
 from codess.walk_sessions import walk_sessions
 
 log = logging.getLogger(__name__)

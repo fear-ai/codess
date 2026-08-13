@@ -11,7 +11,8 @@ import zstandard
 
 from codess.ingest_sources import _record_raw
 from codess.raw_store import (
-    RawCaptureError, RawStore,
+    RawCaptureError,
+    RawStore,
     restore_raw,
     verify_raw,
 )
@@ -582,7 +583,7 @@ def _append_after_read(source: Path, monkeypatch, extra: bytes = b"b" * 4096):
     monkeypatch.setattr(Path, "stat", stat_then_grow)
 
 
-def test_capture_rejects_a_source_that_changed_during_the_read(tmp_path, monkeypatch):
+def test_capture_source_changed(tmp_path, monkeypatch):
     """A source that moved mid-capture cannot be stored as exact bytes."""
     from codess.raw_store import _compress_file
 
@@ -707,3 +708,45 @@ def test_a_rebuilt_manifest_takes_the_identity_from_the_directory(tmp_path):
 
     rebuilt = rebuild_manifest(snapshot)
     assert rebuilt["snapshot_id"] == snapshot.name
+
+
+def test_copy_gated_before_stamp(tmp_path, monkeypatch):
+    """The copy is gated as a write before `store_meta` is stamped into it.
+
+    `_backup_store` verified the target only after writing to it, so a copy
+    whose recorded contract disagreed was modified first and rejected second.
+    The gate now runs between `backup` and the stamp, which is where the
+    target first becomes a store this process writes.
+    """
+    from codess import snapshot as snapshot_module
+    from codess.schema_contract import UnsupportedStoreError
+
+    backup_store = snapshot_module._backup_store  # noqa: SLF001 -- the unit under test
+
+    source = tmp_path / "sessions_cc.db"
+    init_db(source)
+
+    gated: list[bool] = []
+    original = snapshot_module.require_store
+
+    def record(conn, *, write):
+        gated.append(write)
+        if write:
+            raise UnsupportedStoreError("contract mismatch")
+        return original(conn, write=write)
+
+    monkeypatch.setattr(snapshot_module, "require_store", record)
+    with pytest.raises(UnsupportedStoreError):
+        backup_store(
+            source, tmp_path / "copy.db", snapshot_created_at="2026-01-01T00:00:00Z",
+        )
+
+    assert gated == [False, True]  # source read-gated, then target write-gated
+    stamped = sqlite3.connect(tmp_path / "copy.db")
+    try:
+        keys = {
+            row[0] for row in stamped.execute("SELECT key FROM store_meta")
+        }
+    finally:
+        stamped.close()
+    assert "snapshot_created_at" not in keys

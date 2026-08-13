@@ -7,16 +7,16 @@ from __future__ import annotations
 import csv
 import os
 import subprocess
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from codess.path_label import classify_project_path, local_path_key
+from codess.codex_source import build_session_index as build_codex_session_index
 from codess.fileio import check_policy_format, read_json, write_json_atomic
 from codess.helpers import should_prune_directory, unsafe_traversal_root_reason
-from codess.codex_source import build_session_index as build_codex_session_index
+from codess.path_label import classify_project_path, local_path_key
 from codess.walk_sessions import walk_sessions
-
 
 # The shared shape of one candidate-project list, produced by both
 # load_candidate_csv (below) and refresh_candidates -- distinct from

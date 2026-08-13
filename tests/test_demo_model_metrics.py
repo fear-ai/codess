@@ -7,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "demo_model_metrics.py"
 
@@ -34,7 +33,7 @@ def _store(path: Path) -> None:
     )
     conn.executemany("INSERT INTO model_configurations VALUES (?, ?)", models)
     base = 1_783_234_800_000
-    for index, (config_id, model) in enumerate(models, 1):
+    for index, (config_id, _model) in enumerate(models, 1):
         turn = f"turn-{index}"
         interaction = f"interaction-{index}"
         prompt = base + index * 10_000

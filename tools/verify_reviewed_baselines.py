@@ -11,7 +11,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from codess.baseline_catalog import verify_reviewed_catalog  # noqa: E402
+from codess.baseline_catalog import verify_reviewed_catalog
 
 
 def main(argv: list[str] | None = None) -> int:

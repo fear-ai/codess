@@ -1,6 +1,7 @@
 """Content sanitization: control chars, ANSI, redaction."""
 
 import re
+
 from codess.config import REDACT_PATTERNS
 
 # Exclude tab/newline; carriage returns are normalized first. C1 controls are
@@ -16,8 +17,7 @@ def sanitize_text(s: str) -> str:
         return s
     t = s.replace('\r\n', '\n').replace('\r', '\n')
     t = ANSI_ESCAPE_RE.sub('', t)
-    t = CONTROL_CHARS_RE.sub('', t)
-    return t
+    return CONTROL_CHARS_RE.sub('', t)
 
 
 def sanitize_for_display(s: str, max_len: int = 512) -> str:

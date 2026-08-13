@@ -10,17 +10,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from codess.hashing import codess_bytes_hash, codess_canonical_hash
 from codess.baseline_validation import validate_project
 from codess.config import CURRENT_POINTER_FILE, RAW_MANIFEST_FILE, SNAPSHOTS_DIR
 from codess.fileio import read_json, write_json_atomic
+from codess.hashing import codess_bytes_hash, codess_canonical_hash
 from codess.project_catalog import (
-    add_project_location, durable_project_root, get_project_entry,
+    add_project_location,
+    durable_project_root,
+    get_project_entry,
     retire_project_location,
 )
 from codess.schema_contract import contract_digest
 from codess.snapshot import current_stores
-
 
 ONBOARD_RECEIPT_FORMAT = "codess.catalog-onboard/1"
 

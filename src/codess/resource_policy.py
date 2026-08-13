@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from codess.hashing import codess_bytes_hash
-
 
 RESOURCE_POLICY_FORMAT = "codess.resource-policy/1"
 
@@ -39,7 +39,7 @@ class ResourcePolicy:
         values: Mapping[str, int | None],
         *,
         origin: str,
-    ) -> "ResourcePolicy":
+    ) -> ResourcePolicy:
         maximums = dict(self.maximums)
         origins = dict(self.origins)
         for key, value in values.items():
@@ -48,9 +48,9 @@ class ResourcePolicy:
             origins[key] = origin
         return replace(self, maximums=maximums, origins=origins)
 
-    def disabled(self, *, origin: str) -> "ResourcePolicy":
+    def disabled(self, *, origin: str) -> ResourcePolicy:
         return self.with_overrides(
-            {key: None for key in BUILTIN_MAXIMUMS},
+            dict.fromkeys(BUILTIN_MAXIMUMS),
             origin=origin,
         )
 
@@ -78,7 +78,7 @@ def _validate_limit(key: str, value: Any) -> None:
 def load_resource_policy(path: str | Path | None = None) -> ResourcePolicy:
     """Load a partial policy over built-ins and retain its exact file identity."""
     maximums: dict[str, int | None] = dict(BUILTIN_MAXIMUMS)
-    origins = {key: "built-in" for key in BUILTIN_MAXIMUMS}
+    origins = dict.fromkeys(BUILTIN_MAXIMUMS, "built-in")
     if path is None:
         return ResourcePolicy(maximums=maximums, origins=origins)
 

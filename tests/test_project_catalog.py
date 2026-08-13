@@ -11,21 +11,21 @@ from pathlib import Path
 
 import pytest
 
+from codess.config import REGISTRY
+from codess.fileio import hash_file
 from codess.project_annotations import build_project_annotations
 from codess.project_catalog import (
     add_project_location,
-    load_catalog,
     catalog_readiness,
     durable_project_root,
     ensure_project_binding,
     get_project_entry,
+    load_catalog,
     load_project_set,
     register_workspace_bindings,
     resolve_project_query_scopes,
     set_project_selection_state,
 )
-from codess.config import REGISTRY
-from codess.fileio import hash_file
 from codess.raw_store import RawStore
 from codess.session_names import set_session_name
 from codess.snapshot import create_snapshot, current_stores

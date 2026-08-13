@@ -13,17 +13,19 @@ from pathlib import Path
 from typing import Any
 
 from codess.config import (
-    LARGE_STORE_BYTES, LAST_INGEST_REPORT_FILE, RAW_MODES, STORE_DIR,
+    LARGE_STORE_BYTES,
+    LAST_INGEST_REPORT_FILE,
+    RAW_MODES,
+    STORE_DIR,
     raw_mode_error,
 )
-from codess.hashing import codess_canonical_hash, codess_text_hash
 from codess.fileio import hash_file, read_json, write_json_atomic
+from codess.hashing import codess_canonical_hash, codess_text_hash
 from codess.project_annotations import build_project_annotations
 from codess.project_catalog import durable_project_root, load_catalog
 from codess.refresh_receipts import REFRESH_RECEIPT_FORMAT
 from codess.schema_contract import contract_digest
-from codess.snapshot import SnapshotError, read_manifest, current_snapshot
-
+from codess.snapshot import SnapshotError, current_snapshot, read_manifest
 
 REFRESH_DESIGNATORS = frozenset({
     "included",

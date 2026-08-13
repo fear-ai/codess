@@ -2,13 +2,20 @@ from pathlib import Path
 
 import pytest
 
-from codess.ingest_sources import _append_bounded_event
 from codess.context_content import bound_context_content
+from codess.ingest_sources import _append_bounded_event
 from codess.resources import (
-    ResourceLimitError, check_events, check_source, file_usage,
-    peak_rss_bytes, searchable_event_payload, storage_usage,
-    summarize_event_payload, summarize_project_resources,
-    summarize_resource_observations, tree_usage,
+    ResourceLimitError,
+    check_events,
+    check_source,
+    file_usage,
+    peak_rss_bytes,
+    searchable_event_payload,
+    storage_usage,
+    summarize_event_payload,
+    summarize_project_resources,
+    summarize_resource_observations,
+    tree_usage,
 )
 
 

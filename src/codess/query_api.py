@@ -3,19 +3,21 @@
 
 from __future__ import annotations
 
+import contextlib
 import heapq
 import json
-import sqlite3
 import os
 import re
+import sqlite3
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from codess.schema_contract import column_names
 from codess.hashing import codess_bytes_hash
-
+from codess.schema_contract import column_names
+import itertools
 
 REQUEST_FORMAT = "codess.query-request/1"
 RESULT_FORMAT = "codess.query-result/1"
@@ -278,7 +280,7 @@ def validate_request(request: dict[str, Any]) -> None:
     for key in ("artifact", "text"):
         if key in filters and not isinstance(filters[key], str):
             raise QueryContractError(f"filters.{key} must be a string")
-        if key in filters and filters[key]:
+        if filters.get(key):
             sanitize_free_text_filter(filters[key], field=key)
     for key in ("since", "until"):
         if key in filters and not isinstance(filters[key], (int, float)):
@@ -384,10 +386,8 @@ def save_document(path: Path, value: dict[str, Any]) -> None:
             os.fsync(stream.fileno())
         os.replace(name, path)
     except Exception:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(name)
-        except FileNotFoundError:
-            pass
         raise
 
 
@@ -1133,10 +1133,7 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
 
 def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[list[dict], dict]:
     predicate, params = _event_predicate(request["filters"])
-    totals = {key: 0 for key in (
-        "sessions", "interactions", "model_turns", "events", "content_characters",
-        "tool_events", "artifact_events",
-    )}
+    totals = dict.fromkeys(("sessions", "interactions", "model_turns", "events", "content_characters", "tool_events", "artifact_events"), 0)
     times: list[float] = []
     vendors: dict[str, int] = {}
     kinds: dict[str, int] = {}
@@ -1157,7 +1154,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
 
     def day_bucket(timestamp: float) -> dict[str, Any]:
         day = datetime.fromtimestamp(
-            timestamp / 1000, tz=timezone.utc
+            timestamp / 1000, tz=UTC
         ).date().isoformat()
         return daily.setdefault(day, {
             "day": day,
@@ -1248,7 +1245,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
                 times.append(timestamp)
                 bucket = day_bucket(timestamp)
                 month_key = datetime.fromtimestamp(
-                    timestamp / 1000, tz=timezone.utc
+                    timestamp / 1000, tz=UTC
                 ).strftime("%Y-%m")
                 bucket["events"] += 1
                 bucket["content_characters"] += int(row[3])
@@ -1357,7 +1354,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
                     bucket[value] = bucket.get(value, 0) + 1
     times.sort()
     span = (times[-1] - times[0]) if len(times) > 1 else 0
-    gaps = [max(0.0, right - left) for left, right in zip(times, times[1:])]
+    gaps = [max(0.0, right - left) for left, right in itertools.pairwise(times)]
     caps = request.get("active_gap_caps_minutes", [5, 30, 120])
     active = {
         str(cap): sum(min(gap, cap * 60_000) for gap in gaps)
@@ -1377,7 +1374,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
     events_by_month: dict[str, int] = {}
     for timestamp in times:
         month = datetime.fromtimestamp(
-            timestamp / 1000, tz=timezone.utc
+            timestamp / 1000, tz=UTC
         ).strftime("%Y-%m")
         events_by_month[month] = events_by_month.get(month, 0) + 1
     daily_activity: list[dict[str, Any]] = []
@@ -1541,7 +1538,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
         "first_event_at": times[0] if times else None,
         "last_event_at": times[-1] if times else None,
         "elapsed_span_ms": span,
-        "event_days": len({datetime.fromtimestamp(ts / 1000, tz=timezone.utc).date().isoformat() for ts in times}),
+        "event_days": len({datetime.fromtimestamp(ts / 1000, tz=UTC).date().isoformat() for ts in times}),
         "active_time_estimates_ms_by_gap_cap_minutes": active,
         "event_gap_histogram": gap_histogram,
         "events_by_utc_month": dict(sorted(events_by_month.items())),
@@ -1637,7 +1634,7 @@ def execute(
     result = {
         "format": RESULT_FORMAT,
         "processor": QUERY_PROCESSOR,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "request": canonical_request,
         "request_hash": content_hash(canonical_request),
         "provenance": [_store_provenance(store) for store in stores],

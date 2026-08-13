@@ -10,12 +10,13 @@ from pathlib import Path
 
 import pytest
 
+from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import (
-    MANIFEST_PATH,
-    SchemaContractError,
     APPLICATION_ID,
     FORMAT_ID,
     FORMAT_VERSION,
+    MANIFEST_PATH,
+    SchemaContractError,
     UnsupportedStoreError,
     load_contract,
     load_mapping,
@@ -26,13 +27,11 @@ from codess.schema_contract import (
     verify_package,
 )
 from codess.store import connect, init_db, replace_session_events
-from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
-
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "schema" / "coschema" / "fixtures"
 sys.path.insert(0, str(ROOT / "tools"))
-from coschema_gate import compare, required  # noqa: E402
+from coschema_gate import compare, required
 
 
 def load_fixture(kind: str, name: str) -> dict:
@@ -155,7 +154,9 @@ def test_store_from_a_superseded_format_is_refused_for_read_and_write(tmp_path):
 
 def test_only_the_current_format_is_readable():
     from codess.schema_contract import (
-        FORMAT_VERSION, SUPPORTED_READ_FORMATS, SUPPORTED_WRITE_FORMATS,
+        FORMAT_VERSION,
+        SUPPORTED_READ_FORMATS,
+        SUPPORTED_WRITE_FORMATS,
     )
 
     assert SUPPORTED_READ_FORMATS == SUPPORTED_WRITE_FORMATS == {FORMAT_VERSION}
@@ -623,11 +624,11 @@ def test_the_contract_digest_covers_only_the_runtime_files():
     """Six files determine what a store is; nothing else can change that."""
     from codess.schema_contract import CONTRACT_ROLES, load_manifest
 
-    assert CONTRACT_ROLES == {
+    assert {
         "sqlite_schema", "contract", "mapping_contract",
         "mapping_claude", "mapping_codex", "mapping_cursor",
-    }
-    assert CONTRACT_ROLES <= set(load_manifest()["files"])
+    } == CONTRACT_ROLES
+    assert set(load_manifest()["files"]) >= CONTRACT_ROLES
 
 
 def test_the_two_digests_are_distinct():

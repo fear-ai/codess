@@ -392,19 +392,136 @@ The same column name denotes two different representations in one schema, so
 code reading both must know which table it is in, and a query joining them
 cannot compare the values without conversion.
 
-A suffix that encodes the representation removes the ambiguity:
+The columns already differ by something more durable than their storage
+type. Enumerating all nineteen from the DDL, they fall into three groups by
+*who observed the instant*, and the representation follows the group:
 
-| Suffix | Type | Meaning | Examples |
+| Group | Columns | Type |
+|---|---|---|
+| Codess recorded | `observed_at` (×3), `ingested_at` (×2), `created_at`, `asserted_at`, `processing_runs.started_at`, `completed_at` | `TEXT`, RFC 3339 UTC |
+| Source reported | `sessions.started_at`, `sessions.ended_at`, `tool_invocations.started_at`, `tool_invocations.ended_at`, `event_at`, `record_at`, `timestamp` | `REAL`, Unix milliseconds |
+| Filesystem observed | `source_mtime` (×2) | `REAL`, Unix milliseconds |
+
+Exactly one name spans two groups, and it is the collision: `started_at` is
+source-reported `REAL` in `sessions` and `tool_invocations`, and
+Codess-recorded `TEXT` in `processing_runs`. No other name is ambiguous.
+
+**Nineteen columns is too many, and counting what each holds shows why.**
+The vendors supply almost one time between them: every Claude and Codex
+record carries `timestamp`, and Codex adds `started_at`/`completed_at` on a
+minority of records. Measured over 21 real store sets:
+
+| Column | Rows | Populated | Reading |
 |---|---|---|---|
-| `_time` | `TEXT`, RFC 3339 UTC | An instant Codess recorded | `observed_time`, `ingested_time`, `created_time` |
-| `_atms` | `REAL`, Unix milliseconds | An instant the source reported | `event_atms`, `started_atms`, `ended_atms` |
+| `events.event_at` | 250,427 | 94% | The vendor instant |
+| `events.timestamp` | 250,427 | 94% | **Byte-identical to `event_at` in all 250,427 rows** |
+| `sources.observed_at` | 422 | 100% | When the Source was read |
+| `sources.ingested_at` | 422 | 100% | **Byte-identical to `observed_at` in all 422 rows** |
+| `tool_invocations.ended_at` | 85,840 | **0%** | Never written by any adapter |
+| `processing_runs.started_at`, `completed_at` | 0 | — | Table has no rows |
+| `sessions.started_at`, `ended_at` | 497 | 99% | Derived from first/last Event |
+| `sessions.source_mtime`, `sources.source_mtime` | 919 | 100% | Filesystem |
+| `sessions.observed_at`, `ingested_at` | 497 | 100% | Ingest bookkeeping |
+| `event_at_basis` | 250,427 | 100% | Which basis `event_at` used |
+| `source_records.record_at` | 195,591 | 92% | Per raw record |
+| `project_locations.observed_at`, `mapping_diagnostics.created_at`, `correlation_assertions.asserted_at` | 37,838 | 100% | Row bookkeeping |
 
-Both halves matter. `_time` alone would not distinguish the two, since the
-present `_at` columns already fail to; pairing a plain suffix for recorded
-text with an explicit unit for source numerics makes the representation
-readable at every use, and makes the `started_at` conflict impossible to
-restate. This is a breaking schema change and is tracked with the other
-CoSchema strengthening work rather than applied piecemeal.
+So of nineteen: **two are exact duplicates** of another column, **one is
+never written** by any adapter, **two belong to a table that is empty
+because content policy is opt-in** rather than because nothing writes it,
+**four are ordinary row bookkeeping** on unrelated tables, and **two record
+filesystem state**. The genuinely distinct time facts are the vendor instant
+(`event_at`, with `event_at_basis` recording how it was obtained),
+`record_at` for raw records, the derived Session span, and the ingest
+observation -- roughly six, which is close to what the sources support.
+
+#### 5.1.1 Resolution
+
+**Nineteen columns become seven.** Six removals, two renames, and every
+survivor justified against a specific question no other column answers.
+
+*Removed -- duplicates.* Three pairs store one instant twice, measured over
+21 real store sets:
+
+| Column | Evidence |
+|---|---|
+| `events.timestamp` | Byte-identical to `event_at` in all 250,427 rows. `event_at` is kept because it pairs with `event_at_basis`. |
+| `sources.ingested_at` | Byte-identical to `sources.observed_at` in all 422 rows. |
+| `sessions.ingested_at` | Byte-identical to `sessions.observed_at` in all 497 rows. |
+
+Each pair was meant to separate reading a Source from committing it. Nothing
+writes them apart, so the distinction exists only in the column names.
+
+*Removed -- derivable or unwritten.*
+
+| Column | Evidence |
+|---|---|
+| `sessions.started_at` | Exactly `MIN(events.event_at)` for the Session in all 497 rows. |
+| `sessions.ended_at` | Exactly `MAX(events.event_at)` in all 497 rows. |
+| `tool_invocations.ended_at` | Null in all 85,840 rows; no vendor reports an invocation end. |
+
+The Session span is a query over Events, not an independent fact. Storing it
+denormalizes for a convenience no measured workload has asked for, and a
+denormalization that can drift from its source is worse than the join it
+avoids. If a scan cost later justifies it, it returns as an index or a view
+with the derivation stated -- not as a column that silently disagrees.
+
+*Kept -- seven, each answering a distinct question.*
+
+| Column | The question only it answers |
+|---|---|
+| `events.event_at` | When did the vendor say this Event happened? |
+| `events.event_at_basis` | Where did that instant come from -- the record, the Session, the file, or nothing? Without it a substituted time is indistinguishable from a reported one. |
+| `source_records.record_at` | When did the *raw record* occur, at the 195,591-row source grain rather than the 250,427-row Event grain? |
+| `sources.source_mtime`, `sessions.source_mtime` | What did the filesystem say when the read started? Taken from the same `stat` that admits the Source, so it pairs with the bytes actually read -- a Source changing mid-read is detected by comparing against it, which a post-read stamp could not do. |
+| `sources.observed_at` | When did Codess read this Source? |
+| `tool_invocations.started_at` → `source_started_at` | When did the vendor say the invocation began? **Renamed** -- this is the collision. |
+| `processing_runs.started_at`, `completed_at` | When did a content-policy run begin and end? Empty because the policy is opt-in, not because nothing writes it: `record_processing_run` is called from `ingest_publication` and both are test-covered. |
+
+Counting the pair columns once, that is the vendor instant and its basis,
+the raw-record instant, the filesystem mtime, the read observation, the
+invocation start, and the processing-run span -- **seven facts, against the
+roughly four the sources supply plus three Codess genuinely adds**.
+
+*Also removed by consequence.* `project_locations.observed_at`,
+`mapping_diagnostics.created_at`, and `correlation_assertions.asserted_at`
+are row-creation stamps on derived tables whose rows are rebuilt whenever
+their inputs change. None is read by any query. They are dropped with the
+rest rather than carried because each was individually small.
+
+The renames are trivial beside the removals, which is the point: renaming
+twelve columns that should not exist would have been the larger and less
+useful change.
+
+The duplication is not the naming problem, but it is why the naming problem
+went unnoticed: a schema with two names for one instant has already stopped
+being read as a whole. Removing the duplicates and the unwritten columns is
+the larger part of the change, and it should happen with the rename rather
+than after it.
+
+Naming the provenance therefore resolves the collision and states what a
+reader needs: whether the instant is evidence from the source, a fact about
+Codess's own processing, or an observation of the file. Those carry
+different trust and different comparability -- a source-reported time is
+only as good as the vendor's clock, and joining one to a Codess-recorded
+time is usually a mistake regardless of how either is encoded.
+`source_mtime` already names its provenance in this way, which is why it
+was never ambiguous.
+
+Naming the *encoding* instead was the earlier proposal and is withdrawn. A
+suffix such as `_atms` binds the column name to a storage decision, so
+changing the encoding -- to integer microseconds, or to text for a source
+that reports offsets -- becomes a rename across the DDL, the contract, every
+query path, and every consumer. It also answers a question a reader rarely
+has, while leaving the provenance question it does have unanswered.
+
+The exact spelling is settled with the change. A `source_` prefix on the
+vendor-reported columns follows the precedent `source_mtime` already sets,
+leaves the Codess-recorded columns untouched, and makes the distinction
+visible at the point of use: `sessions.source_started_at` against
+`processing_runs.started_at`. This is a breaking schema change and is
+tracked with the other CoSchema strengthening work rather than applied
+piecemeal.
 
 ## 6. Types and Classification
 

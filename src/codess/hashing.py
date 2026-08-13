@@ -35,8 +35,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Iterable
-
+from collections.abc import Iterable
+from typing import Any
 
 HASH_FORMAT = "codess.hash/1"
 
@@ -46,7 +46,6 @@ GENERATED_BITS = 256
 SUPPORTED_TRUNCATED_BITS = (256, 128, 64)
 """Retained widths. 256 keeps the complete digest; the rest keep leading bits."""
 
-DEFAULT_CHUNK_BYTES = 1024 * 1024
 
 _SEPARATOR = b"\0"
 
@@ -77,7 +76,7 @@ def _truncate(digest: bytes, truncated_bits: int) -> str:
     return digest.hex()[: truncated_bits // 4]
 
 
-def codess_digest() -> "hashlib._Hash":
+def codess_digest() -> hashlib._Hash:
     """Return a fresh incremental digest for a caller-owned read policy.
 
     Use this only when the read pattern itself is the policy -- bounded window

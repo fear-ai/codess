@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any, Callable, Iterable, Protocol
+from collections.abc import Callable, Iterable
+from typing import Any, Protocol
 
 from codess.identity import global_session_id
 from codess.schema_contract import column_names, table_names
@@ -56,6 +57,8 @@ class ReportScope(Protocol):
     def stores(self) -> list[dict[str, Any]]: ...
 
     def source_predicate(self, alias: str = "s") -> tuple[str, tuple[str, ...]]: ...
+
+    def diagnostics_predicate(self) -> tuple[str, tuple[str, ...]]: ...
 
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:

@@ -12,14 +12,14 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from codess.hashing import codess_canonical_hash
 from codess.fileio import write_json_atomic
+from codess.hashing import codess_canonical_hash
 from codess.raw_store import RawCaptureError, RawStore, restore_raw
 from codess.store import ingest_state_marker, load_ingest_state
-
 
 CACHE_FORMAT = "codess.cursor-cohort-cache/1"
 SELECTION_CACHE_FORMAT = "codess.cursor-selection-cache/2"

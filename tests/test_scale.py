@@ -5,11 +5,15 @@ import sqlite3
 import time
 
 from cursor_fixtures import create_bubble_table, create_header_table
+
 from codess.adapters.cursor import _iter_bubbles
-from codess.cursor_source import get_db_metrics
 from codess.codex_source import get_session_files as get_codex_session_files
+from codess.cursor_source import get_db_metrics
 from codess.query_api import (
-    execute, make_request, selected_project_ids, selected_project_snapshots,
+    execute,
+    make_request,
+    selected_project_ids,
+    selected_project_snapshots,
 )
 from codess.store import connect, init_db, replace_session_events
 

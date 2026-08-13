@@ -85,7 +85,7 @@ def _is_legacy_global_entry(entry: dict[str, Any]) -> bool:
         and path.endswith("/(global)")
         and not entry.get("sources")
         and not entry.get("query")
-        and set(((entry.get("scan") or {}).get("by_vendor") or {})) <= {"Cursor"}
+        and set((entry.get("scan") or {}).get("by_vendor") or {}) <= {"Cursor"}
     )
 
 

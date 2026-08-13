@@ -9,7 +9,6 @@ from typing import Any
 from codess.config import CODEX_ARCHIVED_SESSIONS, CODEX_SESSIONS
 from codess.fileio import read_json, write_json_atomic
 
-
 CODEX_INDEX_FORMAT = "codess.codex-session-index/1"
 
 
@@ -28,24 +27,6 @@ def session_archive_evidence(path: Path) -> tuple[str, str]:
     if archived is not None and resolved.is_relative_to(archived.resolve()):
         return "archived", "configured-archive-root"
     return "active", "configured-active-root"
-
-
-def read_session_meta(path: Path) -> dict | None:
-    """Return the first session_meta record, tolerating malformed prefixes."""
-    try:
-        with path.open(encoding="utf-8", errors="replace") as stream:
-            for line in stream:
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if record.get("type") == "session_meta":
-                    return record
-    except OSError:
-        return None
-    return None
 
 
 def build_session_index(

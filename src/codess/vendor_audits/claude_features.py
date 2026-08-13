@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -110,7 +110,7 @@ def audit_claude_features(
             diagnostics["io_error"] += 1
     return {
         "audit_format": "codess.claude-feature-audit/1",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "privacy_boundary": "structure and aggregate counts only; content bodies not retained",
         "root": str(root.expanduser().resolve()),
         "file_limit": max_files,

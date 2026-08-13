@@ -209,6 +209,7 @@ capture. Storage deletion remains a reviewed maintenance operation.
 | [Cursor Source Schema](CursorSchema.md) | Cursor storage, records, selective access, mapping, and limitations |
 | `schema/` | Executable SQL, JSON, mapping, policy, and fixture contracts |
 | `catalog/` and the configured registry | Project selections, source bindings, observations, reports, and receipts |
+| `tools/` | Development and diagnosis scripts, described in [Repository Tools](Operations.md#12-repository-tools) |
 | `experiments/` | Bounded investigations that are not part of the accepted design or implementation plan |
 
 ## Release Notes
@@ -252,22 +253,20 @@ analytics service.
 - **Transactional Project store sets.** Each source system contributes a
   separate database to a validated Project store set. Replacement is
   transactional, and an incomplete or invalid conversion is not published as
-  current. This release does not maintain one continuously growing global
-  content database; several selected Project store sets are composed at query
-  time.
+  current. Several selected Project store sets are composed at query time
+  rather than maintained as one continuously growing global database.
 
 - **Structured Session orientation.** Queries can summarize available
   Sessions, time coverage, Event and content volumes, Actors, tools, models,
   and source-system participation. These are measurements of retained local
-  evidence, not complete measures of everything transmitted between a harness
-  and a remote model.
+  evidence, not of everything transmitted between a harness and a remote
+  model.
 
 - **Bounded Event and content search.** Events can be selected by Project,
   source system, Session, Interaction, Model Turn, Event kind, Actor kind,
   content role, origin, tool, model, status, time, Artifact, stable identity,
-  or literal content. The current search is structured and bounded; it is not
-  fuzzy search, embedding search, a general raw-source search engine, or an
-  unrestricted full-corpus scan.
+  or literal content. Search is structured and bounded rather than fuzzy,
+  embedding-based, or an unrestricted full-corpus scan.
 
 - **Interaction reconstruction.** A selected Event can be expanded to its
   recorded Interaction or Model Turn, or examined with nearby Session Events.
@@ -295,15 +294,12 @@ analytics service.
 
 - **Cross-Project and cross-vendor investigation.** Explicitly selected
   Project store sets can be queried as one bounded scope with deterministic
-  ordering and retained Project, Source, Session, and snapshot identity. The
-  release does not yet publish standardized merged SQLite, Parquet, or DuckDB
-  products.
+  ordering and retained Project, Source, Session, and snapshot identity.
 
 - **Reproducible query results.** Canonical query requests, structured JSON
   results, stable row identities, completeness information, facets, and
   derivation metadata can be saved and compared. Results can be narrowed or
-  expanded in later operations, but this is not yet a general-purpose query
-  language or workflow orchestration system.
+  expanded in later operations.
 
 - **Evidence-bound summaries.** A human, model, or external process can bind a
   summary to a saved result and record its processor identity. Codess preserves
@@ -312,9 +308,7 @@ analytics service.
 
 - **Direct analytical access.** Individual stores can be queried read-only
   through SQLite and consumed by Python, notebooks, database browsers, or other
-  analytical tools. JSON Lines and CSV output support external processing, but
-  this release contains no built-in graphical interface, dashboard,
-  visualization service, or notebook package.
+  analytical tools. JSON Lines and CSV output support external processing.
 
 - **Resource and content controls.** Configurable bounds cover Source size,
   Event counts, context bodies, retained content, and query output. Exceeding a
@@ -344,9 +338,9 @@ analytics service.
 - **Executable contracts and validation fixtures.** The repository includes
   SQLite DDL, JSON contracts, mapping profiles, controlled vocabularies,
   representative fixtures, hazard cases, and automated unit, contract,
-  adapter, integration, and scale tests. Real vendor Sources remain a separate
-  validation layer, and coverage is not yet equally strong across every vendor
-  feature and command path.
+  adapter, integration, and scale tests. Real vendor Sources are a separate
+  validation layer, exercised by the audit tools described in
+  [Repository Tools](Operations.md#12-repository-tools).
 
 #### Important Boundaries
 
@@ -371,6 +365,11 @@ requires explicit review.
 
 This release is suitable for controlled local evaluation, decoder validation,
 Project and Session investigation, and development of downstream research
-workflows. It remains a pre-release while cross-vendor classification, runtime
-mapping conformance, selective Cursor processing, performance workloads, and
-structured operational reporting continue to mature.
+workflows. Cross-vendor classification and decode are validated against real
+Sessions from all three source systems; selective Cursor processing,
+structured operational reporting, and repeatable content-free decode auditing
+are available.
+
+Released mapping profiles govern fixtures and contract tests rather than
+every candidate a decoder emits at runtime. Planned work is recorded in the
+[Implementation Plan](CoPlan.md).

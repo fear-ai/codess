@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from codess.hashing import codess_bytes_hash
 
-
 SOURCE_CALL_ID_MAX_BYTES = 100
 _DIGEST_BITS = 256
 _DIGEST_HEX_CHARS = _DIGEST_BITS // 4

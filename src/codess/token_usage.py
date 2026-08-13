@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from codess.config import MAX_TOKEN_LINE_BYTES
 from codess.fileio import open_readonly, read_json, write_json_atomic
@@ -19,7 +21,7 @@ TOKEN_VALIDATION_FORMAT = "codess.codex-token-validation/1"
 def _month(value: Any) -> str:
     if isinstance(value, str) and len(value) >= 7:
         try:
-            datetime.fromisoformat(value.replace("Z", "+00:00"))
+            datetime.fromisoformat(value)
             return value[:7]
         except ValueError:
             pass
@@ -225,12 +227,10 @@ def validate_codex_token_usage(paths: Iterable[Path]) -> dict[str, Any]:
             timestamp = None
             raw_timestamp = observation.get("timestamp")
             if isinstance(raw_timestamp, str):
-                try:
+                with contextlib.suppress(ValueError):
                     timestamp = datetime.fromisoformat(
-                        raw_timestamp.replace("Z", "+00:00")
+                        raw_timestamp
                     )
-                except ValueError:
-                    pass
             if timestamp and previous_timestamp and timestamp < previous_timestamp:
                 timestamp_regressions += 1
             if timestamp:
@@ -254,7 +254,7 @@ def validate_codex_token_usage(paths: Iterable[Path]) -> dict[str, Any]:
             ),
         })
     shared = [
-        {"counter_point": dict(zip(keys, point)), "files": sorted(paths)}
+        {"counter_point": dict(zip(keys, point, strict=False)), "files": sorted(paths)}
         for point, paths in counter_files.items() if len(paths) > 1
     ]
     shared.sort(key=lambda item: (-len(item["files"]), tuple(item["counter_point"].values())))

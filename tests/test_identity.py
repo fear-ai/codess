@@ -2,8 +2,12 @@
 
 from codess.identity import (
     artifact_uri_id,
-    global_event_id, global_session_id, global_source_record_id,
-    global_source_revision_id, location_id, source_observation_id,
+    global_event_id,
+    global_session_id,
+    global_source_record_id,
+    global_source_revision_id,
+    location_id,
+    source_observation_id,
 )
 
 

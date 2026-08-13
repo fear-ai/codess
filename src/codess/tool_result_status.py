@@ -6,7 +6,6 @@ import json
 import re
 from typing import Any
 
-
 _FAILURE_PREFIX = re.compile(
     r"^\s*(?:error|failed(?:\s+to)?|failure|fatal)(?:\b|:)",
     re.IGNORECASE,

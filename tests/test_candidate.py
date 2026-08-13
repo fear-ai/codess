@@ -7,7 +7,7 @@ from codess.helpers import is_excluded, slug_to_path
 
 
 def test_slug_to_path_empty():
-    assert slug_to_path("") == Path(".")
+    assert slug_to_path("") == Path()
 
 
 def test_slug_to_path_leading_dash():

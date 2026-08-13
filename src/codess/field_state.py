@@ -1,6 +1,9 @@
 """Field-state classification and two-value comparison for adapters.
 
-Design, requirements, and rationale: CoPlan D17/D18.
+A decoder that reports only "missing" loses the distinction between a field
+the source omitted, one it sent empty, and one it sent unreadably. Those want
+different dispositions, so the state is named and carried rather than
+collapsed at the point of discovery.
 
 Public API:
 - Field states: ``PRESENT``, ``ABSENT``, ``EMPTY``, ``NULL``, ``SENTINEL``,
@@ -8,8 +11,7 @@ Public API:
 - Comparison outcomes: ``MATCH``, ``MISMATCH``, ``VACANT``.
 - Criticality: ``FATAL``, ``ADVISORY``.
 - ``classify(value)`` -> state; ``get_state(record, key)`` -> ``(value, state)``.
-- ``coarse(state)`` -> ``present``/``vacant`` (``malformed`` stays itself).
-- ``is_vacant(state)``, ``diagnostic_level(state)`` -> ``info``/``warn``/None.
+- ``diagnostic_level(state)`` -> ``info``/``warn``/None.
 - ``criticality(state, is_critical_field)`` -> ``fatal``/``advisory``/None.
 - ``compare(prior, rebuilt)`` -> comparison outcome.
 - ``diagnose(opts, ...)`` records a field diagnostic; never raises.
@@ -32,15 +34,6 @@ MALFORMED = "malformed"
 # Absent-family umbrella (excludes MALFORMED).
 VACANT = "vacant"
 VACANT_STATES = frozenset({ABSENT, EMPTY, NULL, SENTINEL})
-
-
-def coarse(state: str) -> str:
-    """Map a field state to ``present``/``vacant``; ``malformed`` maps to itself."""
-    if state == PRESENT:
-        return PRESENT
-    if state in VACANT_STATES:
-        return VACANT
-    return state
 
 
 # Comparison outcomes.
@@ -88,11 +81,6 @@ def get_state(record: dict, key: str) -> tuple[Any, str]:
     value = record.get(key, _MISSING)
     state = classify(value)
     return (None if value is _MISSING else value), state
-
-
-def is_vacant(state: str) -> bool:
-    """True for any absent-family state (absent/empty/null/sentinel)."""
-    return state in VACANT_STATES
 
 
 def diagnostic_level(state: str) -> str | None:

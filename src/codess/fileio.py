@@ -7,14 +7,16 @@ import logging
 import os
 import sqlite3
 import uuid
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any
 
-from codess.hashing import codess_bytes_hash, codess_digest
 from codess.config import (
-    DEFAULT_HASH_CHUNK_BYTES, SOURCE_FULL_HASH_MAX, SOURCE_SAMPLE_CHUNK_BYTES,
+    HASH_CHUNK_BYTES,
+    SOURCE_FULL_HASH_MAX,
+    SOURCE_SAMPLE_CHUNK_BYTES,
 )
-
+from codess.hashing import codess_bytes_hash, codess_digest
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +27,9 @@ class HashMismatchError(RuntimeError):
     """A file's content did not match the hash a caller expected."""
 
 
-def open_readonly(db_path: Path) -> sqlite3.Connection:
+def open_readonly(
+    db_path: Path, *, timeout: float = 5.0, immutable: bool = False,
+) -> sqlite3.Connection:
     """Open any SQLite file read-only, without asserting it is a CoSchema store.
 
     `store.connect(read_only=True)` additionally validates the store contract,
@@ -41,9 +45,20 @@ def open_readonly(db_path: Path) -> sqlite3.Connection:
     other durable-file primitives rather than in `store`, since the callers
     include source access and raw storage, which must not depend on the store
     layer.
+
+    `busy_timeout` waits rather than failing immediately when another process
+    holds the write lock, which a vendor database being written by its own
+    application routinely is. `immutable` opens a file that has no WAL or
+    shared-memory sidecar and cannot be opened read-only otherwise; it is
+    unsafe for a live database, so the caller asserts the sidecar-free shape
+    rather than this function guessing.
     """
-    conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
+    parameters = "?mode=ro&immutable=1" if immutable else "?mode=ro"
+    conn = sqlite3.connect(
+        db_path.resolve().as_uri() + parameters, uri=True, timeout=timeout,
+    )
     conn.execute("PRAGMA query_only = ON")
+    conn.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
     return conn
 
 
@@ -83,7 +98,7 @@ def _no_hash_active() -> bool:
     return os.environ.get("CODESS_NO_HASH", "0").strip().lower() in ("1", "true", "yes")
 
 
-def hash_file(path: Path, *, chunk_size: int = DEFAULT_HASH_CHUNK_BYTES) -> str:
+def hash_file(path: Path, *, chunk_size: int = HASH_CHUNK_BYTES) -> str:
     digest = codess_digest()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(chunk_size), b""):
@@ -254,7 +269,7 @@ def source_fingerprint(
         )
         combined_digest = codess_digest()
         combined_digest.update(
-            f"main:{revision}\0wal:{wal_revision}".encode("utf-8")
+            f"main:{revision}\0wal:{wal_revision}".encode()
         )
         revision = (
             "sqlite-main-wal-sha256-fingerprint:"

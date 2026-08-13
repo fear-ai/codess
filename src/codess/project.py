@@ -22,6 +22,13 @@ from codess.config import (
     VERBOSE,
 )
 
+# Re-exported: the Claude slug encoding is `helpers`'. `project` carried a
+# second copy whose `slug_to_path` lacked the filesystem fallback for
+# hyphenated directory names, so the two disagreed on any path containing a
+# hyphen -- `spank-py` decoded to the non-existent `spank/py` here (3.5.4).
+from codess.helpers import path_to_slug as path_to_slug
+from codess.helpers import slug_to_path as slug_to_path
+
 log = logging.getLogger(__name__)
 
 CLI_VERSION = __version__
@@ -46,24 +53,6 @@ def get_project_root(cwd: Path | None = None) -> Path:
     except (subprocess.SubprocessError, FileNotFoundError) as e:
         log.warning("git rev-parse failed: %s; using cwd", e)
     return cwd
-
-
-def path_to_slug(path: Path) -> str:
-    """Encode path to CC slug format."""
-    s = path.as_posix()
-    if path.is_absolute():
-        s = s.lstrip("/")
-        return "-" + s.replace("/", "-") if s else ""
-    return s.replace("/", "-")
-
-
-def slug_to_path(slug: str) -> Path:
-    """Decode slug to path."""
-    if not slug:
-        return Path(".")
-    if slug.startswith("-"):
-        return Path("/" + slug[1:].replace("-", "/"))
-    return Path(slug.replace("-", "/"))
 
 
 def get_cc_projects_dir() -> Path:
@@ -254,8 +243,15 @@ def build_ingest_run_options(args: Any) -> dict[str, Any]:
     max_events_per_session, max_context_content_chars (int | None).
     """
     from codess.config import (
-        CONTENT_POLICY, DEBUG, FORCE, INGEST_REDACT, MIN_SIZE, RAW_MODE,
-        RESOURCE_POLICY, STOP, STRICT_MAPPING,
+        CONTENT_POLICY,
+        DEBUG,
+        FORCE,
+        INGEST_REDACT,
+        MIN_SIZE,
+        RAW_MODE,
+        RESOURCE_POLICY,
+        STOP,
+        STRICT_MAPPING,
     )
     from codess.resource_policy import load_resource_policy
 

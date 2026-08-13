@@ -5,23 +5,23 @@ from types import SimpleNamespace
 
 import pytest
 
-from codess.project import (
-    build_ingest_run_options,
-    resolve_registry_directory,
-    validate_scan_source_for_cli,
-)
 from codess.config import (
     CC_PROJECTS,
     CODEX_ARCHIVED_SESSIONS,
     CODEX_SESSIONS,
-    env_bool,
-    get_state_path,
-    get_store_path,
     REDACT_PATTERNS,
     STORE_DB,
     STORE_DIR,
     SUBAGENT,
+    env_bool,
+    get_state_path,
+    get_store_path,
     validate_config,
+)
+from codess.project import (
+    build_ingest_run_options,
+    resolve_registry_directory,
+    validate_scan_source_for_cli,
 )
 
 
@@ -189,7 +189,7 @@ def test_the_raw_store_set_matches_the_vocabulary():
     from codess.config import RAW_MODES
     from codess.raw_store import RAW_MODES as STORE_MODES
 
-    assert STORE_MODES == frozenset(RAW_MODES)
+    assert frozenset(RAW_MODES) == STORE_MODES
 
 
 def test_no_module_writes_the_raw_mode_set_out_longhand():
@@ -210,9 +210,10 @@ def test_no_module_writes_the_raw_mode_set_out_longhand():
 
 
 def test_an_invalid_raw_mode_is_refused_by_the_raw_store():
-    from codess.raw_store import RawCaptureError, RawStore
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
+
+    from codess.raw_store import RawCaptureError, RawStore
 
     store = RawStore(Path(tempfile.mkdtemp()))
     with pytest.raises(RawCaptureError, match="invalid raw mode"):
@@ -275,3 +276,101 @@ def test_the_rejection_message_includes_a_site_specific_value():
     from codess.config import raw_mode_error
 
     assert "auto" in raw_mode_error("raw_mode", "x", extra=("auto",))
+
+
+# --- discovery scoping ------------------------------------------------------
+#
+# W27: `AGGREGATORS` and `EXCLUDE_REVIEW_DIRS` were frozen sets naming one
+# developer's directories, with no override and no mention outside the source.
+# Another operator's grouping directories were reported as Projects and their
+# review trees were scanned.
+
+def reload_config(monkeypatch, **environment):
+    """Re-import config under a chosen environment.
+
+    The constants resolve at import, so an override has to be tested by
+    reloading rather than by setting a variable after the fact -- which is
+    also why `--no-check` and `--no-hash` read the environment directly.
+    """
+    import importlib
+
+    import codess.config as module
+
+    for key, value in environment.items():
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+    return importlib.reload(module)
+
+
+def test_discovery_scoping_defaults_are_documented_names(monkeypatch):
+    module = reload_config(
+        monkeypatch, CODESS_AGGREGATORS=None, CODESS_EXCLUDE_REVIEW_DIRS=None,
+    )
+    try:
+        assert frozenset(module.DEFAULT_AGGREGATORS) == module.AGGREGATORS
+        assert module.EXCLUDE_REVIEW_DIRS == module.DEFAULT_EXCLUDE_REVIEW_DIRS
+    finally:
+        reload_config(monkeypatch)
+
+
+def test_aggregators_can_be_replaced(monkeypatch):
+    """Another operator's tree has different grouping directories."""
+    module = reload_config(monkeypatch, CODESS_AGGREGATORS="Projects, Work ,src")
+    try:
+        assert frozenset({"Projects", "Work", "src"}) == module.AGGREGATORS
+    finally:
+        reload_config(monkeypatch, CODESS_AGGREGATORS=None)
+
+
+def test_an_empty_setting_means_no_aggregators(monkeypatch):
+    """A tree with no grouping directories must be able to say so.
+
+    The frozen set could not express this: an operator whose every directory
+    is a candidate Project had no way to turn the default off.
+    """
+    module = reload_config(monkeypatch, CODESS_AGGREGATORS="")
+    try:
+        assert frozenset() == module.AGGREGATORS
+    finally:
+        reload_config(monkeypatch, CODESS_AGGREGATORS=None)
+
+
+def test_exclusions_can_be_replaced_and_emptied(monkeypatch):
+    module = reload_config(
+        monkeypatch, CODESS_EXCLUDE_REVIEW_DIRS="backups,old/reviews",
+    )
+    try:
+        assert module.EXCLUDE_REVIEW_DIRS == ("backups", "old/reviews")
+    finally:
+        reload_config(monkeypatch, CODESS_EXCLUDE_REVIEW_DIRS=None)
+    module = reload_config(monkeypatch, CODESS_EXCLUDE_REVIEW_DIRS="")
+    try:
+        assert module.EXCLUDE_REVIEW_DIRS == ()
+    finally:
+        reload_config(monkeypatch, CODESS_EXCLUDE_REVIEW_DIRS=None)
+
+
+def test_an_absolute_scoping_entry_is_reported(monkeypatch):
+    """Both are matched relative to the work root, so an absolute path never
+    matches -- silently scoping nothing rather than what was intended."""
+    module = reload_config(monkeypatch, CODESS_AGGREGATORS="/absolute/tree,Fine")
+    try:
+        errors = module.validate_config()
+        assert any("must be relative to the work root" in e for e in errors)
+    finally:
+        reload_config(monkeypatch, CODESS_AGGREGATORS=None)
+
+
+def test_default_configuration_reports_no_errors(monkeypatch):
+    module = reload_config(
+        monkeypatch, CODESS_AGGREGATORS=None, CODESS_EXCLUDE_REVIEW_DIRS=None,
+    )
+    try:
+        assert not [
+            e for e in module.validate_config()
+            if "AGGREGATORS" in e or "EXCLUDE_REVIEW_DIRS" in e
+        ]
+    finally:
+        reload_config(monkeypatch)

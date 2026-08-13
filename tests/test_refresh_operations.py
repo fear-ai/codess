@@ -26,7 +26,6 @@ from codess.store import (
     sync_project_catalog,
 )
 
-
 REPO_ROOT = Path(__file__).parents[1]
 
 
@@ -86,7 +85,7 @@ def _project(
 def test_refresh_resolves_ids_names_paths_and_project_lists(tmp_path):
     registry = tmp_path / "registry"
     first, first_id = _project(registry, tmp_path, "first")
-    second, second_id = _project(registry, tmp_path, "second")
+    _second, second_id = _project(registry, tmp_path, "second")
     project_list = tmp_path / "projects.json"
     project_list.write_text(json.dumps({
         "format": "codess.project-list/1",

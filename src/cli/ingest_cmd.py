@@ -5,50 +5,51 @@ import logging
 import sys
 import tempfile
 import time
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping, MutableMapping, Sequence
+from typing import Any
 
+from codess.codex_source import build_session_index as build_codex_session_index
 from codess.config import (
-    LAST_INGEST_REPORT_FILE, STORE_DIR, get_state_path, get_store_path,
+    LAST_INGEST_REPORT_FILE,
+    STORE_DIR,
+    get_state_path,
+    get_store_path,
     validate_config,
 )
 from codess.content_processing import ContentPolicy, ContentProcessor
-from codess.fileio import write_json_atomic
-from codess.hashing import codess_hash
-from codess.cursor_source import (
-    get_global_db as get_cursor_global_db,
-    get_project_composer_headers as get_cursor_project_composer_headers,
-    get_selection_markers as get_cursor_selection_markers,
-    get_sqlite_container_marker as get_cursor_container_marker,
-    get_workspace_dbs as get_cursor_workspace_dbs,
-    get_workspace_ids as get_cursor_workspace_ids,
-)
 from codess.cursor_cohort import (
-    combine_selection_markers,
     cohort_needed,
+    combine_selection_markers,
     load_selection_marker_cache,
     prepare_cursor_cohort,
     save_selection_marker_cache,
 )
-from codess.project import (
-    RootsWhenEmpty,
-    build_ingest_run_options,
-    get_cc_session_dir,
-    resolve_cli_roots,
+from codess.cursor_source import (
+    get_global_db as get_cursor_global_db,
 )
-from codess.codex_source import build_session_index as build_codex_session_index
-from codess.store import (
-    SOURCE_PROFILES,
-    connect,
-    init_db,
+from codess.cursor_source import (
+    get_project_composer_headers as get_cursor_project_composer_headers,
 )
-from codess.raw_store import RawStore
-from codess.project_catalog import ensure_project_binding, get_project_entry
-from codess.snapshot import current_raw_records
+from codess.cursor_source import (
+    get_selection_markers as get_cursor_selection_markers,
+)
+from codess.cursor_source import (
+    get_sqlite_container_marker as get_cursor_container_marker,
+)
+from codess.cursor_source import (
+    get_workspace_dbs as get_cursor_workspace_dbs,
+)
+from codess.cursor_source import (
+    get_workspace_ids as get_cursor_workspace_ids,
+)
+from codess.evidence import summarize_store_evidence
+from codess.fileio import write_json_atomic
+from codess.hashing import codess_hash
 from codess.ingest_publication import (
     VENDOR_DISPLAY_NAMES,
     PublicationOutcome,
@@ -60,20 +61,34 @@ from codess.ingest_publication import (
     record_content_processing,
     resync_project_catalog,
 )
-from codess.store import integrity_report, sync_project_catalog, table_counts
-from codess.resources import (
-    peak_rss_bytes,
-    summarize_project_resources,
-)
-from codess.resource_policy import ResourcePolicyError
-from codess.evidence import summarize_store_evidence
-from codess.progress import ProgressTrace
-from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
-
 from codess.ingest_sources import (
     _ingest_cc,
     _ingest_codex,
     _ingest_cursor,
+)
+from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
+from codess.progress import ProgressTrace
+from codess.project import (
+    RootsWhenEmpty,
+    build_ingest_run_options,
+    get_cc_session_dir,
+    resolve_cli_roots,
+)
+from codess.project_catalog import ensure_project_binding, get_project_entry
+from codess.raw_store import RawStore
+from codess.resource_policy import ResourcePolicyError
+from codess.resources import (
+    peak_rss_bytes,
+    summarize_project_resources,
+)
+from codess.snapshot import current_raw_records
+from codess.store import (
+    SOURCE_PROFILES,
+    connect,
+    init_db,
+    integrity_report,
+    sync_project_catalog,
+    table_counts,
 )
 
 log = logging.getLogger(__name__)
@@ -674,14 +689,13 @@ def _publish_project(
         registry_root,
         diagnostics=diagnostics, progress_trace=progress_trace,
     )
-    if opts.get("content_policy_data"):
-        if record_content_processing(
-            config, project_path, project.changed_vendors,
-            project_id=binding["project_id"],
-            policy=opts["content_policy_data"],
-            actions=opts.get("content_actions", []),
-        ):
-            published.derived_changed = True
+    if opts.get("content_policy_data") and record_content_processing(
+        config, project_path, project.changed_vendors,
+        project_id=binding["project_id"],
+        policy=opts["content_policy_data"],
+        actions=opts.get("content_actions", []),
+    ):
+        published.derived_changed = True
 
     if force and not config.validate_only:
         staged_project = config.staged_store_roots.pop(project_path)
@@ -1092,9 +1106,9 @@ def run(args) -> int:
             )
             if settings["validate_only"]:
                 # A within-run label for a Project preflight never persists.
-                # 64 bits is the narrowest supported width and is ample for
-                # the handful of Projects one run selects (13.4.8).
-                digest = codess_hash(256, 64, [str(project_path)])
+                # 128 bits keeps the width the previous 24-hex value had
+                # headroom at, now declared rather than ad hoc (13.4.8).
+                digest = codess_hash(256, 128, [str(project_path)])
                 binding = {"project_id": f"codess:preflight-project:{digest}", "location_id": f"preflight:{digest}"}
                 project_entry = {
                     "project_id": binding["project_id"], "logical_name": project_path.name,

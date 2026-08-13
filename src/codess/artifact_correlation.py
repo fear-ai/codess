@@ -11,7 +11,6 @@ from urllib.parse import unquote, urlparse
 
 from codess.identity import artifact_uri_id
 
-
 METHOD = "catalog.longest-root-containment/1"
 RELATION = "artifact_path_within_project_location"
 AMBIGUOUS_RELATION = "artifact_path_candidate_project_location"

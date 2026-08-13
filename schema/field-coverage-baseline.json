@@ -1,0 +1,49 @@
+{
+  "format_id": "codess.field-coverage-baseline",
+  "format_version": 1,
+  "purpose": "Single-vendor column gaps that are accepted, each with the evidence for accepting it. tools/field_coverage.py --fail-on-gap fails on any gap absent from this list. An entry belongs here only when the source has been checked and shown not to carry the value, or when the null is a property of the sample rather than the decoder. A gap that is merely unexamined does not belong here: it fails the check until someone looks.",
+  "accepted": [
+    {
+      "column": "model_configurations.service_tier",
+      "empty_for": "cursor",
+      "reason": "Checked. Cursor bubble records carry no tier field -- the only mode-like key across 400 sampled records is unifiedMode, which is not a service tier. Claude and Codex record one when the harness reports it.",
+      "evidence": "cursorDiskKV bubbleId records, 400 sampled: no key matching tier/effort/speed",
+      "work_item": null
+    },
+    {
+      "column": "sessions.archive_source",
+      "empty_for": "claude",
+      "reason": "Checked. Claude has no archived-session concept; the column exists for the Codex archive directory and the Cursor workspace origin.",
+      "evidence": "~/.claude/projects has no archive location; CODESS_CODEX_ARCHIVED_SESSIONS has no Claude equivalent",
+      "work_item": null
+    },
+    {
+      "column": "sessions.parent_session_id",
+      "empty_for": "codex",
+      "reason": "Checked. Codex rollouts record no parent relation.",
+      "evidence": "tools/audit_codex_parentage.py",
+      "work_item": null
+    },
+    {
+      "column": "sessions.session_relation_kind",
+      "empty_for": "codex",
+      "reason": "Checked, and travels with parent_session_id: a relation is recorded only where the parent is, so this is the same finding on a second column.",
+      "evidence": "tools/audit_codex_parentage.py",
+      "work_item": null
+    },
+    {
+      "column": "sources.content_sha256",
+      "empty_for": "codex",
+      "reason": "Sample property, not a decoder gap. The column is written only under raw capture, and non-null counts track captured Sources exactly: Claude 20 of 20 captured, Cursor 2 of 2, Codex 0 of 0. No Codex Source in this sample was captured.",
+      "evidence": "sources.availability='captured' equals sources.content_sha256 IS NOT NULL in every store",
+      "work_item": null
+    },
+    {
+      "column": "mapping_diagnostics.source_value",
+      "empty_for": "codex",
+      "reason": "By design, not a gap. field_state.diagnostic withholds source_value for the malformed state so a malformed value is never echoed into a diagnostic; a vendor whose diagnostics are all malformed-type therefore has none. No adapter sets the field directly.",
+      "evidence": "src/codess/field_state.py:152",
+      "work_item": null
+    }
+  ]
+}

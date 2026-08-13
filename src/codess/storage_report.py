@@ -10,13 +10,15 @@ from pathlib import Path
 from typing import Any
 
 from codess.config import (
-    LARGE_RAW_OBJECT_BYTES, MAX_CODESS_DB_BYTES, MAX_CURSOR_DB_BYTES,
+    LARGE_RAW_OBJECT_BYTES,
+    MAX_CODESS_DB_BYTES,
+    MAX_CURSOR_DB_BYTES,
     RAW_MANIFEST_FILE,
 )
 from codess.fileio import open_readonly, write_json_atomic
-from codess.token_usage import collect_token_usage
 from codess.resources import allocated_bytes, file_usage, storage_usage, tree_usage
 from codess.store import table_counts, table_names
+from codess.token_usage import collect_token_usage
 
 REPORT_FORMAT = "codess.storage-observation/1"
 
@@ -86,7 +88,7 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
                         "records": int(value[0]), "characters": int(value[1])
                     }
             if "sessions" in tables and "events" in tables:
-                rows = [dict(zip(("session_id", "source", "events", "characters"), row)) for row in conn.execute(
+                rows = [dict(zip(("session_id", "source", "events", "characters"), row, strict=False)) for row in conn.execute(
                     "SELECT s.global_id, s.source, COUNT(e.id), "
                     "COALESCE(SUM(COALESCE(e.content_len,length(e.content),0) + "
                     "COALESCE(length(e.tool_input),0) + COALESCE(length(e.tool_output),0)),0) "

@@ -11,9 +11,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from codess.baseline_validation import write_json_atomic  # noqa: E402
-from codess.cursor_feature_audit import audit_cursor_features  # noqa: E402
-from codess.project_catalog import load_catalog  # noqa: E402
+from codess.baseline_validation import write_json_atomic
+from codess.cursor_feature_audit import audit_cursor_features
+from codess.project_catalog import load_catalog
 
 
 def main() -> int:

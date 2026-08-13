@@ -8,7 +8,6 @@ rather than each fixture restating them.
 
 from __future__ import annotations
 
-
 VENDOR_SOURCE_SYSTEMS = {
     "Claude": "anthropic.claude-code",
     "Codex": "openai.codex",

@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from codess.baseline_validation import load_policy, validate_project
 from codess.fileio import read_json, write_json_atomic
 from codess.project_catalog import durable_project_root
 from codess.schema_contract import FORMAT_VERSION, contract_digest
-
 
 SELECTION_FORMAT = "codess.baseline-selection/1"
 APPROVED_FORMAT = "codess.approved-baselines/1"
@@ -212,7 +212,7 @@ def freeze_reviewed_catalogs(
     }
     reviewed = {
         "catalog_format": REVIEWED_FORMAT,
-        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "reviewed_at": datetime.now(UTC).isoformat(),
         "review_state": "accepted_with_known_gaps",
         "package_digest": package_digest,
         "registry": registry,

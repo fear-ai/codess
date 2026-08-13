@@ -8,28 +8,43 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from codess.hashing import codess_digest
-from codess.raw_store import (
-    RAW_FORMAT, RawCaptureError, RawStore, verify_raw,
+from codess.config import (
+    CURRENT_POINTER_FILE,
+    MANIFEST_FILE,
+    RAW_MANIFEST_FILE,
+    RAW_MODES,
+    STORE_DIR,
 )
 from codess.fileio import (
-    check_policy_format, hash_file, load_versioned_policy, open_readonly, source_fingerprint, write_json_atomic,
+    check_policy_format,
+    hash_file,
+    load_versioned_policy,
+    open_readonly,
+    source_fingerprint,
+    write_json_atomic,
 )
-from codess.config import (
-    CURRENT_POINTER_FILE, MANIFEST_FILE, RAW_MANIFEST_FILE, RAW_MODES, STORE_DIR,
-)
+from codess.hashing import codess_digest
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
-from codess.schema_contract import FORMAT_VERSION, require_store, contract_digest
-from codess.store import integrity_report, table_counts
+from codess.raw_store import (
+    RAW_FORMAT,
+    RawCaptureError,
+    RawStore,
+    verify_raw,
+)
+from codess.schema_contract import FORMAT_VERSION, contract_digest, require_store
 from codess.snapshot import (
-    SnapshotError, current_stores, read_manifest, current_snapshot,
+    SnapshotError,
+    current_snapshot,
+    current_stores,
+    read_manifest,
     snapshot_store_paths_from_base,
 )
-
+from codess.store import integrity_report, table_counts
 
 REPORT_FORMAT = "codess.validation-report/1"
 
@@ -83,8 +98,6 @@ REQUIRED_ARTIFACT_INDEXES = {
 }
 
 
-_sha256 = hash_file
-
 
 def load_policy(path: Path | None) -> dict[str, Any]:
     if path is None:
@@ -123,13 +136,13 @@ def load_policy(path: Path | None) -> dict[str, Any]:
         valid = (
             isinstance(reason, str)
             and (
-                isinstance(specification, int) and not isinstance(specification, bool)
-                and specification >= 0
-                or isinstance(specification, dict)
+                (isinstance(specification, int) and not isinstance(specification, bool)
+                and specification >= 0)
+                or (isinstance(specification, dict)
                 and set(specification) == {"max"}
                 and isinstance(specification["max"], int)
                 and not isinstance(specification["max"], bool)
-                and specification["max"] >= 0
+                and specification["max"] >= 0)
             )
         )
         if not valid:
@@ -335,7 +348,7 @@ def semantic_digest(
             for table, rows in canonical_rows(conn):
                 if table in exclude_tables:
                     continue
-                digest.update(f"{path.name}\0{table}\n".encode("utf-8"))
+                digest.update(f"{path.name}\0{table}\n".encode())
                 for row in rows:
                     values = tuple(row)
                     if normalize_observations and table == "sessions":
@@ -674,7 +687,7 @@ def validate_project(
     policy = policy or {}
     report: dict[str, Any] = {
         "report_format": REPORT_FORMAT,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "project": str(project_path),
         "status": "rejected",
         "errors": [],
@@ -738,7 +751,7 @@ def validate_project(
     )
     _add_check(
         report, "validator_version",
-        VALIDATOR_VERSION == required_validator,
+        required_validator == VALIDATOR_VERSION,
         {"observed": VALIDATOR_VERSION, "required": required_validator},
     )
 

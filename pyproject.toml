@@ -16,6 +16,13 @@ dependencies = [
 test = [
   "pytest>=7.0",
 ]
+# The checks `tools/quality_report.py` runs and reports counts for. Declared
+# so a fresh checkout reproduces the same measurement; a report whose tools
+# are undeclared reports whatever happens to be installed.
+lint = [
+  "ruff>=0.15",
+  "mypy>=1.19",
+]
 
 [project.scripts]
 codess = "codess.project:console_main"
@@ -27,7 +34,70 @@ include = ["codess*", "cli*"]
 [tool.setuptools.dynamic]
 version = {attr = "codess.__version__"}
 
+[tool.ruff]
+# Matches the prevailing style rather than reformatting the tree: 460 source
+# lines exceed 88 characters and 174 exceed 100, so a narrower limit would
+# report existing code rather than new defects.
+line-length = 110
+
+[tool.ruff.lint]
+# Selected for what each family detects, measured before adoption (10.4).
+#
+#   E,W,F  pycodestyle and pyflakes: undefined names, unused imports, syntax
+#   I      import ordering, so a diff does not depend on where an import landed
+#   B      bugbear: B023 (loop-variable capture) is the one real bug class here
+#   S      bandit: SQL construction and subprocess use, the two surfaces that
+#          touch a store and the shell
+#   C4,SIM,RET,ARG,RUF  comprehension, branch, return, and argument cleanups
+#   N,UP,PTH  naming, modern syntax, and pathlib over os.path
+#
+# Deliberately not selected: ANN (132 findings; annotation coverage is not a
+# defect class here and the codebase annotates where it aids a reader), D
+# (140; docstring formatting, where this codebase's convention is explanatory
+# prose rather than a fixed shape), and COM (490; trailing-comma placement,
+# which is formatting.)
+select = [
+  "E", "W", "F", "I", "B", "S", "C4", "SIM", "RET", "ARG", "N", "UP", "PTH", "RUF",
+  # Added after measuring every family. These eight report zero findings
+  # today, which is the argument for selecting them: they cost nothing now
+  # and fail the moment the property they check stops holding.
+  "DTZ",    # naive datetime construction -- every stamp here is UTC-aware
+  "ASYNC",  # blocking calls in async code
+  "LOG", "G",  # logging construction and format-string interpolation
+  "ISC",    # implicit string concatenation across lines
+  "ICN",    # import naming conventions
+  "TID",    # banned and relative imports
+  "PGH",    # blanket noqa and type-ignore without a code
+  # Small and actionable rather than clean:
+  "PERF",   # 13: manual loops where a comprehension is clearer
+  "FURB",   # 13: includes the `fromisoformat(...replace("Z"))` workaround
+  "SLF",    # 2: private-member access across module boundaries
+]
+
+ignore = [
+  # Line length is set above; E501 duplicates it as a lint error.
+  "E501",
+  # Every `subprocess` call passes a list with no shell and runs either
+  # `sys.executable` or `git`; the pattern is reviewed in 10.4.2. S603 cannot
+  # distinguish that from an interpolated command line, so it reports all of
+  # them and none is actionable.
+  "S603",
+  # `git` is resolved from PATH deliberately: Codess runs against whichever
+  # Git the operator uses, and pinning an absolute path would break that.
+  "S607",
+  # Matches on the substring "TOKEN" in `TOKEN_OBSERVATION_FORMAT` and its
+  # siblings, which are document format tags rather than secrets.
+  "S105",
+  # `/tmp` appears in the system-root and ephemeral-location tables that
+  # `helpers` uses to *reject* such paths, which is the opposite of the
+  # insecure use the rule looks for.
+  "S108",
+]
+
 [tool.ruff.lint.per-file-ignores]
+# A test asserts; that is what it is for. Test doubles and progress sinks
+# also take arguments they deliberately ignore, to match a real signature.
+"tests/*" = ["S101", "ARG001", "ARG002", "ARG004", "ARG005"]
 # S608 rationale and per-site pattern: CoPlan.md 10.4.
 "src/codess/baseline_validation.py" = ["S608"]
 "src/codess/configuration_audit.py" = ["S608"]
@@ -42,3 +112,22 @@ version = {attr = "codess.__version__"}
 # Fixture builders interpolate their own table-name constants, never input.
 "tests/cursor_fixtures.py" = ["S608"]
 "tests/store_fixtures.py" = ["S608"]
+
+
+[tool.mypy]
+# Type checking runs, and its current output is a measurement rather than a
+# gate: 180 errors on adoption, dominated by `assignment` and `arg-type` in
+# code that reads vendor JSON, where a value is legitimately `Any` until it
+# is validated. Tightening those needs the candidate-record contract (W04),
+# so the settings below are what can be enforced today without annotating
+# around a decode boundary that is about to change.
+python_version = "3.11"
+files = ["src"]
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+# Not enabled yet, each with the item that would make it achievable:
+#   disallow_untyped_defs  -- broad annotation work, no owning item
+#   strict_optional        -- W04, at the decode boundary
+#   warn_return_any        -- W04, same reason

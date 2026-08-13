@@ -11,9 +11,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codess.catalog_operations import relocate_project  # noqa: E402
-from codess.fileio import write_json_atomic  # noqa: E402
-from codess.project_catalog import ensure_project_binding  # noqa: E402
+from codess.catalog_operations import relocate_project
+from codess.fileio import write_json_atomic
+from codess.project_catalog import ensure_project_binding
 
 
 def main(argv: list[str] | None = None) -> int:

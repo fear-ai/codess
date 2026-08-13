@@ -7,22 +7,30 @@ import csv
 import io
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from codess.baseline_catalog import (
-    freeze_reviewed_catalogs, load_baseline_selection, verify_reviewed_catalog,
+    freeze_reviewed_catalogs,
+    load_baseline_selection,
+    verify_reviewed_catalog,
 )
 from codess.baseline_operations import apply_project
 from codess.baseline_validation import load_policy, run_query_smoke, validate_project
-from codess.review_project import record_decision, refresh_candidates, validate_policy
 from codess.catalog_operations import onboard_catalog, relocate_project, retire_location
+from codess.codex_parent_audit import audit_parentage
 from codess.config import (
-    CC_PROJECTS, CODEX_ARCHIVED_SESSIONS, CODEX_SESSIONS, CURSOR_DATA, GB,
-    LARGE_EVENT_COUNT, LARGE_STORE_BYTES, MAX_RECORD_BYTES, RAW_MODE_CHOICES,
+    CC_PROJECTS,
+    CODEX_ARCHIVED_SESSIONS,
+    CODEX_SESSIONS,
+    CURSOR_DATA,
+    GB,
+    LARGE_EVENT_COUNT,
+    LARGE_STORE_BYTES,
+    MAX_RECORD_BYTES,
+    RAW_MODE_CHOICES,
     REGISTRY,
 )
-from codess.codex_parent_audit import audit_parentage
 from codess.cursor_feature_audit import audit_cursor_features
 from codess.evidence import build_evidence_inventory
 from codess.fileio import read_json, write_json_atomic
@@ -30,24 +38,28 @@ from codess.helpers import parse_dir_list, unsafe_traversal_root_reason
 from codess.mcp_audit import audit_mcp_interactions
 from codess.orientation_audit import audit_orientation
 from codess.project_annotations import build_project_annotations
+from codess.project_catalog import (
+    add_project_location,
+    catalog_readiness,
+    load_catalog,
+    set_project_selection_state,
+)
 from codess.refresh_operations import (
     REFRESH_DESIGNATORS,
     refresh_projects,
 )
-from codess.project_catalog import (
-    add_project_location, catalog_readiness, load_catalog,
-    set_project_selection_state,
-)
+from codess.retention import apply_retention_plan, build_retention_plan
+from codess.review_project import record_decision, refresh_candidates, validate_policy
 from codess.schema_evolution import RANK, compare, required
 from codess.session_names import (
-    load_session_names, remove_session_name, set_session_name,
+    load_session_names,
+    remove_session_name,
+    set_session_name,
 )
 from codess.storage_report import all_store_paths, build_storage_report
 from codess.token_usage import source_paths, validate_codex_token_usage
-from codess.retention import apply_retention_plan, build_retention_plan
 from codess.vendor_audits.claude_features import audit_claude_features
 from codess.vendor_audits.codex_features import audit_codex_features
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -82,7 +94,7 @@ def _candidate_parser(subparsers) -> None:
 def _refresh(args) -> int:
     receipt = args.receipt
     if receipt is None and args.stage != "plan":
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
         receipt = (
             args.registry.expanduser().resolve()
             / "reports" / f"refresh-{stamp}.json"
@@ -642,7 +654,10 @@ def _package_verify(args) -> int:
     operator diagnosing a refused write needs to see which one moved.
     """
     from codess.schema_contract import (
-        CONTRACT_ROLES, contract_digest, load_manifest, verify_package,
+        CONTRACT_ROLES,
+        contract_digest,
+        load_manifest,
+        verify_package,
     )
 
     roles = sorted(load_manifest().get("files", {}))

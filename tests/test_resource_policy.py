@@ -37,7 +37,7 @@ def test_builtins_are_complete_and_separate_cursor_from_transcripts():
     assert policy.maximums == BUILTIN_MAXIMUMS
     assert policy.maximums["transcript_bytes"] == 256 * 1024**2
     assert policy.maximums["cursor_container_bytes"] == 10 * 1024**3
-    assert policy.origins == {key: "built-in" for key in BUILTIN_MAXIMUMS}
+    assert policy.origins == dict.fromkeys(BUILTIN_MAXIMUMS, "built-in")
 
 
 def test_partial_file_overrides_and_null_disables_one_limit(tmp_path):

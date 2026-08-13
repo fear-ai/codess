@@ -11,7 +11,6 @@ from pathlib import Path
 
 from codess.hashing import codess_hash
 
-
 REFERENCE_SEGMENTS = frozenset({"sOSS", "Claws", "ZKs", "CodingTools"})
 
 
@@ -57,4 +56,4 @@ def local_path_key(path: Path) -> str:
     it the first time a directory moved (W20, 13.4.8).
     """
     normalized = str(path.expanduser().resolve())
-    return "local:path-key:" + codess_hash(256, 64, [normalized])
+    return "local:path-key:" + codess_hash(256, 128, [normalized])

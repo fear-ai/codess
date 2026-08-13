@@ -7,14 +7,14 @@ comparison outcome and criticality partition.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable, Iterator
 from contextlib import ExitStack
 from itertools import zip_longest
 from pathlib import Path
-from typing import Iterable, Iterator
 
 from codess import field_state
-from codess.fileio import open_readonly
 from codess.baseline_validation import canonical_rows
+from codess.fileio import open_readonly
 from codess.schema_contract import require_store
 
 # Fields whose per-row divergence blocks promotion (identity / ordering / lineage).

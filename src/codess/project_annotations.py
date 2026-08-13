@@ -5,21 +5,20 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from codess.fileio import open_readonly
 from codess.config import LARGE_EVENT_COUNT, LARGE_STORE_BYTES
+from codess.fileio import open_readonly
 from codess.project_catalog import (
     catalog_readiness,
     durable_project_root,
     load_catalog,
 )
-from codess.snapshot import SnapshotError, read_manifest, current_snapshot
 from codess.schema_contract import column_names
+from codess.snapshot import SnapshotError, current_snapshot, read_manifest
 from codess.store import table_counts
-
 
 ANNOTATION_REPORT_FORMAT = "codess.project-annotations/1"
 
@@ -271,7 +270,7 @@ def build_project_annotations(
     }
     return {
         "format": ANNOTATION_REPORT_FORMAT,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "registry": str(registry),
         "definitions": definitions,
         "thresholds": {

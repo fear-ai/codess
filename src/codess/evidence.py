@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from codess.codex_parent_audit import audit_parentage
 from codess.config import CC_PROJECTS
@@ -14,7 +15,6 @@ from codess.snapshot import current_stores
 from codess.store import connect
 from codess.vendor_audits.claude_features import audit_claude_features
 from codess.vendor_audits.codex_features import audit_codex_features
-
 
 _TOTAL_COUNT_QUERIES = {
     "tool_invocations": "SELECT COUNT(*) FROM tool_invocations",

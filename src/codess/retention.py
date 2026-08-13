@@ -6,19 +6,22 @@ import json
 import os
 import shutil
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from codess.hashing import codess_canonical_hash
 from codess.config import (
-    CURRENT_POINTER_FILE, LARGE_RAW_REVISION_BYTES, RAW_MANIFEST_FILE,
-    SNAPSHOTS_DIR, STORE_DIR, WORKING_ARCHIVES_DIR,
+    CURRENT_POINTER_FILE,
+    LARGE_RAW_REVISION_BYTES,
+    RAW_MANIFEST_FILE,
+    SNAPSHOTS_DIR,
+    STORE_DIR,
+    WORKING_ARCHIVES_DIR,
 )
 from codess.fileio import hash_file, open_readonly, write_json_atomic
+from codess.hashing import codess_canonical_hash
 from codess.resources import storage_usage
-from codess.snapshot import SnapshotError, read_manifest, current_snapshot
-
+from codess.snapshot import SnapshotError, current_snapshot, read_manifest
 
 PLAN_FORMAT = "codess.retention-plan/1"
 RECEIPT_FORMAT = "codess.retention-receipt/1"
@@ -397,7 +400,7 @@ def apply_retention_plan(
     # is written to are two renderings of the same moment; reading the clock
     # twice would name the file a different instant than its own contents
     # report, which is exactly the correlation a receipt exists to support.
-    applied_at = datetime.now(timezone.utc)
+    applied_at = datetime.now(UTC)
     receipt = {
         "format": RECEIPT_FORMAT,
         "applied_at": applied_at.isoformat(),

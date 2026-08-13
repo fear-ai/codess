@@ -10,26 +10,41 @@ import pytest
 
 from codess.baseline_catalog import freeze_reviewed_catalogs, verify_reviewed_catalog
 from codess.baseline_operations import (
-    apply_project, reset_rebuildable_working_stores, run_ingest,
+    apply_project,
+    reset_rebuildable_working_stores,
+    run_ingest,
 )
 from codess.baseline_validation import validate_project
-from codess.review_project import (
-    discover_git_roots, observe_git, recommend, record_decision,
-    refresh_candidates, validate_policy,
-)
 from codess.catalog_operations import (
-    _run_ingest_stage, onboard_catalog, relocate_project, retire_location,
+    _run_ingest_stage,
+    onboard_catalog,
+    relocate_project,
+    retire_location,
 )
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.project import parse_and_run
 from codess.project_catalog import (
-    add_project_location, ensure_project_binding, get_project_entry,
-    durable_project_root, retire_project_location, set_project_selection_state,
+    add_project_location,
+    durable_project_root,
+    ensure_project_binding,
+    get_project_entry,
+    retire_project_location,
+    set_project_selection_state,
 )
 from codess.raw_store import RawStore
+from codess.review_project import (
+    discover_git_roots,
+    observe_git,
+    recommend,
+    record_decision,
+    refresh_candidates,
+    validate_policy,
+)
 from codess.schema_evolution import compare, required
 from codess.session_names import (
-    alias_index, remove_session_name, set_session_name,
+    alias_index,
+    remove_session_name,
+    set_session_name,
 )
 from codess.snapshot import create_snapshot, current_raw_records, publish_snapshot
 from codess.store import connect, init_db, replace_session_events, sync_project_catalog

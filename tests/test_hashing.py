@@ -136,7 +136,7 @@ def test_text_mode_matches_a_utf8_digest_of_the_string():
         b"payload"
     ).hexdigest()
     assert codess_text_hash(256, 256, "café") == codess_bytes_hash(
-        256, 256, "café".encode("utf-8")
+        256, 256, "café".encode()
     )
 
 

@@ -62,7 +62,7 @@ class ContentPolicy:
     scopes: tuple[dict[str, Any], ...] = ()
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any] | None) -> "ContentPolicy":
+    def from_mapping(cls, value: dict[str, Any] | None) -> ContentPolicy:
         value = dict(value or {})
         scopes = tuple(value.pop("scopes", ()) or ())
         return cls(rules=value, scopes=scopes)
@@ -95,9 +95,7 @@ def _merged_rules(policy: ContentPolicy, context: ContentContext) -> dict[str, A
                 continue
             if key in list_fields:
                 merged[key] = list(merged.get(key) or []) + list(value or [])
-            elif key == "topics":
-                merged[key] = {**(merged.get(key) or {}), **(value or {})}
-            elif key == "charset":
+            elif key == "topics" or key == "charset":
                 merged[key] = {**(merged.get(key) or {}), **(value or {})}
             else:
                 merged[key] = value
@@ -130,7 +128,7 @@ class ContentProcessor:
                 observed_type="bytes", encoding=encoding,
             ) from exc
         result = self._process(text, context, rules)
-        actions = (f"decoded:{encoding}:{errors}",) + result.actions
+        actions = (f"decoded:{encoding}:{errors}", *result.actions)
         return replace(result, actions=actions)
 
     def preprocess(self, value: str, context: ContentContext) -> ContentResult:
@@ -173,7 +171,7 @@ class ContentProcessor:
         for pattern in rules.get("suppress_patterns") or []:
             if re.search(str(pattern), text, flags=re.IGNORECASE | re.MULTILINE):
                 return ContentResult(
-                    "", False, original_length, tuple(actions + ["suppressed"]),
+                    "", False, original_length, (*actions, "suppressed"),
                     "suppressed_pattern",
                 )
 
@@ -202,7 +200,7 @@ class ContentProcessor:
             for pattern in topics.get("exclude") or []
         ):
             return ContentResult(
-                "", False, original_length, tuple(actions + ["topic_excluded"]),
+                "", False, original_length, (*actions, "topic_excluded"),
                 "topic_excluded",
             )
         include = topics.get("include") or []
@@ -211,14 +209,14 @@ class ContentProcessor:
             for pattern in include
         ):
             return ContentResult(
-                "", False, original_length, tuple(actions + ["topic_not_included"]),
+                "", False, original_length, (*actions, "topic_not_included"),
                 "topic_not_included",
             )
 
         minimum = rules.get("min_chars")
         if minimum is not None and len(text) < int(minimum):
             return ContentResult(
-                "", False, original_length, tuple(actions + ["min_chars"]),
+                "", False, original_length, (*actions, "min_chars"),
                 "below_min_chars",
             )
         maximum = rules.get("max_chars")

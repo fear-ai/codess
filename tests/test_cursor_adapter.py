@@ -1,15 +1,18 @@
 """Tests for Cursor adapter."""
 
-from contextlib import closing
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
-
 from cursor_fixtures import (
-    build_cursor_db, create_bubble_table, create_header_table, put_headers,
+    build_cursor_db,
+    create_bubble_table,
+    create_header_table,
+    put_headers,
 )
+
 from codess.adapters.cursor import (
     _bubble_timestamp,
     _bubble_to_events,
@@ -23,7 +26,6 @@ from codess.cursor_source import (
     get_composer_headers,
     get_db_metrics,
     get_project_composer_headers,
-    get_selection_marker,
     get_selection_markers,
     get_sqlite_container_marker,
     get_workspace_composer_headers,
@@ -288,7 +290,7 @@ class TestSelectionMarker:
                     ("bubbleId:other:one", "other payload"),
                 ],
             )
-        first = get_selection_marker(db, {"ws1"})
+        first = get_selection_markers(db, {"selection": {"ws1"}})["selection"]
         assert first["source_revision"].startswith(
             "cursor-selection-sha256-fingerprint:"
         )
@@ -307,7 +309,7 @@ class TestSelectionMarker:
             )
             conn.execute("CREATE TABLE unrelated(value TEXT)")
             conn.execute("INSERT INTO unrelated VALUES ('changed')")
-        assert get_selection_marker(db, {"ws1"}) == first
+        assert get_selection_markers(db, {"selection": {"ws1"}})["selection"] == first
 
         with sqlite3.connect(db) as conn:
             conn.execute(
@@ -318,7 +320,7 @@ class TestSelectionMarker:
                 "UPDATE composerHeaders SET lastUpdatedAt=1700000002000 "
                 "WHERE composerId='selected'"
             )
-        changed = get_selection_marker(db, {"ws1"})
+        changed = get_selection_markers(db, {"selection": {"ws1"}})["selection"]
         assert changed["source_revision"] != first["source_revision"]
         assert changed["source_mtime"] == 1700000002000
 
@@ -341,8 +343,8 @@ class TestSelectionMarker:
             db, {"one": {"ws1"}, "two": {"ws2"}}
         )
 
-        assert markers["one"] == get_selection_marker(db, {"ws1"})
-        assert markers["two"] == get_selection_marker(db, {"ws2"})
+        assert markers["one"] == get_selection_markers(db, {"selection": {"ws1"}})["selection"]
+        assert markers["two"] == get_selection_markers(db, {"selection": {"ws2"}})["selection"]
         with sqlite3.connect(db) as conn:
             conn.execute(
                 "UPDATE cursorDiskKV SET value=? WHERE key=?",
@@ -359,11 +361,10 @@ class TestSelectionMarker:
         Path(str(db) + "-wal").unlink(missing_ok=True)
         Path(str(db) + "-shm").unlink(missing_ok=True)
 
-        with pytest.raises(sqlite3.OperationalError):
-            with sqlite3.connect(
-                db.resolve().as_uri() + "?mode=ro", uri=True
-            ) as conn:
-                conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+        with pytest.raises(sqlite3.OperationalError), sqlite3.connect(
+            db.resolve().as_uri() + "?mode=ro", uri=True
+        ) as conn:
+            conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
         with closing(connect_readonly(db)) as conn:
             assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert not has_bubble_rows(db)
@@ -622,11 +623,11 @@ class TestBubbleToEvents:
         )
 
     def test_user_model_selection_is_bounded_metadata(self):
-        event = list(_bubble_to_events(
+        event = next(iter(_bubble_to_events(
             "c1", "b1",
             {"type": 1, "text": "prompt", "modelInfo": {"modelName": "composer-2.5"}},
             "/db", False,
-        ))[0]
+        )))
         assert json.loads(event["metadata"]) == {
             "model_selection": "composer-2.5", "model": "composer-2.5",
             "configuration_provenance": {"model": {
@@ -637,12 +638,12 @@ class TestBubbleToEvents:
         }
 
     def test_subagent_user_bubble_is_harness_delegated(self):
-        event = list(_bubble_to_events(
+        event = next(iter(_bubble_to_events(
             "c1", "b1",
             {"type": 1, "text": "Investigate this"},
             "/db", False,
             session_header={"is_subagent": True},
-        ))[0]
+        )))
         assert event["event_type"] == "system_event"
         assert event["subtype"] == "delegated_prompt"
         assert event["role"] == "harness"
@@ -698,7 +699,7 @@ class TestIterBubbles:
         db = _make_cursor_db(
             special, [("c1", "b1", {"type": 1, "text": "safe uri"})]
         )
-        assert list(_iter_bubbles(db))[0][2]["text"] == "safe uri"
+        assert next(iter(_iter_bubbles(db)))[2]["text"] == "safe uri"
 
     def test_skips_non_bubble_keys(self, tmp_path):
         db = _make_cursor_db(tmp_path, [])
@@ -958,11 +959,11 @@ class TestCursorTimestamps:
 
 
 def test_hostile_cursor_fields_are_diagnosed_without_losing_events():
-    prompt = list(_bubble_to_events(
+    prompt = next(iter(_bubble_to_events(
         "c1", "b1",
         {"type": 1, "text": "keep prompt", "modelInfo": ["bad"]},
         "/db", False,
-    ))[0]
+    )))
     assert prompt["content"] == "keep prompt"
     assert {
         (row["source_field"], row["reason_code"])
@@ -972,17 +973,86 @@ def test_hostile_cursor_fields_are_diagnosed_without_losing_events():
         ("bubble.origin", "field_absent"),
     }
 
-    call = list(_bubble_to_events(
+    call = next(iter(_bubble_to_events(
         "c1", "b2",
         {"type": 2, "text": "", "toolFormerData": {
             "name": "read_file", "toolCallId": "call-1",
             "status": "pending",
         }},
         "/db", False,
-    ))[0]
+    )))
     assert call["event_type"] == "tool_call"
     assert any(
         row["source_field"] == "toolFormerData.params"
         and row["reason_code"] == "field_absent"
         for row in call["field_diagnostics"]
     )
+
+
+class TestSubagentLineage:
+    """Cursor records which Composer delegated a subagent; Codess reads it.
+
+    `isSubagent` was the only field consulted, so a Session was marked
+    `subagent` while its parent stayed unnamed -- a relation asserted without
+    its evidence. The parent is in the header's JSON `value` under
+    `subagentInfo`, alongside the tool call that spawned it (W02, 13.4.9).
+    """
+
+    def header(self, **overrides) -> str:
+        info = {
+            "subagentType": 3,
+            "parentComposerId": "parent-1",
+            "rootParentConversationId": "root-1",
+            "subagentTypeName": "explore",
+            "toolCallId": "tool_abc",
+            "conversationLengthAtSpawn": 0,
+        }
+        info.update(overrides.pop("subagentInfo", {}))
+        value = {"type": "head", "composerId": "child-1", "subagentInfo": info}
+        value.update(overrides)
+        return json.dumps(value)
+
+    def test_the_parent_is_read_from_the_header(self):
+        from codess.cursor_source import subagent_lineage
+
+        lineage = subagent_lineage(self.header())
+        assert lineage["parent_composer_id"] == "parent-1"
+        assert lineage["root_parent_composer_id"] == "root-1"
+
+    def test_the_spawning_tool_call_is_retained(self):
+        """What links a delegated Session back to the invocation in its parent."""
+        from codess.cursor_source import subagent_lineage
+
+        lineage = subagent_lineage(self.header())
+        assert lineage["spawning_tool_call_id"] == "tool_abc"
+        assert lineage["subagent_type_name"] == "explore"
+
+    def test_a_header_without_lineage_reports_nothing(self):
+        """Absent stays absent, so a caller can merge unconditionally."""
+        from codess.cursor_source import subagent_lineage
+
+        assert subagent_lineage(json.dumps({"type": "head"})) == {}
+
+    def test_unusable_header_values_are_absence_not_failure(self):
+        from codess.cursor_source import subagent_lineage
+
+        assert subagent_lineage(None) == {}
+        assert subagent_lineage("") == {}
+        assert subagent_lineage("{not json") == {}
+        assert subagent_lineage(json.dumps(["not", "an", "object"])) == {}
+
+    def test_a_partial_lineage_keeps_what_was_recorded(self):
+        from codess.cursor_source import subagent_lineage
+
+        value = json.dumps({
+            "type": "head", "subagentInfo": {"parentComposerId": "p1"},
+        })
+        lineage = subagent_lineage(value)
+        assert lineage == {"parent_composer_id": "p1"}
+
+    def test_a_bytes_header_decodes(self):
+        """SQLite may hand back the column as bytes."""
+        from codess.cursor_source import subagent_lineage
+
+        lineage = subagent_lineage(self.header().encode("utf-8"))
+        assert lineage["parent_composer_id"] == "parent-1"

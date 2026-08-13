@@ -12,10 +12,10 @@ import json
 from pathlib import Path
 
 import pytest
+from cursor_fixtures import build_cursor_db
 
 from codess.cursor_feature_audit import AUDIT_FORMAT, audit_cursor_features
 from codess.cursor_source import read_feature_evidence
-from cursor_fixtures import build_cursor_db
 
 
 def bubble(**overrides) -> str:

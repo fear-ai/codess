@@ -6,7 +6,7 @@ import json
 import sys
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, TextIO
 
 
@@ -34,7 +34,7 @@ class ProgressTrace:
 
     def __call__(self, event: str, **fields: Any) -> dict[str, Any]:
         record = {
-            "at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            "at": datetime.now(UTC).isoformat(timespec="milliseconds"),
             "elapsed_seconds": round(time.monotonic() - self.start_tick, 3),
             "event": event,
             **fields,
@@ -75,7 +75,7 @@ class ProgressTrace:
         ]
         if self.dropped_events:
             records.append({
-                "at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+                "at": datetime.now(UTC).isoformat(timespec="milliseconds"),
                 "elapsed_seconds": round(time.monotonic() - self.start_tick, 3),
                 "event": "progress.events_dropped",
                 "count": self.dropped_events,

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 from codess.query_api import RESULT_FORMAT, QueryContractError, content_hash
-
 
 INVESTIGATION_FORMAT = "codess.investigation/1"
 
@@ -32,7 +32,7 @@ def build_investigation(
         for row in result.get("rows") or []
         if row.get("global_event_id")
     }
-    requested = sorted(set(str(value) for value in event_ids if value))
+    requested = sorted({str(value) for value in event_ids if value})
     if requested:
         missing = sorted(set(requested) - set(by_event))
         if missing:
@@ -64,7 +64,7 @@ def build_investigation(
         })
     record = {
         "format": INVESTIGATION_FORMAT,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "processor_id": processor_id.strip(),
         "summary": summary,
         "input_result_hash": result.get("result_hash"),

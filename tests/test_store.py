@@ -9,19 +9,19 @@ import pytest
 from codess.fileio import open_readonly
 from codess.schema_contract import column_names, store_metadata, table_names
 from codess.store import (
-    init_db,
-    ingest_state_marker,
-    load_ingest_state,
-    save_ingest_state,
-    should_ingest,
     connect,
-    replace_session_events,
-    ensure_source,
-    prune_unreferenced_source_revisions,
     drop_sessions_absent_from_source,
+    ensure_source,
+    ingest_state_marker,
+    init_db,
     integrity_report,
-    table_counts,
+    load_ingest_state,
+    prune_unreferenced_source_revisions,
+    replace_session_events,
+    save_ingest_state,
     session_ids_for_source,
+    should_ingest,
+    table_counts,
     upsert_event,
     upsert_session,
 )
@@ -634,5 +634,118 @@ class TestSharedStoreReads:
         conn = open_readonly(foreign)
         try:
             assert table_names(conn) == {"unrelated"}
+        finally:
+            conn.close()
+
+
+class TestInvocationKind:
+    """What evidence an invocation rests on, rather than a constant.
+
+    `invocation_kind` was written as `harness_capability` for every row, so
+    the column that should distinguish a model's request from a
+    harness-observed operation carried nothing. Codex records both --
+    `patch_apply_end` and `web_search_end` are operations the harness
+    performed and reported -- and 461 of one Project's invocations are the
+    latter (13.4.9).
+    """
+
+    def write(self, tmp_path, events: list[dict]):
+        """Write through the real path: `_record_tool` runs inside it."""
+        db = tmp_path / "s.db"
+        init_db(db)
+        conn = connect(db)
+        replace_session_events(
+            conn,
+            {"id": "s1", "source": "Codex", "type": "Code", "started_at": 1.0},
+            events,
+            session_id="s1",
+            prune=False,
+        )
+        conn.commit()
+        return conn
+
+    def call(self, **overrides) -> dict:
+        event = {
+            "session_id": "s1", "event_id": "e1", "event_type": "tool_call",
+            "tool_name": "Read", "metadata": json.dumps({"call_id": "c1"}),
+            "timestamp": 1.0,
+        }
+        event.update(overrides)
+        return event
+
+    def kinds(self, conn) -> dict:
+        return dict(conn.execute(
+            "SELECT invocation_kind, COUNT(*) FROM tool_invocations GROUP BY 1"
+        ))
+
+    def test_a_model_request_is_recorded_as_such(self, tmp_path):
+        conn = self.write(tmp_path, [self.call()])
+        try:
+            assert self.kinds(conn) == {"model_requested": 1}
+        finally:
+            conn.close()
+
+    def test_a_result_without_a_request_is_harness_observed(self, tmp_path):
+        """The harness reporting what it did, with no model call recorded."""
+        conn = self.write(tmp_path, [self.call(
+            event_id="r1", event_type="user_message", subtype="tool_result",
+            metadata=json.dumps({"call_id": "only-result"}),
+        )])
+        try:
+            assert self.kinds(conn) == {"harness_observed": 1}
+        finally:
+            conn.close()
+
+    def test_a_request_arriving_after_its_result_promotes_the_kind(self, tmp_path):
+        """Absence of evidence at one moment is not evidence of absence.
+
+        A store can see the result before the request. The value is promoted
+        when the request arrives and never demoted, so the completed pair
+        reads as what it is.
+        """
+        result = self.call(
+            event_id="r1", event_type="user_message", subtype="tool_result",
+        )
+        conn = self.write(tmp_path, [result])
+        try:
+            assert self.kinds(conn) == {"harness_observed": 1}
+            # The request arrives in a later write of the same Session, as it
+            # would when a source is re-read and the pair completes.
+            replace_session_events(
+                conn,
+                {"id": "s1", "source": "Codex", "type": "Code", "started_at": 1.0},
+                [result, self.call()],
+                session_id="s1",
+                prune=False,
+            )
+            conn.commit()
+            assert self.kinds(conn) == {"model_requested": 1}
+        finally:
+            conn.close()
+
+    def test_a_later_result_does_not_demote_a_request(self, tmp_path):
+        conn = self.write(tmp_path, [
+            self.call(),
+            self.call(event_id="r1", event_type="user_message", subtype="tool_result"),
+        ])
+        try:
+            assert self.kinds(conn) == {"model_requested": 1}
+        finally:
+            conn.close()
+
+    def test_the_kind_agrees_with_the_evidence_it_is_derived_from(self, tmp_path):
+        """The column must never disagree with `requested_event_id`."""
+        conn = self.write(tmp_path, [
+            self.call(),
+            self.call(event_id="r2", event_type="user_message",
+                      subtype="tool_result", metadata=json.dumps({"call_id": "c2"})),
+        ])
+        try:
+            disagreeing = conn.execute("""
+                SELECT COUNT(*) FROM tool_invocations
+                WHERE (invocation_kind='model_requested')
+                  <> (requested_event_id IS NOT NULL)
+            """).fetchone()[0]
+            assert disagreeing == 0
         finally:
             conn.close()

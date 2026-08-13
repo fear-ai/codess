@@ -17,8 +17,9 @@ def test_merge_preserves_scan_when_ingest(tmp_path):
 
     update_project_entry(tmp_path, proj, ingest)
 
-    from codess.config import get_stats_path
     import json
+
+    from codess.config import get_stats_path
 
     raw = json.loads(get_stats_path(tmp_path).read_text())
     ent = next(p for p in raw["projects"] if p["path"] == proj)

@@ -1,11 +1,17 @@
-"""A16 / D18: universal field-state classification prototype."""
+"""Field-state classification: one vocabulary for absent, empty, and malformed.
+
+Adapters need to say *how* a field failed to arrive, not merely that it did,
+because absent and malformed call for different dispositions. These tests fix
+that vocabulary and the two collapses built on it -- diagnostic level and
+criticality.
+"""
 
 from __future__ import annotations
 
 from codess import field_state as fs
 
 
-def test_specific_states():
+def test_states():
     assert fs.classify(fs._MISSING) == fs.ABSENT
     assert fs.classify(None) == fs.NULL
     assert fs.classify("") == fs.EMPTY
@@ -26,11 +32,13 @@ def test_get_state_distinguishes_absent_from_null():
     assert fs.get_state({"k": "v"}, "k") == ("v", fs.PRESENT)
 
 
-def test_vacant_umbrella_covers_absent_family_but_not_malformed():
-    for state in (fs.ABSENT, fs.EMPTY, fs.NULL, fs.SENTINEL):
-        assert fs.is_vacant(state)
-    assert not fs.is_vacant(fs.PRESENT)
-    assert not fs.is_vacant(fs.MALFORMED)  # malformed is a warning, not absence
+def test_vacant_umbrella():
+    assert set(fs.VACANT_STATES) == {fs.ABSENT, fs.EMPTY, fs.NULL, fs.SENTINEL}
+    assert fs.PRESENT not in fs.VACANT_STATES
+    # Malformed is a warning, not an absence: it names a value that was there
+    # and could not be read, which a caller reports rather than treats as
+    # missing.
+    assert fs.MALFORMED not in fs.VACANT_STATES
 
 
 def test_diagnostic_levels():
@@ -40,7 +48,7 @@ def test_diagnostic_levels():
     assert fs.diagnostic_level(fs.MALFORMED) == "warn"
 
 
-def test_diagnose_records_and_never_raises():
+def test_diagnose():
     opts = {"diagnostics": {}, "field_diagnostics": []}
     fs.diagnose(opts, field="model", state=fs.ABSENT,
                 source_field="message.model")
@@ -55,14 +63,13 @@ def test_diagnose_records_and_never_raises():
     assert rows[1]["level"] == "warn" and rows[1]["detail"] is None  # malformed value not echoed
 
 
-def test_coarse_collapses_to_present_vacant_but_keeps_malformed():
-    assert fs.coarse(fs.PRESENT) == fs.PRESENT
-    for state in (fs.ABSENT, fs.EMPTY, fs.NULL, fs.SENTINEL):
-        assert fs.coarse(state) == fs.VACANT
-    assert fs.coarse(fs.MALFORMED) == fs.MALFORMED  # neither present nor vacant
+def test_criticality():
+    """Severity follows the field's role, not which non-present state it is in.
 
-
-def test_criticality_is_the_shared_a14_a16_partition():
+    Every non-present state is fatal on an identity, order, or lineage field
+    and advisory everywhere else, so `classify` never has to know a field's
+    role and `criticality` never has to rank the states.
+    """
     # present: nothing to weigh.
     assert fs.criticality(fs.PRESENT, is_critical_field=True) is None
     # vacant/malformed on a critical (identity/order/lineage) field blocks.
@@ -74,7 +81,7 @@ def test_criticality_is_the_shared_a14_a16_partition():
     assert fs.criticality(fs.MALFORMED, is_critical_field=False) == fs.ADVISORY
 
 
-def test_compare_two_present_values():
+def test_compare_present():
     assert fs.compare("x", "x") == fs.MATCH        # both present, equal
     assert fs.compare("x", "y") == fs.MISMATCH     # both present, differ
     assert fs.compare(1, 1) == fs.MATCH

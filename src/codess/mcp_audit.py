@@ -10,9 +10,8 @@ from typing import Any
 from codess.adapters.codex import process_file
 from codess.project_catalog import catalog_readiness, durable_project_root
 from codess.store import connect
-from codess.tool_result_status import application_failure_evidence
 from codess.tool_identity import bounded_source_call_id
-
+from codess.tool_result_status import application_failure_evidence
 
 MCP_AUDIT_FORMAT = "codess.mcp-interaction-audit/1"
 _MCP_NAMES = (

@@ -7,15 +7,14 @@ import argparse
 import json
 import shutil
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from codess.baseline_validation import write_json_atomic  # noqa: E402
-from codess.project_catalog import durable_project_root, load_catalog  # noqa: E402
-
+from codess.baseline_validation import write_json_atomic
+from codess.project_catalog import durable_project_root, load_catalog
 
 TEMP_PREFIXES = ("/private/var/folders/", "/var/folders/")
 
@@ -46,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         ],
     }
     if args.apply and removable:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         quarantine = registry / "quarantine" / f"missing-temp-projects-{stamp}"
         quarantine.mkdir(parents=True, exist_ok=False)
         for project in removable:
@@ -54,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
             if source.exists():
                 shutil.move(str(source), quarantine / source.name)
         catalog["projects"] = retained
-        catalog["updated_at"] = datetime.now(timezone.utc).isoformat()
+        catalog["updated_at"] = datetime.now(UTC).isoformat()
         write_json_atomic(registry / "projects.json", catalog)
         write_json_atomic(quarantine / "pruned-projects.json", result)
         result["quarantine"] = str(quarantine)

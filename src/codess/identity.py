@@ -7,7 +7,6 @@ from pathlib import Path
 
 from codess.hashing import codess_digest
 
-
 IDENTITY_FORMAT = "codess.id/1"
 
 

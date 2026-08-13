@@ -23,9 +23,10 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from codess.artifact_correlation import correlate_external_artifacts
 from codess.config import STORE_DIR, get_state_path, get_store_path

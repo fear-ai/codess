@@ -14,13 +14,13 @@ import hashlib
 import json
 import math
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime
 from html import escape
 from pathlib import Path
 from statistics import median
-from typing import Any, Iterable
+from typing import Any
 from zoneinfo import ZoneInfo
-
 
 FORMAT = "codess.demo-model-metrics/1"
 DEFAULT_TABLE_MODELS = (
@@ -51,7 +51,7 @@ VENDOR_STORES = {
 
 def _parse_boundary(value: str, timezone_name: str) -> float:
     """Return an inclusive/exclusive boundary as Unix milliseconds."""
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
     return parsed.timestamp() * 1000

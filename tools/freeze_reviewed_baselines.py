@@ -11,8 +11,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from codess.baseline_catalog import (  # noqa: E402
-    freeze_reviewed_catalogs, load_baseline_selection,
+from codess.baseline_catalog import (
+    freeze_reviewed_catalogs,
+    load_baseline_selection,
 )
 
 

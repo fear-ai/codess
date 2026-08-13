@@ -1,15 +1,14 @@
 """Tests for the codess scan CLI command (backed by codess.walk_sessions)."""
 
 import json
-import sqlite3
-
-import pytest
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
+import pytest
 from cursor_fixtures import create_bubble_table, create_header_table, put_headers
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -19,7 +18,7 @@ def _run(cmd, cwd=None, env=None, **kw):
     env = env or os.environ.copy()
     cwd = cwd or PROJECT_ROOT
     return subprocess.run(
-        [sys.executable, "-m", "main"] + cmd,
+        [sys.executable, "-m", "main", *cmd],
         cwd=PROJECT_ROOT,
         env=env,
         capture_output=True,
@@ -738,7 +737,7 @@ def test_scan_cursor_central_db():
         lines = r.stdout.strip().split("\n")
         assert lines[0] == "path,vendor,sess,mb,span_weeks"
         assert any("(global)" in ln for ln in lines)
-        row = [ln for ln in lines if "(global)" in ln][0]
+        row = next(ln for ln in lines if "(global)" in ln)
         assert "1," in row or ",1," in row  # sess=1
 
 

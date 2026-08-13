@@ -1,6 +1,7 @@
 """Read-only, cross-store session query CLI command.
 """
 
+import contextlib
 import csv
 import json
 import logging
@@ -11,31 +12,32 @@ from pathlib import Path
 from typing import Any
 
 from codess.config import (
-    DEFAULT_QUERY_BYTE_LIMIT, get_project_stores, validate_config,
+    DEFAULT_QUERY_BYTE_LIMIT,
+    get_project_stores,
+    validate_config,
 )
-from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
-from codess.project_catalog import resolve_project_query_scopes
-from codess.registry_store import merge_query_stats, update_project_entry
-from codess.sanitize import (
-    protect_csv_row, sanitize_for_display, sanitize_tabular, sanitize_text,
-)
-from codess.schema_contract import SchemaContractError
-from codess.session_names import alias_index
-from codess.snapshot import (
-    SnapshotError,
-    current_store_paths_from_base,
-    snapshot_store_paths,
-    snapshot_store_paths_from_base,
-)
-from codess.store import connect as connect_store
 from codess.configuration_audit import audit as audit_configurations
 from codess.evidence_resolver import resolve_event
 from codess.investigation import build_investigation
+from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
+from codess.project_catalog import resolve_project_query_scopes
 from codess.query_api import (
-    REQUEST_FORMAT, RESULT_FORMAT, QueryContractError,
-    compare_results, content_hash, execute as execute_typed_query, load_document,
-    make_request, merge_selection, save_document, selection_from_result,
-    selected_project_ids, selected_project_snapshots, validate_request,
+    REQUEST_FORMAT,
+    RESULT_FORMAT,
+    QueryContractError,
+    compare_results,
+    content_hash,
+    load_document,
+    make_request,
+    merge_selection,
+    save_document,
+    selected_project_ids,
+    selected_project_snapshots,
+    selection_from_result,
+    validate_request,
+)
+from codess.query_api import (
+    execute as execute_typed_query,
 )
 from codess.query_reports import (
     artifact_evidence,
@@ -51,6 +53,23 @@ from codess.query_reports import (
     tool_lineage,
     tool_totals,
 )
+from codess.registry_store import merge_query_stats, update_project_entry
+from codess.sanitize import (
+    protect_csv_row,
+    sanitize_for_display,
+    sanitize_tabular,
+    sanitize_text,
+)
+from codess.schema_contract import SchemaContractError
+from codess.session_names import alias_index
+from codess.snapshot import (
+    SnapshotError,
+    current_store_paths_from_base,
+    snapshot_store_paths,
+    snapshot_store_paths_from_base,
+)
+from codess.store import connect as connect_store
+
 log = logging.getLogger(__name__)
 
 # Standard (built-in) tools for grouping; others are "loaded"
@@ -247,18 +266,6 @@ def _open_project_id_query_scope(
         raise
 
 
-def _source_predicate(scope: QueryScope, alias: str = "s") -> tuple[str, tuple[str, ...]]:
-    """Return a session-source predicate and its parameters."""
-    if not scope.source_tokens:
-        return "1", ()
-    tokens = sorted(scope.source_tokens)
-    placeholders = ", ".join("?" for _ in tokens)
-    return (
-        f"{alias}.source_system_id IN ({placeholders})",
-        tuple(QUERY_SOURCE_FILTERS[token] for token in tokens),
-    )
-
-
 def _timestamp_last_sort_key(
     timestamp: Any, project: str, store_index: int, session_id: str, tail: str,
 ) -> tuple:
@@ -321,10 +328,6 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
             if project_id else None
         )
     return sessions
-
-
-def _limited(rows: list[dict], limit: int | None) -> list[dict]:
-    return rows if limit is None else rows[:limit]
 
 
 def _session_by_number(scope: QueryScope, n: int) -> dict | None:
@@ -1069,10 +1072,10 @@ def _tool_table(scope: QueryScope, recent: int) -> int:
     max_w = max(len(t) for t in tools_ordered) if tools_ordered else 10
     for tool in tools_ordered:
         row = [tool]
-        for i, sid in enumerate(sess_ids):
+        for _i, sid in enumerate(sess_ids):
             row.append(str(sess_counts[sid].get(tool, 0)))
         row.append(str(all_tools[tool]))
-        print("  ".join([sanitize_tabular(row[0]).ljust(max_w)] + row[1:]))
+        print("  ".join([sanitize_tabular(row[0]).ljust(max_w), *row[1:]]))
     return 0
 
 
@@ -1116,7 +1119,7 @@ def _show_session(
         print(f"No session {display}", file=sys.stderr)
         return 1
 
-    modes = show_modes if show_modes else ["prompt", "pr", "agent", "tool", "perm"]
+    modes = show_modes or ["prompt", "pr", "agent", "tool", "perm"]
     show_prompt = "prompt" in modes or "pr" in modes
     show_pr = "pr" in modes
     show_agent = "agent" in modes
@@ -1142,10 +1145,9 @@ def _show_session(
                     print(f"[{subtype}] {sanitize_tabular(tool_name)}")
                     print(sanitize_for_display(content or "", 500))
                     print()
-            elif subtype == "permission_denied":
-                if show_perm:
-                    print(f"[permission_denied] {sanitize_tabular(tool_name)}")
-                    print()
+            elif subtype == "permission_denied" and show_perm:
+                print(f"[permission_denied] {sanitize_tabular(tool_name)}")
+                print()
         elif etype == "assistant_message":
             # Skip dialog (short pre-tool chatter); keep response and truncated only
             if subtype in ("response", "truncated") and show_pr:
@@ -1159,10 +1161,8 @@ def _show_session(
             if is_agent and show_agent:
                 inp = {}
                 if tool_input:
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError):
                         inp = json.loads(tool_input)
-                    except json.JSONDecodeError:
-                        pass
                 print(f"[agent] {sanitize_tabular(tool_name)}")
                 print(f"  desc: {sanitize_for_display(inp.get('description', ''), 80)}")
                 print(f"  prompt: {sanitize_for_display(inp.get('prompt', ''), 80)}")
@@ -1282,10 +1282,8 @@ def _task_review(scope: QueryScope) -> int:
         for row in task_calls:
             inp = {}
             if row["tool_input"]:
-                try:
+                with contextlib.suppress(json.JSONDecodeError):
                     inp = json.loads(row["tool_input"])
-                except json.JSONDecodeError:
-                    pass
             desc = sanitize_for_display(inp.get("description", ""), 80)
             prompt = sanitize_for_display(inp.get("prompt", ""), 80)
             sub = sanitize_tabular(inp.get("subagent_type", ""))

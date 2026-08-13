@@ -3,7 +3,9 @@
 from pathlib import Path
 
 from codess.artifact_correlation import (
-    AMBIGUOUS_RELATION, RELATION, correlate_external_artifacts,
+    AMBIGUOUS_RELATION,
+    RELATION,
+    correlate_external_artifacts,
 )
 from codess.store import connect, init_db
 

@@ -6,15 +6,14 @@ import json
 import logging
 import os
 import sqlite3
+from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from codess.hashing import codess_digest
 from codess.fileio import hash_file
+from codess.hashing import codess_digest
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
-
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "schema" / "coschema"
@@ -39,8 +38,6 @@ class UnsupportedStoreError(SchemaContractError):
 
 
 log = logging.getLogger(__name__)
-
-_sha256 = hash_file
 
 CONTRACT_OVERRIDE_ENV = "CODESS_NO_CONTRACT_CHECK"
 
@@ -130,7 +127,7 @@ def _digest_manifest_files(roles: Iterable[str] | None, subject: str) -> str:
         if not path.is_file():
             failures.append(f"{role}: missing {entry['path']}")
             continue
-        actual = _sha256(path)
+        actual = hash_file(path)
         if actual != entry.get("sha256"):
             failures.append(
                 f"{role}: hash mismatch for {entry['path']} "

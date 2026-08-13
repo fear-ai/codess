@@ -12,7 +12,6 @@ from codess.identity import global_session_id
 from codess.project_catalog import resolve_project_query_scopes
 from codess.snapshot import snapshot_store_paths_from_base
 
-
 SESSION_NAMES_FORMAT = "codess.session-names/1"
 
 

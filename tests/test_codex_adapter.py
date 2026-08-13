@@ -38,7 +38,7 @@ def test_codex_events_carry_declared_exact_mapping_evidence(tmp_path):
             "content": [{"type": "output_text", "text": "hi"}],
         },
     }) + "\n", encoding="utf-8")
-    event = list(process_file(path, "s1", "/p", {}))[0]
+    event = next(iter(process_file(path, "s1", "/p", {})))
     assert event["source_record_type"] == "response_item"
     assert event["source_record_subtype"] == "message"
     assert validate_mapped_event("codex", event) == []
@@ -84,7 +84,58 @@ class TestGetSessionMeta:
             "cli_version": "1.2.3",
             "model_provider": "openai",
             "originator": "codex_cli_rs",
+            # `originator` is retained as source evidence and also mapped to
+            # the common column, so a reader sees both what Codex said and
+            # what it was normalized to.
+            "harness_name": "codex_cli_rs",
         }
+
+
+class TestObservedHarness:
+    """Codex reports its harness and surface; the profile constant hid them.
+
+    `store.SOURCE_PROFILES` supplies one constant per vendor, correct for
+    Claude and Cursor because neither names its harness in a Session. Codex
+    does, and storing the constant recorded a Desktop or VS Code Session as
+    CLI.
+    """
+
+    def _metadata(self, tmp_path, payload):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(json.dumps({
+            "type": "session_meta",
+            "payload": {"id": "a", "cwd": "/x", **payload},
+        }) + "\n")
+        return get_session_metadata(path)
+
+    @pytest.mark.parametrize(
+        ("originator", "source", "harness", "surface"),
+        [
+            ("codex_cli_rs", "cli", "codex_cli_rs", "cli"),
+            ("Codex Desktop", "vscode", "Codex Desktop", "ide"),
+            ("codex-tui", "cli", "codex-tui", "cli"),
+            ("codex_exec", "exec", "codex_exec", "cli"),
+        ],
+    )
+    def test_observed(self, tmp_path, originator, source, harness, surface):
+        values = self._metadata(
+            tmp_path, {"originator": originator, "source": source},
+        )
+        assert values["harness_name"] == harness
+        assert values["surface_kind"] == surface
+
+    def test_unknown_surface(self, tmp_path):
+        """Unmapped surfaces stay absent; the profile default is a guess."""
+        values = self._metadata(
+            tmp_path, {"originator": "codex_cli_rs", "source": "hologram"},
+        )
+        assert "surface_kind" not in values
+        assert values["harness_name"] == "codex_cli_rs"
+
+    def test_absent(self, tmp_path):
+        values = self._metadata(tmp_path, {"cli_version": "1.0"})
+        assert "harness_name" not in values
+        assert "surface_kind" not in values
 
 
 class TestProcessFile:
@@ -253,7 +304,7 @@ class TestProcessFile:
                 "content": [{"type": "output_text", "text": "response"}],
             },
         }) + "\n")
-        event = list(process_file(path, "s1", "/p", {}))[0]
+        event = next(iter(process_file(path, "s1", "/p", {})))
         assert event["actor_kind"] == "model"
         metadata = json.loads(event["metadata"])
         assert metadata["source_role"] == "assistant"
@@ -274,7 +325,7 @@ class TestProcessFile:
                 "content": [{"type": "input_text", "text": "legacy"}],
             },
         }) + "\n")
-        event = list(process_file(path, "s1", "/p", {}))[0]
+        event = next(iter(process_file(path, "s1", "/p", {})))
         assert event["actor_kind"] == "human"
         assert json.loads(event["metadata"])["actor_evidence"] == (
             "legacy_user_role_fallback"
@@ -626,7 +677,7 @@ class TestProcessFile:
                 "num_turns": 2,
             },
         }) + "\n")
-        event = list(process_file(path, "s1", "/p", {}))[0]
+        event = next(iter(process_file(path, "s1", "/p", {})))
         assert event["event_kind"] == "context.rollback"
         assert event["actor_kind"] == "harness"
         assert json.loads(event["metadata"]) == {"removed_user_turns": 2}
@@ -781,3 +832,71 @@ def test_hostile_codex_fields_are_diagnosed_and_other_records_survive(tmp_path):
         and row["reason_code"] == "field_null"
         for row in tool_rows
     )
+
+
+class TestPatchedFile:
+    """`apply_patch` is the only Codex call that names a file.
+
+    Codex passes no path as a tool argument -- `exec_command` carries a shell
+    string, `apply_patch` an envelope -- so `events.file_path` was null for
+    every Codex Event while 4,639 real `apply_patch` calls named 5,722 file
+    operations in their envelope headers.
+    """
+
+    def _call(self, tmp_path, name, arguments):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(json.dumps({
+            "timestamp": "2026-07-10T00:00:00Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call", "name": name,
+                "call_id": "c1", "arguments": arguments,
+            },
+        }) + "\n")
+        calls = [
+            event for event in process_file(path, "s1", "/p", {})
+            if event.get("event_type") == "tool_call"
+        ]
+        assert len(calls) == 1
+        return calls[0]
+
+    @pytest.mark.parametrize(
+        ("operation", "expected"),
+        [
+            ("Add File: new/module.py", "new/module.py"),
+            ("Update File: src/existing.py", "src/existing.py"),
+            ("Delete File: old/gone.py", "old/gone.py"),
+        ],
+    )
+    def test_operations(self, tmp_path, operation, expected):
+        patch = f"*** Begin Patch\n*** {operation}\n+body\n*** End Patch"
+        event = self._call(
+            tmp_path, "apply_patch", json.dumps({"input": patch}),
+        )
+        assert event["file_path"] == expected
+
+    def test_first_of_several(self, tmp_path):
+        """One column, so the first path; `tool_input` retains them all."""
+        patch = (
+            "*** Begin Patch\n*** Update File: first.py\n+a\n"
+            "*** Update File: second.py\n+b\n*** End Patch"
+        )
+        event = self._call(
+            tmp_path, "apply_patch", json.dumps({"input": patch}),
+        )
+        assert event["file_path"] == "first.py"
+        assert "second.py" in event["tool_input"]
+
+    def test_other_tools(self, tmp_path):
+        """A shell command naming a file is not a file operation."""
+        event = self._call(
+            tmp_path, "exec_command",
+            json.dumps({"cmd": "cat src/thing.py"}),
+        )
+        assert event["file_path"] is None
+
+    def test_malformed_envelope(self, tmp_path):
+        event = self._call(
+            tmp_path, "apply_patch", "not json at all",
+        )
+        assert event["file_path"] is None

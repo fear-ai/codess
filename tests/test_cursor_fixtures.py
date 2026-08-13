@@ -10,8 +10,6 @@ from __future__ import annotations
 import json
 import sqlite3
 
-
-from codess.cursor_source import get_composer_headers, has_bubble_rows
 from cursor_fixtures import (
     HEADER_COLUMNS,
     build_cursor_db,
@@ -21,6 +19,8 @@ from cursor_fixtures import (
     put_headers,
     put_records,
 )
+
+from codess.cursor_source import get_composer_headers, has_bubble_rows
 
 
 def columns(conn: sqlite3.Connection, table: str) -> list[str]:

@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from codess.baseline_validation import (  # noqa: E402
+from codess.baseline_validation import (
     load_policy,
     run_query_smoke,
     validate_project,

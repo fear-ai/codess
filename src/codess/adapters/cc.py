@@ -2,13 +2,12 @@
 
 import json
 import logging
-from datetime import datetime, timezone
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator
 
 from codess import field_state
-from codess.hashing import codess_bytes_hash
-
+from codess.bounded_jsonl import iter_bounded_jsonl
 from codess.config import (
     TRUNCATE_DIALOG,
     TRUNCATE_GREP_PATTERN,
@@ -16,10 +15,10 @@ from codess.config import (
     TRUNCATE_RESPONSE,
     TRUNCATE_TOOL_RESULT,
 )
-from codess.sanitize import apply_sanitization, sanitize_value
-from codess.bounded_jsonl import iter_bounded_jsonl
-from codess.context_content import bound_context_content
+from codess.context_content import bound_context_content, truncate_content
+from codess.hashing import codess_bytes_hash
 from codess.mapping import annotate_mapping
+from codess.sanitize import apply_sanitization, sanitize_value
 from codess.tool_result_status import application_failure_evidence
 
 log = logging.getLogger(__name__)
@@ -29,7 +28,8 @@ class SourceCompatibilityError(ValueError):
     """A source record cannot be mapped without silently losing meaning."""
 
 SKIP_TYPES = frozenset({
-    "progress", "file-history-snapshot", "queue-operation", "last-prompt", "system",
+    "progress", "file-history-snapshot", "file-history-delta", "queue-operation",
+    "last-prompt", "system",
 })
 
 PERMISSION_DENIAL_MARKERS = (
@@ -222,9 +222,7 @@ def should_skip(record: dict) -> bool:
         if content and (not isinstance(content, list) or content):
             return False  # Include system with content
         return True
-    if rtype in SKIP_TYPES:
-        return True
-    return False
+    return rtype in SKIP_TYPES
 
 
 def _is_permission_denial(text: str) -> bool:
@@ -390,17 +388,7 @@ def extract_tool_input(tool_name: str, input_obj: dict) -> dict:
     return out
 
 
-def truncate_content(text: str, limit: int) -> tuple[str, int]:
-    """Return (truncated, full_len). If over limit, append …."""
-    if text is None:
-        return "", 0
-    s = str(text)
-    n = len(s)
-    if limit <= 0:
-        return "…" if n else "", n
-    if n <= limit:
-        return s, n
-    return s[: limit - 1] + "…", n
+
 
 
 def _build_tool_map(path: Path) -> dict[str, str]:
@@ -430,7 +418,7 @@ def _parse_timestamp(ts) -> float | None:
             s = ts.replace("Z", "+00:00")
             dt = datetime.fromisoformat(s)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
             return dt.timestamp() * 1000
         except (ValueError, TypeError):
             pass
@@ -602,6 +590,18 @@ def _attach_prompt_origin_state(event: dict, record: dict) -> None:
         )
 
 
+PRODUCT_LABEL_LIMIT = 512
+"""Bound for a Session label -- a title or agent name, never a message."""
+
+NAMED_LABEL_RECORDS = {
+    # record type -> (Event subtype, the field holding the label)
+    "ai-title": ("ai_title", "aiTitle"),
+    "custom-title": ("custom_title", "customTitle"),
+    "agent-name": ("agent_name", "agentName"),
+}
+"""Records that carry one short label and differ only in where it lives."""
+
+
 def normalize_product_state(
     record: dict, line_num: int, session_id: str, source_file: str, opts: dict,
 ) -> dict | None:
@@ -616,21 +616,18 @@ def normalize_product_state(
     elif rtype == "permission-mode":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="permission_mode", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
         metadata["permission_mode"] = record.get("permissionMode")
-    elif rtype == "ai-title":
-        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="ai_title", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
-        title = _process_text(record.get("aiTitle") or "", opts, phase="pre", record_type="ai-title")
-        if title is not None:
-            event["content"], event["content_len"] = truncate_content(title, 512)
-    elif rtype == "custom-title":
-        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="custom_title", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
-        title = _process_text(record.get("customTitle") or "", opts, phase="pre", record_type="custom-title")
-        if title is not None:
-            event["content"], event["content_len"] = truncate_content(title, 512)
-    elif rtype == "agent-name":
-        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="agent_name", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
-        name = _process_text(record.get("agentName") or "", opts, phase="pre", record_type="agent-name")
-        if name is not None:
-            event["content"], event["content_len"] = truncate_content(name, 512)
+    elif rtype in NAMED_LABEL_RECORDS:
+        # Three records that differ only in which field holds the label and
+        # what the resulting Event is called. Written out separately they
+        # were three copies of one construction, which is what made a
+        # fourteen-branch dispatch look longer than its decisions (3.5.4).
+        subtype, field = NAMED_LABEL_RECORDS[rtype]
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype=subtype, role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        label = _process_text(record.get(field) or "", opts, phase="pre", record_type=rtype)
+        if label is not None:
+            event["content"], event["content_len"] = truncate_content(
+                label, PRODUCT_LABEL_LIMIT
+            )
     elif rtype == "fork-context-ref":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="fork_context_reference", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
         metadata = {
@@ -654,6 +651,27 @@ def normalize_product_state(
     elif rtype == "file-history-snapshot":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="file_history_snapshot", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
         metadata["snapshot_field_count"] = len(record)
+    elif rtype == "file-history-delta":
+        # Records that one tracked file was backed up, and which snapshot the
+        # backup derives from. Harness product state like its snapshot
+        # sibling, not a message: the file content is not in the record, only
+        # the fact that a backup exists and where the harness tracked it.
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="file_history_delta", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        backup = record.get("backup")
+        backup = backup if isinstance(backup, dict) else {}
+        metadata.update({
+            # The message this delta belongs to, and the snapshot it extends.
+            # Both are vendor identifiers retained as recorded.
+            "message_id": record.get("messageId"),
+            "snapshot_message_id": record.get("snapshotMessageId"),
+            "backup_version": backup.get("version"),
+            "backup_time": backup.get("backupTime"),
+            # The tracked path is retained as an Artifact locator elsewhere;
+            # here only its presence is recorded, so this Event stays a
+            # structural observation rather than a second copy of the path.
+            "has_tracking_path": bool(record.get("trackingPath")),
+            "has_backup": bool(backup),
+        })
     elif rtype == "queue-operation":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="queue_operation", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
         metadata["operation"] = record.get("operation")
@@ -1098,6 +1116,48 @@ def normalize_user(
                 _attach_prompt_origin_state(events[-1], record)
             emitted_index += 1
 
+        elif btype == "image":
+            # A human pasting a screenshot with no accompanying text. The
+            # record produced no Event before W02, so the prompt existed in
+            # the Session and not in the store -- 48 of them in one observed
+            # Project, counted only as a diagnostic (13.4.9).
+            #
+            # The payload is deliberately not retained. These are base64
+            # images averaging ~185 KB, and the `attachment` record's
+            # treatment is the established pattern in this adapter: record
+            # that content was present, its type and size, never the bytes.
+            source = block.get("source")
+            source = source if isinstance(source, dict) else {}
+            data = source.get("data") or ""
+            semantics = _user_origin_semantics(record, source_file)
+            events.append({
+                "session_id": session_id,
+                "event_id": _block_event_id(line_num, emitted_index),
+                "event_type": semantics["event_type"],
+                "subtype": "attachment",
+                "role": semantics["role"],
+                "content": None,
+                "content_len": 0,
+                "timestamp": ts,
+                "source_file": source_file,
+                "actor_kind": semantics["actor_kind"],
+                "content_role": semantics["content_role"],
+                # The normalized origin, as the text branch stores; the raw
+                # vendor string travels in metadata rather than the column.
+                "origin_kind": semantics["origin_kind"],
+                "metadata": _event_metadata(record, extra={
+                    "attachment_type": btype,
+                    "origin_kind": semantics["source_origin_kind"],
+                    "media_type": source.get("media_type"),
+                    "attachment_source": source.get("type"),
+                    "encoded_length": len(data) if data else 0,
+                    "prompt_source": semantics["prompt_source"],
+                    "user_type": record.get("userType"),
+                    "is_sidechain": record.get("isSidechain"),
+                    "actor_evidence": semantics["actor_evidence"],
+                }),
+            })
+            emitted_index += 1
         elif btype == "tool_result":
             tool_use_id = block.get("tool_use_id")
             tool_name = tool_map.get(tool_use_id) if tool_use_id else None
@@ -1341,21 +1401,12 @@ def process_file(
                 record, line_num, session_id, source_file, tool_map, opts
             )
             if not evs and diagnostics is not None:
-                blocks = (record.get("message") or {}).get("content") or []
-                if blocks and all(
-                    isinstance(block, dict) and block.get("type") == "image"
-                    for block in blocks
-                ):
-                    diagnostics["unsupported_records"] = (
-                        diagnostics.get("unsupported_records", 0) + 1
-                    )
-                    diagnostics["attachment_only_records"] = (
-                        diagnostics.get("attachment_only_records", 0) + 1
-                    )
-                else:
-                    diagnostics["ignored_records"] = (
-                        diagnostics.get("ignored_records", 0) + 1
-                    )
+                # Image-only records used to land here and be counted
+                # unsupported; they now decode as bounded attachment prompts,
+                # so anything still producing no Event is an ordinary ignore.
+                diagnostics["ignored_records"] = (
+                    diagnostics.get("ignored_records", 0) + 1
+                )
             for ev in evs:
                 if source_raw is not None:
                     ev["source_raw"] = source_raw

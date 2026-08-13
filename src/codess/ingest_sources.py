@@ -12,29 +12,52 @@ observation, and progress emission -- and have no other consumer.
 
 from __future__ import annotations
 
+import gc
+import json
 import logging
+import sqlite3
+import time
+from functools import partial
+from pathlib import Path
+
 from codess.adapters.cc import get_session_lineage as get_cc_session_lineage
 from codess.adapters.cc import get_session_metadata as get_cc_session_metadata
 from codess.adapters.cc import process_file as process_cc_file
-from codess.adapters.codex import get_session_meta, get_session_metadata, process_file as process_codex_file
+from codess.adapters.codex import get_session_meta, get_session_metadata
+from codess.adapters.codex import process_file as process_codex_file
 from codess.adapters.cursor import process_db as process_cursor_db
 from codess.codex_source import get_session_files as get_codex_session_files
 from codess.codex_source import session_archive_evidence as get_codex_archive_evidence
 from codess.cursor_cohort import cohort_state_key
-from codess.cursor_source import get_composer_headers, get_global_db as get_cursor_global_db, has_bubble_rows as cursor_has_bubble_rows, get_workspace_dbs as get_cursor_workspace_dbs, get_workspace_ids as get_cursor_workspace_ids
+from codess.cursor_source import get_composer_headers
+from codess.cursor_source import get_global_db as get_cursor_global_db
+from codess.cursor_source import get_workspace_dbs as get_cursor_workspace_dbs
+from codess.cursor_source import get_workspace_ids as get_cursor_workspace_ids
+from codess.cursor_source import has_bubble_rows as cursor_has_bubble_rows
 from codess.ingest_pipeline import commit_source_replacement, inspect_sources, mark_source_complete
 from codess.ingest_review import record_ingest_review
 from codess.project import get_cc_session_dir
 from codess.project_catalog import register_workspace_bindings
-from codess.resources import ResourceLimitError, check_events, check_source, peak_rss_bytes, searchable_event_payload, summarize_event_payload
-from codess.store import SOURCE_PROFILES, connect, drop_sessions_absent_from_source, ingest_state_marker, load_ingest_state, replace_session_events, prune_unreferenced_records, save_ingest_state, session_ids_for_source, should_ingest
-from functools import partial
-from pathlib import Path
-import gc
-import json
-import sqlite3
-import time
-
+from codess.resources import (
+    ResourceLimitError,
+    check_events,
+    check_source,
+    peak_rss_bytes,
+    searchable_event_payload,
+    summarize_event_payload,
+)
+from codess.store import (
+    SOURCE_PROFILES,
+    connect,
+    drop_sessions_absent_from_source,
+    ingest_state_marker,
+    load_ingest_state,
+    prune_unreferenced_records,
+    replace_session_events,
+    save_ingest_state,
+    session_ids_for_source,
+    should_ingest,
+)
 
 log = logging.getLogger(__name__)
 
@@ -228,6 +251,29 @@ def _cc_session_files(cc_dir: Path) -> list[tuple[Path, str | None]]:
     return sorted(main + nested, key=lambda item: str(item[0]))
 
 
+def _record_cc_source(
+    opts: dict,
+    path: Path,
+    external_sources: list[dict],
+    external_start: int,
+    conn,
+) -> None:
+    """Record one Claude source and the external content it referenced.
+
+    Takes its inputs explicitly rather than closing over the loop that calls
+    it. The closure form read four enclosing values and rebound none, so it
+    was a closure by accident of where it was written (13.4.1) -- and one a
+    later deferred call would have silently bound to the wrong iteration.
+    """
+    _record_raw(opts, path, "Claude", conn)
+    for external in external_sources[external_start:]:
+        _record_related_raw(
+            opts, Path(external["path"]), "Claude",
+            parent_source_locator=external["parent_source"],
+            relation_kind=external["relation_kind"],
+        )
+
+
 def _ingest_cc(
     project_path: Path,
     store_path: Path,
@@ -244,7 +290,7 @@ def _ingest_cc(
         return 0, 0, 0, False
     ingested, total_events, failures, changed = 0, 0, 0, False
     files = _cc_session_files(cc_dir)
-    parent_by_path = {path: parent for path, parent in files}
+    parent_by_path = dict(files)
     for admission in inspect_sources(
         files, state_path=state_path, force=force, min_size=min_size,
         max_source_bytes=opts.get("max_source_bytes"),
@@ -335,21 +381,14 @@ def _ingest_cc(
                     diagnostics["empty_sources"] = (
                         diagnostics.get("empty_sources", 0) + 1
                     )
-            def record_source(conn) -> None:
-                _record_raw(opts, path, "Claude", conn)
-                for external in external_sources[external_start:]:
-                    _record_related_raw(
-                        opts, Path(external["path"]), "Claude",
-                        parent_source_locator=external["parent_source"],
-                        relation_kind=external["relation_kind"],
-                    )
-
             commit_source_replacement(
                 store_path,
                 session=session,
                 events=events_list,
                 session_id=session_id,
-                after_replace=record_source,
+                after_replace=partial(
+                    _record_cc_source, opts, path, external_sources, external_start,
+                ),
             )
             changed = True
             total_events += len(events_list)
@@ -468,6 +507,10 @@ def _ingest_codex(
                     "archive_source": archive_source,
                     "parent_session_id": parent_session_id,
                     "session_relation_kind": session_relation_kind,
+                    # Observed where Codex reports them; `store` falls back to
+                    # the vendor profile constant where it does not (W40).
+                    "harness_name": session_metadata.get("harness_name"),
+                    "surface_kind": session_metadata.get("surface_kind"),
                     "metadata": (
                         json.dumps(session_metadata, separators=(",", ":"))
                         if session_metadata
@@ -597,7 +640,14 @@ def _ingest_cursor(
                 "source_observation": source_observation,
             }
             if headers is not None and headers[current_id].get("is_subagent"):
+                # The relation and the parent travel together: a `subagent`
+                # Session whose parent the store cannot name asserts a
+                # relationship without its evidence. Cursor records the
+                # parent in the header's `subagentInfo` (W02, 13.4.9).
                 session["session_relation_kind"] = "subagent"
+                session["parent_session_id"] = headers[current_id].get(
+                    "parent_composer_id"
+                )
             replace_session_events(
                 conn, session, current_events, session_id=current_id,
                 prune=False,

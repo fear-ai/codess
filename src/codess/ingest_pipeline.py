@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from codess.resources import ResourceLimitError, check_source
 from codess.store import (
-    connect, ingest_state_marker, load_ingest_state, replace_session_events,
-    save_ingest_state, should_ingest,
+    connect,
+    ingest_state_marker,
+    load_ingest_state,
+    replace_session_events,
+    save_ingest_state,
+    should_ingest,
 )
 
 

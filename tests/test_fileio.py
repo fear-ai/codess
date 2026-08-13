@@ -7,7 +7,11 @@ import hashlib
 import pytest
 
 from codess.fileio import (
-    HashMismatchError, hash_file, read_hash, rewrite_hash, verify_hash,
+    HashMismatchError,
+    hash_file,
+    read_hash,
+    rewrite_hash,
+    verify_hash,
     write_hash,
 )
 

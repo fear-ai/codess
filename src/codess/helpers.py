@@ -105,20 +105,77 @@ def path_to_slug(path: Path) -> str:
     return s.replace("/", "-")
 
 
+def resolve_slug(slug: str, root: Path | None = None) -> Path | None:
+    """Decode a Claude storage slug against the filesystem, or return None.
+
+    The encoding is Claude's and is lossy: `/` and `-` both become `-`, so
+    `spank-py` and `spank/py` produce the same slug and the string alone
+    cannot say which was meant. The only authority that can decide is the
+    filesystem, so this matches slug tokens against directories that exist,
+    preferring the longest name at each step -- `spank-py` is tried before
+    `spank/py`, because a literal directory name is better evidence than a
+    split that happens to parse.
+
+    Returns None when no directory matches. That is the honest answer for a
+    slug whose Project was deleted or moved, and it is what `slug_to_path`
+    cannot express: a caller that needs to distinguish "resolved" from
+    "guessed" asks here.
+
+    A slug always encodes an absolute path, so the walk starts at `/`. Pass
+    `root` to require the result to lie under a directory: the descent still
+    begins at the filesystem root, and a match outside `root` is rejected
+    rather than returned. A resolved path is always a real directory reached
+    by ordinary descent, so a `..` token cannot redirect the walk -- it is
+    matched as a literal directory name or not at all.
+    """
+    if not slug or not slug.startswith("-"):
+        return None
+    tokens = slug[1:].split("-")
+
+    def descend(current: Path, index: int) -> Path | None:
+        if index == len(tokens):
+            return current
+        # Longest first: a hyphenated directory name outranks a split that
+        # only happens to exist.
+        for end in range(len(tokens), index, -1):
+            name = "-".join(tokens[index:end])
+            if not name or name in (".", ".."):
+                continue
+            candidate = current / name
+            if candidate.is_dir():
+                found = descend(candidate, end)
+                if found is not None:
+                    return found
+        return None
+
+    found = descend(Path("/"), 0)
+    if found is None or root is None:
+        return found
+    return found if found.is_relative_to(root.resolve()) else None
+
+
 def slug_to_path(slug: str) -> Path:
-    """Decode slug to path. Lossy: 'spank-py' and 'spank/py' both encode to same slug."""
+    """Decode slug to path, falling back to the naive split when unresolvable.
+
+    Prefers `resolve_slug`, which consults the filesystem and is correct for
+    any Project that still exists. When nothing matches -- a deleted or moved
+    Project -- this returns the naive one-token-per-segment reading so the
+    caller still has a value to record and report.
+
+    That fallback is a guess and can name the wrong directory: `A-..-B`
+    reads as `A/../B`, which resolves to `B`. Callers that act on the path
+    rather than display it should use `resolve_slug` and handle None. The
+    containment check in `walk_sessions.in_work_root` resolves before
+    comparing, so a fallback path cannot escape the configured work root.
+    """
     if not slug:
-        return Path(".")
+        return Path()
+    resolved = resolve_slug(slug)
+    if resolved is not None:
+        return resolved
     if slug.startswith("-"):
-        p = Path("/" + slug[1:].replace("-", "/"))
-    else:
-        p = Path(slug.replace("-", "/"))
-    # Fallback: decoded path may be wrong (e.g. spank/py vs spank-py). Try hyphen variant.
-    if not p.exists() and len(p.parts) >= 3:
-        alt = Path(*p.parts[:-2], p.parts[-2] + "-" + p.parts[-1])
-        if alt.exists():
-            return alt
-    return p
+        return Path("/" + slug[1:].replace("-", "/"))
+    return Path(slug.replace("-", "/"))
 
 
 def is_excluded(p: Path, work_root: Path | None = None) -> bool:

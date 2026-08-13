@@ -481,10 +481,10 @@ def test_empty_run_reports_zero_rather_than_failing():
 
 def test_catalog_resync_skips_stores_that_do_not_exist():
     """Resync reconciles existing stores; it must not provision new ones."""
-    from codess.ingest_publication import resync_project_catalog
-
     import tempfile
     from pathlib import Path as P
+
+    from codess.ingest_publication import resync_project_catalog
 
     tmp = P(tempfile.mkdtemp())
     cfg = config(tmp)

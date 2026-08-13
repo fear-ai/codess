@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+from store_fixtures import insert_event, insert_session
 
 from codess.config import get_store_path
 from codess.query_reports import (
@@ -34,7 +35,6 @@ from codess.query_reports import (
     tool_totals,
 )
 from codess.store import connect, init_db
-from store_fixtures import insert_event, insert_session
 
 
 class Scope:
@@ -504,7 +504,7 @@ def test_store_counts_report_sessions_and_events(store):
     add_event(conn, "e1", timestamp=1.0)
     add_event(conn, "e2", timestamp=2.0)
     conn.commit()
-    [(project, totals)] = store_counts(scope).items()
+    [(_project, totals)] = store_counts(scope).items()
     assert totals == {"sessions": 1, "events": 2}
 
 

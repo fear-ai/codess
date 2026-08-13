@@ -6,25 +6,33 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from codess.acceptance import compare_snapshots
 from codess.baseline_catalog import update_approved_catalog
 from codess.baseline_validation import (
-    load_policy, run_query_smoke, validate_project,
+    load_policy,
+    run_query_smoke,
+    validate_project,
 )
 from codess.config import (
-    CURRENT_POINTER_FILE, LAST_INGEST_REPORT_FILE, STATE_FILE, STORE_DIR,
+    CURRENT_POINTER_FILE,
+    LAST_INGEST_REPORT_FILE,
+    STATE_FILE,
+    STORE_DIR,
     WORKING_ARCHIVES_DIR,
 )
 from codess.fileio import hash_file, open_readonly, read_json, write_json_atomic
-from codess.schema_contract import store_metadata, contract_digest
+from codess.schema_contract import contract_digest, store_metadata
 from codess.snapshot import (
-    current_stores, publish_snapshot, snapshot_store_paths,
+    current_stores,
+    publish_snapshot,
+    snapshot_store_paths,
     snapshot_store_paths_from_base,
 )
+
 
 def archive_stale_working_stores(project: Path) -> Path | None:
     base = project / STORE_DIR
@@ -52,7 +60,7 @@ def archive_stale_working_stores(project: Path) -> Path | None:
     # `archived_at` are two renderings of the same moment, so reading the clock
     # twice would let a directory claim a different second than the manifest
     # inside it -- and the directory name is what an operator sorts by.
-    archived_at = datetime.now(timezone.utc)
+    archived_at = datetime.now(UTC)
     stamp = archived_at.strftime("%Y%m%dT%H%M%SZ")
     old_label = "-".join(sorted((value or "unknown")[:12] for value in package_digests))
     destination = base / WORKING_ARCHIVES_DIR / f"pre-package-{old_label}-{stamp}"

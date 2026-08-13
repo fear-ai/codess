@@ -6,15 +6,19 @@ from types import SimpleNamespace
 
 from codess.cursor_source import (
     get_global_db as get_cursor_global_db,
+)
+from codess.cursor_source import (
     get_workspace_dbs as get_cursor_workspace_dbs,
+)
+from codess.cursor_source import (
     get_workspace_ids as get_cursor_workspace_ids,
 )
 from codess.project import (
+    RootsWhenEmpty,
     find_slug_for_project,
     path_to_slug,
     resolve_cli_roots,
     slug_to_path,
-    RootsWhenEmpty,
 )
 
 
@@ -69,11 +73,11 @@ class TestPathToSlug:
 
     def test_relative(self):
         assert path_to_slug(Path("a/b/c")) == "a-b-c"
-        assert path_to_slug(Path(".")) == "."
+        assert path_to_slug(Path()) == "."
 
     def test_empty_relative(self):
         # Path("") normalizes to Path(".")
-        assert path_to_slug(Path("")) == "."
+        assert path_to_slug(Path()) == "."
 
     def test_single_segment(self):
         assert path_to_slug(Path("/home")) == "-home"
@@ -83,7 +87,7 @@ class TestSlugToPath:
     """slug_to_path edge cases."""
 
     def test_empty(self):
-        assert slug_to_path("") == Path(".")
+        assert slug_to_path("") == Path()
 
     def test_leading_dash_absolute(self):
         assert slug_to_path("-a-b-c") == Path("/a/b/c")

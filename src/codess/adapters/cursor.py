@@ -9,18 +9,20 @@ or key range (see the ownership table in `cursor_source`).
 import json
 import logging
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 from codess import field_state
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
 from codess.content_processing import apply_processing
-from codess.context_content import bound_context_content
+from codess.context_content import bound_context_content, truncate_content
 from codess.cursor_source import (
     open_bubble_rows,
     open_message_request_context_rows,
-    parse_timestamp as _parse_timestamp,
     read_composer_data,
+)
+from codess.cursor_source import (
+    parse_timestamp as _parse_timestamp,
 )
 from codess.mapping import annotate_mapping, structured_json
 from codess.tool_result_status import application_failure_evidence
@@ -47,17 +49,7 @@ def _bubble_timestamp(data: dict) -> float | None:
     return None
 
 
-def _truncate(text: str, limit: int) -> tuple[str, int]:
-    """Return (truncated, full_len)."""
-    if text is None:
-        return "", 0
-    s = str(text)
-    n = len(s)
-    if limit <= 0:
-        return "…" if n else "", n
-    if n <= limit:
-        return s, n
-    return s[: limit - 1] + "…", n
+
 
 
 def _context_window_metadata(data: dict) -> dict:
@@ -518,7 +510,7 @@ def _bubble_to_events(
         if text is None:
             return
         subtype = "slash_command" if text.strip().startswith("/") else "prompt"
-        truncated, content_len = _truncate(text, TRUNCATE_PROMPT)
+        truncated, content_len = truncate_content(text, TRUNCATE_PROMPT)
         truncated = apply_processing(
             truncated, opts, vendor="Cursor", record_type="bubble.user",
             event_kind="message.prompt", phase="post",
@@ -593,7 +585,7 @@ def _bubble_to_events(
                 event_kind="message.response", phase="pre",
             )
         if text and text.strip():
-            truncated, content_len = _truncate(text, TRUNCATE_RESPONSE)
+            truncated, content_len = truncate_content(text, TRUNCATE_RESPONSE)
             truncated = apply_processing(
                 truncated, opts, vendor="Cursor", record_type="bubble.assistant",
                 event_kind="message.response", phase="post",
@@ -766,7 +758,7 @@ def _bubble_to_events(
                         event_kind="tool.result", phase="pre",
                     )
                     if result_text is not None:
-                        result_text, result_len = _truncate(result_text, TRUNCATE_TOOL_RESULT)
+                        result_text, result_len = truncate_content(result_text, TRUNCATE_TOOL_RESULT)
                         result_text = apply_processing(
                             result_text, opts, vendor="Cursor", record_type="tool_result",
                             event_kind="tool.result", phase="post",
@@ -804,7 +796,7 @@ def _bubble_to_events(
             )
             if result_str is None:
                 continue
-            ttrunc, tlen = _truncate(result_str, TRUNCATE_TOOL_RESULT)
+            ttrunc, tlen = truncate_content(result_str, TRUNCATE_TOOL_RESULT)
             ttrunc = apply_processing(
                 ttrunc, opts, vendor="Cursor", record_type="tool_result",
                 event_kind="tool.result", phase="post",

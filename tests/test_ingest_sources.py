@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 import pytest
+from cursor_fixtures import build_cursor_db
 
 from codess.config import get_state_path, get_store_path
 from codess.ingest_sources import (
@@ -33,7 +34,6 @@ from codess.project_catalog import ensure_project_binding
 from codess.raw_store import RawStore
 from codess.resources import ResourceLimitError
 from codess.store import connect, init_db, sync_project_catalog
-from cursor_fixtures import build_cursor_db
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -358,9 +358,9 @@ def test_cc_session_files_attributes_nested_subagents_to_their_parent(tmp_path):
     nested.mkdir(parents=True)
     (nested / "sub.jsonl").write_text("", encoding="utf-8")
     (tmp_path / "main-session.jsonl").write_text("", encoding="utf-8")
-    parents = dict(
-        (path.name, parent) for path, parent in _cc_session_files(tmp_path)
-    )
+    parents = {
+        path.name: parent for path, parent in _cc_session_files(tmp_path)
+    }
     assert parents["main-session.jsonl"] is None
     assert parents["sub.jsonl"] == "main-session"
 

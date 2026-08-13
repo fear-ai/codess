@@ -10,13 +10,16 @@ from pathlib import Path
 from typing import Any
 
 from codess.config import (
-    PROJECT_FILE, REGISTRY, SOURCE_LINKS_FILE, SOURCE_LINKS_FORMAT, STORE_DIR,
+    PROJECT_FILE,
+    REGISTRY,
+    SOURCE_LINKS_FILE,
+    SOURCE_LINKS_FORMAT,
+    STORE_DIR,
 )
-from codess.hashing import codess_canonical_hash
-from codess.identity import location_id
 from codess.fileio import write_json_atomic
+from codess.hashing import codess_canonical_hash
 from codess.helpers import ephemeral_project_location_reason
-
+from codess.identity import location_id
 
 CATALOG_FORMAT = "codess.project-catalog/1"
 PROJECT_BINDING_FORMAT = "codess.project-binding/1"
@@ -875,38 +878,3 @@ def register_workspace_bindings(
     return dict(entry)
 
 
-def register_relocation(
-    registry_root: Path,
-    project_id: str,
-    old_root: Path,
-    new_root: Path | None,
-) -> dict[str, Any]:
-    """Retire an observed location and optionally bind a replacement location."""
-    catalog = load_catalog(registry_root)
-    entry = next(
-        (item for item in catalog["projects"] if item.get("project_id") == project_id),
-        None,
-    )
-    if entry is None:
-        raise ValueError(f"project is absent from catalog: {project_id}")
-    old_path = str(old_root.expanduser().resolve())
-    stamped = datetime.now(UTC).isoformat()
-    for location in entry.get("locations", []):
-        if location.get("path") == old_path:
-            location["state"] = "retired"
-            location["path_obsolete"] = True
-            location["retired_at"] = stamped
-    catalog["updated_at"] = stamped
-    write_json_atomic(_catalog_path(registry_root), catalog)
-    if new_root is None:
-        return {"project_id": project_id, "old_path": old_path, "new_path": None}
-    new_root = new_root.expanduser().resolve()
-    new_root.mkdir(parents=True, exist_ok=True)
-    write_json_atomic(_binding_path(new_root), {
-        "binding_format": PROJECT_BINDING_FORMAT,
-        "project_id": project_id,
-        "location_id": location_id(_machine_id(registry_root), new_root),
-        "registry_root": str(registry_root.expanduser().resolve()),
-    })
-    ensure_project_binding(registry_root, new_root)
-    return {"project_id": project_id, "old_path": old_path, "new_path": str(new_root)}

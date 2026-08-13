@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from cursor_fixtures import create_bubble_table, create_header_table, put_headers
+
 from codess.project import path_to_slug, slug_to_path
 from codess.snapshot import current_raw_records
 
@@ -74,7 +75,7 @@ def test_cc_adapter_iter_and_skip():
     fixtures = Path(__file__).parent / "fixtures" / "sample.jsonl"
     records = list(iter_cc_records(fixtures))
     assert len(records) >= 9  # 9 data lines, progress skipped in processing
-    for line_num, record, raw in records:
+    for line_num, record, _raw in records:
         assert line_num >= 1
         assert "type" in record
         if record["type"] == "progress":

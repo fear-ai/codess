@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from codess.hashing import (
-    codess_bytes_hash, codess_canonical_hash, codess_text_hash,
-)
 from codess import __version__
 from codess.fileio import open_readonly, source_fingerprint
+from codess.hashing import (
+    codess_bytes_hash,
+    codess_canonical_hash,
+    codess_text_hash,
+)
 from codess.identity import (
     global_event_id,
     global_session_id,
@@ -22,20 +26,19 @@ from codess.identity import (
     global_source_revision_id,
     source_observation_id,
 )
+from codess.mapping import canonical_json, structured_json
+from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import (
     APPLICATION_ID,
     FORMAT_ID,
     FORMAT_VERSION,
+    contract_check_disabled,
+    contract_digest,
     load_ddl,
     require_store,
     table_names,
-    contract_check_disabled,
-    contract_digest,
 )
 from codess.tool_identity import bounded_source_call_id
-from codess.mapping import canonical_json, structured_json
-from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
-
 
 SOURCE_PROFILES = {
     "Claude": {
@@ -186,10 +189,7 @@ def init_db(db_path: Path) -> None:
 
 def connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
     """Open and validate a CoSchema store."""
-    if read_only:
-        conn = open_readonly(db_path)
-    else:
-        conn = sqlite3.connect(db_path)
+    conn = open_readonly(db_path) if read_only else sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:
@@ -645,7 +645,15 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
     )
 
 
-def _event_semantics(event: dict[str, Any]) -> dict[str, str | None]:
+def _inferred_classification(event: dict[str, Any]) -> dict[str, str | None]:
+    """Derive the four classification dimensions from `event_type` and `role`.
+
+    The fallback for records an adapter did not classify. It is not the
+    authority: `_event_classification` is what callers use, and it prefers
+    what the adapter stated. `semantics` was the earlier name for both, which
+    said the subject rather than the operation and left the pair
+    indistinguishable.
+    """
     etype, subtype, role = event.get("event_type"), event.get("subtype"), event.get("role")
     if etype != "tool_call" and subtype in {
         "tool_result", "tool_failure", "permission_denied"
@@ -668,9 +676,17 @@ def _event_semantics(event: dict[str, Any]) -> dict[str, str | None]:
     return {"event_kind": "unknown", "actor_kind": "unknown", "content_role": "status", "origin_kind": "unknown"}
 
 
-def _resolved_event_semantics(event: dict[str, Any]) -> dict[str, str | None]:
-    """Prefer explicit adapter mappings, filling only absent common dimensions."""
-    inferred = _event_semantics(event)
+def _event_classification(event: dict[str, Any]) -> dict[str, str | None]:
+    """The four classification dimensions for one Event: what the adapter
+    stated, with anything it left absent derived.
+
+    This is the value every caller wants, so it carries the plain name and
+    `_inferred_classification` carries the qualified one -- the reverse of
+    the earlier `_event_semantics` / `_resolved_event_semantics` pair, where
+    the plain name belonged to the fallback and `resolved` did not say
+    resolved against what.
+    """
+    inferred = _inferred_classification(event)
     return {
         key: event.get(key) or inferred[key]
         for key in ("event_kind", "actor_kind", "content_role", "origin_kind")
@@ -699,7 +715,7 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
         "SELECT source, source_system_id, project_id, global_id FROM sessions WHERE id=?",
         (event.get("session_id"),),
     ).fetchone()
-    semantics = _resolved_event_semantics(event)
+    semantics = _event_classification(event)
     raw_metadata = event.get("metadata")
     metadata = _json_dict(raw_metadata)
     stored_metadata = (
@@ -1133,6 +1149,21 @@ def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -
             )
             return
     invocation_id = f"{session_id}:call:{call_id or event['event_id']}"
+    # What evidence this invocation rests on, rather than a constant. A
+    # request record means the model asked and the harness answered; its
+    # absence means the harness reported an operation it performed, which is
+    # how Codex records `patch_apply_end` and `web_search_end`. The two are
+    # not interchangeable: one is a model decision, the other an observation
+    # of the harness, and 461 of one Project's invocations are the latter.
+    #
+    # An upsert can see the result before the request, so the value is
+    # promoted to `model_requested` when the request arrives and never
+    # demoted -- absence of evidence at one moment is not evidence of
+    # absence once the pair completes (13.4.9).
+    invocation_kind = (
+        "model_requested" if event.get("event_type") == "tool_call"
+        else "harness_observed"
+    )
     conn.execute(
         """
         INSERT INTO tool_invocations(
@@ -1146,12 +1177,15 @@ def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -
           canonical_tool_name=COALESCE(excluded.canonical_tool_name, tool_invocations.canonical_tool_name),
           input_json=COALESCE(excluded.input_json, tool_invocations.input_json),
           source_status=COALESCE(excluded.source_status, tool_invocations.source_status),
-          normalized_status=COALESCE(excluded.normalized_status, tool_invocations.normalized_status)
+          normalized_status=COALESCE(excluded.normalized_status, tool_invocations.normalized_status),
+          invocation_kind=CASE
+            WHEN excluded.invocation_kind='model_requested' THEN 'model_requested'
+            ELSE tool_invocations.invocation_kind END
         """,
         (
             invocation_id, session_id, event.get("interaction_id"), event.get("model_turn_id"),
             row_id if event.get("event_type") == "tool_call" else None, call_id,
-            event.get("tool_name"), event.get("tool_name"), "harness_capability",
+            event.get("tool_name"), event.get("tool_name"), invocation_kind,
             event.get("tool_input"), source_status, normalized_status,
             event.get("timestamp") if event.get("event_type") == "tool_call" else None,
         ),
@@ -1208,10 +1242,8 @@ def _record_artifact(conn: sqlite3.Connection, event: dict[str, Any], row_id: in
     uri = None
     artifact_metadata = None
     if absolute and project_path:
-        try:
+        with contextlib.suppress(ValueError):
             relative = os.path.relpath(absolute, project_path)
-        except ValueError:
-            pass
         if relative == os.pardir or relative.startswith(os.pardir + os.sep):
             uri = Path(absolute).as_uri()
             relative = None
@@ -1284,10 +1316,10 @@ def _prepare_event_groups(
     for sequence, original in enumerate(events, 1):
         event = dict(original)
         event["sequence_no"] = sequence
-        semantics = _resolved_event_semantics(event)
+        semantics = _event_classification(event)
         is_prompt = (
             semantics["actor_kind"] == "human"
-            and event.get("subtype") not in {"tool_result"}
+            and event.get("subtype") != "tool_result"
         )
         if is_prompt:
             interaction_counter += 1
@@ -1458,7 +1490,7 @@ def replace_session_events(
                 level=str(diagnostic.get("diagnostic_level") or "field"),
                 severity=str(diagnostic.get("level") or "warn"),
             )
-        if _resolved_event_semantics(event)["event_kind"] == "unknown":
+        if _event_classification(event)["event_kind"] == "unknown":
             _record_diagnostic(
                 conn, event, row_id,
                 reason_code="unmapped_event_semantics",

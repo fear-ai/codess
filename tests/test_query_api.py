@@ -11,9 +11,18 @@ from codess.fileio import source_fingerprint
 from codess.investigation import build_investigation
 from codess.orientation_audit import _compare, _sqlite_observations
 from codess.query_api import (
-    QueryContractError, compare_results, content_hash, execute, load_document,
-    make_request, merge_selection, sanitize_free_text_filter, save_document,
-    selected_project_ids, selected_project_snapshots, selection_from_result,
+    QueryContractError,
+    compare_results,
+    content_hash,
+    execute,
+    load_document,
+    make_request,
+    merge_selection,
+    sanitize_free_text_filter,
+    save_document,
+    selected_project_ids,
+    selected_project_snapshots,
+    selection_from_result,
 )
 from codess.raw_store import RawStore
 from codess.snapshot import create_snapshot, snapshot_store_paths

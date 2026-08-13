@@ -25,15 +25,20 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Iterator
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
-from codess.hashing import codess_digest
 from codess.config import (
-    CURSOR_DATA, SOURCE_LINKS_FILE, SOURCE_LINKS_FORMAT, STORE_DIR,
+    CURSOR_DATA,
+    SOURCE_LINKS_FILE,
+    SOURCE_LINKS_FORMAT,
+    STORE_DIR,
 )
+from codess.fileio import open_readonly
+from codess.hashing import codess_digest
 from codess.helpers import local_path_from_uri
 
 log = logging.getLogger(__name__)
@@ -48,10 +53,7 @@ def _fingerprint_digest():
 
 def connect_readonly(db_path: Path) -> sqlite3.Connection:
     """Open a URI-safe, query-only connection that can observe a live WAL."""
-    uri = db_path.resolve().as_uri() + "?mode=ro"
-    conn = sqlite3.connect(uri, uri=True, timeout=5)
-    conn.execute("PRAGMA query_only = ON")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    conn = open_readonly(db_path)
     try:
         conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
         return conn
@@ -62,12 +64,7 @@ def connect_readonly(db_path: Path) -> sqlite3.Connection:
         # sidecars. Immutable mode is safe only for that sidecar-free shape.
         if Path(str(db_path) + "-wal").exists() or Path(str(db_path) + "-shm").exists():
             raise
-        immutable = sqlite3.connect(
-            db_path.resolve().as_uri() + "?mode=ro&immutable=1",
-            uri=True,
-            timeout=5,
-        )
-        immutable.execute("PRAGMA query_only = ON")
+        immutable = open_readonly(db_path, immutable=True)
         immutable.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
         return immutable
 
@@ -101,11 +98,11 @@ def parse_timestamp(value) -> float | None:
         if not stripped:
             return None
         try:
-            dt = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(stripped)
         except (TypeError, ValueError):
             return None
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         return dt.timestamp() * 1000
     return None
 
@@ -218,6 +215,41 @@ def get_workspace_dbs(
     ]
 
 
+def subagent_lineage(header_value: object) -> dict[str, Any]:
+    """Read the parent a Cursor subagent Composer records, if it names one.
+
+    `isSubagent` says a Composer is delegated work; the identity of what
+    delegated it lives in the header's JSON `value` under `subagentInfo`.
+    Reading only the flag set a `subagent` relation on a Session whose parent
+    the store never named, which asserts a relationship without its evidence
+    (W02, 13.4.9).
+
+    Returns an empty mapping when the header records no lineage, so a caller
+    can merge it unconditionally and absent stays absent.
+    """
+    if isinstance(header_value, (bytes, bytearray)):
+        header_value = header_value.decode("utf-8", errors="replace")
+    if not isinstance(header_value, str) or not header_value:
+        return {}
+    try:
+        head = json.loads(header_value)
+    except (TypeError, ValueError):
+        return {}
+    info = head.get("subagentInfo") if isinstance(head, dict) else None
+    if not isinstance(info, dict):
+        return {}
+    lineage = {
+        "parent_composer_id": info.get("parentComposerId"),
+        "root_parent_composer_id": info.get("rootParentConversationId"),
+        "subagent_type_name": info.get("subagentTypeName"),
+        # The tool call that spawned it, which is what links a delegated
+        # Session back to the invocation in its parent.
+        "spawning_tool_call_id": info.get("toolCallId"),
+        "conversation_length_at_spawn": info.get("conversationLengthAtSpawn"),
+    }
+    return {key: value for key, value in lineage.items() if value is not None}
+
+
 def _composer_headers(
     conn: sqlite3.Connection, workspace_ids: set[str] | None,
 ) -> dict[str, dict]:
@@ -240,7 +272,8 @@ def _composer_headers(
         f"SELECT {composer_col} AS composerId, "
         f"{workspace_col} AS workspaceId, "
         f"{optional('createdAt')}, {optional('lastUpdatedAt')}, "
-        f"{optional('isArchived')}, {optional('isSubagent')} "
+        f"{optional('isArchived')}, {optional('isSubagent')}, "
+        f"{optional('value')} "
         "FROM composerHeaders"
     )
     params: tuple[str, ...] = ()
@@ -257,9 +290,10 @@ def _composer_headers(
             "is_archived": bool(is_archived),
             "is_subagent": bool(is_subagent),
             "selection_source": "composerHeaders",
+            **subagent_lineage(value),
         }
         for composer_id, workspace_id, created_at, last_updated_at,
-            is_archived, is_subagent in conn.execute(sql, params)
+            is_archived, is_subagent, value in conn.execute(sql, params)
         if composer_id
     }
 
@@ -549,21 +583,6 @@ def get_selection_markers(
             }
         finally:
             conn.rollback()
-
-
-def get_selection_marker(
-    db_path: Path, workspace_ids: set[str],
-) -> dict[str, Any]:
-    """Fingerprint only Cursor rows consumed by one Project ingest.
-
-    Header fields are hashed exactly. Every selected bubble contributes its
-    key, byte length, and bounded leading/trailing value bytes. This is a fast
-    non-authenticating invalidation guard, not raw-object integrity evidence.
-    All fields come from one SQLite read transaction, including live WAL state.
-    """
-    return get_selection_markers(
-        db_path, {"selection": workspace_ids}
-    )["selection"]
 
 
 def iter_bubble_rows(

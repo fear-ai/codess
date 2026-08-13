@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,19 +13,18 @@ from codess.query_api import execute, make_request, session_structure_counts
 from codess.snapshot import snapshot_store_paths_from_base
 from codess.store import connect
 
-
 ORIENTATION_AUDIT_FORMAT = "codess.orientation-reconciliation/1"
 
 
 def _day(timestamp: float) -> str:
     return datetime.fromtimestamp(
-        timestamp / 1000, tz=timezone.utc
+        timestamp / 1000, tz=UTC
     ).date().isoformat()
 
 
 def _month(timestamp: float) -> str:
     return datetime.fromtimestamp(
-        timestamp / 1000, tz=timezone.utc
+        timestamp / 1000, tz=UTC
     ).strftime("%Y-%m")
 
 

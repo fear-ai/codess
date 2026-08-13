@@ -10,7 +10,6 @@ from codess.config import MANIFEST_FILE, RAW_MANIFEST_FILE
 from codess.fileio import hash_file, source_fingerprint
 from codess.raw_store import RawCaptureError, verify_raw
 
-
 EVIDENCE_FORMAT = "codess.evidence-resolution/1"
 
 

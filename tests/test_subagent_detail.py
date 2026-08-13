@@ -14,7 +14,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 def _run(cmd, env=None, **kw):
     env = env or os.environ.copy()
     return subprocess.run(
-        [sys.executable, "-m", "main"] + cmd,
+        [sys.executable, "-m", "main", *cmd],
         cwd=PROJECT_ROOT,
         env=env,
         capture_output=True,

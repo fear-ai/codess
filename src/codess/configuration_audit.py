@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
 AUDIT_FORMAT = "codess.configuration-audit/1"
 SETTING_FIELDS = (
     "provider", "model_family", "model_name_exact", "model_revision",

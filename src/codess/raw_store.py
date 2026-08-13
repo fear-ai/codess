@@ -6,11 +6,13 @@ import os
 import sqlite3
 import tempfile
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from codess.config import RAW_CAPTURE_CHUNK_BYTES, RAW_MODES as RAW_MODE_VALUES
+from codess.config import RAW_CAPTURE_CHUNK_BYTES
+from codess.config import RAW_MODES as RAW_MODE_VALUES
 from codess.fileio import hash_file, open_readonly, source_fingerprint, stat_consistency
 from codess.hashing import codess_digest, codess_text_hash
 
@@ -48,16 +50,15 @@ def _read_source_identity(
     """
     content_digest = codess_digest()
     uncompressed_size = 0
-    with path.open("rb") as compressed:
-        with zstandard.ZstdDecompressor().stream_reader(compressed) as source:
-            while True:
-                chunk = source.read(CAPTURE_CHUNK_SIZE)
-                if not chunk:
-                    break
-                if output is not None:
-                    output.write(chunk)
-                content_digest.update(chunk)
-                uncompressed_size += len(chunk)
+    with path.open("rb") as compressed, zstandard.ZstdDecompressor().stream_reader(compressed) as source:
+        while True:
+            chunk = source.read(CAPTURE_CHUNK_SIZE)
+            if not chunk:
+                break
+            if output is not None:
+                output.write(chunk)
+            content_digest.update(chunk)
+            uncompressed_size += len(chunk)
     return content_digest.hexdigest(), uncompressed_size
 
 

@@ -11,12 +11,12 @@ import tempfile
 from pathlib import Path
 
 from cursor_fixtures import create_bubble_table
+from store_fixtures import insert_event, insert_session
+
 from codess.project import path_to_slug
 from codess.raw_store import RawStore
 from codess.snapshot import create_snapshot
 from codess.store import connect, init_db, replace_session_events
-from store_fixtures import insert_event, insert_session
-
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -25,7 +25,7 @@ def _run(cmd, cwd=None, env=None, **kw):
     env = env or os.environ.copy()
     cwd = cwd or PROJECT_ROOT
     return subprocess.run(
-        [sys.executable, "-m", "main"] + cmd,
+        [sys.executable, "-m", "main", *cmd],
         cwd=PROJECT_ROOT,
         env=env,
         capture_output=True,
