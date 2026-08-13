@@ -590,9 +590,10 @@ def _coverage(scope: QueryScope) -> int:
         losses = report["loss"]
         if losses.get("available"):
             unmapped = losses["unmapped_records"]
+            qualifier = "" if losses.get("record_loss_recorded") else " (not recorded)"
             print(
                 f"  not mapped: source={unmapped['source']} "
-                f"record={unmapped['record']} "
+                f"record={unmapped['record']}{qualifier} "
                 f"| fields incomplete={losses['by_level'].get('field', 0)}"
             )
             for reason, count in list(losses["by_reason"].items())[:5]:

@@ -116,6 +116,13 @@ def loss(conn: sqlite3.Connection) -> dict[str, Any]:
         "unmapped_records": {
             level: by_level.get(level, 0) for level in _LOSS_LEVELS
         },
+        # A zero here currently means "not recorded", not "did not happen":
+        # nothing writes a source or record diagnostic yet, so record-level
+        # loss is unmeasured rather than absent (W47). Stated so a reader
+        # does not take the zero as evidence.
+        "record_loss_recorded": any(
+            by_level.get(level, 0) for level in _LOSS_LEVELS
+        ),
         "by_reason": _counts_by(conn, "reason_code"),
         "record_level_reasons": _counts_by(
             conn, "reason_code",

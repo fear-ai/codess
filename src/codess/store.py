@@ -751,6 +751,14 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
             json.loads(mapping_trace)
         except json.JSONDecodeError as exc:
             raise ValueError("mapping_trace must be valid JSON") from exc
+    event_at = event.get("event_at", event.get("timestamp"))
+    # The basis states where the instant came from, so it cannot be
+    # asserted when there is no instant: the default `vendor` claimed
+    # vendor provenance for 14,031 Events that had no vendor timestamp,
+    # which is the one thing this column exists to prevent.
+    event_at_basis = event.get("event_at_basis") or (
+        "vendor" if event_at is not None else "unknown"
+    )
     tool_input = structured_json(event.get("tool_input"))
     event["tool_input"] = tool_input
     event["mapping_trace"] = mapping_trace
@@ -770,7 +778,7 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
         event.get("parent_event_id"), event.get("caused_by_event_id"),
         event.get("content"), event.get("content_len"), event.get("tool_name"),
         tool_input, event.get("tool_output"),
-        event.get("event_at", event.get("timestamp")), event.get("event_at_basis") or "vendor",
+        event_at, event_at_basis,
         source_status, normalized_status, event.get("source_file"),
         event.get("artifact_path") or event.get("file_path"), mapping_rule,
         mapping_trace,

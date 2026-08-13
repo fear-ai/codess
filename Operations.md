@@ -492,6 +492,7 @@ and can be acted on without reproducing what a Session said.
 | `audit_claude_features.py` | Which Claude Code record features appear in local Sources? |
 | `audit_codex_parentage.py` | What parent-Session evidence do Codex rollouts carry? |
 | `audit_cursor_features.py` | Which Cursor tool and model structures appear in the selected workspaces? |
+| `value_survey.py` | Which columns carry no information -- never written, or written with the same value every time? Six classes, because what a value is constant *across* changes what it means: absent everywhere, absent for all but one vendor, absent for exactly one, one value across all vendors, one value differing per vendor, constant for some. Values are printed only with `--values`, and are classifications rather than content. |
 | `field_coverage.py` | Which CoSchema columns hold no data, and for which vendors? Classifies every column as empty for one vendor, populated for only one, or empty for all -- three different findings. `--fail-on-gap` exits nonzero on the first class, where a column is demonstrably decodable and one adapter does not fill it. |
 | `gather_evidence.py` | What compatibility evidence is currently available across all three vendors and the registry? |
 | `demo_model_metrics.py` | What model latency and prompt/response measures does one store hold over a bounded period? |

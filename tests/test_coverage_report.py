@@ -159,6 +159,22 @@ class TestLoss:
     def test_no_diagnostics(self, store):
         assert loss(store)["by_level"] == {}
 
+    def test_zero_record_loss_is_distinguished_from_unmeasured(self, store):
+        """A zero must not read as evidence when nothing writes the level.
+
+        Only `field` diagnostics are constructed today -- 38,092 rows across
+        every real store and none at the other two levels -- so a reported
+        zero for record loss means "not recorded", not "did not happen"
+        (W47). The report says which.
+        """
+        self._diagnostic(store, level="field", reason="field_absent")
+        store.commit()
+        assert loss(store)["record_loss_recorded"] is False
+
+        self._diagnostic(store, level="record", reason="unsupported_shape")
+        store.commit()
+        assert loss(store)["record_loss_recorded"] is True
+
 
 def test_store_coverage_reports_all_three(store):
     """The three sections travel together: a count, its shapes, and its loss."""
@@ -169,3 +185,40 @@ def test_store_coverage_reports_all_three(store):
     assert report["coverage"]["admitted_events"] == 1
     assert report["shapes"]["by_source_record_type"] == {"assistant": 1}
     assert report["loss"]["available"] is True
+
+
+class TestEventAtBasis:
+    """The basis states where an instant came from, so it needs an instant.
+
+    `event_at_basis` defaulted to `vendor` whenever unset, asserting vendor
+    provenance for 14,031 real Events that had no vendor timestamp -- the one
+    claim this column exists to prevent. The value survey found it because
+    the column held one constant across every store and vendor.
+    """
+
+    def _upsert(self, store, **event):
+        """Through `upsert_event`, which is where the basis is decided.
+
+        `store_fixtures.insert_event` writes the row directly, so it cannot
+        exercise this -- the defect lived in the writer, not the schema.
+        """
+        from codess.store import upsert_event
+
+        upsert_event(store, {
+            "session_id": "s1", "source_id": None, "event_type": "user_message",
+            **event,
+        })
+        store.commit()
+
+    def test_vendor_basis_requires_a_vendor_instant(self, store):
+        self._upsert(store, event_id="e1", timestamp=1000.0)
+        self._upsert(store, event_id="e2")  # no vendor instant
+        assert dict(
+            store.execute("SELECT event_at_basis, COUNT(*) FROM events GROUP BY 1")
+        ) == {"vendor": 1, "unknown": 1}
+
+    def test_an_explicit_basis_is_kept(self, store):
+        self._upsert(store, event_id="e1", timestamp=1000.0, event_at_basis="session")
+        assert store.execute(
+            "SELECT event_at_basis FROM events"
+        ).fetchone()[0] == "session"

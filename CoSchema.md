@@ -152,6 +152,24 @@ Renaming touches `store_meta`, so it is a wire-format change that rides with
 W03, and the vocabulary audit in 14.4 should record `matching set` as the
 term for this concept so it is not reinvented.
 
+**Vendor, harness, and provider are three facts.** A harness is the program
+(Claude Code, Codex, Cursor); its vendor is the company that makes it
+(Anthropic, OpenAI, Anysphere); the provider is the company whose model
+answered a given Model Turn. `sessions.vendor_name` records the first two
+correctly for Claude and Codex and holds the harness name for Cursor, whose
+vendor is Anysphere -- a defect rather than a shorthand, since it makes an
+Anthropic model run under Cursor indistinguishable from an Anysphere one.
+
+**A model name is retained, not parsed into.** The exact string the harness
+recorded is stored verbatim, because it is what reached the API and is the
+only value a reader can compare against vendor documentation. Family,
+generation, and strength are separate columns filled from whatever the vendor
+states -- Codex supplies `model_provider` and `effort` as fields, Claude Code
+supplies `effort`, Cursor supplies neither and embeds strength in a label
+that is not an API name. Where a harness records a label rather than an
+identifier, the derived identifier is carried beside it rather than replacing
+it.
+
 **Vendor releases are recorded, never gated.** Each Session stores the
 harness version observed in its source records (`sessions.harness_version`,
 with `sessions.release` for the product release where the vendor supplies
@@ -176,7 +194,7 @@ diagnostics rather than silent loss.
 | `interactions` | Initiating work units within a Session. |
 | `model_turns` | Evidenced model executions and their optional Interaction and configuration. |
 | `events` | Ordered normalized observations with exact source classification and mapping evidence. |
-| `model_configurations` | Nullable independent provider, model, revision, effort, speed, service, and mode values. |
+| `model_configurations` | Nullable independent provider, model, revision, effort, speed, service, and mode values. **`provider` names the company whose model answered, which is not the vendor of the harness that ran it**: Cursor engages Anthropic and xAI models alongside its own, so the two differ in half its observed configurations. |
 | `tool_invocations` | Requested tool operations, exact names, call lineage, input, and status. |
 | `tool_results` | Ordered results and outcomes linked to invocations when source evidence permits. |
 | `artifacts` and `event_artifacts` | Durable files, URIs, repository objects, and evidence-backed Event operations. |
