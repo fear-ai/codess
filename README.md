@@ -90,6 +90,10 @@ The typed query interface supplies four primary actions:
 | `events` | Select exact Events or structured Event groups. |
 | `search` | Find bounded content and structured matches. |
 
+`codess query --coverage` reports what each store mapped, which vendor record
+shapes it saw, and what it did not carry across, so a result can state what it
+missed rather than only what it found.
+
 Common filters include:
 
 ```text

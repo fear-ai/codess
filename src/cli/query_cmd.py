@@ -17,6 +17,7 @@ from codess.config import (
     validate_config,
 )
 from codess.configuration_audit import audit as audit_configurations
+from codess.coverage_report import store_coverage
 from codess.evidence_resolver import resolve_event
 from codess.investigation import build_investigation
 from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
@@ -553,14 +554,55 @@ def run(args) -> int:
             return _diagnostics(scope, limit)
         if getattr(args, "artifacts", False):
             return _artifacts(scope, limit)
+        if getattr(args, "coverage", False):
+            return _coverage(scope)
         print(
             "Specify --tool, --sessions, -sess, --session-id, --permissions, --task-review, "
-            "--lineage, --audit, --diagnostics, --artifacts, --stats, or --taxonomy",
+            "--lineage, --audit, --diagnostics, --artifacts, --coverage, --stats, "
+            "or --taxonomy",
             file=sys.stderr,
         )
         return 1
     finally:
         scope.close()
+
+
+
+def _coverage(scope: QueryScope) -> int:
+    """Print what each selected store mapped, missed, and could not name.
+
+    One block per store rather than a merged total: coverage is a property of
+    a vendor's records under one released profile, and averaging Claude with
+    Cursor would hide the vendor whose decode is weaker, which is the
+    question this report exists to answer.
+    """
+    for store in scope.stores:
+        report = store_coverage(store["conn"])
+        coverage = report["coverage"]
+        print(f"{store['path'].name}\t{store['project_path']}")
+        ratio = coverage["classified_ratio"]
+        print(
+            f"  events={coverage['admitted_events']} "
+            f"classified={coverage['classified_events']} "
+            f"unclassified={coverage['unclassified_events']} "
+            f"ratio={'n/a' if ratio is None else format(ratio, '.6f')}"
+        )
+        losses = report["loss"]
+        if losses.get("available"):
+            unmapped = losses["unmapped_records"]
+            print(
+                f"  not mapped: source={unmapped['source']} "
+                f"record={unmapped['record']} "
+                f"| fields incomplete={losses['by_level'].get('field', 0)}"
+            )
+            for reason, count in list(losses["by_reason"].items())[:5]:
+                print(f"    {reason}\t{count}")
+        shapes = report["shapes"]["by_source_record_type"]
+        named = ", ".join(
+            f"{name}={count}" for name, count in list(shapes.items())[:6]
+        )
+        print(f"  record shapes ({len(shapes)}): {named}")
+    return 0
 
 
 def _typed_filters(args, source_tokens: set[str] | None) -> dict:

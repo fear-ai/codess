@@ -630,6 +630,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="query: correlate artifact evidence across sessions and vendors",
     )
     p.add_argument(
+        "--coverage",
+        action="store_true",
+        help="query: report what was mapped, what was not, and which record "
+             "shapes were seen, per store",
+    )
+    p.add_argument(
         "--snapshot-id",
         help="query: select one retained snapshot (requires exactly one project)",
     )

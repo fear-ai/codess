@@ -342,10 +342,28 @@ as a routine content dump.
 
 ### 10.2 Ingest Reports Malformed or Unsupported Records
 
-Identify the source system, Source locator, record locator, exact type, and
-diagnostic reason. Compare the representative record with the vendor schema and
-adapter fixture. A malformed optional field should not remove an otherwise
-usable Event; a core identity or ordering failure should remain explicit.
+Start with the coverage report, which states what was mapped and what was
+not for each store in a Project:
+
+```bash
+codess query --dir "$PROJECT" --coverage
+```
+
+It reports admitted Events against classified Events, the record shapes seen
+and their counts, and diagnostic reasons split by level. The split matters
+when reading it: a **source** or **record** reason means something did not
+become an Event, while a **field** reason means an Event exists with a value
+missing. A Project can show thousands of field diagnostics and lose nothing.
+
+A record shape appearing there that no mapping profile names is an unknown
+shape -- usually a vendor format change rather than a decoder fault. A shape
+that has stopped appearing is the same evidence from the other direction.
+
+Then identify the source system, Source locator, record locator, exact type,
+and diagnostic reason for a representative record, and compare it with the
+vendor schema and adapter fixture. A malformed optional field should not
+remove an otherwise usable Event; a core identity or ordering failure should
+remain explicit.
 
 ### 10.3 Search Returns Unexpected Counts
 
