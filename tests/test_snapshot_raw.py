@@ -311,7 +311,7 @@ def test_snapshot_is_validated_promoted_and_sealable(tmp_path):
     # The snapshot identity lives in the manifest, not in the stores it
     # names: it is derived before the copy and the manifest records that
     # copy's digest, so a copy carrying the identity would sit inside the
-    # structure whose digest depends on it (W20, 13.4.8).
+    # structure whose digest depends on it.
     assert "snapshot_id" not in meta
     assert meta["snapshot_created_at"] == manifest["created_at"]
 
@@ -626,10 +626,9 @@ def test_a_transactional_backup_is_exempt_from_the_stat_guard(tmp_path, monkeypa
 
 # --- snapshot identity lives above the stores --------------------------------
 #
-# W20: `snapshot_id` was written into each copied store's `store_meta`, and
-# the manifest then recorded that store's digest -- so a derived name sat
-# inside the structure whose digest depended on it. The identity stays a
-# creation identity; it moved to the manifest and the directory name.
+# Written into each copied store's `store_meta`, `snapshot_id` would sit inside the
+# structure whose digest the manifest records. The identity stays a creation identity,
+# held in the manifest and the directory name.
 
 def test_a_snapshot_store_does_not_carry_the_snapshot_identity(tmp_path):
     from codess.schema_contract import store_metadata

@@ -4,6 +4,13 @@
   "purpose": "Single-vendor column gaps that are accepted, each with the evidence for accepting it. tools/field_coverage.py --fail-on-gap fails on any gap absent from this list. An entry belongs here only when the source has been checked and shown not to carry the value, or when the null is a property of the sample rather than the decoder. A gap that is merely unexamined does not belong here: it fails the check until someone looks.",
   "accepted": [
     {
+      "column": "model_configurations.reasoning_effort",
+      "empty_for": "cursor",
+      "reason": "Checked. Cursor states no effort field: across 3000 sampled bubble records the only reasoning-related key is allThinkingBlocks, which is generated content rather than a setting. The strength does appear inside the model label (claude-4.6-opus-high-thinking), but recovering it is name parsing rather than reading a stated field, so it is not a decode gap on this column. This gap became single-vendor when Claude effort decoding landed; before that the column was empty for Claude too.",
+      "evidence": "cursorDiskKV bubbleId records, 3000 sampled: no key matching effort/reasoning/thinking except allThinkingBlocks",
+      "work_item": null
+    },
+    {
       "column": "model_configurations.service_tier",
       "empty_for": "cursor",
       "reason": "Checked. Cursor bubble records carry no tier field -- the only mode-like key across 400 sampled records is unifiedMode, which is not a service tier. Claude and Codex record one when the harness reports it.",

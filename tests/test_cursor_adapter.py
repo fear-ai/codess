@@ -11,6 +11,7 @@ from cursor_fixtures import (
     create_bubble_table,
     create_header_table,
     put_headers,
+    put_records,
 )
 
 from codess.adapters.cursor import (
@@ -956,7 +957,7 @@ class TestSubagentLineage:
     `isSubagent` was the only field consulted, so a Session was marked
     `subagent` while its parent stayed unnamed -- a relation asserted without
     its evidence. The parent is in the header's JSON `value` under
-    `subagentInfo`, alongside the tool call that spawned it (W02, 13.4.9).
+    `subagentInfo`, alongside the tool call that spawned it.
     """
 
     def header(self, **overrides) -> str:
@@ -1020,7 +1021,7 @@ class TestSubagentLineage:
 
 
 class TestClientVersion:
-    """Cursor records its client version; nothing read it until W37.
+    """Cursor records its client version, and `harness_version` carries it.
 
     `sessions.harness_version` was null for every Cursor Session while Claude
     and Codex filled 425 of 426, so a Cursor decode gap could not be
@@ -1080,7 +1081,7 @@ class TestToolFilePath:
     real tool calls carried a path in their arguments. The keys differ per
     tool -- `read_file` and `edit_file` use `target_file`, `search_replace`
     uses `file_path`, `list_dir` uses `relative_workspace_path` -- which is
-    why one field read found none of them (W39).
+    why one field read finds none of them.
     """
 
     @pytest.mark.parametrize(
@@ -1114,3 +1115,75 @@ class TestToolFilePath:
     )
     def test_no_usable_path(self, tool_former):
         assert _tool_file_path(tool_former) is None
+
+
+class TestComposerSettings:
+    """Interaction settings Cursor states once per composer."""
+
+    def build(self, tmp_path, composer_data=None, *, kv=True):
+        db = tmp_path / "state.vscdb"
+        conn = sqlite3.connect(db)
+        create_header_table(conn)
+        put_headers(conn, [("c1", "ws1", 1, 2, 0, 0)])
+        if kv:
+            create_bubble_table(conn)
+            if composer_data is not None:
+                put_records(conn, {"composerData:c1": composer_data})
+        conn.commit()
+        conn.close()
+        return db
+
+    def test_settings(self, tmp_path):
+        """`unifiedMode` and `maxMode` are Session facts, so they join the header
+        rather than being re-read per bubble."""
+        headers = get_composer_headers(
+            self.build(tmp_path, {
+                "unifiedMode": "agent", "modelConfig": {"maxMode": False},
+            }),
+            {"ws1"},
+        )
+        assert headers["c1"]["interaction_mode"] == "agent"
+        assert headers["c1"]["max_mode"] is False
+
+    def test_chat_mode(self, tmp_path):
+        headers = get_composer_headers(
+            self.build(tmp_path, {"unifiedMode": "chat"}), {"ws1"},
+        )
+        assert headers["c1"]["interaction_mode"] == "chat"
+        assert "max_mode" not in headers["c1"]
+
+    def test_integer_mode(self, tmp_path):
+        """Bubbles state `unifiedMode` as an integer where composers state a word.
+        Nothing observed says what an integer means, so it is not read as one."""
+        headers = get_composer_headers(
+            self.build(tmp_path, {"unifiedMode": 2}), {"ws1"},
+        )
+        assert "interaction_mode" not in headers["c1"]
+
+    def test_absent_composer_data(self, tmp_path):
+        headers = get_composer_headers(self.build(tmp_path), {"ws1"})
+        assert set(headers) == {"c1"}
+        assert "interaction_mode" not in headers["c1"]
+
+    def test_malformed_composer_data(self, tmp_path):
+        db = tmp_path / "state.vscdb"
+        conn = sqlite3.connect(db)
+        create_header_table(conn)
+        put_headers(conn, [("c1", "ws1", 1, 2, 0, 0)])
+        create_bubble_table(conn)
+        conn.execute(
+            "INSERT INTO cursorDiskKV VALUES (?, ?)",
+            ("composerData:c1", "{not json"),
+        )
+        conn.commit()
+        conn.close()
+        headers = get_composer_headers(db, {"ws1"})
+        assert set(headers) == {"c1"}
+        assert "interaction_mode" not in headers["c1"]
+
+    def test_missing_kv_table(self, tmp_path):
+        """Settings only qualify a Session, so a store keeping headers without
+        `cursorDiskKV` still yields them."""
+        headers = get_composer_headers(self.build(tmp_path, kv=False), {"ws1"})
+        assert set(headers) == {"c1"}
+        assert "interaction_mode" not in headers["c1"]

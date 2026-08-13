@@ -172,9 +172,8 @@ class TestRegistryArgResolution:
 
 # --- closed vocabulary: raw modes -------------------------------------------
 #
-# W23's criterion is that closed-vocabulary literals are replaced and an
-# invalid value fails at the boundary. Raw modes were written out longhand at
-# nine sites, so a mode added at one would have been accepted by some
+# Closed-vocabulary literals are replaced and an invalid value fails at the boundary.
+# Written out longhand at nine sites, a mode added at one would be accepted by some
 # boundaries and rejected by others.
 
 def test_raw_modes_are_ordered_by_how_much_is_retained():
@@ -193,7 +192,7 @@ def test_the_raw_store_set_matches_the_vocabulary():
 
 
 def test_no_module_writes_the_raw_mode_set_out_longhand():
-    """The duplication W23 removed must not come back."""
+    """The longhand duplication must not come back."""
     from pathlib import Path
 
     import codess.config as config_module
@@ -280,10 +279,9 @@ def test_the_rejection_message_includes_a_site_specific_value():
 
 # --- discovery scoping ------------------------------------------------------
 #
-# W27: `AGGREGATORS` and `EXCLUDE_REVIEW_DIRS` were frozen sets naming one
-# developer's directories, with no override and no mention outside the source.
-# Another operator's grouping directories were reported as Projects and their
-# review trees were scanned.
+# `AGGREGATORS` and `EXCLUDE_REVIEW_DIRS` are environment-configurable. As frozen sets
+# naming one developer's directories they reported another operator's grouping
+# directories as Projects and scanned their review trees.
 
 def reload_config(monkeypatch, **environment):
     """Re-import config under a chosen environment.

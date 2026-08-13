@@ -1,4 +1,4 @@
-"""Coverage, shape, and loss reporting over one store (W12).
+"""Coverage, shape, and loss reporting over one store.
 
 The report answers what an ingest *missed*, which the run-time diagnostic
 counters could not: they printed to stderr and were discarded, so nothing
@@ -164,8 +164,8 @@ class TestLoss:
 
         Only `field` diagnostics are constructed today -- 38,092 rows across
         every real store and none at the other two levels -- so a reported
-        zero for record loss means "not recorded", not "did not happen"
-        (W47). The report says which.
+        zero for record loss means "not recorded", not "did not happen". The report
+        says which.
         """
         self._diagnostic(store, level="field", reason="field_absent")
         store.commit()

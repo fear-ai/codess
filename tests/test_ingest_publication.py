@@ -388,7 +388,7 @@ def test_publication_does_not_import_the_command_layer():
 
 
 def test_the_command_module_no_longer_owns_publication_transactions():
-    """W06's point: the transactions live in the domain, not in the command."""
+    """The transactions live in the domain, not in the command."""
     source = Path("src/cli/ingest_cmd.py").read_text(encoding="utf-8")
     assert "create_snapshot(" not in source
     assert "os.replace(" not in source

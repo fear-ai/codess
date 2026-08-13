@@ -657,10 +657,9 @@ def test_project_set_rejects_duplicate_or_unknown_inputs(tmp_path):
 
 # --- extracted binding steps -------------------------------------------------
 #
-# `ensure_project_binding` and `catalog_readiness` were each over a hundred
-# lines. W23 reduced them to their named steps, extracted within this module
-# because catalog identity, locations, and readiness are one concern. These
-# call the steps directly; the composed behavior is covered above.
+# `ensure_project_binding` and `catalog_readiness` are composed from named steps,
+# extracted within this module because catalog identity, locations, and readiness are one
+# concern. These call the steps directly; the composed behavior is covered above.
 
 def test_a_missing_binding_file_reads_as_no_binding(tmp_path):
     from codess.project_catalog import _read_existing_binding

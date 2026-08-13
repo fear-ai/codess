@@ -39,6 +39,17 @@ duplicating its content elsewhere.
 - Capitalize principal words and Codess entity names; lowercase short articles, conjunctions, and prepositions unless they begin or end the title
 - Code blocks may specify language like bash or python
 
+## Code Comments
+
+- State the durable fact, not the history: what the code does and why it must, not what
+  it used to do, what a rejected approach would have done, or which review found it
+- Do NOT cite work-item identifiers (`W54`, `W12`); completed items are removed from
+  CoPlan, so the reference resolves to nothing for a later reader
+- Keep measured evidence that justifies a constant or a mapping; drop the narrative around it
+- Wrap to the configured line length, not to 80; service calls like `log.warning` belong
+  on one line and may extend to 120
+- A comment restating the line below it is noise; delete it
+
 ## Security
 
 - Identify security issues in system operation, code or documentation

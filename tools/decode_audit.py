@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Audit source-type, Actor, and decode coverage against ingested stores.
 
-W01 and W02 are validated against real Sessions rather than fixtures, which
-means the audit has to be re-runnable over whatever a developer has locally.
+Decode is validated against real Sessions rather than fixtures, so the audit has to be
+re-runnable over whatever a developer has locally.
 This reports classification distributions, the pairings that should not
 co-occur, and the coverage of tool, model, context, and compaction decode.
 

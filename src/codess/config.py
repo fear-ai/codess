@@ -252,9 +252,8 @@ RAW_MODES = ("none", "reference", "capture", "seal")
 A closed vocabulary: unlike `actor_kind`, `content_role`, and `origin_kind` --
 which CoSchema keeps open so vendor evidence can introduce useful new values
 -- these four are the modes Codess implements, and a fifth would be new
-behavior rather than a new observation. Written out longhand at six sites
-before W23, so a mode added here would have been accepted by some boundaries
-and rejected by others.
+behavior rather than a new observation. Declared once here so a mode added to it
+cannot be accepted by some boundaries and rejected by others.
 
 Ordered from least to most retained, which is the order every message that
 lists them uses. `config` owns it because config is a leaf module: the

@@ -95,7 +95,7 @@ def test_store_path_redirects_into_staging_for_preflight(tmp_path):
     Both redirections read one mapping. Preflight previously derived its own
     directory by hashing the Project path, while the Project loop derived the
     state path from the loop index, so a Project's stores and its state landed
-    in different staging directories (W20).
+    in different staging directories.
     """
     staging = tmp_path / "staging"
     cfg = config(

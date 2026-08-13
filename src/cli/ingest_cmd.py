@@ -428,7 +428,7 @@ class VendorStore:
         loop index -- two answers to one question, which put a Project's
         stores and its state in different staging directories. Nothing failed,
         because preflight discards both and always runs with `force`, so the
-        state was never read back (W20, 13.4.8).
+        state was never read back.
         """
         project = self.config.staged_store_roots.get(
             self.project_path.resolve(), self.project_path,
@@ -715,9 +715,8 @@ def _publish_project(
     registry_root = config.registry_root
     opts = run_totals.opts
     diagnostics = run_totals.diagnostics
-    # `_begin_project` already placed these in `opts` as per-Project state,
-    # so taking them as parameters passed the same objects twice and let a
-    # call site disagree with the dict every adapter reads (W45).
+    # `_begin_project` places these in `opts` as per-Project state; taking them as
+    # parameters too would let a call site disagree with the dict every adapter reads.
     raw_records = opts["raw_records"]
     raw_store = opts["raw_store"]
     project_id = opts["project_id"]
@@ -803,8 +802,7 @@ def _cursor_preflight(
     caller must clean up, returned rather than assigned because it outlives
     this call.
     """
-    # From the two run-state halves rather than as separate parameters
-    # (W45): the registry is fixed for the run, `opts` accumulates.
+    # From the two run-state halves: the registry is fixed for the run, `opts` accumulates.
     registry_root = config.registry_root
     cursor_roots = cursor.roots
     cursor_workspace_ids = cursor.workspace_ids
@@ -1061,9 +1059,8 @@ def _ingest_project(
     `outcome` here, in the `finally`, so a Project that fails partway still
     contributes exactly once.
     """
-    # Unpacked once: `config` owns what the run was configured to do,
-    # `totals` what it has produced. Both were previously spread across
-    # the signature as separate parameters (W45).
+    # Unpacked once: `config` owns what the run was configured to do, `totals` what it
+    # has produced.
     outcome = run_totals.outcome
     diagnostics = run_totals.diagnostics
     opts = run_totals.opts
@@ -1484,7 +1481,7 @@ def run(args) -> int:
     # above: `settings` is what the run was configured to do, `opts` is what
     # the decoders need while doing it. The two share only `raw_mode`.
     #
-    # Three lifetimes are mixed here, which is why W06 step 4 replaces it:
+    # Three lifetimes are mixed here, which is why this is slated for replacement:
     #
     #   run-wide inputs     -- debug, redact, strict_mapping, validate_only,
     #                          and the max_* bounds, copied from `settings`
@@ -1582,8 +1579,8 @@ def run(args) -> int:
         and (workspace_ids := get_cursor_workspace_ids(root))
     }
     live_cursor_global = get_cursor_global_db() if cursor_workspace_ids else None
-    # One object rather than four parallel values: they are derived together
-    # and every following step uses all of them (W46).
+    # One object rather than four parallel values: they are derived together and every
+    # following step uses all of them.
     cursor = CursorSelection(
         workspace_ids=cursor_workspace_ids,
         global_db=live_cursor_global,

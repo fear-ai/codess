@@ -178,9 +178,31 @@ def iter_cc_records(
                 continue
 
 
+# Claude's `entrypoint` mapped onto CoSchema's `surface_kind` vocabulary. An unlisted
+# value is left unmapped, since a wrong surface is worse than an absent one. `sdk-cli`
+# is `api` rather than `cli`: those records carry `promptSource: sdk`, so the Session was
+# driven programmatically rather than typed at a terminal.
+_CC_SURFACE = {
+    "cli": "cli",
+    "claude-desktop": "desktop",
+    "sdk-cli": "api",
+}
+
+# Resource bound on an otherwise unbounded file, not a claim the facts appear within it:
+# one stated later is simply not found. Over 370 real Sessions the latest first statement
+# of any fact sought here was line 7.
+MAX_FACT_RECORDS = 256
+
+
 def get_session_metadata(path: Path) -> dict:
-    """Return bounded session facts observed directly in Claude records."""
-    facts = {}
+    """Return bounded session facts observed directly in Claude records.
+
+    `entrypoint` is a per-record field but a Session-level fact -- across 370 real
+    Sessions none mixed two values -- so the first observed value describes the Session.
+    Only observed values are returned, so `store` falls back to the vendor profile where
+    a record states none.
+    """
+    facts: dict[str, str] = {}
     for line_num, record, _raw in iter_cc_records(path, warn=False):
         version = record.get("version") or record.get("claudeCodeVersion")
         if version is not None and "harness_version" not in facts:
@@ -188,7 +210,16 @@ def get_session_metadata(path: Path) -> dict:
         cwd = record.get("cwd")
         if isinstance(cwd, str) and cwd and "source_cwd" not in facts:
             facts["source_cwd"] = cwd
-        if len(facts) == 2 or line_num >= 256:
+        entrypoint = record.get("entrypoint")
+        if (
+            isinstance(entrypoint, str) and entrypoint.strip()
+            and "entrypoint" not in facts
+        ):
+            facts["entrypoint"] = entrypoint.strip()
+            mapped = _CC_SURFACE.get(entrypoint.strip().lower())
+            if mapped:
+                facts["surface_kind"] = mapped
+        if line_num >= MAX_FACT_RECORDS:
             break
     return facts
 
@@ -463,10 +494,14 @@ def _event_metadata(record: dict, tool_use_id=None, extra: dict | None = None) -
 
 
 def _assistant_configuration(record: dict) -> dict:
-    """Retain verified Claude model settings with their exact source fields."""
-    message = record.get("message") or {}
+    """Retain verified Claude model settings with their exact source fields.
+
+    `effort` is read from the record's top level, which is where Claude states it, rather
+    than from `message` alongside the model.
+    """
+    message = record.get("message")
     if not isinstance(message, dict):
-        return {}
+        message = {}
     values = {}
     provenance = {}
 
@@ -483,6 +518,7 @@ def _assistant_configuration(record: dict) -> dict:
             }
 
     keep("model", "message.model", message.get("model"))
+    keep("reasoning_effort", "effort", record.get("effort"))
     usage = message.get("usage")
     if isinstance(usage, dict):
         keep(
@@ -1117,10 +1153,9 @@ def normalize_user(
             emitted_index += 1
 
         elif btype == "image":
-            # A human pasting a screenshot with no accompanying text. The
-            # record produced no Event before W02, so the prompt existed in
-            # the Session and not in the store -- 48 of them in one observed
-            # Project, counted only as a diagnostic (13.4.9).
+            # A human pasting a screenshot with no accompanying text. Without this the
+            # prompt exists in the Session and not in the store -- 48 of them in one
+            # observed Project, counted only as a diagnostic.
             #
             # The payload is deliberately not retained. These are base64
             # images averaging ~185 KB, and the `attachment` record's
@@ -1211,11 +1246,10 @@ def normalize_user(
                 "tool_input": None,
                 "tool_output": truncated,
                 # What the source said, not what was inferred from it.
-                # `result_failure` is a text-pattern inference used only for
-                # MCP results; `is_error` is Claude's own flag on the result
-                # block. Recording only the inference left `source_status`
-                # null on all 470 failure and denial Events while the vendor
-                # had stated the outcome directly (W39.1).
+                # `result_failure` is a text-pattern inference used only for MCP
+                # results; `is_error` is Claude's own flag on the result block. Reading
+                # only the inference leaves `source_status` null on the 470 failure and
+                # denial Events whose outcome the vendor states directly.
                 "source_status": (
                     "application_error" if result_failure
                     else "is_error" if is_error

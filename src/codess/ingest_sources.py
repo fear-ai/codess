@@ -341,7 +341,8 @@ def _ingest_cc(
                 timestamps = [e["timestamp"] for e in events_list if e.get("timestamp") is not None]
                 started_at = min(timestamps) if timestamps else None
                 ended_at = max(timestamps) if timestamps else None
-                session_metadata = None
+                session_facts = get_cc_session_metadata(path)
+                metadata_values: dict[str, object] = {}
                 if parent_session_id is not None:
                     metadata_values = {
                         "is_sidechain": True,
@@ -355,8 +356,13 @@ def _ingest_cc(
                                 "parent_session_id", "session_relation_kind"
                             } and value is not None
                         })
-                    session_metadata = json.dumps(metadata_values)
-                session_facts = get_cc_session_metadata(path)
+                # `surface_kind` maps three entrypoints onto a shared vocabulary, so the
+                # exact token is the only place the original distinction survives.
+                if session_facts.get("entrypoint"):
+                    metadata_values["entrypoint"] = session_facts["entrypoint"]
+                session_metadata = (
+                    json.dumps(metadata_values) if metadata_values else None
+                )
                 session = {
                     "id": session_id,
                     "source": "Claude",
@@ -374,6 +380,9 @@ def _ingest_cc(
                         direct_lineage.get("session_relation_kind")
                         or ("subagent" if parent_session_id else None)
                     ),
+                    # Observed where Claude reports it; `store` falls back to the vendor
+                    # profile constant where it does not.
+                    "surface_kind": session_facts.get("surface_kind"),
                     "metadata": session_metadata,
                 }
             else:
@@ -508,8 +517,8 @@ def _ingest_codex(
                     "archive_source": archive_source,
                     "parent_session_id": parent_session_id,
                     "session_relation_kind": session_relation_kind,
-                    # Observed where Codex reports them; `store` falls back to
-                    # the vendor profile constant where it does not (W40).
+                    # Observed where Codex reports them; `store` falls back to the
+                    # vendor profile constant where it does not.
                     "harness_name": session_metadata.get("harness_name"),
                     "surface_kind": session_metadata.get("surface_kind"),
                     "metadata": (
@@ -600,9 +609,9 @@ def _ingest_cursor(
     ) -> tuple[int, int]:
         """Replace one Cursor source while retaining only one session buffer."""
         source_file = source_file or str(db_path.resolve())
-        # Read once per Source, not per Session: Cursor records one current
-        # client version for the whole store, so this attests the version
-        # observed at read time rather than a per-Session fact (W37).
+        # Read once per Source, not per Session: Cursor records one current client
+        # version for the whole store, so this attests the version observed at read
+        # time rather than a per-Session fact.
         client_version = get_cursor_client_version(db_path)
         old_session_ids = session_ids_for_source(conn, source_file)
         seen: set[str] = set()
@@ -648,7 +657,7 @@ def _ingest_cursor(
                 # The relation and the parent travel together: a `subagent`
                 # Session whose parent the store cannot name asserts a
                 # relationship without its evidence. Cursor records the
-                # parent in the header's `subagentInfo` (W02, 13.4.9).
+                # parent in the header's `subagentInfo`.
                 session["session_relation_kind"] = "subagent"
                 session["parent_session_id"] = headers[current_id].get(
                     "parent_composer_id"

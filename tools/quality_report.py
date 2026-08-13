@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Report lint, type, and test results as one measurement.
 
-W29's point: a clean run means the selected rules passed, and a rule set
-nobody selected proves nothing. This runs the three checks the repository
-declares and reports each count, so a change can be compared against the
-state before it rather than asserted to be clean.
+A clean run means the selected rules passed, and a rule set nobody selected proves
+nothing. This runs the three checks the repository declares and reports each count, so a
+change can be compared against the state before it rather than asserted to be clean.
 
 Only the test suite gates the exit status. Lint and type counts are reported
 because both currently have a nonzero baseline that is being reduced against

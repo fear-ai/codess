@@ -704,6 +704,13 @@ def process_file(
         )
 
         if rtype == "session_meta":
+            # Codex states provider and model on different records: `session_meta` carries
+            # `model_provider` and no model, `turn_context` the reverse. The provider is a
+            # Session-level fact, so it seeds the configuration every later turn extends.
+            _update_configuration(
+                current_configuration,
+                _configuration_values("session_meta", payload, line_num),
+            )
             if diagnostics is not None:
                 diagnostics["session_metadata_records"] = (
                     diagnostics.get("session_metadata_records", 0) + 1
@@ -1084,10 +1091,9 @@ def process_file(
                     tool_output=truncated,
                     metadata=_merge_metadata(payload, { **current_configuration, **({ "application_status": "failed", "result_status_evidence": application_failure, } if application_failure else {}), }),
                     source_raw=source_raw,
-                    # Codex states `status` on few outputs, so the exit code
-                    # it embeds in the output body is the fallback; where
-                    # neither exists the result stays unknown rather than
-                    # being assumed successful (W39.1).
+                    # Codex states `status` on few outputs, so the exit code it embeds
+                    # in the output body is the fallback; where neither exists the result
+                    # stays unknown rather than being assumed successful.
                     source_status=(
                         "application_error" if application_failure
                         else payload.get("status") or _exit_code_status(payload)

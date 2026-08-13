@@ -53,7 +53,7 @@ def local_path_key(path: Path) -> str:
     decision. Codess already has a portable Project identity
     (`project_catalog.ensure_project_binding`), and a candidate acquires one
     when it is approved; a second, path-derived identity would disagree with
-    it the first time a directory moved (W20, 13.4.8).
+    it the first time a directory moved.
     """
     normalized = str(path.expanduser().resolve())
     return "local:path-key:" + codess_hash(256, 128, [normalized])

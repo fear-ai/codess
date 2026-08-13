@@ -253,9 +253,8 @@ def subagent_lineage(header_value: object) -> dict[str, Any]:
 
     `isSubagent` says a Composer is delegated work; the identity of what
     delegated it lives in the header's JSON `value` under `subagentInfo`.
-    Reading only the flag set a `subagent` relation on a Session whose parent
-    the store never named, which asserts a relationship without its evidence
-    (W02, 13.4.9).
+    Reading only the flag would set a `subagent` relation on a Session whose parent the
+    store never named, asserting a relationship without its evidence.
 
     Returns an empty mapping when the header records no lineage, so a caller
     can merge it unconditionally and absent stays absent.
@@ -331,6 +330,47 @@ def _composer_headers(
     }
 
 
+def _composer_settings(conn: sqlite3.Connection, composer_ids: set[str]) -> dict[str, dict]:
+    """Interaction settings each named composer states in `composerData`.
+
+    Cursor records these once per composer rather than per bubble, so they are read here
+    rather than during bubble decode. `unifiedMode` also appears on bubbles, but as an
+    integer where the composer states a word (`agent`, `chat`); across 3,984 real bubbles
+    the integer co-occurred with `agent` alone, so nothing establishes what another value
+    would mean and only the composer's spelling is read.
+    """
+    if not composer_ids or not table_columns(conn, "cursorDiskKV"):
+        # Supplementary evidence: a store keeping headers without `cursorDiskKV` still has
+        # usable Sessions, so an absent table yields no settings rather than an error.
+        return {}
+    settings: dict[str, dict] = {}
+    for composer_id in sorted(composer_ids):
+        row = conn.execute(
+            "SELECT value FROM cursorDiskKV WHERE key=? LIMIT 1",
+            (f"composerData:{composer_id}",),
+        ).fetchone()
+        if row is None or row[0] is None:
+            continue
+        try:
+            data = json.loads(row[0])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        observed: dict[str, object] = {}
+        mode = data.get("unifiedMode")
+        if isinstance(mode, str) and mode.strip():
+            observed["interaction_mode"] = mode.strip()
+        model_config = data.get("modelConfig")
+        if isinstance(model_config, dict):
+            max_mode = model_config.get("maxMode")
+            if isinstance(max_mode, bool):
+                observed["max_mode"] = max_mode
+        if observed:
+            settings[composer_id] = observed
+    return settings
+
+
 def get_composer_headers(
     db_path: Path, workspace_ids: set[str] | None = None,
 ) -> dict[str, dict]:
@@ -339,7 +379,17 @@ def get_composer_headers(
         return {}
     try:
         with closing(connect_readonly(db_path)) as conn:
-            return _composer_headers(conn, workspace_ids)
+            headers = _composer_headers(conn, workspace_ids)
+            try:
+                settings = _composer_settings(conn, set(headers))
+            except sqlite3.Error as exc:
+                # Settings only qualify the headers, so a failure narrows what is known
+                # rather than discarding Sessions the store does contain.
+                log.warning("Cannot read Cursor composer settings from %s: %s", db_path, exc)
+                settings = {}
+            for composer_id, observed in settings.items():
+                headers[composer_id].update(observed)
+            return headers
     except Exception as exc:
         log.warning("Cannot read Cursor composer headers from %s: %s", db_path, exc)
         return {}

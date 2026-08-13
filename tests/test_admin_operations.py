@@ -910,9 +910,8 @@ def test_a_working_archive_is_named_the_instant_its_manifest_reports(tmp_path):
 def test_package_verify_reports_both_digests_and_what_each_covers():
     """Exact package verification has a named consumer now that the gate does not.
 
-    W03 removed the fixtures from the write gate; the guarantee did not
-    disappear, it moved here, where its question -- "is this working tree the
-    reviewed one" -- is the right one to ask.
+    The fixtures are not in the write gate; the guarantee lives here instead, where its
+    question -- "is this working tree the reviewed one" -- is the right one to ask.
     """
     import io
     import json

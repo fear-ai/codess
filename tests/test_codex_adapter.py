@@ -908,7 +908,7 @@ class TestExitCodeStatus:
     Most `function_call_output` records carry no `status` field, so 26,917 of
     30,415 real results had neither a source nor a normalized outcome. The
     exit code is there but embedded as JSON in text, which no field read
-    reaches (W39.1).
+    reaches.
     """
 
     def _result(self, tmp_path, output):
@@ -944,3 +944,75 @@ class TestExitCodeStatus:
         """Codex did not say, so neither does the store."""
         event = self._result(tmp_path, "plain output with no code")
         assert event["source_status"] is None
+
+
+class TestSessionProvider:
+    """Codex states provider and model on different records."""
+
+    def decode(self, tmp_path, *records):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in records))
+        return list(process_file(path, "s1", "/p", {}))
+
+    def meta(self, **payload):
+        return {
+            "timestamp": "2026-07-10T00:00:00Z", "type": "session_meta",
+            "payload": {"id": "s1", "cwd": "/p", **payload},
+        }
+
+    def turn(self, **payload):
+        return {
+            "timestamp": "2026-07-10T00:00:01Z", "type": "turn_context",
+            "payload": payload,
+        }
+
+    def message(self):
+        return {
+            "timestamp": "2026-07-10T00:00:02Z", "type": "response_item",
+            "payload": {
+                "type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello"}],
+            },
+        }
+
+    def configured(self, events):
+        for event in events:
+            metadata = json.loads(event.get("metadata") or "{}")
+            if "model" in metadata:
+                return metadata
+        return {}
+
+    def test_provider_reaches_turn(self, tmp_path):
+        """`model_provider` is on `session_meta` and `model` on `turn_context`, so
+        reading one record at a time never saw both."""
+        events = self.decode(
+            tmp_path,
+            self.meta(model_provider="openai"),
+            self.turn(model="gpt-5.6-sol", effort="high"),
+            self.message(),
+        )
+        metadata = self.configured(events)
+        assert metadata["model"] == "gpt-5.6-sol"
+        assert metadata["model_provider"] == "openai"
+        assert metadata["reasoning_effort"] == "high"
+
+    def test_provider_absent(self, tmp_path):
+        """A Session stating no provider records none rather than a guess."""
+        events = self.decode(
+            tmp_path, self.meta(), self.turn(model="gpt-5.6-sol"),
+            self.message(),
+        )
+        metadata = self.configured(events)
+        assert metadata["model"] == "gpt-5.6-sol"
+        assert "model_provider" not in metadata
+
+    def test_turn_provider_precedence(self, tmp_path):
+        """A provider stated on the turn describes that turn, so it wins over the
+        Session-level one it would otherwise inherit."""
+        events = self.decode(
+            tmp_path,
+            self.meta(model_provider="openai"),
+            self.turn(model="local", model_provider="ollama"),
+            self.message(),
+        )
+        assert self.configured(events)["model_provider"] == "ollama"

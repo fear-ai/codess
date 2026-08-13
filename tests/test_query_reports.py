@@ -1,7 +1,7 @@
 """Direct tests for the report queries moved out of the query command.
 
-W06 step 6 moved `query_cmd`'s report SQL into `codess/query_reports.py`, so
-each report is now callable without a CLI invocation. These cover what the
+`query_cmd`'s report SQL lives in `codess/query_reports.py`, so each report is
+callable without a CLI invocation. These cover what the
 byte-identity comparison against the previous output cannot: the ordering
 rules, the older-store fallbacks, and the outcome classification that decides
 what a tool call without a result is called.
@@ -516,7 +516,7 @@ def test_store_counts_omit_a_project_with_no_open_store():
 # --- module boundary --------------------------------------------------------
 
 def test_the_query_command_owns_no_report_sql():
-    """W06 step 6: report SQL belongs to the domain, not the command layer."""
+    """Report SQL belongs to the domain, not the command layer."""
     import ast
     import re
 

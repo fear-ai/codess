@@ -1,9 +1,7 @@
 """Cursor feature-audit reporting and its source-access boundary.
 
-The audit previously opened its own SQLite connection and carried fifteen
-vendor SQL statements, duplicating what `cursor_source` owns. W26 moved the
-queries there and left this module owning the report. These cover both sides:
-the counted evidence, and the boundary that keeps them apart.
+The vendor SQL lives in `cursor_source` and this module owns the report. These cover
+both sides: the counted evidence, and the boundary that keeps them apart.
 """
 
 from __future__ import annotations
@@ -200,7 +198,7 @@ def test_an_empty_catalog_still_produces_a_report(cursor_db):
 # --- module boundary --------------------------------------------------------
 
 def test_the_audit_owns_no_vendor_storage_knowledge():
-    """W26's criterion: reporting and selection are different concerns."""
+    """Reporting and selection are different concerns."""
     import codess.cursor_feature_audit as module
 
     source = Path(module.__file__).read_text(encoding="utf-8")

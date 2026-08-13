@@ -1,9 +1,8 @@
 """Direct tests for the vendor ingest coordinators and their shared helpers.
 
-`codess/ingest_sources.py` holds the three per-vendor coordinators moved out of
-`cli.ingest_cmd` by W06 step 4. Until now every function here was reachable
-only by running a whole ingest, so a failure in one of them surfaced as a
-changed session count several layers away. These call the module directly:
+`codess/ingest_sources.py` holds the three per-vendor coordinators. Reachable only by
+running a whole ingest, a failure in one of them would surface as a changed session count
+several layers away. These call the module directly:
 the helpers with explicit parameters, and each coordinator against a Project
 fixture carrying one Session for its vendor.
 """

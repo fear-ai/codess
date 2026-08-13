@@ -226,10 +226,9 @@ def test_underlying_algorithm_is_sha256_over_tagged_input():
 def test_direct_hashlib_use_is_confined_to_the_hashing_module():
     """Digest construction belongs in codess.hashing, with no exceptions.
 
-    Four modules were exempt while they used truncation widths this module
-    did not offer. W20 settled those widths -- the 48- and 96-bit sites moved
-    to the narrowest supported 64 -- so the exemptions are gone and the rule
-    is now what it always claimed to be.
+    Four modules were exempt while they used truncation widths this module did not
+    offer. Those widths are settled -- the 48- and 96-bit sites moved to the narrowest
+    supported 64 -- so the exemptions are gone and the rule is what it claims to be.
     """
     root = pathlib.Path(__file__).resolve().parents[1] / "src"
     offenders = sorted(

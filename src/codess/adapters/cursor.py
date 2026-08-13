@@ -53,9 +53,8 @@ _TOOL_PATH_KEYS = (
 def _tool_file_path(tool_former: dict) -> str | None:
     """The file a Cursor tool call operates on, or None.
 
-    `events.file_path` was null for every Cursor Event while 2,873 of 4,530
-    real tool calls named a file in their arguments -- the paths were there,
-    under four spellings, and nothing read them (W39).
+    Cursor names the file under four spellings; 2,873 of 4,530 real tool calls carry
+    one, so a single field read finds none of them.
 
     Only a single path is returned, because the column holds one; a call
     naming several (`paths`) records none rather than an arbitrary first,

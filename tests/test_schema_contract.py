@@ -654,7 +654,7 @@ def test_a_new_store_records_the_contract_digest(tmp_path):
 def test_editing_a_fixture_does_not_make_a_store_unwritable(
     tmp_path, restore_package,
 ):
-    """The defect W03 removed: a test document must not gate a store write."""
+    """A test document must not gate a store write."""
     import codess.schema_contract as module
 
     path = tmp_path / "store.db"

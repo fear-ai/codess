@@ -3,9 +3,8 @@
 After a Project's vendor stores are written, four things decide what becomes
 current: the catalog entries are re-synced, external Artifacts are correlated,
 a fresh rebuild's staged stores are promoted over the working ones, and a
-snapshot is created when anything actually changed. These are the transactions
-W06 is about, and they belong to the ingest domain rather than to the command
-that adapts arguments and renders reports.
+snapshot is created when anything actually changed. These transactions belong to the
+ingest domain rather than to the command that adapts arguments and renders reports.
 
 Each phase takes what it needs and returns what the caller records; none
 mutates a caller's local. `promote_rebuilt_stores` and `publish_snapshot`

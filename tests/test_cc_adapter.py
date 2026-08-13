@@ -271,9 +271,8 @@ class TestNormalizeUser:
 
         `source_status` recorded a text-pattern inference used for MCP
         results and nothing else, so it was null on all 470 Claude failure
-        and denial Events while Claude had stated the outcome directly
-        (W39.1). `normalized_status` was already correct; what was lost was
-        the exact source value the schema exists to retain.
+        and denial Events while Claude states the outcome directly. `normalized_status`
+        is correct either way; what is lost is the exact source value the schema retains.
         """
         record = {"message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1",
@@ -672,7 +671,7 @@ class TestProcessFile:
         assert diagnostics.get("ignored_records", 0) == 0
         # The image-only user record now decodes. It was counted unsupported
         # and emitted nothing, so a human prompt existed in the Session and
-        # not in the store (W02, 13.4.9).
+        # not in the store.
         assert diagnostics.get("unsupported_records", 0) == 0
         [event] = events
         assert event["subtype"] == "attachment"
@@ -874,9 +873,8 @@ class TestFileHistoryDelta:
     """A tracked file's backup, linked to the snapshot it extends.
 
     Real Claude Code Sessions emit 369 of these across the observed Projects,
-    and every one was counted as an unsupported record before W02 handled it
-    -- the count matched exactly, which is what made the gap actionable
-    rather than a suspicion (13.4.9).
+    and without this every one is counted as an unsupported record -- the count matched
+    exactly, which is what made the gap actionable rather than a suspicion.
     """
 
     def record(self, **overrides) -> dict:
@@ -941,7 +939,7 @@ class TestFileHistoryDelta:
         assert "backup_version" not in metadata
 
     def test_a_delta_is_a_known_record_rather_than_unsupported(self):
-        """The defect W02 closed: 44 of these were reported unsupported.
+        """Without this, 44 of these are reported unsupported.
 
         `should_skip` is what the record loop consults before falling through
         to the unsupported counter, so membership there is the fix.
@@ -955,11 +953,10 @@ class TestFileHistoryDelta:
 class TestImageOnlyPrompt:
     """A human pasting a screenshot with no accompanying text.
 
-    Before W02 these produced no Event and were counted unsupported, so the
-    prompt existed in the Session and not in the store -- 48 of them in one
-    observed Project, 107 image blocks, 19.8 MB of base64 (13.4.9). The
-    payload is deliberately not retained: the `attachment` record's bounded
-    treatment is this adapter's established pattern.
+    Untreated these produce no Event and count as unsupported, leaving the prompt in
+    the Session and not in the store -- 48 of them in one observed Project, 107 image
+    blocks, 19.8 MB of base64. The payload is deliberately not retained: the `attachment`
+    record's bounded treatment is this adapter's established pattern.
     """
 
     def record(self, blocks=None) -> dict:
@@ -1036,3 +1033,100 @@ class TestImageOnlyPrompt:
         assert events
         assert diagnostics.get("unsupported_records", 0) == 0
         assert diagnostics.get("attachment_only_records", 0) == 0
+
+
+class TestSessionSurface:
+    """`entrypoint` decoded to `surface_kind` and kept verbatim."""
+
+    def write(self, tmp_path, *records):
+        f = tmp_path / "session.jsonl"
+        f.write_text("".join(json.dumps(r) + "\n" for r in records))
+        return f
+
+    def test_desktop(self, tmp_path):
+        """A Desktop Session is a Desktop Session, not the profile constant."""
+        from codess.adapters.cc import get_session_metadata
+        facts = get_session_metadata(self.write(
+            tmp_path, {"type": "user", "entrypoint": "claude-desktop"},
+        ))
+        assert facts["surface_kind"] == "desktop"
+        assert facts["entrypoint"] == "claude-desktop"
+
+    def test_sdk(self, tmp_path):
+        """`sdk-cli` is programmatic, so `api`, though the token contains "cli"."""
+        from codess.adapters.cc import get_session_metadata
+        facts = get_session_metadata(self.write(
+            tmp_path, {"type": "user", "entrypoint": "sdk-cli"},
+        ))
+        assert facts["surface_kind"] == "api"
+        assert facts["entrypoint"] == "sdk-cli"
+
+    def test_cli(self, tmp_path):
+        from codess.adapters.cc import get_session_metadata
+        facts = get_session_metadata(self.write(
+            tmp_path, {"type": "user", "entrypoint": "cli"},
+        ))
+        assert facts["surface_kind"] == "cli"
+
+    def test_unlisted(self, tmp_path):
+        """An unmapped value yields no surface: a wrong one is worse than none."""
+        from codess.adapters.cc import get_session_metadata
+        facts = get_session_metadata(self.write(
+            tmp_path, {"type": "user", "entrypoint": "future-surface"},
+        ))
+        assert "surface_kind" not in facts
+        assert facts["entrypoint"] == "future-surface"
+
+    def test_absent(self, tmp_path):
+        from codess.adapters.cc import get_session_metadata
+        facts = get_session_metadata(self.write(tmp_path, {"type": "user"}))
+        assert "surface_kind" not in facts
+        assert "entrypoint" not in facts
+
+    def test_stated_late(self, tmp_path):
+        """The fact is sought across the whole bounded read, not until the facts
+        collected so far look complete."""
+        from codess.adapters.cc import get_session_metadata
+        records = [{"type": "assistant", "version": "2.1.0", "cwd": "/w"}]
+        records += [{"type": "assistant"} for _ in range(40)]
+        records.append({"type": "user", "entrypoint": "claude-desktop"})
+        facts = get_session_metadata(self.write(tmp_path, *records))
+        assert facts["surface_kind"] == "desktop"
+
+    def test_beyond_bound(self, tmp_path):
+        """Past the bound the fact is not found: the bound is a resource limit, so this
+        states its cost rather than a decode rule."""
+        from codess.adapters.cc import MAX_FACT_RECORDS, get_session_metadata
+        records = [{"type": "assistant"} for _ in range(MAX_FACT_RECORDS + 1)]
+        records.append({"type": "user", "entrypoint": "claude-desktop"})
+        facts = get_session_metadata(self.write(tmp_path, *records))
+        assert "surface_kind" not in facts
+
+
+class TestAssistantEffort:
+    """Claude states `effort` at the record top level."""
+
+    def test_effort(self):
+        """Both vendors state the effort; only Codex's was being decoded."""
+        from codess.adapters.cc import _assistant_configuration
+        values = _assistant_configuration({
+            "type": "assistant", "uuid": "u1", "effort": "high",
+            "message": {"model": "claude-opus-4-8"},
+        })
+        assert values["reasoning_effort"] == "high"
+        assert values["model"] == "claude-opus-4-8"
+        provenance = values["configuration_provenance"]["reasoning_effort"]
+        assert provenance["source_field"] == "effort"
+
+    def test_effort_without_message(self):
+        """`effort` is top-level, so an absent `message` must not drop it."""
+        from codess.adapters.cc import _assistant_configuration
+        values = _assistant_configuration({"type": "assistant", "effort": "high"})
+        assert values["reasoning_effort"] == "high"
+
+    def test_absent(self):
+        from codess.adapters.cc import _assistant_configuration
+        values = _assistant_configuration({
+            "type": "assistant", "message": {"model": "claude-opus-4-8"},
+        })
+        assert "reasoning_effort" not in values
