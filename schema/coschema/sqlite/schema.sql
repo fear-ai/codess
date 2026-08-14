@@ -51,7 +51,7 @@ CREATE TABLE workspace_bindings (
 
 CREATE TABLE sources (
   id INTEGER PRIMARY KEY,
-  entity_id TEXT NOT NULL UNIQUE,
+  source_entity_id TEXT NOT NULL UNIQUE,
   source_system_id TEXT NOT NULL,
   source_path TEXT NOT NULL,
   storage_format TEXT NOT NULL,
@@ -92,7 +92,7 @@ CREATE TABLE model_params (
 
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
-  entity_id TEXT NOT NULL UNIQUE,
+  session_entity_id TEXT NOT NULL UNIQUE,
   observation_id TEXT NOT NULL UNIQUE,
   source_system_id TEXT NOT NULL DEFAULT 'legacy.unknown',
   vendor_session_id TEXT,
@@ -154,7 +154,7 @@ CREATE TABLE model_turns (
 
 CREATE TABLE events (
   id INTEGER PRIMARY KEY,
-  entity_id TEXT NOT NULL UNIQUE,
+  event_entity_id TEXT NOT NULL UNIQUE,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   source_id INTEGER REFERENCES sources(id),
   event_id TEXT NOT NULL,
@@ -381,12 +381,12 @@ CREATE INDEX idx_sources_uri_revision ON sources(source_path, source_revision);
 CREATE INDEX idx_sessions_project ON sessions(project_id);
 CREATE INDEX idx_sessions_project_path ON sessions(project_path);
 CREATE INDEX idx_sessions_parent ON sessions(parent_session_id);
-CREATE INDEX idx_sessions_entity ON sessions(entity_id);
+CREATE INDEX idx_sessions_entity ON sessions(session_entity_id);
 CREATE INDEX idx_sessions_observation ON sessions(observation_id);
 CREATE INDEX idx_sessions_source ON sessions(source_id);
 CREATE INDEX idx_sessions_model_param ON sessions(session_model_param_id)
   WHERE session_model_param_id IS NOT NULL;
-CREATE INDEX idx_events_entity ON events(entity_id);
+CREATE INDEX idx_events_entity ON events(event_entity_id);
 CREATE INDEX idx_model_turns_model_param ON model_turns(model_param_id)
   WHERE model_param_id IS NOT NULL;
 CREATE INDEX idx_project_locations_project ON project_locations(project_id);

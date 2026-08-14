@@ -472,7 +472,7 @@ def selected_sessions(
         conn = store["conn"]
         columns = column_names(conn, "sessions")
         global_projection = (
-            "entity_id," if "entity_id" in columns else "NULL AS entity_id,"
+            "session_entity_id," if "session_entity_id" in columns else "NULL AS session_entity_id,"
         )
         project_projection = (
             "project_id," if "project_id" in columns else "NULL AS project_id,"
@@ -488,12 +488,12 @@ def selected_sessions(
             """,
             params,
         ):
-            stable_id = row["entity_id"] or session_entity_id(
+            stable_id = row["session_entity_id"] or session_entity_id(
                 row["source_system_id"], row["vendor_session_id"] or row["id"],
             )
             sessions.append({
                 "id": row["id"],
-                "entity_id": stable_id,
+                "session_entity_id": stable_id,
                 "project_id": row["project_id"] or store.get("project_id"),
                 "query_id": (store_index, row["id"]),
                 "source": row["source"],

@@ -127,11 +127,11 @@ def audit(
             """
             WITH ranked_turns AS (
               SELECT mt.model_param_id,s.source_system_id,
-                     s.entity_id AS session_entity_id,
+                     s.session_entity_id AS session_entity_id,
                      mt.id AS model_turn_id,mt.sequence_no,
                      ROW_NUMBER() OVER (
                        PARTITION BY mt.model_param_id
-                       ORDER BY s.source_system_id,s.entity_id,
+                       ORDER BY s.source_system_id,s.session_entity_id,
                                 mt.sequence_no,mt.id
                      ) AS occurrence_rank
               FROM model_turns mt
@@ -140,7 +140,7 @@ def audit(
             """ + source_and + """
             ),
             ranked_events AS (
-              SELECT e.id,e.model_turn_id,e.entity_id,
+              SELECT e.id,e.model_turn_id,e.event_entity_id,
                      e.source_record_locator,e.metadata,e.source_id,
                      ROW_NUMBER() OVER (
                        PARTITION BY e.model_turn_id
@@ -155,8 +155,8 @@ def audit(
             )
             SELECT rt.model_param_id,rt.source_system_id,
                    rt.session_entity_id,rt.model_turn_id,
-                   e.entity_id AS event_entity_id,e.source_record_locator,
-                   e.metadata,src.entity_id AS source_entity_id,
+                   e.event_entity_id AS event_entity_id,e.source_record_locator,
+                   e.metadata,src.source_entity_id AS source_entity_id,
                    src.source_path,src.source_revision
             FROM ranked_turns rt
             LEFT JOIN ranked_events e ON e.model_turn_id=rt.model_turn_id
@@ -273,7 +273,7 @@ def audit(
                 turns_with_occurrence_provenance
             ),
             "source_params_values": source_values,
-            "invalid_source_paramsurations": invalid_source_params,
+            "invalid_source_params": invalid_source_params,
         },
         "vendor_coverage": dict(sorted(vendor_coverage.items())),
         "configurations": configurations,

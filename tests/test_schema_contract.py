@@ -321,10 +321,10 @@ def test_event_graph_tools_and_artifacts_are_materialized(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM tool_result_content").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM artifact_content").fetchone()[0] == 1
     assert conn.execute(
-        "SELECT COUNT(*) FROM sessions WHERE entity_id LIKE 'codess:session:sha256:%'"
+        "SELECT COUNT(*) FROM sessions WHERE session_entity_id LIKE 'codess:session:sha256:%'"
     ).fetchone()[0] == 1
     assert conn.execute(
-        "SELECT COUNT(*) FROM events WHERE entity_id LIKE 'codess:event:sha256:%'"
+        "SELECT COUNT(*) FROM events WHERE event_entity_id LIKE 'codess:event:sha256:%'"
     ).fetchone()[0] == 3
     call = conn.execute("SELECT source_status, normalized_status FROM tool_invocations").fetchone()
     assert tuple(call) == ("completed", "succeeded")

@@ -4,6 +4,7 @@ import os
 import platform
 import re
 from pathlib import Path
+from typing import cast
 
 from codess.resource_policy import BUILTIN_MAXIMUMS
 
@@ -114,6 +115,8 @@ _IS_ENV_TABLE = (
         "CODESS_MAX_CONTEXT_CONTENT_CHARS", env_int,
         BUILTIN_MAXIMUMS["context_content_chars"],
     ),
+    ("CODESS_QUERY_BYTE_LIMIT", env_int, MB(16)),
+    ("CODESS_SOURCE_READ_MAX", env_int, MB(64)),
     ("CODESS_MAX_CODESS_DB_BYTES", env_int, GB(2)),
     ("CODESS_MAX_CURSOR_DB_BYTES", env_int, GB(10)),
     ("CODESS_CC_PROJECTS", env_path, str(Path.home() / ".claude" / "projects")),
@@ -304,18 +307,26 @@ MAX_RECORD_BYTES = MB(2)
 # A distinct captured raw revision at or above this size is flagged in
 # retention planning as worth explicit --keep-comparison-revisions review.
 LARGE_RAW_REVISION_BYTES = GB(1)
-# A single JSONL line above this size during token-usage scanning is
-# treated as implausible and skipped rather than parsed.
-MAX_TOKEN_LINE_BYTES = MB(8)
-# Above this size, source fingerprinting samples bounded windows instead of
-# hashing the complete file (see fileio.read_source_revision).
-SOURCE_FULL_HASH_MAX = MB(64)
+# A single JSONL line above this size during token-usage scanning is treated as
+# implausible and skipped rather than parsed. A usage record holds counts, not content,
+# so a line this large means a malformed file or an unexpected record type, and parsing
+# it would allocate megabytes to read a few integers. Measured over 58,106 real Claude
+# lines: mean 2.5 KB, largest 1.35 MB, so the bound is 3x the largest observed line --
+# far enough above real data to never skip a valid record.
+MAX_TOKEN_LINE_BYTES = MB(4)
+# The largest Source `read_source_revision` reads in full. Above it the revision is
+# derived from bounded sampled windows plus size, so the value attests the sampled
+# regions rather than byte identity, and `method` records which claim was made.
+# Measured over 405 real Sources: 395 fall under this bound and are read whole, 1 is
+# sampled, 9 are SQLite containers checked by inode and size instead.
+SOURCE_READ_MAX = cast(int, _IS_ENV_VALUES["CODESS_SOURCE_READ_MAX"])
 # A raw-capture object above this size is called out individually in a
 # storage report rather than only contributing to the aggregate total.
 LARGE_RAW_OBJECT_BYTES = MB(300)
-# Default maximum inline content bytes for one typed query result
-# (query --byte-limit); explicit --byte-limit overrides this default.
-DEFAULT_QUERY_BYTE_LIMIT = MB(16)
+# Default maximum inline content bytes for one typed query result. `--byte-limit`
+# overrides it per call; the environment variable moves the default, so an operator
+# whose results are routinely larger does not pass the flag every time.
+DEFAULT_QUERY_BYTE_LIMIT = cast(int, _IS_ENV_VALUES["CODESS_QUERY_BYTE_LIMIT"])
 
 # --- I/O chunk sizes (streaming buffer tuning, not a policy limit or
 # threshold; grouped here for one place to look, not because these values
@@ -336,11 +347,14 @@ STOP = _IS_ENV_VALUES["CODESS_STOP"]
 NO_HASH = _IS_ENV_VALUES["CODESS_NO_HASH"]
 
 # --- Truncation (display / stored excerpt limits) ---
-TRUNCATE_RESPONSE = 2000
+# One default, so a limit that has no reason to differ does not drift. The two 200s
+# bound a label and a pattern rather than a body, which is why they are stated apart.
+TRUNCATE_DEFAULT = 2000
+TRUNCATE_RESPONSE = TRUNCATE_DEFAULT
+TRUNCATE_TOOL_RESULT = TRUNCATE_DEFAULT
+TRUNCATE_PROMPT = TRUNCATE_DEFAULT
 TRUNCATE_DIALOG = 200
-TRUNCATE_TOOL_RESULT = 2000
 TRUNCATE_GREP_PATTERN = 200
-TRUNCATE_PROMPT = 2000
 
 # --- Redaction ---
 REDACT_PATTERNS = [
@@ -401,6 +415,8 @@ def validate_config() -> list[str]:
         ("CODESS_MAX_EVENTS_PER_SOURCE", MAX_EVENTS_PER_SOURCE),
         ("CODESS_MAX_EVENTS_PER_SESSION", MAX_EVENTS_PER_SESSION),
         ("CODESS_MAX_CONTEXT_CONTENT_CHARS", MAX_CONTEXT_CONTENT_CHARS),
+        ("CODESS_QUERY_BYTE_LIMIT", DEFAULT_QUERY_BYTE_LIMIT),
+        ("CODESS_SOURCE_READ_MAX", SOURCE_READ_MAX),
         ("CODESS_MAX_CODESS_DB_BYTES", MAX_CODESS_DB_BYTES),
         ("CODESS_MAX_CURSOR_DB_BYTES", MAX_CURSOR_DB_BYTES),
     ):

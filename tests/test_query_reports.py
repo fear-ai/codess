@@ -450,10 +450,10 @@ def test_a_store_without_the_identity_columns_still_reports_sessions(tmp_path):
         add_session(conn, "s1")
         conn.commit()
         columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
-        assert {"entity_id", "project_id"} <= columns
+        assert {"session_entity_id", "project_id"} <= columns
         scope = Scope([{"conn": conn, "path": path, "project_path": tmp_path}])
         [session] = selected_sessions(scope, lambda row: row["id"])
-        assert session["entity_id"].startswith("codess:session:")
+        assert session["session_entity_id"].startswith("codess:session:")
     finally:
         conn.close()
 

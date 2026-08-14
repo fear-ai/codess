@@ -27,7 +27,7 @@ def insert_session(conn, session_id, *, source="Claude", **columns):
     """
     row = {
         "id": session_id,
-        "entity_id": f"codess:session:sha256:{session_id}",
+        "session_entity_id": f"codess:session:sha256:{session_id}",
         "observation_id": f"codess:observation:sha256:{session_id}",
         "source_system_id": VENDOR_SOURCE_SYSTEMS.get(source, "anthropic.claude-code"),
         "source": source,
@@ -51,7 +51,7 @@ def insert_event(conn, session_id, event_id, **columns):
     row = {
         "session_id": session_id,
         "event_id": event_id,
-        "entity_id": f"codess:event:sha256:{session_id}-{event_id}",
+        "event_entity_id": f"codess:event:sha256:{session_id}-{event_id}",
     }
     row.update(columns)
     names = ", ".join(row)

@@ -194,7 +194,7 @@ rather than parsed, and an undeclared one stays unresolved. A built-in tool has 
 namespace: it belongs to the harness, not a server.
 
 **Hashing is for identity, integrity, and content addressing -- not for naming.**
-Evaluated across all 55 call sites: 4 derive a cross-store identity, 10 are integrity
+Evaluated across all 51 remaining call sites: 4 derive a cross-store identity, 10 are integrity
 digests a reader recomputes, 6 are the raw store's content addresses, and 9 are change
 detection. The rest were convenience -- a dict or a path hashed to get a name for it --
 and two were written and never read at all.
@@ -227,6 +227,65 @@ reads content and answers "are these the same bytes". The first is 216x cheaper 
 real corpus and sufficient for its question; the second is required where byte identity
 is the claim. **The inode matters**: a file replaced by rename can carry the same size
 and a copied mtime, so those two alone report it unchanged.
+
+**Parsing methods, in the order a decoder should reach for them.** Vendor evidence is
+overwhelmingly JSON, so the first choice is a real parser and the last is a regular
+expression over free text.
+
+| Method | Uses | Modules | Applies to |
+|---|---|---|---|
+| `json.loads` | 98 | 38 | vendor records, envelopes, stored metadata |
+| SQLite `json_extract` / `json_valid` | 42 | 6 | querying stored JSON without materializing it |
+| `str.startswith` / `endswith` | 38 | 17 | prefix classification (`mcp__`, `codess:`) |
+| `re` | 31 | 9 | genuinely irregular text, such as the Codex output header |
+| `str.split` / `partition` | 20 | 15 | known single separators |
+| `removeprefix` / `removesuffix` | 4 | 4 | stripping a declared prefix |
+| `datetime.fromisoformat` | 7 | 6 | vendor timestamps |
+| `urllib.parse` | 8 | 4 | Artifact URIs |
+
+**SQLite JSON or Python JSON, measured rather than assumed.** Both parse the same
+blobs; which is faster depends on how much crosses the boundary, and the intuition that
+"push it into the database" always wins is wrong here.
+
+| Case | `json_extract` | `json.loads` |
+|---|---|---|
+| Extract a field present on most rows (9,695 of 14,267) | 0.104s | **0.025s** |
+| Filter where almost nothing matches | **0.009s** | 0.024s |
+
+**The rule: filter in SQLite, read in Python.** Concretely:
+
+```sql
+-- Yes: the predicate is selective, so non-matching rows never cross the boundary.
+SELECT event_id, content FROM events
+WHERE json_extract(metadata,'$.parent_uuid') = ?;
+```
+
+```python
+# Yes: the rows are being read anyway, so parse once in Python rather than
+# asking SQLite to parse the same blob per extracted path.
+for row in conn.execute("SELECT event_id, metadata FROM events WHERE metadata IS NOT NULL"):
+    meta = json.loads(row["metadata"])
+    uuid, parent = meta.get("record_uuid"), meta.get("parent_uuid")
+```
+
+```sql
+-- No: three extractions parse the same blob three times, for rows already selected.
+SELECT json_extract(metadata,'$.record_uuid'),
+       json_extract(metadata,'$.parent_uuid'),
+       json_extract(metadata,'$.tool_use_id') FROM events;
+```
+ A selective predicate belongs in the
+query, because rows that do not match never cross the boundary. A field wanted from
+rows already being read belongs in Python, whose parser is faster than SQLite's and
+runs once per row rather than once per extracted path. The 3.6 MB of metadata in one
+Project is small enough that transfer is not the deciding cost either way; the
+deciding cost is how many times each blob is parsed.
+
+**A regular expression is the last resort, and never over JSON.** The one substantial
+use is Codex's output header, where fields are optional, reorderable, and doubly
+spelled -- `Wall time:` and `Wall time` -- which `split` cannot express and
+`startswith` cannot extract from. Even there the match is per line, so an unrecognized
+line rejects the whole header rather than half-populating it.
 
 ## 4. Identifier Suffixes
 
@@ -274,6 +333,28 @@ The rule: **`_id` names an identifier something assigned; a composed or
 descriptive literal takes `_key` or no suffix.** `source_system_id` violates it
 and is renamed. A bare rowid named `id` is unremarkable and stays.
 
+**Every entity row carries two identities, and both are needed.** `sources`,
+`sessions`, and `events` each hold a local `id` -- a rowid, or the vendor's own string
+for a Session -- and a derived cross-store identity. The local one addresses a row
+inside this store; the derived one is the same value on any machine that ingested the
+same evidence, which is what `--session-id` and `--event-id` select on.
+
+| Table | Local id | Cross-store identity |
+|---|---|---|
+| `sessions` | `id` (vendor session id) | `session_entity_id` |
+| `events` | `id` (rowid) | `event_entity_id` |
+| `sources` | `id` (rowid) | `source_entity_id` |
+
+**The identity column is qualified by table on purpose.** All three were named
+`entity_id`, which said nothing in a join and forced an alias wherever two were
+selected together. Qualifying them costs a stutter in a fully qualified reference
+(`sessions.session_entity_id`) and removes the ambiguity everywhere else. A query
+joining Sessions to Events now selects both without aliasing either.
+
+**Which one to use.** Join and filter inside a store by `id`; cite, deduplicate across
+stores, or hand an identifier to a later query by `*_entity_id`. A `*_entity_id` is
+stable across machines; an `id` is not.
+
 ## 5. Plurality
 
 **The rule: countable entities are plural; mass nouns are singular.**
@@ -313,8 +394,8 @@ regenerating every store.
 | `sessions.vendor_name` | *records the company* | `cursor` is a product; Anysphere is the vendor |
 | `sessions.product_name` | *dropped* | A pure function of `source_system_id` |
 | `package_digest` | `contract_digest` | Covers the six-file contract, not the Python package |
-| `*_sha256` suffixes (78 sites) | `*_hash` | Algorithm names live in `hashing` alone, and `codess_hash` is already the function that produces them |
-| `sha256:` inside stored values (33 sites) | *with the identity rewrite* | Changes stored bytes compared across stores; rides with the `entity_id` change rather than landing twice |
+| `*_sha256` suffixes (71 sites) | `*_hash` | Algorithm names live in `hashing` alone, and `codess_hash` is already the function that produces them |
+| `sha256:` inside stored values (32 sites) | *with the identity rewrite* | Changes stored bytes compared across stores; rides with the `entity_id` change rather than landing twice |
 | `tool_invocations.started_at` | `source_started_at` | Distinguishes vendor-reported from Codess-recorded times |
 | `mapping_diagnostics.level` | *names granularity* | Holds `source`/`record`/`field`, a granularity, while `field_state` uses `level` for severity |
 | `events.state.product` | four kinds | `session.label`, `harness.setting`, `content.attachment`, `session.marker` |

@@ -237,7 +237,7 @@ def test_record_raw_writes_source_availability_into_the_store(tmp_path):
         conn.execute(
             """
             INSERT INTO sources(
-              entity_id, source_system_id, source_path, storage_format,
+              source_entity_id, source_system_id, source_path, storage_format,
               source_revision, observed_at, ingested_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,

@@ -9,7 +9,7 @@ from codess.storage_report import build_storage_report, inspect_sqlite
 def _store(path, sessions=1, events=3):
     conn = sqlite3.connect(path)
     conn.executescript("""
-        CREATE TABLE sessions(id TEXT PRIMARY KEY, entity_id TEXT, source TEXT);
+        CREATE TABLE sessions(id TEXT PRIMARY KEY, session_entity_id TEXT, source TEXT);
         CREATE TABLE interactions(id TEXT);
         CREATE TABLE events(
           id INTEGER PRIMARY KEY, session_id TEXT, event_kind TEXT,

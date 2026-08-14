@@ -13,7 +13,7 @@ from typing import Any
 
 from codess.config import (
     HASH_CHUNK_BYTES,
-    SOURCE_FULL_HASH_MAX,
+    SOURCE_READ_MAX,
     SOURCE_SAMPLE_CHUNK_BYTES,
 )
 from codess.hashing import codess_bytes_hash, codess_digest
@@ -302,7 +302,7 @@ def read_source_revision(
 
     | Size | Method | What the value attests |
     |---|---|---|
-    | 0 to `SOURCE_FULL_HASH_MAX` | every byte the first `stat` announced | byte identity |
+    | 0 to `SOURCE_READ_MAX` | every byte the first `stat` announced | byte identity |
     | above it | `SOURCE_SAMPLE_WINDOWS` windows plus size and mtime | identity of the sampled regions |
     | a SQLite container | inode, size, and mtime of the main file and its sidecars | identity of the file set |
 
@@ -324,7 +324,7 @@ def read_source_revision(
     digest = codess_digest()
     try:
         with path.open("rb") as stream:
-            if before.st_size <= SOURCE_FULL_HASH_MAX:
+            if before.st_size <= SOURCE_READ_MAX:
                 # Hash exactly the bytes the first stat announced, not to EOF:
                 # a session file being appended to has no stable end.
                 read_bytes = 0

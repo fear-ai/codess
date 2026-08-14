@@ -597,7 +597,7 @@ def test_relation_orientation_filters_and_exchange_windows(tmp_path):
         """
     )
     anchor = conn.execute(
-        "SELECT entity_id FROM events WHERE event_id='e2'"
+        "SELECT event_entity_id FROM events WHERE event_id='e2'"
     ).fetchone()[0]
     conn.commit()
     conn.close()
@@ -987,7 +987,7 @@ def test_exact_evidence_prefers_verified_sealed_object_over_changed_live(tmp_pat
         "UPDATE sources SET availability='captured',content_sha256=?",
         (record["object_id"].removeprefix("sha256:"),),
     )
-    event_id = conn.execute("SELECT entity_id FROM events WHERE event_id='e1'").fetchone()[0]
+    event_id = conn.execute("SELECT event_entity_id FROM events WHERE event_id='e1'").fetchone()[0]
     conn.commit()
     conn.close()
     snapshot = create_snapshot(project, [store], [record], raw_store=raw, seal=True)
@@ -1017,7 +1017,7 @@ def test_exact_evidence_marks_unsupported_digest_reference_incompatible(tmp_path
         legacy[:3],
     )
     event_id = conn.execute(
-        "SELECT entity_id FROM events WHERE event_id='e1'"
+        "SELECT event_entity_id FROM events WHERE event_id='e1'"
     ).fetchone()[0]
     conn.commit()
     conn.close()
@@ -1112,7 +1112,7 @@ def test_configuration_audit_honors_native_session_scope(tmp_path):
         } == {
             conn_row[0]
             for conn_row in opened["conn"].execute(
-                "SELECT entity_id FROM sessions WHERE id='selected'"
+                "SELECT session_entity_id FROM sessions WHERE id='selected'"
             )
         }
     finally:

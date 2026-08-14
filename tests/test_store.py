@@ -118,7 +118,7 @@ class TestShouldIngest:
     ):
         source = tmp_path / "large.jsonl"
         source.write_bytes(b"0123456789")
-        monkeypatch.setattr("codess.fileio.SOURCE_FULL_HASH_MAX", 4)
+        monkeypatch.setattr("codess.fileio.SOURCE_READ_MAX", 4)
         marker = ingest_state_marker(source)
         assert marker["source_revision"].startswith(
             "sample-sha256-fingerprint:"
@@ -529,7 +529,7 @@ class TestSharedStoreReads:
         conn = connect(db)
         try:
             columns = column_names(conn, "sessions")
-            assert {"id", "entity_id", "project_id"} <= columns
+            assert {"id", "session_entity_id", "project_id"} <= columns
         finally:
             conn.close()
 
@@ -822,47 +822,47 @@ class TestToolNamespace:
     """MCP tool names state their server; built-in names have none."""
 
     def test_server(self):
-        from codess.store import _tool_namespace
+        from codess.tool_identity import mcp_namespace
 
-        assert _tool_namespace("mcp__visualize__show_widget") == "visualize"
-        assert _tool_namespace("mcp__codex_apps__github_search") == "codex_apps"
+        assert mcp_namespace("mcp__visualize__show_widget") == "visualize"
+        assert mcp_namespace("mcp__codex_apps__github_search") == "codex_apps"
 
     def test_builtin_has_none(self):
         """A built-in tool belongs to the harness, not a server; inventing a
         namespace would make the column answer a question nobody asked."""
-        from codess.store import _tool_namespace
+        from codess.tool_identity import mcp_namespace
 
-        assert _tool_namespace("Bash") is None
-        assert _tool_namespace("read_file_v2") is None
+        assert mcp_namespace("Bash") is None
+        assert mcp_namespace("read_file_v2") is None
 
     def test_cursor_underscore_form(self):
-        from codess.store import _tool_namespace
+        from codess.tool_identity import mcp_namespace
 
-        assert _tool_namespace("mcp_Notion_search") == "Notion"
+        assert mcp_namespace("mcp_Notion_search") == "Notion"
 
     def test_cursor_hyphen_form_needs_a_declared_server(self):
         """Single hyphens run through both halves of the name and no field states
         the server, so the boundary comes from a declared list. Splitting on the
         first hyphen would record `cursor`."""
-        from codess.store import _tool_namespace
+        from codess.tool_identity import mcp_namespace
 
-        assert _tool_namespace(
+        assert mcp_namespace(
             "mcp-cursor-app-control-open_resource"
         ) == "cursor-app-control"
 
     def test_undeclared_hyphen_server_is_unresolved(self):
-        from codess.store import _tool_namespace
+        from codess.tool_identity import mcp_namespace
 
-        assert _tool_namespace("mcp-unknown-server-tool") is None
+        assert mcp_namespace("mcp-unknown-server-tool") is None
 
     def test_malformed(self):
-        from codess.store import _tool_namespace
+        from codess.tool_identity import mcp_namespace
 
-        assert _tool_namespace("mcp__only") is None
-        assert _tool_namespace("mcp____tool") is None
-        assert _tool_namespace("mcp--") is None
-        assert _tool_namespace(None) is None
-        assert _tool_namespace(42) is None
+        assert mcp_namespace("mcp__only") is None
+        assert mcp_namespace("mcp____tool") is None
+        assert mcp_namespace("mcp--") is None
+        assert mcp_namespace(None) is None
+        assert mcp_namespace(42) is None
 
 
 class TestBoundedOutputJson:

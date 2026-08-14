@@ -50,13 +50,13 @@ REPORT_FORMAT = "codess.validation-report/1"
 
 
 _GLOBAL_IDENTITY_DUPLICATE_QUERIES = (
-    ("sources.entity_id", "SELECT COUNT(*)-COUNT(DISTINCT entity_id) FROM sources"),
-    ("sessions.entity_id", "SELECT COUNT(*)-COUNT(DISTINCT entity_id) FROM sessions"),
+    ("sources.source_entity_id", "SELECT COUNT(*)-COUNT(DISTINCT source_entity_id) FROM sources"),
+    ("sessions.session_entity_id", "SELECT COUNT(*)-COUNT(DISTINCT session_entity_id) FROM sessions"),
     (
         "sessions.observation_id",
         "SELECT COUNT(*)-COUNT(DISTINCT observation_id) FROM sessions",
     ),
-    ("events.entity_id", "SELECT COUNT(*)-COUNT(DISTINCT entity_id) FROM events"),
+    ("events.event_entity_id", "SELECT COUNT(*)-COUNT(DISTINCT event_entity_id) FROM events"),
 )
 
 _INVALID_JSON_QUERIES = (
@@ -198,13 +198,13 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM workspace_bindings ORDER BY id
         """,
         "sources": """
-            SELECT entity_id, source_system_id, source_path, storage_format, source_revision,
+            SELECT source_entity_id, source_system_id, source_path, storage_format, source_revision,
                    source_mtime, source_size, availability, capture_method,
                    consistency, content_sha256, metadata
             FROM sources ORDER BY source_system_id, source_path, source_revision
         """,
         "sessions": """
-            SELECT id, entity_id, observation_id, source_system_id, vendor_session_id, vendor_name,
+            SELECT id, session_entity_id, observation_id, source_system_id, vendor_session_id, vendor_name,
                    product_name, harness_name, storage_format, surface_kind,
                    session_purpose, harness_version, source_cwd,
                    path_obsolete, started_at,
@@ -224,7 +224,7 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM model_turns ORDER BY session_id, sequence_no
         """,
         "events": """
-            SELECT entity_id, session_id, event_id, sequence_no, source_record_locator,
+            SELECT event_entity_id, session_id, event_id, sequence_no, source_record_locator,
                    source_record_type, source_record_subtype, event_kind,
                    actor_kind, content_role, origin_kind, interaction_id,
                    model_turn_id, parent_event_id, caused_by_event_id, content,
@@ -235,11 +235,11 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM events ORDER BY session_id, sequence_no, event_id
         """,
         "source_records": """
-            SELECT r.id, s.entity_id, r.source_locator, r.source_sequence,
+            SELECT r.id, s.source_entity_id, r.source_locator, r.source_sequence,
                    r.source_record_type, r.source_record_subtype, r.parent_locator,
                    r.record_at, r.classification, r.parameters_json
             FROM source_records r JOIN sources s ON s.id=r.source_id
-            ORDER BY s.entity_id, r.source_sequence, r.source_locator
+            ORDER BY s.source_entity_id, r.source_sequence, r.source_locator
         """,
         "content_objects": """
             SELECT id, content_sha256, media_type, charset, byte_length,
@@ -248,10 +248,10 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM content_objects ORDER BY id
         """,
         "event_content": """
-            SELECT e.entity_id, ec.content_id, ec.relation_kind, ec.sequence_no,
+            SELECT e.event_entity_id, ec.content_id, ec.relation_kind, ec.sequence_no,
                    ec.start_offset, ec.end_offset, ec.integrity_state
             FROM event_content ec JOIN events e ON e.id=ec.event_id
-            ORDER BY e.entity_id, ec.relation_kind, ec.sequence_no
+            ORDER BY e.event_entity_id, ec.relation_kind, ec.sequence_no
         """,
         "source_record_content": """
             SELECT source_record_id, content_id, relation_kind, sequence_no,

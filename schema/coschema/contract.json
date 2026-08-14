@@ -181,7 +181,7 @@
         "source_revision"
       ],
       "fields": {
-        "entity_id": {
+        "source_entity_id": {
           "type": "text",
           "nullable": false
         },
@@ -247,7 +247,7 @@
         "vendor_session_id"
       ],
       "fields": {
-        "entity_id": {
+        "session_entity_id": {
           "type": "text",
           "nullable": false
         },
@@ -455,7 +455,7 @@
         "sequence_no"
       ],
       "fields": {
-        "entity_id": {
+        "event_entity_id": {
           "type": "text",
           "nullable": false
         },

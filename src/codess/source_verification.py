@@ -70,15 +70,15 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
     """Resolve by stable event entity ID or unambiguous local event ID."""
     conn = store["conn"]
     matches = conn.execute("""
-        SELECT e.entity_id,e.event_id,e.session_id,e.source_record_locator,
-               e.source_record_type,e.source_file,s.entity_id AS session_entity_id,
+        SELECT e.event_entity_id,e.event_id,e.session_id,e.source_record_locator,
+               e.source_record_type,e.source_file,s.session_entity_id AS session_entity_id,
                src.id AS source_id,src.source_system_id,src.source_path,
                src.source_revision,src.source_mtime,src.source_size,
                src.availability,src.capture_method,
                src.consistency,src.content_sha256
         FROM events e JOIN sessions s ON s.id=e.session_id
         LEFT JOIN sources src ON src.id=e.source_id
-        WHERE e.entity_id=? OR e.event_id=?
+        WHERE e.event_entity_id=? OR e.event_id=?
     """, (event_identifier, event_identifier)).fetchall()
     if not matches:
         raise LookupError(f"event {event_identifier!r} was not found")
@@ -190,7 +190,7 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
     return {
         "format": VERIFICATION_FORMAT,
         "event": {
-            "event_entity_id": row["entity_id"], "event_id": row["event_id"],
+            "event_entity_id": row["event_entity_id"], "event_id": row["event_id"],
             "session_entity_id": row["session_entity_id"], "session_id": row["session_id"],
             "source_record_locator": row["source_record_locator"],
             "source_record_type": row["source_record_type"],

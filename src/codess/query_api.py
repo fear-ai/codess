@@ -529,8 +529,8 @@ def _configuration_predicates(
 def _event_predicate(filters: dict[str, Any]) -> tuple[str, list[Any]]:
     where: list[str] = []
     params: list[Any] = []
-    _in_clause("s.entity_id", filters.get("session_ids") or [], where, params)
-    _in_clause("e.entity_id", filters.get("event_ids") or [], where, params)
+    _in_clause("s.session_entity_id", filters.get("session_ids") or [], where, params)
+    _in_clause("e.event_entity_id", filters.get("event_ids") or [], where, params)
     _in_clause("e.interaction_id", filters.get("interaction_ids") or [], where, params)
     _in_clause("e.model_turn_id", filters.get("model_turn_ids") or [], where, params)
     _in_clause("s.source_system_id", filters.get("source_system_ids") or [], where, params)
@@ -607,8 +607,8 @@ def _expanded_event_predicate(
         placeholders = ",".join("?" for _ in event_ids)
         anchors = list(conn.execute(
             f"""
-            SELECT entity_id,session_id,sequence_no,interaction_id,model_turn_id
-            FROM events WHERE entity_id IN ({placeholders})
+            SELECT event_entity_id,session_id,sequence_no,interaction_id,model_turn_id
+            FROM events WHERE event_entity_id IN ({placeholders})
             """,
             event_ids,
         ))
@@ -616,7 +616,7 @@ def _expanded_event_predicate(
     branch_params: list[Any] = []
     if event_ids:
         branches.append(
-            f"e.entity_id IN ({','.join('?' for _ in event_ids)})"
+            f"e.event_entity_id IN ({','.join('?' for _ in event_ids)})"
         )
         branch_params.extend(event_ids)
     if expand == "interaction":
@@ -772,7 +772,7 @@ def _event_heap_sort_key(record, store: dict[str, Any]) -> tuple:
         ordered_time,
         record["session_entity_id"] or "",
         record["sequence_no"] if record["sequence_no"] is not None else -1,
-        record["entity_id"] or "",
+        record["event_entity_id"] or "",
         str(store.get("project_id") or store["project_path"]),
         str(store["path"]),
     )
@@ -794,7 +794,7 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
     row_limit = request.get("limit")
     limit_sql = " LIMIT ?" if row_limit is not None else ""
     sql_template = """
-        SELECT e.entity_id,e.event_id,s.entity_id AS session_entity_id,e.session_id,
+        SELECT e.event_entity_id,e.event_id,s.session_entity_id AS session_entity_id,e.session_id,
                s.project_id,s.source_system_id,s.project_path,
                e.sequence_no,e.interaction_id,
                e.model_turn_id,e.event_kind,e.actor_kind,e.content_role,e.origin_kind,
@@ -812,8 +812,8 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
         LEFT JOIN model_params mc ON mc.id=mt.model_param_id
         WHERE {predicate}
         ORDER BY (COALESCE(e.event_at,e.timestamp) IS NULL),
-                 COALESCE(e.event_at,e.timestamp),s.entity_id,
-                 e.sequence_no,e.entity_id,e.id
+                 COALESCE(e.event_at,e.timestamp),s.session_entity_id,
+                 e.sequence_no,e.event_entity_id,e.id
         {limit_sql}
     """
 
@@ -872,9 +872,9 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
             configuration_provenance_scope = None
         rows.append({
             "observation_id": _observation_id(
-                store, "event", record["entity_id"]
+                store, "event", record["event_entity_id"]
             ),
-            "event_entity_id": record["entity_id"],
+            "event_entity_id": record["event_entity_id"],
             "event_id": record["event_id"],
             "session_entity_id": record["session_entity_id"],
             "session_id": record["session_id"],
@@ -1041,7 +1041,7 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
     filters = request["filters"]
     where: list[str] = []
     params: list[Any] = []
-    _in_clause("s.entity_id", filters.get("session_ids") or [], where, params)
+    _in_clause("s.session_entity_id", filters.get("session_ids") or [], where, params)
     _in_clause("s.source_system_id", filters.get("source_system_ids") or [], where, params)
     _in_clause(
         "s.parent_session_id",
@@ -1085,7 +1085,7 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
             else "0 AS path_obsolete"
         )
         for row in store["conn"].execute(f"""
-            SELECT s.entity_id,s.id,s.source_system_id,s.vendor_session_id,
+            SELECT s.session_entity_id,s.id,s.source_system_id,s.vendor_session_id,
                    s.vendor_name,s.product_name,s.harness_name,s.harness_version,
                    s.started_at,s.ended_at,s.time_basis,s.source_cwd,
                    s.project_id,s.project_path,s.parent_session_id,
@@ -1095,20 +1095,20 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
                    (SELECT COUNT(*) FROM model_turns mt WHERE mt.session_id=s.id) model_turns,
                    (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id) events
             FROM sessions s WHERE {predicate}
-            ORDER BY COALESCE(s.ended_at,s.started_at,s.source_mtime) DESC,s.entity_id
+            ORDER BY COALESCE(s.ended_at,s.started_at,s.source_mtime) DESC,s.session_entity_id
         """, params):
             item = dict(row)
             source_project_path = item.pop("source_cwd") or item["project_path"]
             rows.append({
                 **item,
                 "observation_id": _observation_id(
-                    store, "session", item["entity_id"]
+                    store, "session", item["session_entity_id"]
                 ),
                 "snapshot_id": _store_snapshot_id(store),
                 "project_path": str(store["project_path"]),
                 "source_project_path": source_project_path,
             })
-    rows.sort(key=lambda row: (-(row["ended_at"] or row["started_at"] or 0), row["entity_id"]))
+    rows.sort(key=lambda row: (-(row["ended_at"] or row["started_at"] or 0), row["session_entity_id"]))
     matched = len(rows)
     if request.get("limit") is not None:
         rows = rows[:request["limit"]]
@@ -1119,7 +1119,7 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
         observations_by_snapshot[snapshot] = (
             observations_by_snapshot.get(snapshot, 0) + 1
         )
-        identity = row.get("entity_id")
+        identity = row.get("session_entity_id")
         if identity:
             entity_occurrences[identity] = entity_occurrences.get(identity, 0) + 1
     duplicate_entity_ids = sorted(
@@ -1233,7 +1233,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
                    LENGTH(COALESCE(e.content,'')),e.tool_name,e.artifact_path,
                    mc.provider,mc.model_gradation,mc.model_name_exact,mc.model_revision,
                    mc.reasoning_effort,mc.speed_tier,mc.service_tier,mc.mode,
-                   e.actor_kind,e.content_role,s.entity_id,e.interaction_id,e.entity_id,
+                   e.actor_kind,e.content_role,s.session_entity_id,e.interaction_id,e.event_entity_id,
                    COALESCE(s.session_relation_kind,'top_level'),
                    LENGTH(COALESCE(e.tool_input,'')),
                    LENGTH(COALESCE(e.tool_output,''))

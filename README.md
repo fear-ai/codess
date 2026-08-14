@@ -182,6 +182,20 @@ WHERE session_id = ?
 ORDER BY sequence_no;
 ```
 
+Each entity row carries **two identities**. `id` addresses a row inside one store: a
+rowid for `events` and `sources`, the vendor's own identifier for `sessions`. The
+`*_entity_id` columns -- `session_entity_id`, `event_entity_id`, `source_entity_id` --
+are derived from vendor-stated facts, so the same Session ingested on another machine
+carries the same value. Join and filter within a store by `id`; cite or deduplicate
+across stores by `*_entity_id`, which is also what `--session-id` and `--event-id`
+accept.
+
+Stored JSON columns (`metadata`, `tool_input`, `output_json`) can be filtered with
+SQLite's `json_extract`. Use it for a **selective predicate**, so rows that do not match
+are never returned; read the column and parse it in your own language when you want
+several fields from rows you are reading anyway, which is measurably faster than one
+`json_extract` per field.
+
 Direct SQL is useful for exploratory joins, distributions, query-plan review,
 and access to physical fields. The Codess query interface is preferable when
 you need Project selection, cross-store composition, stable structured output,

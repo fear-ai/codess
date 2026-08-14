@@ -10,7 +10,7 @@ from typing import Any
 from codess.adapters.codex import process_file
 from codess.project_catalog import catalog_readiness, durable_project_root
 from codess.store import connect
-from codess.tool_identity import bounded_source_call_id
+from codess.tool_identity import bounded_source_call_id, is_mcp_tool
 from codess.tool_result_status import application_failure_evidence
 
 MCP_AUDIT_FORMAT = "codess.mcp-interaction-audit/1"
@@ -22,11 +22,8 @@ _MCP_NAMES = (
 
 
 def _mcp_candidate(name: str) -> bool:
-    lowered = name.lower()
-    return (
-        lowered.startswith(("mcp-", "mcp__", "mcp--"))
-        or lowered in _MCP_NAMES
-    )
+    """An MCP call by any vendor spelling, or one of the named built-in bridges."""
+    return is_mcp_tool(name) or name.lower() in _MCP_NAMES
 
 
 def _bounded(value: object, limit: int = 240) -> str | None:
@@ -76,7 +73,7 @@ def _discovery_details(value: object, depth: int = 0) -> dict[str, Any]:
         return {}
     if not isinstance(decoded, dict):
         return {}
-    details: dict[str, Any] = {}
+    details = {}
     if decoded.get("server") is not None:
         details["target_server"] = _bounded(decoded["server"], 120)
     if decoded.get("serverStatus") is not None:

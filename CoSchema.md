@@ -144,7 +144,7 @@ diagnostics rather than silent loss.
 | `workspace_bindings` | Evidence-backed source-system workspace attribution to a Project. |
 | `sources` | One observed Source revision, locator, storage family, availability, and integrity evidence. |
 | `source_records` | Exact record positions, types, subtypes, ordering, and classification within a Source. |
-| `sessions` | Source-system conversation/thread identity, Project attribution, lifecycle, time, and relation evidence. |
+| `sessions` | Source-system conversation/thread identity, Project attribution, lifecycle, time, and relation evidence. Carries both `id` (the vendor's own identifier, unique in this store) and `session_entity_id` (derived from vendor-stated facts, identical on any machine that ingested the same Session). `events` and `sources` follow the same pattern with `event_entity_id` and `source_entity_id`. See [CoNames 4](CoNames.md#4-identifier-suffixes). |
 | `interactions` | Initiating work units within a Session. |
 | `model_turns` | Evidenced model executions and their optional Interaction and configuration. |
 | `events` | Ordered normalized observations with exact source classification and mapping evidence. |

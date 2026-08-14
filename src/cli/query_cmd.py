@@ -325,7 +325,7 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
     for session in sessions:
         project_id = session["project_id"]
         session["name"] = (
-            scope.session_names.get((str(project_id), session["entity_id"]))
+            scope.session_names.get((str(project_id), session["session_entity_id"]))
             if project_id else None
         )
     return sessions
@@ -344,7 +344,7 @@ def _session_by_identifier(scope: QueryScope, identifier: str) -> dict | None:
     matches = [
         row for row in _get_sessions_ordered(scope)
         if (
-            row["entity_id"] == identifier
+            row["session_entity_id"] == identifier
             or row["id"] == identifier
             or (
                 row.get("name") is not None
@@ -943,7 +943,7 @@ def _jsonl_output(
     if args.sessions:
         for number, row in enumerate(_get_sessions_ordered(scope, limit), 1):
             _emit_jsonl("sessions", {
-                "session_id": row["id"], "session_entity_id": row["entity_id"],
+                "session_id": row["id"], "session_entity_id": row["session_entity_id"],
                 "source": row["source"], "release": row["release"],
                 "started_at": row["started_at"], "ended_at": row["ended_at"],
                 "source_project_path": row["project_path"],
@@ -989,7 +989,7 @@ def _csv_output(
         ])
         for number, row in enumerate(_get_sessions_ordered(scope, limit), 1):
             writer.writerow(protect_csv_row([
-                row["id"], row["entity_id"], number, row["source"],
+                row["id"], row["session_entity_id"], number, row["source"],
                 row["release"], row["started_at"], row["ended_at"],
                 row["project_path"], row["query_project"],
                 json.dumps(_json_metadata(row["metadata"]), sort_keys=True),
@@ -1229,12 +1229,12 @@ def _sessions(scope: QueryScope, with_id: bool, limit: int | None = None) -> int
     if not rows:
         return 0
     if with_id:
-        print("id\tentity_id\tnum\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
+        print("id\tsession_entity_id\tnum\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for i, row in enumerate(rows, 1):
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
             print(
-                f"{sanitize_tabular(row['id'])}\t{row['entity_id']}\t{i}\t"
+                f"{sanitize_tabular(row['id'])}\t{row['session_entity_id']}\t{i}\t"
                 f"{sanitize_tabular(row['source'])}\t"
                 f"{sanitize_tabular(row['name'])}\t"
                 f"{sanitize_tabular(row['release'])}\t{details}\t"
@@ -1242,12 +1242,12 @@ def _sessions(scope: QueryScope, with_id: bool, limit: int | None = None) -> int
                 f"{row['ended_at']}\t{sanitize_tabular(project)}"
             )
     else:
-        print("id\tentity_id\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
+        print("id\tsession_entity_id\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for row in rows:
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
             print(
-                f"{sanitize_tabular(row['id'])}\t{row['entity_id']}\t"
+                f"{sanitize_tabular(row['id'])}\t{row['session_entity_id']}\t"
                 f"{sanitize_tabular(row['source'])}\t"
                 f"{sanitize_tabular(row['name'])}\t"
                 f"{sanitize_tabular(row['release'])}\t{details}\t"
