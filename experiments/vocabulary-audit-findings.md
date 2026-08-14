@@ -32,7 +32,7 @@ Ordered most severe/confusing first.
 - Line 1856/1858: `## 14. Current Work Registry` — "This registry contains
   only incomplete work."
 - This sense has nothing to do with Sense A. It is a section of a Markdown
-  document (a table of W01–W18 items), not a filesystem location or runtime
+  document (a table of tracked items), not a filesystem location or runtime
   concept at all.
 
 **Sense C — `registry_store.py`, a usage-statistics store keyed by the
@@ -75,7 +75,7 @@ those docs for a shared definition.
   (default `~/.codess`) that holds all published Project store sets; set by
   `CODESS_REGISTRY` / `--registry`.
 - Sense B: "work registry" or, to avoid the word entirely, "work item list" /
-  "§14 work items" — Section 14's table of W01–W18 tracked engineering items.
+  "§14 work items" — Section 14's table of tracked engineering items.
 - Sense C: "registry stats" or "usage stats store" — the small JSON file
   `registry_store.py` reads and writes inside the Sense-A root.
 
@@ -261,7 +261,7 @@ completely different subject: third-party BI/observability tool integration
 (Datasette, ccusage, OpenTelemetry, etc.), unrelated to the `investigation`
 module.**
 - Line 1089: `### 9.7 External Investigation Interfaces`
-- Line 1889 (W16): "Evaluate, design, and plan the external investigation
+- Line 1889: "Evaluate, design, and plan the external investigation
   interfaces described in Section 9.7"
 - This "investigation" is generic English (a user investigating their coding
   session history via some external tool), not a reference to the
@@ -421,7 +421,7 @@ store set") if they mean the same thing as terms already defined elsewhere.
 label distinct from the DDL itself), "Executable Contracts" (an architecture
 layer in §3.1's diagram, encompassing decode/mapping/query/storage
 constraints collectively), and informally "the candidate contract" (§7.1,
-not yet a real enforced artifact — described as work-in-progress, W04). None
+not yet a real enforced artifact — described as work-in-progress). None
 of these usages plainly collide with each other or with plain English (a
 "contract" as an agreement is a reasonable metaphor extension throughout),
 but the term names at least five differently-scoped things (one architecture
@@ -433,7 +433,7 @@ adjacent generic-vs-controlled patterns, but this one reads more like a
 consistent metaphor family than a genuine collision. No quotes reproduced
 here since no single pair of usages is actually confusable; noting only
 because it's a candidate the next step may want to scope explicitly (e.g.
-"which of these five are 'a contract' for W13's mechanical-enforcement
+"which of these five are 'a contract' for the mechanical-enforcement
 purposes?").
 
 ---

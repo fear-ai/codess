@@ -155,14 +155,8 @@ and is renamed. A bare rowid named `id` is unremarkable and stays.
 
 **The rule: countable entities are plural; mass nouns are singular.**
 
-W53 recorded this as measured over four peer SQLite schemas on this machine --
-56 tables, of which the 11 singular ones were all mass nouns. That measurement
-no longer reproduces: three of the four databases are gone from disk and the
-survivor has 6 tables, so the figure is retained as the rule's origin rather
-than as current evidence. The rule stands on CoSchema itself, where 19 of 24
-tables are plural and all five exceptions are mass nouns: `store_meta` and the
-four `*_content` tables (`artifact_content`, `event_content`,
-`source_record_content`, `tool_result_content`).
+CoSchema follows it: 19 of 24 tables are plural, and all five exceptions are
+mass nouns -- `store_meta` and the four `*_content` tables.
 
 `event_artifacts` is correctly plural, and the earlier proposal to pluralize
 `event_content` to match it is withdrawn: the two names disagree because the
@@ -170,8 +164,8 @@ nouns differ, not because the convention does.
 
 ## 6. Renames
 
-Every rename accepted anywhere in CoPlan, stated once here. All are wire-format,
-so each requires regenerating every store.
+Every accepted rename, stated once. All are wire-format, so each requires
+regenerating every store.
 
 **Landed.** The model-parameter set went in one regeneration:
 
@@ -186,17 +180,17 @@ so each requires regenerating every store.
 
 **Pending**, for the next regeneration:
 
-| From | To | Why | Item |
-|---|---|---|---|
-| `sessions.source` | `adapter_key` | Holds the `SOURCE_PROFILES` key, not the Source entity | W51 |
-| `sessions.source_system_id` | `source_system_key` | A composed literal, not an assigned identifier | W51 |
-| `sessions.vendor_name` | *records the company* | `cursor` is a product; Anysphere is the vendor | W54.3 |
-| `sessions.product_name` | *dropped* | A pure function of `source_system_id` | W40 |
-| `package_digest` | `contract_digest` | Covers the six-file contract, not the Python package | W33 |
-| `content_sha256`, `policy_sha256` | `content_digest`, `policy_digest` | Algorithm names live in `hashing` alone | W34 |
-| `tool_invocations.started_at` | `source_started_at` | Distinguishes vendor-reported from Codess-recorded times | W25 |
-| `mapping_diagnostics.level` | *names granularity* | Holds `source`/`record`/`field`, a granularity, while `field_state` uses `level` for severity | W50 |
-| `events.state.product` | four kinds | `session.label`, `harness.setting`, `content.attachment`, `session.marker` | W36 |
+| From | To | Why |
+|---|---|---|
+| `sessions.source` | `adapter_key` | Holds the `SOURCE_PROFILES` key, not the Source entity |
+| `sessions.source_system_id` | `source_system_key` | A composed literal, not an assigned identifier |
+| `sessions.vendor_name` | *records the company* | `cursor` is a product; Anysphere is the vendor |
+| `sessions.product_name` | *dropped* | A pure function of `source_system_id` |
+| `package_digest` | `contract_digest` | Covers the six-file contract, not the Python package |
+| `content_sha256`, `policy_sha256` | `content_digest`, `policy_digest` | Algorithm names live in `hashing` alone |
+| `tool_invocations.started_at` | `source_started_at` | Distinguishes vendor-reported from Codess-recorded times |
+| `mapping_diagnostics.level` | *names granularity* | Holds `source`/`record`/`field`, a granularity, while `field_state` uses `level` for severity |
+| `events.state.product` | four kinds | `session.label`, `harness.setting`, `content.attachment`, `session.marker` |
 
 **Not renamed, and why.** `sources.id` -- a bare rowid is unremarkable.
 `event_content` -- mass noun, see [5](#5-plurality). `surface_kind`,

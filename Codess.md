@@ -370,7 +370,7 @@ Codess uses the following concepts consistently across source systems.
 | **harness** | A program that runs on a laptop or server and mediates coding work, native or invoked from a shell: Claude Code, Codex, Cursor. It is not a Codess entity; a Session is evidence one produced. |
 | **vendor** | The company a harness originates from -- Anthropic, OpenAI, Anysphere. Names the company, never the program. |
 | **provider** | The company whose model was engaged for a Model Turn -- Anthropic, OpenAI, xAI, Anysphere. The same as the vendor when a harness runs its own models, and different when it does not. |
-| **Model** | One evidenced set of model parameters a Model Turn ran under: the exact name the harness recorded, plus provider, family, generation, and strength where stated or derivable. The parameters are independent and separately selected, not a configuration Codess composes, and they belong to the Model Turn rather than the Session: one Session commonly runs several. |
+| **Model** | One evidenced set of model parameters a Model Turn ran under: the exact name the harness recorded, plus the parts [CoNames](CoNames.md#3-model-name-parts) names. The parameters are independent and separately selected, not a configuration Codess composes, and they belong to the Model Turn rather than the Session: one Session commonly runs several. |
 | **Event** | One ordered normalized observation within a Session. |
 | **Artifact** | File, URI, repository object, or other durable object operated on or mentioned by an Event. |
 | **Source-system store** | One CoSchema SQLite database for one source system and Project observation. |
@@ -378,18 +378,9 @@ Codess uses the following concepts consistently across source systems.
 | **Unified Codess store** | Logical queryable collection of selected Project store sets; it need not be one SQLite file. |
 | **Search result** | Bounded result carrying stable record identities, scope, provenance, and limitations. |
 
-Vendor and provider are separate dimensions, and conflating them is a
-recorded defect rather than a hypothetical: a harness commonly engages models
-from providers other than its own vendor. Cursor is the observed case, running
-Anthropic and xAI models alongside its own, so "which company made the
-harness" and "which company's model answered" are two questions with two
-answers.
-
-A model name is not a decomposition. `claude-opus-4-8`, `gpt-5.6-sol`, and
-`claude-4.6-opus-high-thinking` order their parts differently and only some
-carry a strength, so family, generation, and strength are recorded as fields
-rather than reconstructed by a reader splitting a string. The exact name the
-harness recorded is retained verbatim in every case.
+Vendor and provider are separate dimensions, and conflating them is a recorded
+defect rather than a hypothetical: a harness commonly engages models from
+providers other than its own vendor.
 
 Actor, source role, content role, origin, and Session relationship are separate
 dimensions. A vendor `user` envelope can carry harness-generated context or a

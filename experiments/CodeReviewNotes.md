@@ -218,7 +218,7 @@ don't need to share the function's local scope to work.
   closure). These are two composable steps, not one.
 - `ingest_cmd.py::run` — config validation, source resolution, per-vendor
   dispatch, transaction/publication orchestration, and raw-capture handling
-  in one function; see CoPlan.md 13.4.1 (W06) for the existing finding this
+  in one function; see CoPlan.md 13.4.1 for the existing finding this
   confirms with a specific location.
 - `cli/query_cmd.py::run` — hand-built mutual-exclusion checking across
   eleven independent boolean "mode" flags via manual list slicing, instead

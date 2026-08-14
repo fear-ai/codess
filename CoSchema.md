@@ -110,65 +110,19 @@ profiles, and ten conformance fixtures, enumerated in
 hashes each file, compares it to the manifest, and folds the results into one
 digest. Editing any listed file changes that digest and makes existing stores
 unwritable -- including the fixtures, which no runtime code reads. That
-coupling is the subject of W03.
+coupling is deliberate: the fixtures define what a conforming store looks like.
 
-**The name "package" is a poor fit and should change.** It collides with
-Python packaging in a codebase that is itself a Python package, so
-`package_digest` reads as a hash of the installed distribution rather than of
-the schema contract. What the thing actually is: the versioned set of files
-that determines how a store is written and read -- DDL, logical and mapping
-contracts, vendor mapping profiles, conformance fixtures -- released
-together and identified as a unit.
-
-Candidates, judged against that:
-
-| Name | Argument for | Argument against |
-|---|---|---|
-| `contract_set` | Names the members accurately; "set" conveys that membership is what the digest covers | "Contract" already carries five scoped meanings in this project (14.4); adds a sixth |
-| `schema_release` | Conveys versioned-and-released, which is the property that matters to a store | Implies a release process, cadence, and compatibility policy that do not exist |
-| `store_format` | Says what it governs from the reader's side | Collides with `format_version`, which names only the SQLite layout; two things called format |
-| `decode_contract` | Names the behavior a store depends on | Too narrow: fixtures and the logical contract are not decode rules |
-| `coschema_release` | Scoped to CoSchema, so no collision with Python or with `format_version` | Same release-process implication; also long at every use |
-| `schema_bundle` | "Bundle" is neutral about process and conveys assembled-from-parts | Vague about what is inside; "bundle" is not used elsewhere in the vocabulary |
-| `binding_set` | The set a store is bound to, which is exactly the write-gate relationship | Overloads "binding", already used for Project-to-workspace attribution |
-| Keep `package`, qualify it | `coschema_package` disambiguates without inventing a term | Retains the Python collision in the word a reader sees first |
-
-**Selected: `matching_set`, with `matching_set_digest` for the value.** It
-names the relationship the digest actually expresses -- a store may be
-written only by software whose released files match the set the store was
-written under -- rather than naming the members or implying a release
-process. It avoids every collision the alternatives carry: `contract`,
-`format`, `binding`, `release`, and `baseline` are all already in use with
-other meanings, and `package` reads as the Python distribution. The one
-existing use of the word, `acceptance.match_count`, is a count of matched
-acceptance cases and does not compete for the term as a noun.
-
-The choice also survives the open question underneath it. W03 is deciding
-which files belong in the digest; a name built on *matching* stays accurate
-whether or not conformance fixtures remain members, where a name built on
-*contract* or *release* would have to be revisited alongside the membership.
-
-Renaming touches `store_meta`, so it is a wire-format change that rides with
-W03, and the vocabulary audit in 14.4 should record `matching set` as the
-term for this concept so it is not reinvented.
-
-**Vendor, harness, and provider are three facts.** A harness is the program
-(Claude Code, Codex, Cursor); its vendor is the company that makes it
-(Anthropic, OpenAI, Anysphere); the provider is the company whose model
-answered a given Model Turn. `sessions.vendor_name` records the first two
-correctly for Claude and Codex and holds the harness name for Cursor, whose
-vendor is Anysphere -- a defect rather than a shorthand, since it makes an
-Anthropic model run under Cursor indistinguishable from an Anysphere one.
+**Vendor, harness, provider, and the parts of a model name** are defined once
+in [CoNames](CoNames.md), which is authoritative for them. The schema
+consequence is that `provider` is a separate column from `sessions.vendor_name`
+and is filled per Model Turn: a harness commonly runs another company's model,
+so the two differ in half of Cursor's rows.
 
 **A model name is retained, not parsed into.** The exact string the harness
-recorded is stored verbatim, because it is what reached the API and is the
-only value a reader can compare against vendor documentation. Family,
-generation, and strength are separate columns filled from whatever the vendor
-states -- Codex supplies `model_provider` and `effort` as fields, Claude Code
-supplies `effort`, Cursor supplies neither and embeds strength in a label
-that is not an API name. Where a harness records a label rather than an
-identifier, the derived identifier is carried beside it rather than replacing
-it.
+recorded is stored verbatim in `model_name_exact`, because it is what reached
+the API and is the only value a reader can compare against vendor
+documentation. The decomposed columns are filled beside it, never in place of
+it, and a name Codess cannot resolve leaves them null rather than guessed.
 
 **Vendor releases are recorded, never gated.** Each Session stores the
 harness version observed in its source records (`sessions.harness_version`,
