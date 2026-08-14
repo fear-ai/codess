@@ -591,7 +591,7 @@ class TestBubbleToEvents:
             "/db", False,
         )))
         assert json.loads(event["metadata"]) == {
-            "model_selection": "composer-2.5", "model": "composer-2.5",
+            "model_set": "composer-2.5", "model": "composer-2.5",
             "configuration_provenance": {"model": {
                 "source_record_type": "bubble.user",
                 "source_record_locator": "c1:b1",
@@ -1196,7 +1196,7 @@ class TestComposerSettings:
             self.build(tmp_path, {"modelConfig": {"modelName": "composer-2-fast"}}),
             {"ws1"},
         )
-        assert headers["c1"]["model_selection"] == "composer-2-fast"
+        assert headers["c1"]["model_name"] == "composer-2-fast"
         assert headers["c1"]["model"] == "composer-2-fast"
 
     def test_model_default(self, tmp_path):
@@ -1205,5 +1205,5 @@ class TestComposerSettings:
         headers = get_composer_headers(
             self.build(tmp_path, {"modelConfig": {"modelName": "default"}}), {"ws1"},
         )
-        assert headers["c1"]["model_selection"] == "default"
+        assert headers["c1"]["model_name"] == "default"
         assert "model" not in headers["c1"]

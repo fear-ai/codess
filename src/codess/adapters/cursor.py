@@ -547,7 +547,7 @@ def _bubble_to_events(
                 model_info, "modelName"
             )
             if isinstance(selection, str) and selection.strip():
-                metadata = {"model_selection": selection.strip()}
+                metadata = {"model_set": selection.strip()}
                 if selection.strip().lower() != "default":
                     metadata["model"] = selection.strip()
                     metadata["configuration_provenance"] = {

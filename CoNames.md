@@ -52,7 +52,7 @@ Each row is one concept. The columns are the places that concept is named.
 |---|---|---|---|
 | Adapter key | `sessions.source` | `store.SOURCE_PROFILES` keys | `Claude`, `Codex`, `Cursor` |
 | Vendor | `sessions.vendor_name` | profile `vendor_name` | `anthropic`, `openai`, `cursor` |
-| Harness | `sessions.harness_name` | profile `harness_name`; Codex decodes `originator` | `claude-code-cli`, `codex-cli`, `cursor-ide` |
+| Harness | `sessions.harness_name` | profile `harness_name`; Codex decodes `originator` | `claude-code`, `codex`, `cursor` |
 | Surface | `sessions.surface_kind` | `adapters/cc._CC_SURFACE`, `adapters/codex._CODEX_SURFACE` | `cli`, `desktop`, `ide`, `api` |
 | Source system | `sessions.source_system_id` | profile, composed `vendor + "." + product` | `anthropic.claude-code`, `openai.codex`, `cursor.composer` |
 | Product | `sessions.product_name` | profile `product_name` | `claude-code`, `codex`, `cursor-composer` |
@@ -69,10 +69,23 @@ each have four. The local designators (`cc`, filename, token) are deliberately
 short and are not vendor facts; they need not match the vendor spellings, but
 they must not be confused with them.
 
-**Three of these are wrong today** and are listed in
-[Renames](#6-renames): `vendor_name` names a product for Cursor,
-`harness_name` embeds a surface claim the decoded `surface_kind` contradicts,
-and `product_name` is derivable from `source_system_id`.
+**A harness name states the program only.** The constants held
+`claude-code-cli`, `codex-cli`, and `cursor-ide` -- a surface suffix beside a
+`surface_kind` column that names the surface itself, so a Desktop or SDK Session
+was stored as a CLI one. Fixed: the program does not change with the surface.
+Codex's decoded `originator` values keep their vendor spelling (`Codex Desktop`,
+`codex_cli_rs`) because an exact source value is retained rather than
+normalized; the surface is read separately from its `source` field.
+
+**Two of these are still wrong** and are listed in [Renames](#6-renames):
+`vendor_name` names a product for Cursor, and `product_name` is derivable from
+`source_system_id`. Removing the surface suffix makes `harness_name` and
+`product_name` identical for Claude and Codex, which is the same finding from
+the other side: with the surface in its own column, the program and the product
+are one fact spelled twice, and `product_name` is the copy to drop.
+
+**Only Codex names its own program.** Claude states a surface (`entrypoint`) and
+no program; Cursor states neither, so both take the profile constant.
 
 ## 3. Model Name Parts
 
@@ -90,7 +103,9 @@ resolves a vendor string into them.
 | variant | `model_variant` | `--model-variant` | A superseded or purpose-marking designator in the same position | `codex`, `codex-max`, `latest` |
 | revision | `model_revision` | `--model-revision` | A dated build | `20251001` |
 | strength | `reasoning_effort` | `--reasoning-effort` | Reasoning effort selected | `high`, `medium`, `low` |
-| speed | `speed_tier` | `--speed-tier` | A separate dimension, named only when given | `fast` |
+| served tier | `service_tier` | `--service-tier` | The tier the API reported serving (Claude, in `message.usage`) | `standard` |
+| requested tier | `request_tier` | `--request-tier` | The tier the client asked for (Codex, in `thread_settings`) | `default` |
+| speed | `speed_tier` | `--speed-tier` | A separate dimension, named only when given | `fast` (the only value any vendor names) |
 
 **Gradations, lowest to highest capability.** The order is the vendor's own and
 is not recoverable from the names -- nothing in `haiku`, `sonnet`, `opus` says
@@ -126,6 +141,32 @@ something the vendor no longer means.
 them loses one. Only `fast` is ever named -- no vendor writes `slow` or
 `standard` -- so an absent speed means *not stated*, not standard.
 
+**Served and requested tiers are two facts, not one.** Claude records
+`service_tier` in `message.usage`, beside the token counts -- what the API
+reported serving. Codex records its tier in `thread_settings`, beside
+`model_provider` -- what the client asked for. One is an outcome, the other a
+request, so they occupy separate columns and a cross-vendor comparison of the
+two is a comparison of different things.
+
+**Cursor states a model name twice, and the two disagree.**
+`composerData.modelConfig.modelName` is the composer's current setting, decoded
+as **`model_name`**; the bubble's `modelInfo.modelName` is what ran for that
+message, decoded as **`model_set`**. Across 38 composers stating both, 15
+disagree -- one records `claude-4.6-opus-high-thinking` while every bubble
+records `composer-1.5`. The composer value is last-write-wins for the Session
+and carries the speed variants; the bubble value is per-turn evidence and
+appears on 1.6% of bubbles. Both are kept because neither substitutes for the
+other.
+
+**`speed_tier` is the weakest of these columns and is on notice.** No vendor
+states a speed as a field; all three non-null values are parsed from a Cursor
+label suffix, so it is the one model column filled purely by inference. Its only
+value is `fast`, which makes every other row null by construction and leaves a
+reader unable to distinguish "no speed named" from "no fast variant exists". It
+earns its place only because `composer-2` and `composer-2-fast` are genuinely
+different selections; if that stops being true it should be removed rather than
+carried.
+
 **A recorded strength does not prove it was selected.** A model offering only
 one level states it the same way as one where the user chose among several, so
 `high` occludes whether it was the only option. The value is evidence of what
@@ -134,6 +175,15 @@ ran, not of a decision.
 **An unresolved name is recorded as such, never guessed.** The vendor string is
 kept verbatim in `model_name_exact` in every case; only the derived columns are
 left null, so "not recognized" stays distinct from "has none".
+
+**Resolution is a table first, a tokenizer second.** `schema/model-aliases.json`
+is consulted by case-folded whole-string match; a name absent from it falls to
+the per-vendor tokenizer; anything else is unresolved. Each result records which
+path produced it, so a curated mapping is distinguishable from a parsed one.
+
+**API names are stated explicitly, not inferred at read time.** Cursor's
+`claude-4.6-sonnet-medium-thinking` resolves to `claude-sonnet-4-6` because the
+alias table says so. Correcting a mapping is a data edit, not a code change.
 
 ## 4. Identifier Suffixes
 

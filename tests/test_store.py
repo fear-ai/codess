@@ -749,3 +749,18 @@ class TestInvocationKind:
             assert disagreeing == 0
         finally:
             conn.close()
+
+
+def test_harness_name_carries_no_surface():
+    """`harness_name` names the program; `surface_kind` names the surface.
+
+    The constants held `claude-code-cli`, `codex-cli`, and `cursor-ide`, so a
+    Desktop or SDK Session was stored as a CLI one by a value contradicting the
+    decoded column beside it.
+    """
+    from codess.store import SOURCE_PROFILES
+
+    for key, profile in SOURCE_PROFILES.items():
+        harness = profile["harness_name"]
+        for surface in ("cli", "ide", "desktop", "api", "tui"):
+            assert not harness.endswith(f"-{surface}"), f"{key}: {harness}"

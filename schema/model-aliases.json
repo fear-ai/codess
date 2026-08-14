@@ -274,5 +274,9 @@
       "latest"
     ],
     "note": "Superseded or purpose-marking designators a vendor has used in the gradation position at other times. Kept distinct from gradation so a historical `codex` is not read as a current capability level."
+  },
+  "derivation": {
+    "order": "Alias table first, then the per-vendor tokenizer, then unresolved. `basis` on each result records which path produced it, so a curated mapping is distinguishable from a parsed one.",
+    "api_names": "An `api` value is the identifier the provider recognizes, stated explicitly here rather than inferred at read time. Correcting one is a data edit."
   }
 }

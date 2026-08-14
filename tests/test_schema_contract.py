@@ -207,7 +207,7 @@ def test_cursor_prompt_model_selection_configures_following_model_turn(tmp_path)
             "session_id": "cursor-1", "event_id": "prompt",
             "event_type": "user_message", "subtype": "prompt", "role": "user",
             "content": "hello",
-            "metadata": json.dumps({"model_selection": "composer-2.5", "model": "composer-2.5"}),
+            "metadata": json.dumps({"model_set": "composer-2.5", "model": "composer-2.5"}),
         },
         {
             "session_id": "cursor-1", "event_id": "response",

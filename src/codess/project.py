@@ -665,6 +665,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reasoning-effort", action="append", dest="query_reasoning_efforts", help="query: exact observed reasoning effort (repeatable)")
     p.add_argument("--speed-tier", action="append", dest="query_speed_tiers", help="query: exact observed speed tier (repeatable)")
     p.add_argument("--service-tier", action="append", dest="query_service_tiers", help="query: exact observed service tier (repeatable)")
+    p.add_argument("--request-tier", action="append", dest="query_request_tiers", help="query: tier the client requested (repeatable)")
     p.add_argument("--model-mode", action="append", dest="query_model_modes", help="query: exact observed model/collaboration mode (repeatable)")
     p.add_argument("--tool-name", action="append", dest="query_tool_names", help="query: exact tool name (repeatable)")
     p.add_argument("--actor-kind", action="append", dest="query_actor_kinds", help="query: normalized actor kind (repeatable)")

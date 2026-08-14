@@ -372,7 +372,12 @@ def _composer_settings(conn: sqlite3.Connection, composer_ids: set[str]) -> dict
             # `cursor-grok-4.5-high-fast` name a speed variant no bubble records.
             name = model_config.get("modelName")
             if isinstance(name, str) and name.strip():
-                observed["model_selection"] = name.strip()
+                # `model_name` is the composer's current setting, not the model a given
+                # message ran under: across 38 composers stating both, 15 disagree --
+                # one records `claude-4.6-opus-high-thinking` while every bubble records
+                # `composer-1.5`. Last-write-wins for the Session; the per-turn evidence
+                # is the bubble's `model_set`.
+                observed["model_name"] = name.strip()
                 # `default` records the absence of an explicit choice, which is not an
                 # unknown model, so it is retained as the selection and withheld as one.
                 if name.strip().casefold() != "default":

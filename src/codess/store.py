@@ -41,12 +41,17 @@ from codess.schema_contract import (
 )
 from codess.tool_identity import bounded_source_call_id
 
+# `harness_name` names the program only. It carried a surface suffix -- `claude-code-cli`,
+# `codex-cli`, `cursor-ide` -- while `surface_kind` names the surface in the next column,
+# so a Desktop or SDK Session was stored as a CLI one by a constant that contradicted the
+# decoded value beside it. The surface is decoded per Session where a vendor states it;
+# the program does not change with it.
 SOURCE_PROFILES = {
     "Claude": {
         "source_system_id": "anthropic.claude-code",
         "vendor_name": "anthropic",
         "product_name": "claude-code",
-        "harness_name": "claude-code-cli",
+        "harness_name": "claude-code",
         "storage_format": "claude-jsonl",
         "surface_kind": "cli",
         "mapping": "claude",
@@ -55,7 +60,7 @@ SOURCE_PROFILES = {
         "source_system_id": "openai.codex",
         "vendor_name": "openai",
         "product_name": "codex",
-        "harness_name": "codex-cli",
+        "harness_name": "codex",
         "storage_format": "codex-jsonl",
         "surface_kind": "cli",
         "mapping": "codex",
@@ -64,7 +69,7 @@ SOURCE_PROFILES = {
         "source_system_id": "cursor.composer",
         "vendor_name": "cursor",
         "product_name": "cursor-composer",
-        "harness_name": "cursor-ide",
+        "harness_name": "cursor",
         "storage_format": "cursor-sqlite",
         "surface_kind": "ide",
         "mapping": "cursor",
@@ -480,7 +485,10 @@ def _ensure_model_params(
     unresolved name leaves the derived columns null rather than guessed, so "not
     recognized" stays distinct from "has none".
     """
-    exact = metadata.get("model") or metadata.get("model_name")
+    # `model` only: no adapter emits `model_name` as the exact model, and Cursor uses
+    # that key for the composer's stated setting, which may be `default` -- the
+    # absence of a choice rather than a model named "default".
+    exact = metadata.get("model")
     values: dict[str, Any] = {
         "provider": metadata.get("model_provider"),
         "model_line": metadata.get("model_line"),
@@ -495,6 +503,7 @@ def _ensure_model_params(
         ),
         "speed_tier": metadata.get("speed") or metadata.get("speed_tier"),
         "service_tier": metadata.get("service_tier"),
+        "request_tier": metadata.get("request_tier"),
         "mode": metadata.get("mode"),
     }
     if not any(values.values()):

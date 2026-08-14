@@ -1225,6 +1225,7 @@
         "reasoning_effort",
         "speed_tier",
         "service_tier",
+        "request_tier",
         "mode"
       ],
       "fields": {
@@ -1269,6 +1270,10 @@
           "nullable": true
         },
         "service_tier": {
+          "type": "open_vocabulary",
+          "nullable": true
+        },
+        "request_tier": {
           "type": "open_vocabulary",
           "nullable": true
         },

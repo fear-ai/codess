@@ -786,9 +786,12 @@ class TestProcessFile:
         assert diagnostics["configuration_records"] == 2
         assert metadata["model"] == "gpt-test"
         assert metadata["reasoning_effort"] == "high"
-        assert metadata["service_tier"] == "priority"
+        # Codex states the tier the client requested; Claude states the tier the API
+        # served. The provenance keeps Codex's exact field name either way.
+        assert metadata["request_tier"] == "priority"
+        assert "service_tier" not in metadata
         assert metadata["mode"] == "default"
-        assert metadata["configuration_provenance"]["service_tier"] == {
+        assert metadata["configuration_provenance"]["request_tier"] == {
             "source_record_type": "thread_settings_applied",
             "source_record_locator": "1",
             "source_field": "payload.thread_settings.service_tier",

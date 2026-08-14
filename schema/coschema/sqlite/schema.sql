@@ -82,11 +82,12 @@ CREATE TABLE model_params (
   reasoning_effort TEXT,
   speed_tier TEXT,
   service_tier TEXT,
+  request_tier TEXT,
   mode TEXT,
   source_params TEXT CHECK (source_params IS NULL OR json_valid(source_params)),
   UNIQUE(provider, model_line, model_generation, model_version, model_gradation,
          model_variant, model_name_exact, model_revision, reasoning_effort,
-         speed_tier, service_tier, mode)
+         speed_tier, service_tier, request_tier, mode)
 );
 
 CREATE TABLE sessions (
@@ -408,7 +409,7 @@ CREATE UNIQUE INDEX idx_model_params_identity
     coalesce(model_gradation,''), coalesce(model_variant,''),
     coalesce(model_name_exact,''), coalesce(model_revision,''),
     coalesce(reasoning_effort,''), coalesce(speed_tier,''),
-    coalesce(service_tier,''), coalesce(mode,'')
+    coalesce(service_tier,''), coalesce(request_tier,''), coalesce(mode,'')
   );
 CREATE INDEX idx_model_params_line ON model_params(model_line)
   WHERE model_line IS NOT NULL;

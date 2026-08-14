@@ -73,15 +73,19 @@ _CODEX_SURFACE = {
 def _observed_harness(payload: dict) -> dict:
     """Harness and surface the Session actually reports, where it reports them.
 
-    `store.SOURCE_PROFILES` supplies a constant per vendor, which is right for
-    Claude and Cursor -- neither names its harness in a Session. Codex does:
-    `originator` distinguishes `codex_cli_rs`, `Codex Desktop`, `codex-tui`,
-    and `codex_exec`, and `source` distinguishes `cli` from `vscode`. Storing
-    the constant recorded a Desktop Session as CLI, which is the cross-harness
-    comparison 4.3 promises reported wrongly rather than not at all.
+    Codex is the only one of the three vendors that names both: `originator`
+    distinguishes `codex_cli_rs`, `Codex Desktop`, `codex-tui`, and `codex_exec`,
+    and `source` distinguishes `cli`, `vscode`, and `exec`. Claude states a surface
+    only (`entrypoint`) and Cursor neither, so both fall back to the profile.
 
-    Only observed values are returned, so `store` falls back to the profile
-    where a vendor supplies nothing.
+    `originator` is stored verbatim even though its values conflate the program with
+    the surface -- `codex_cli_rs` and `Codex Desktop` are one program under two
+    surfaces. It is the exact vendor string, which the schema retains rather than
+    normalizes; the surface is recorded separately from `source`, so a reader who
+    wants the program alone reads `surface_kind` beside it.
+
+    Only observed values are returned, so `store` falls back to the profile where a
+    vendor supplies nothing.
     """
     observed: dict[str, str] = {}
     originator = payload.get("originator")
@@ -361,7 +365,10 @@ def _configuration_values(
         "reasoning_effort" if "reasoning_effort" in source else "effort",
         source.get("reasoning_effort") or source.get("effort"),
     )
-    keep("service_tier", "service_tier", source.get("service_tier"))
+    # Codex states the tier the client *requested*, in `thread_settings` beside
+    # `model_provider`. Claude states the tier the API *served*, in `message.usage`
+    # beside the token counts. Different facts, so different columns.
+    keep("request_tier", "service_tier", source.get("service_tier"))
     collaboration = source.get("collaboration_mode")
     if isinstance(collaboration, dict):
         keep("mode", "collaboration_mode.mode", collaboration.get("mode"))

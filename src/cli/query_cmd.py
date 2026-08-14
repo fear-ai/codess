@@ -625,6 +625,7 @@ def _typed_filters(args, source_tokens: set[str] | None) -> dict:
         "reasoning_efforts": getattr(args, "query_reasoning_efforts", None),
         "speed_tiers": getattr(args, "query_speed_tiers", None),
         "service_tiers": getattr(args, "query_service_tiers", None),
+        "request_tiers": getattr(args, "query_request_tiers", None),
         "model_modes": getattr(args, "query_model_modes", None),
         "tool_names": getattr(args, "query_tool_names", None),
         "actor_kinds": getattr(args, "query_actor_kinds", None),

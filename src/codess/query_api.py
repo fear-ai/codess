@@ -28,7 +28,7 @@ SUPPORTED_FILTERS = frozenset({
     "source_system_ids", "event_kinds", "statuses", "models",
     "model_providers", "model_lines", "model_generations",
     "model_versions", "model_gradations", "model_variants", "model_revisions",
-    "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
+    "reasoning_efforts", "speed_tiers", "service_tiers", "request_tiers", "model_modes",
     "tool_names", "actor_kinds", "content_roles", "origin_kinds",
     "parent_session_ids", "session_relation_kinds", "initiation_kinds",
     "artifact", "text", "since", "until",
@@ -39,7 +39,7 @@ ACTION_FILTERS = {
         "session_relation_kinds", "since", "until", "models",
         "model_providers", "model_lines", "model_generations",
         "model_versions", "model_gradations", "model_variants", "model_revisions",
-        "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
+        "reasoning_efforts", "speed_tiers", "service_tiers", "request_tiers", "model_modes",
     }),
     "overview": SUPPORTED_FILTERS,
     "events": SUPPORTED_FILTERS,
@@ -157,7 +157,7 @@ def make_request(
         "source_system_ids", "event_kinds", "statuses", "models",
         "model_providers", "model_lines", "model_generations",
         "model_versions", "model_gradations", "model_variants", "model_revisions",
-        "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
+        "reasoning_efforts", "speed_tiers", "service_tiers", "request_tiers", "model_modes",
         "tool_names", "actor_kinds", "content_roles", "origin_kinds",
         "parent_session_ids", "session_relation_kinds", "initiation_kinds",
     ):
@@ -270,7 +270,7 @@ def validate_request(request: dict[str, Any]) -> None:
         "source_system_ids", "event_kinds", "statuses", "models",
         "model_providers", "model_lines", "model_generations",
         "model_versions", "model_gradations", "model_variants", "model_revisions",
-        "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
+        "reasoning_efforts", "speed_tiers", "service_tiers", "request_tiers", "model_modes",
         "tool_names", "actor_kinds", "content_roles", "origin_kinds",
         "parent_session_ids", "session_relation_kinds", "initiation_kinds",
     ):
@@ -505,6 +505,7 @@ CONFIGURATION_FILTER_COLUMNS = {
     "reasoning_efforts": "reasoning_effort",
     "speed_tiers": "speed_tier",
     "service_tiers": "service_tier",
+    "request_tiers": "request_tier",
     "model_modes": "mode",
 }
 
