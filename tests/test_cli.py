@@ -180,18 +180,18 @@ def test_query_duplicate_session_ids_route_by_global_number():
             insert_session(
                 conn, "same", source=source, started_at=timestamp,
                 ended_at=timestamp, project_path=str(proj),
-                global_id=f"codess:session:sha256:{source}-same",
+                entity_id=f"codess:session:sha256:{source}-same",
             )
             insert_event(
                 conn, "same", "e1", event_type="user_message", subtype="prompt",
                 role="user", content=content, timestamp=timestamp,
-                global_id=f"codess:event:sha256:{source}-same-e1",
+                entity_id=f"codess:event:sha256:{source}-same-e1",
             )
             insert_event(
                 conn, "same", "e2", event_type="tool_call",
                 tool_name="Read" if source == "Codex" else "Bash",
                 timestamp=timestamp,
-                global_id=f"codess:event:sha256:{source}-same-e2",
+                entity_id=f"codess:event:sha256:{source}-same-e2",
             )
             conn.commit()
             conn.close()
@@ -357,7 +357,7 @@ def test_query_lineage_and_session_metadata_report():
         )
         conn.executemany(
             "INSERT INTO events "
-            "(session_id, global_id, event_id, event_type, subtype, tool_name, "
+            "(session_id, entity_id, event_id, event_type, subtype, tool_name, "
             "content_len, timestamp, metadata) "
             "VALUES ('s1', 'codess:event:sha256:s1-' || ?, ?, ?, ?, ?, ?, ?, ?)",
             [
@@ -669,7 +669,7 @@ def test_query_sessions_with_id(durable_tmp_path):
     _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
     r = _run(["query", "--dir", str(proj), "--sessions", "--id"], env=env)
     assert r.returncode == 0
-    assert "global_id" in r.stdout and "num" in r.stdout and "\t1\t" in r.stdout
+    assert "entity_id" in r.stdout and "num" in r.stdout and "\t1\t" in r.stdout
 
 
 def test_ingest_source_codex_only(durable_tmp_path):
@@ -1385,11 +1385,11 @@ def test_query_vendor_filter_stable_session_id_sequence_and_csv():
         init_db(store)
         conn = sqlite3.connect(store)
         insert_session(
-            conn, "claude-1", source="Claude", global_id="global-claude",
+            conn, "claude-1", source="Claude", entity_id="global-claude",
             started_at=1, project_path=str(project),
         )
         insert_session(
-            conn, "cursor-1", source="Cursor", global_id="global-cursor",
+            conn, "cursor-1", source="Cursor", entity_id="global-cursor",
             started_at=2, project_path=str(project),
         )
         for session_id, event_id, sequence_no, content, timestamp in (
@@ -1522,7 +1522,7 @@ def test_query_ambiguous_vendor_session_id_requests_global_id():
             insert_session(
                 conn, "same",
                 source="Claude" if index == 0 else "Cursor",
-                global_id=f"global-{index}",
+                entity_id=f"global-{index}",
                 observation_id=f"observation-{index}",
             )
             conn.commit()
@@ -1600,7 +1600,7 @@ def test_typed_research_workflow_search_expand_and_resolve_evidence(tmp_path):
     ])
     assert search.returncode == 0, search.stderr
     selected = json.loads(selected_path.read_text(encoding="utf-8"))
-    anchor = selected["rows"][0]["global_event_id"]
+    anchor = selected["rows"][0]["event_entity_id"]
 
     context = _run([
         "query", "events", "--dir", str(project),
@@ -1660,7 +1660,7 @@ def test_typed_research_workflow_search_expand_and_resolve_evidence(tmp_path):
     )
     assert investigation["format"] == "codess.investigation/1"
     assert investigation["input_result_hash"] == expanded["result_hash"]
-    assert investigation["citations"][0]["global_event_id"] == anchor
+    assert investigation["citations"][0]["event_entity_id"] == anchor
 
 
 def test_query_pipeline_close_has_no_broken_pipe_traceback():
@@ -1669,7 +1669,7 @@ def test_query_pipeline_close_has_no_broken_pipe_traceback():
         store = project / ".codess/sessions_cc.db"
         init_db(store)
         conn = sqlite3.connect(store)
-        insert_session(conn, "s1", global_id="global-s1", started_at=1)
+        insert_session(conn, "s1", entity_id="global-s1", started_at=1)
         for index in range(1, 300):
             insert_event(
                 conn, "s1", f"e{index}", sequence_no=index,

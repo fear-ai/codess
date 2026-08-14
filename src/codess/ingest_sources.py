@@ -98,7 +98,7 @@ def _merge_raw_record(records: list[dict], record: dict) -> bool:
 
 def _record_raw(
     opts: dict, path: Path, source: str, conn=None, *,
-    record_override: dict | None = None, source_uri: str | None = None,
+    record_override: dict | None = None, source_path: str | None = None,
 ) -> None:
     """Observe/capture one successfully parsed source for the pending snapshot."""
     recorder = opts.get("raw_store")
@@ -111,7 +111,7 @@ def _record_raw(
         source_system_id=profile["source_system_id"],
         storage_format=profile["storage_format"],
         mode=opts.get("raw_mode", "reference"),
-        source_locator=source_uri,
+        source_locator=source_path,
         progress=opts.get("progress"),
     )
     if _merge_raw_record(records, record):
@@ -129,14 +129,14 @@ def _record_raw(
             SET availability=?, capture_method=?, consistency=?, content_sha256=?
             WHERE id=(
               SELECT id FROM sources
-              WHERE source_system_id=? AND source_uri=?
+              WHERE source_system_id=? AND source_path=?
               ORDER BY id DESC LIMIT 1
             )
             """,
             (
                 record["availability"], record["capture_method"],
                 record["consistency"], content_hash,
-                profile["source_system_id"], source_uri or str(path),
+                profile["source_system_id"], source_path or str(path),
             ),
         )
 
@@ -901,7 +901,7 @@ def _ingest_cursor(
                     _record_raw(
                         opts, global_db, "Cursor", conn,
                         record_override=cohort_record,
-                        source_uri=str(global_source),
+                        source_path=str(global_source),
                     )
                     conn.commit()
                     changed = True

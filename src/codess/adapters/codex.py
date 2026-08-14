@@ -547,6 +547,91 @@ def _failed_status(payload: dict) -> bool:
 _EXIT_CODE = re.compile(r'\\?"exit_code\\?":\s*(-?\d+)')
 
 
+# Codex prefixes most tool output with a fixed header -- `Exit code`, `Wall time`,
+# `Total output lines` -- then `Output:` and the body. 18,543 of 19,576 real results
+# carry it. The fields are stated, not inferred, so they are decoded rather than left
+# inside the text; the body stays a string because that is what it is.
+# Codex prefixes tool output with a header of stated facts, then `Output:` and the
+# body. 18,543 of 19,576 real results carry one. The fields are matched per line rather
+# than as one expression, because the set and order vary by tool and the spellings do
+# too: the exit code appears as `Process exited with code N` on 14,934 results and
+# `Exit code: N` on 1,319, and the wall time with and without a colon.
+_HEADER_FIELDS = (
+    (re.compile(r"\AExit code: (-?\d+)\Z"), "exit_code", int),
+    (re.compile(r"\AProcess exited with code (-?\d+)\Z"), "exit_code", int),
+    (re.compile(r"\AWall time:? ([\d.]+) seconds?\Z"), "wall_seconds", float),
+    (re.compile(r"\ATotal output lines: (\d+)\Z"), "output_lines", int),
+    (re.compile(r"\AOriginal token count: (\d+)\Z"), "output_tokens", int),
+    (re.compile(r"\AChunk ID: (\S+)\Z"), "chunk_id", str),
+    (re.compile(r"\AProcess running with session ID (\S+)\Z"), "process_session_id", str),
+    (re.compile(r"\A(Script completed)\Z"), "script_completed", bool),
+)
+_OUTPUT_MARKER = "Output:"
+
+
+def _output_text(output: object) -> str | None:
+    """The text Codex wrapped, from whichever wrapper it used.
+
+    Three transports carry the same payload: a bare string, a `{"output": ...}`
+    envelope, and a list of `{type, text}` content blocks. The wrapper is retained
+    verbatim in `output_json`; this returns only the text so one header decode serves
+    all three.
+    """
+    if isinstance(output, str):
+        stripped = output.strip()
+        if stripped[:1] == "{":
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                return output
+            if isinstance(parsed, dict) and isinstance(parsed.get("output"), str):
+                return parsed["output"]
+            return output
+        return output
+    if isinstance(output, list):
+        parts = [
+            block["text"] for block in output
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        ]
+        return "\n".join(parts) if parts else None
+    return None
+
+
+def _decoded_output(output: object) -> dict | None:
+    """Header fields plus body, where Codex states a header.
+
+    Returns None when no `Output:` marker is present, or when the lines before it
+    state nothing recognized: a result Codex did not annotate has no fields, and an
+    envelope holding only the body would claim structure that is not there.
+    """
+    text = _output_text(output)
+    if not isinstance(text, str):
+        return None
+    marker = text.find(_OUTPUT_MARKER)
+    if marker < 0:
+        return None
+    decoded: dict = {}
+    for line in text[:marker].split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        for pattern, name, cast in _HEADER_FIELDS:
+            match = pattern.match(line)
+            if match is None:
+                continue
+            decoded[name] = True if cast is bool else cast(match.group(1))
+            break
+        else:
+            # An unrecognized header line means the marker was body text rather than
+            # a header, so nothing is claimed for this result.
+            return None
+    if not decoded:
+        return None
+    body = text[marker + len(_OUTPUT_MARKER):]
+    decoded["output"] = body[1:] if body[:1] in ("\n", " ") else body
+    return decoded
+
+
 def _exit_code_status(payload: dict) -> str | None:
     """The shell exit code Codex reports inside its output text, or None.
 
@@ -565,7 +650,14 @@ def _exit_code_status(payload: dict) -> str | None:
     if not isinstance(raw, str):
         raw = json.dumps(raw) if raw is not None else ""
     match = _EXIT_CODE.search(raw)
-    return f"exit_code:{match.group(1)}" if match else None
+    if match:
+        return f"exit_code:{match.group(1)}"
+    # The header states the same fact in words on far more results -- 14,795 against
+    # 79 -- and the two forms never co-occur, so the header is the larger source.
+    decoded = _decoded_output(payload.get("output"))
+    if decoded and "exit_code" in decoded:
+        return f"exit_code:{decoded['exit_code']}"
+    return None
 
 
 def _compaction_events(
@@ -1098,9 +1190,13 @@ def process_file(
                     tool_output=truncated,
                     metadata=_merge_metadata(payload, { **current_configuration, **({ "application_status": "failed", "result_status_evidence": application_failure, } if application_failure else {}), }),
                     source_raw=source_raw,
-                    # Codex states `status` on few outputs, so the exit code it embeds
-                    # in the output body is the fallback; where neither exists the result
-                    # stays unknown rather than being assumed successful.
+                    # The wrapper is kept verbatim; the header fields are lifted beside
+                    # it so wall time, token count, and exit code are queryable without
+                    # re-parsing the text.
+                    tool_output_structured=_decoded_output(payload.get("output")),
+                    # Codex states `status` on few outputs, so the exit code it states
+                    # in the output header is the fallback; where neither exists the
+                    # result stays unknown rather than being assumed successful.
                     source_status=(
                         "application_error" if application_failure
                         else payload.get("status") or _exit_code_status(payload)

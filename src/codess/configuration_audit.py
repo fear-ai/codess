@@ -127,11 +127,11 @@ def audit(
             """
             WITH ranked_turns AS (
               SELECT mt.model_param_id,s.source_system_id,
-                     s.global_id AS session_global_id,
+                     s.entity_id AS session_entity_id,
                      mt.id AS model_turn_id,mt.sequence_no,
                      ROW_NUMBER() OVER (
                        PARTITION BY mt.model_param_id
-                       ORDER BY s.source_system_id,s.global_id,
+                       ORDER BY s.source_system_id,s.entity_id,
                                 mt.sequence_no,mt.id
                      ) AS occurrence_rank
               FROM model_turns mt
@@ -140,7 +140,7 @@ def audit(
             """ + source_and + """
             ),
             ranked_events AS (
-              SELECT e.id,e.model_turn_id,e.global_id,
+              SELECT e.id,e.model_turn_id,e.entity_id,
                      e.source_record_locator,e.metadata,e.source_id,
                      ROW_NUMBER() OVER (
                        PARTITION BY e.model_turn_id
@@ -154,10 +154,10 @@ def audit(
               WHERE e.model_turn_id IS NOT NULL
             )
             SELECT rt.model_param_id,rt.source_system_id,
-                   rt.session_global_id,rt.model_turn_id,
-                   e.global_id AS event_global_id,e.source_record_locator,
-                   e.metadata,src.global_id AS source_global_id,
-                   src.source_uri,src.source_revision
+                   rt.session_entity_id,rt.model_turn_id,
+                   e.entity_id AS event_entity_id,e.source_record_locator,
+                   e.metadata,src.entity_id AS source_entity_id,
+                   src.source_path,src.source_revision
             FROM ranked_turns rt
             LEFT JOIN ranked_events e ON e.model_turn_id=rt.model_turn_id
                                      AND e.event_rank=1
@@ -184,12 +184,12 @@ def audit(
                 example["model_param_id"], []
             ).append({
                 "source_system_id": example["source_system_id"],
-                "session_global_id": example["session_global_id"],
+                "session_entity_id": example["session_entity_id"],
                 "model_turn_id": example["model_turn_id"],
-                "event_global_id": example["event_global_id"],
+                "event_entity_id": example["event_entity_id"],
                 "source_record_locator": example["source_record_locator"],
-                "source_global_id": example["source_global_id"],
-                "source_uri": example["source_uri"],
+                "source_entity_id": example["source_entity_id"],
+                "source_path": example["source_path"],
                 "source_revision": example["source_revision"],
                 "configuration_provenance": (
                     evidence if isinstance(evidence, dict) else None

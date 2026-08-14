@@ -12,7 +12,7 @@ def _lines(path, values):
 
 def _source_store(path, sources):
     conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE sources(source_system_id TEXT, source_uri TEXT)")
+    conn.execute("CREATE TABLE sources(source_system_id TEXT, source_path TEXT)")
     conn.executemany("INSERT INTO sources VALUES (?, ?)", sources)
     conn.commit()
     conn.close()

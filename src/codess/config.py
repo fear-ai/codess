@@ -308,7 +308,7 @@ LARGE_RAW_REVISION_BYTES = GB(1)
 # treated as implausible and skipped rather than parsed.
 MAX_TOKEN_LINE_BYTES = MB(8)
 # Above this size, source fingerprinting samples bounded windows instead of
-# hashing the complete file (see fileio.source_fingerprint).
+# hashing the complete file (see fileio.read_source_revision).
 SOURCE_FULL_HASH_MAX = MB(64)
 # A raw-capture object above this size is called out individually in a
 # storage report rather than only contributing to the aggregate total.

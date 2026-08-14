@@ -19,7 +19,7 @@ def insert_session(conn, session_id, *, source="Claude", **columns):
     """Insert one session row carrying the identities a real store requires.
 
     Fixtures previously wrote raw SQL naming only the columns a given test
-    cared about, which worked because the schema defaulted `global_id`. It no
+    cared about, which worked because the schema defaulted `entity_id`. It no
     longer does -- an identity is derived from evidence or the row is invalid
     -- so this builder supplies the required fields and leaves the rest to
     the caller. Using it keeps fixtures unable to construct a row that
@@ -27,7 +27,7 @@ def insert_session(conn, session_id, *, source="Claude", **columns):
     """
     row = {
         "id": session_id,
-        "global_id": f"codess:session:sha256:{session_id}",
+        "entity_id": f"codess:session:sha256:{session_id}",
         "observation_id": f"codess:observation:sha256:{session_id}",
         "source_system_id": VENDOR_SOURCE_SYSTEMS.get(source, "anthropic.claude-code"),
         "source": source,
@@ -51,7 +51,7 @@ def insert_event(conn, session_id, event_id, **columns):
     row = {
         "session_id": session_id,
         "event_id": event_id,
-        "global_id": f"codess:event:sha256:{session_id}-{event_id}",
+        "entity_id": f"codess:event:sha256:{session_id}-{event_id}",
     }
     row.update(columns)
     names = ", ".join(row)

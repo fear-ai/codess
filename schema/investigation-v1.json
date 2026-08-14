@@ -32,9 +32,9 @@
       "items": {
         "type": "object",
         "required": [
-          "global_event_id",
+          "event_entity_id",
           "observation_id",
-          "global_session_id",
+          "session_entity_id",
           "project_id",
           "snapshot_id",
           "source_system_id",

@@ -8,8 +8,8 @@ import pytest
 from codess.adapters.cc import process_file as process_claude
 from codess.adapters.codex import process_file as process_codex
 from codess.adapters.cursor import process_db as process_cursor
-from codess.evidence_resolver import resolve_event
 from codess.query_api import execute, make_request
+from codess.source_verification import verify_event_source
 from codess.store import connect, init_db, replace_session_events
 
 
@@ -222,7 +222,7 @@ def test_core_exchange_retains_exact_vendor_evidence_through_query(
 
     mapped = list(conn.execute(
         """
-        SELECT global_id,mapping_rule,mapping_trace,source_record_locator
+        SELECT entity_id,mapping_rule,mapping_trace,source_record_locator
         FROM events ORDER BY sequence_no
         """
     ))
@@ -232,14 +232,14 @@ def test_core_exchange_retains_exact_vendor_evidence_through_query(
     assert all(json.loads(row["mapping_trace"]) for row in mapped)
     status_row = conn.execute(
         """
-        SELECT global_id,actor_kind FROM events
+        SELECT entity_id,actor_kind FROM events
         WHERE normalized_status=? ORDER BY sequence_no LIMIT 1
         """,
         (status,),
     ).fetchone()
     assert status_row is not None
     assert status_row["actor_kind"] == status_actor
-    status_event_id = status_row["global_id"]
+    status_event_id = status_row["entity_id"]
     conn.close()
 
     opened = {
@@ -265,7 +265,7 @@ def test_core_exchange_retains_exact_vendor_evidence_through_query(
             for row in expanded["rows"]
         )
         assert all(row["source_record_locator"] for row in expanded["rows"])
-        evidence = resolve_event(opened, status_event_id)
+        evidence = verify_event_source(opened, status_event_id)
         assert evidence["selected"]["kind"] == "live"
         assert evidence["selected"]["equality"] == "exact"
         if source_name == "Cursor":

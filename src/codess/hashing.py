@@ -19,7 +19,7 @@ they consume, not in the digest they compute:
 Each has a matching `..._check` that recomputes and compares, so verification
 never re-derives the construction by hand. `codess_digest()` returns the
 incremental object for callers implementing their own read policy, such as the
-bounded window sampling in `fileio.source_fingerprint`; policy of that kind is
+bounded window sampling in `fileio.read_source_revision`; policy of that kind is
 deliberately not owned here.
 
 Truncation keeps the leading bits of the digest. Which end is retained does

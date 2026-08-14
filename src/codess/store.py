@@ -13,18 +13,18 @@ from pathlib import Path
 from typing import Any
 
 from codess import __version__
-from codess.fileio import open_readonly, source_fingerprint
+from codess.fileio import open_readonly, read_source_revision
 from codess.hashing import (
     codess_bytes_hash,
     codess_canonical_hash,
     codess_text_hash,
 )
 from codess.identity import (
-    global_event_id,
-    global_session_id,
-    global_source_record_id,
-    global_source_revision_id,
+    event_entity_id,
+    session_entity_id,
     source_observation_id,
+    source_record_entity_id,
+    source_revision_entity_id,
 )
 from codess.mapping import canonical_json, structured_json
 from codess.model_names import resolve as resolve_model_name
@@ -399,7 +399,7 @@ def sync_project_catalog(
 def _source_revision(
     path: Path,
 ) -> tuple[str, float | None, int | None, str, str]:
-    return source_fingerprint(path)
+    return read_source_revision(path)
 
 
 def ensure_source(
@@ -434,24 +434,24 @@ def ensure_source(
         capture_method = str(observation.get("capture_method") or "observed")
         consistency = str(observation.get("consistency") or "observed")
         availability = str(observation.get("availability") or availability)
-    global_id = global_source_revision_id(
+    entity_id = source_revision_entity_id(
         profile["source_system_id"], source_file, revision
     )
     now = datetime.now(UTC).isoformat()
     conn.execute(
         """
         INSERT INTO sources(
-          global_id, source_system_id, source_uri, storage_format, source_revision,
+          entity_id, source_system_id, source_path, storage_format, source_revision,
           source_mtime, source_size, observed_at, ingested_at, availability,
           capture_method, consistency)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_system_id, source_uri, source_revision) DO UPDATE SET
+        ON CONFLICT(source_system_id, source_path, source_revision) DO UPDATE SET
           observed_at=excluded.observed_at,
           ingested_at=excluded.ingested_at,
           availability=excluded.availability
         """,
         (
-            global_id,
+            entity_id,
             profile["source_system_id"],
             source_file,
             profile["storage_format"],
@@ -468,7 +468,7 @@ def ensure_source(
     row = conn.execute(
         """
         SELECT id FROM sources
-        WHERE source_system_id=? AND source_uri=? AND source_revision=?
+        WHERE source_system_id=? AND source_path=? AND source_revision=?
         """,
         (profile["source_system_id"], source_file, revision),
     ).fetchone()
@@ -571,15 +571,15 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
     now = datetime.now(UTC).isoformat()
     source_system_id = session.get("source_system_id") or profile["source_system_id"]
     vendor_session_id = session.get("vendor_session_id") or session.get("id")
-    session_global_id = global_session_id(source_system_id, vendor_session_id)
+    session_identity = session_entity_id(source_system_id, vendor_session_id)
     source_row = conn.execute(
-        "SELECT global_id, source_uri, source_revision FROM sources WHERE id IS ?",
+        "SELECT entity_id, source_path, source_revision FROM sources WHERE id IS ?",
         (session.get("source_id"),),
     ).fetchone()
     observation_id = source_observation_id(
-        session_global_id,
+        session_identity,
         source_system_id,
-        source_row["source_uri"] if source_row else "unobserved",
+        source_row["source_path"] if source_row else "unobserved",
         source_row["source_revision"] if source_row else "unobserved",
         project_id,
     )
@@ -589,7 +589,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         path_obsolete = _path_is_obsolete(conn, project_id, source_cwd)
     values = (
         session.get("id"),
-        session_global_id,
+        session_identity,
         observation_id,
         source_system_id,
         vendor_session_id,
@@ -624,7 +624,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
     conn.execute(
         """
         INSERT INTO sessions(
-          id, global_id, observation_id, source_system_id, vendor_session_id, vendor_name, product_name,
+          id, entity_id, observation_id, source_system_id, vendor_session_id, vendor_name, product_name,
           harness_name, storage_format, surface_kind, session_purpose,
           harness_version, source_id, project_id, source_cwd, path_obsolete,
           started_at, ended_at, source_mtime, observed_at, ingested_at, time_basis,
@@ -632,7 +632,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
           session_model_param_id, metadata, source, type, release, project_path)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
-          global_id=excluded.global_id,
+          entity_id=excluded.entity_id,
           observation_id=excluded.observation_id,
           source_system_id=excluded.source_system_id,
           vendor_session_id=excluded.vendor_session_id,
@@ -744,7 +744,7 @@ def _normalized_status(event: dict[str, Any], metadata: dict[str, Any]) -> tuple
 def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
     """Upsert one event with common semantics and return its surrogate id."""
     session = conn.execute(
-        "SELECT source, source_system_id, project_id, global_id FROM sessions WHERE id=?",
+        "SELECT source, source_system_id, project_id, entity_id FROM sessions WHERE id=?",
         (event.get("session_id"),),
     ).fetchone()
     semantics = _event_classification(event)
@@ -785,11 +785,11 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
     tool_input = structured_json(event.get("tool_input"))
     event["tool_input"] = tool_input
     event["mapping_trace"] = mapping_trace
-    event_global_id = global_event_id(
-        session["global_id"], str(event.get("event_id"))
+    event_identity = event_entity_id(
+        session["entity_id"], str(event.get("event_id"))
     )
     values = (
-        event_global_id, event.get("session_id"), event.get("source_id"), event.get("event_id"),
+        event_identity, event.get("session_id"), event.get("source_id"), event.get("event_id"),
         event.get("sequence_no"), event.get("source_record_locator") or event.get("event_id"),
         event.get("source_record_type"),
         event.get("source_record_subtype"),
@@ -811,7 +811,7 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
     conn.execute(
         """
         INSERT INTO events(
-          global_id, session_id, source_id, event_id, sequence_no, source_record_locator,
+          entity_id, session_id, source_id, event_id, sequence_no, source_record_locator,
           source_record_type, source_record_subtype, event_kind, actor_kind,
           content_role, origin_kind, interaction_id, model_turn_id,
           parent_event_id, caused_by_event_id, content, content_len, tool_name,
@@ -820,7 +820,7 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
           mapping_trace, metadata, event_type, subtype, role, timestamp, file_path)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(session_id, event_id) DO UPDATE SET
-          global_id=excluded.global_id, source_id=excluded.source_id, sequence_no=excluded.sequence_no,
+          entity_id=excluded.entity_id, source_id=excluded.source_id, sequence_no=excluded.sequence_no,
           source_record_locator=excluded.source_record_locator,
           source_record_type=excluded.source_record_type,
           source_record_subtype=excluded.source_record_subtype,
@@ -887,10 +887,10 @@ def _record_source_and_content(
     source_record_id = None
     if source_id is not None:
         source = conn.execute(
-            "SELECT global_id FROM sources WHERE id=?", (source_id,)
+            "SELECT entity_id FROM sources WHERE id=?", (source_id,)
         ).fetchone()
         if source is not None:
-            source_record_id = global_source_record_id(source["global_id"], locator)
+            source_record_id = source_record_entity_id(source["entity_id"], locator)
             conn.execute(
                 """
                 INSERT INTO source_records(
@@ -1065,48 +1065,18 @@ def record_processing_run(
             json.dumps(actions, separators=(",", ":")), rejection, now, now,
         ),
     )
-    def record_policy_content(
-        content_hash: str | None, length: Any, privacy_class: str,
-    ) -> str | None:
-        """Record one policy input or output as a not-retained content object.
-
-        Content processed under a policy is identified but not stored: the
-        digest and length are evidence that a value existed and was acted on,
-        which is what a later reader needs without retaining the value itself.
-        """
-        if not content_hash:
-            return None
-        content_id = f"codess:content:sha256:{content_hash}"
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO content_objects(
-              id, content_sha256, storage_class, character_length, privacy_class)
-            VALUES (?, ?, 'not_retained', ?, ?)
-            """,
-            (content_id, content_hash, length, privacy_class),
-        )
-        return content_id
-
     for sequence, action in enumerate(actions, 1):
-        input_id = record_policy_content(
-            action.get("input_sha256"), action.get("original_length"),
-            "policy_input",
-        )
-        if input_id is None:
-            continue
-        output_id = record_policy_content(
-            action.get("output_sha256"), action.get("output_length"),
-            "policy_output",
-        )
+        # A derivation records which actions ran and why one was rejected. It does
+        # not name the processed text: doing so meant hashing every input and output,
+        # and nothing ever compared the result.
         conn.execute(
             """
             INSERT OR REPLACE INTO content_derivations(
-              processing_run_id, input_content_id, output_content_id,
-              sequence_no, actions_json, rejection_reason)
-            VALUES (?, ?, ?, ?, ?, ?)
+              processing_run_id, sequence_no, actions_json, rejection_reason)
+            VALUES (?, ?, ?, ?)
             """,
             (
-                run_id, input_id, output_id, sequence,
+                run_id, sequence,
                 json.dumps(action.get("actions", []), separators=(",", ":")),
                 action.get("reason"),
             ),
@@ -1177,18 +1147,20 @@ def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -
                 """
                 INSERT INTO tool_results(
                   invocation_id, result_event_id, sequence_no,
-                  producing_actor_kind, output_text, is_error,
+                  producing_actor_kind, output_text, output_json, is_error,
                   source_status, normalized_status)
-                VALUES (NULL, ?, 1, 'tool', ?, ?, ?, ?)
+                VALUES (NULL, ?, 1, 'tool', ?, ?, ?, ?, ?)
                 """,
                 (
                     row_id, event.get("tool_output") or event.get("content"),
+                    _bounded_output_json(event.get("tool_output_structured")),
                     1 if normalized_status in {"failed", "denied", "incomplete"} else 0,
                     source_status, normalized_status,
                 ),
             )
             return
     invocation_id = f"{session_id}:call:{call_id or event['event_id']}"
+    namespace = _tool_namespace(event.get("tool_name"))
     # What evidence this invocation rests on, rather than a constant. A
     # request record means the model asked and the harness answered; its
     # absence means the harness reported an operation it performed, which is
@@ -1208,13 +1180,14 @@ def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -
         """
         INSERT INTO tool_invocations(
           id, session_id, interaction_id, model_turn_id, requested_event_id,
-          source_call_id, source_tool_name, canonical_tool_name, invocation_kind,
-          input_json, source_status, normalized_status, started_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          source_call_id, source_tool_name, canonical_tool_name, tool_namespace,
+          invocation_kind, input_json, source_status, normalized_status, started_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           requested_event_id=COALESCE(excluded.requested_event_id, tool_invocations.requested_event_id),
           source_tool_name=COALESCE(excluded.source_tool_name, tool_invocations.source_tool_name),
           canonical_tool_name=COALESCE(excluded.canonical_tool_name, tool_invocations.canonical_tool_name),
+          tool_namespace=COALESCE(excluded.tool_namespace, tool_invocations.tool_namespace),
           input_json=COALESCE(excluded.input_json, tool_invocations.input_json),
           source_status=COALESCE(excluded.source_status, tool_invocations.source_status),
           normalized_status=COALESCE(excluded.normalized_status, tool_invocations.normalized_status),
@@ -1225,7 +1198,8 @@ def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -
         (
             invocation_id, session_id, event.get("interaction_id"), event.get("model_turn_id"),
             row_id if event.get("event_type") == "tool_call" else None, call_id,
-            event.get("tool_name"), event.get("tool_name"), invocation_kind,
+            event.get("tool_name"), event.get("tool_name"), namespace,
+            invocation_kind,
             event.get("tool_input"), source_status, normalized_status,
             event.get("timestamp") if event.get("event_type") == "tool_call" else None,
         ),
@@ -1239,11 +1213,12 @@ def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -
             """
             INSERT OR REPLACE INTO tool_results(
               invocation_id, result_event_id, sequence_no, producing_actor_kind,
-              output_text, is_error, source_status, normalized_status)
-            VALUES (?, ?, ?, 'tool', ?, ?, ?, ?)
+              output_text, output_json, is_error, source_status, normalized_status)
+            VALUES (?, ?, ?, 'tool', ?, ?, ?, ?, ?)
             """,
             (
                 invocation_id, row_id, next_seq, event.get("tool_output") or event.get("content"),
+                _bounded_output_json(event.get("tool_output_structured")),
                 1 if normalized_status in {"failed", "denied", "incomplete"} else 0,
                 source_status, normalized_status,
             ),
@@ -1333,12 +1308,106 @@ def _record_artifact(conn: sqlite3.Connection, event: dict[str, Any], row_id: in
     )
 
 
+# MCP servers whose tools Cursor spells with single hyphens, where the name gives no
+# boundary between server and tool. Declared rather than parsed; a server absent here is
+# recorded unresolved rather than guessed at the first hyphen.
+_MCP_HYPHEN_SERVERS = ("cursor-app-control",)
+
+
+# The text projection is bounded at TRUNCATE_TOOL_RESULT, so the structured form is
+# bounded too: without it a large result would enter through the JSON column the text
+# column refuses. The limit is generous relative to the data -- real structured results
+# have a median of 780 bytes and only 4 of 12,867 exceed 64 KB -- so the bound rejects
+# an outlier rather than truncating ordinary output into invalid JSON.
+MAX_OUTPUT_JSON_BYTES = 65536
+
+
+def _bounded_output_json(value: object) -> str | None:
+    """Structured tool output as JSON, or None when it exceeds the retained bound.
+
+    Truncating JSON would produce a value that is no longer JSON, so an oversized
+    result is omitted rather than cut; the text projection still records it.
+    """
+    encoded = structured_json(value)
+    if encoded is None:
+        return None
+    if len(encoded.encode("utf-8")) > MAX_OUTPUT_JSON_BYTES:
+        return None
+    return encoded
+
+
+def _tool_namespace(tool_name: object) -> str | None:
+    """The server an MCP tool belongs to, where the name marks it unambiguously.
+
+    Claude and Codex spell these `mcp__<server>__<tool>` and Cursor also emits
+    `mcp_<Server>_<tool>`; in both the separator delimits the server, so it is read
+    rather than inferred.
+
+    **Cursor's hyphen spelling needs a declared server**, because single hyphens run
+    through both halves of `mcp-cursor-app-control-move_agent_to_root` and nothing in
+    the record marks the boundary -- no field states the server, and splitting on the
+    first hyphen would record `cursor`. `cursor-app-control` is Cursor's own built-in
+    server and prefixes 208 of the 210 hyphen-form calls observed, so it is matched by
+    name rather than parsed. A server absent from that list stays unresolved.
+
+    A built-in tool has no namespace either way: it belongs to the harness, not to a
+    server.
+    """
+    if not isinstance(tool_name, str):
+        return None
+    lowered = tool_name.lower()
+    for server in _MCP_HYPHEN_SERVERS:
+        if lowered.startswith(f"mcp-{server}-"):
+            return server
+    for separator in ("__", "_"):
+        if not lowered.startswith("mcp" + separator):
+            continue
+        parts = tool_name.split(separator)
+        # `mcp`, server, tool: fewer means the name states no server, and an empty
+        # middle part is the degenerate `mcp__` form.
+        if len(parts) >= 3 and parts[1].strip():
+            return parts[1].strip()
+        return None
+    return None
+
+
+def _resolve_parent_events(events: list[dict[str, Any]]) -> None:
+    """Fill `parent_event_id` where a vendor names the parent record.
+
+    Vendors state the link by their own record identifier -- Claude's `parent_uuid`
+    against `record_uuid` -- while the column holds the Event id. Resolution needs the
+    whole Session, because a parent may be decoded after its child, so it happens here
+    rather than in a streaming adapter.
+
+    A parent naming a record that produced no Event stays null: the record was skipped
+    or lies outside the Session, and asserting a link to an Event that does not exist
+    would be worse than recording none.
+    """
+    by_record: dict[str, str] = {}
+    for event in events:
+        metadata = _json_dict(event.get("metadata"))
+        record_uuid = metadata.get("record_uuid")
+        if record_uuid and event.get("event_id") is not None:
+            by_record[str(record_uuid)] = str(event["event_id"])
+    if not by_record:
+        return
+    for event in events:
+        if event.get("parent_event_id"):
+            continue
+        parent = _json_dict(event.get("metadata")).get("parent_uuid")
+        if parent:
+            resolved = by_record.get(str(parent))
+            if resolved is not None:
+                event["parent_event_id"] = resolved
+
+
 def _prepare_event_groups(
     conn: sqlite3.Connection,
     session_id: str,
     events: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     prepared: list[dict[str, Any]] = []
+    _resolve_parent_events(events)
     session_row = conn.execute(
         "SELECT source,session_model_param_id FROM sessions WHERE id=?",
         (session_id,),

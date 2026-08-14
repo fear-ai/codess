@@ -96,13 +96,11 @@ def test_processing_run_persists_accepted_and_rejected_derivations(tmp_path):
         )
         actions = [
             {
-                "accepted": True, "input_sha256": "a" * 64,
-                "output_sha256": "b" * 64, "original_length": 8,
+                "accepted": True, "original_length": 8,
                 "output_length": 6, "actions": ["privacy_masked"],
             },
             {
-                "accepted": False, "input_sha256": "c" * 64,
-                "output_sha256": None, "original_length": 10,
+                "accepted": False, "original_length": 10,
                 "output_length": 0, "actions": ["suppressed"],
                 "reason": "suppressed_pattern",
             },
@@ -113,9 +111,12 @@ def test_processing_run_persists_accepted_and_rejected_derivations(tmp_path):
         conn.commit()
         assert conn.execute("SELECT COUNT(*) FROM processing_runs").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM content_derivations").fetchone()[0] == 2
+        # A derivation records which actions ran and why one was rejected. It does
+        # not name the processed text: identifying it meant hashing every input and
+        # output, and nothing ever compared the result.
         assert conn.execute(
-            "SELECT COUNT(*) FROM content_derivations WHERE output_content_id IS NULL"
-        ).fetchone()[0] == 1
+            "SELECT rejection_reason FROM content_derivations WHERE sequence_no=2"
+        ).fetchone()[0] == "suppressed_pattern"
     finally:
         conn.close()
 

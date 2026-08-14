@@ -25,7 +25,7 @@ import sqlite3
 from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 
-from codess.identity import global_session_id
+from codess.identity import session_entity_id
 from codess.schema_contract import column_names, table_names
 
 SUPPORTED_AUDIT_SUBTYPES = (
@@ -457,9 +457,9 @@ def selected_sessions(
 ) -> list[dict[str, Any]]:
     """Sessions across the selected stores, globally ordered by recency.
 
-    `global_id` and `project_id` are projected as literals when a store
+    `entity_id` and `project_id` are projected as literals when a store
     predates the column, so an older store reports an absent identity rather
-    than failing to open. A Session with no stored `global_id` has one derived
+    than failing to open. A Session with no stored `entity_id` has one derived
     from its source system and vendor identifier, which is the same
     construction the store would have written -- the identity is a property of
     the Session, not of when the store was created.
@@ -472,7 +472,7 @@ def selected_sessions(
         conn = store["conn"]
         columns = column_names(conn, "sessions")
         global_projection = (
-            "global_id," if "global_id" in columns else "NULL AS global_id,"
+            "entity_id," if "entity_id" in columns else "NULL AS entity_id,"
         )
         project_projection = (
             "project_id," if "project_id" in columns else "NULL AS project_id,"
@@ -488,12 +488,12 @@ def selected_sessions(
             """,
             params,
         ):
-            stable_id = row["global_id"] or global_session_id(
+            stable_id = row["entity_id"] or session_entity_id(
                 row["source_system_id"], row["vendor_session_id"] or row["id"],
             )
             sessions.append({
                 "id": row["id"],
-                "global_id": stable_id,
+                "entity_id": stable_id,
                 "project_id": row["project_id"] or store.get("project_id"),
                 "query_id": (store_index, row["id"]),
                 "source": row["source"],

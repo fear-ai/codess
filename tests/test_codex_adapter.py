@@ -1019,3 +1019,64 @@ class TestSessionProvider:
             self.message(),
         )
         assert self.configured(events)["model_provider"] == "ollama"
+
+
+class TestDecodedOutput:
+    """Codex states a header of facts before `Output:`, in several spellings."""
+
+    def test_exit_code_spellings(self):
+        """`Process exited with code N` appears on 14,795 results and
+        `Exit code: N` on 1,319; both state the same fact."""
+        from codess.adapters.codex import _decoded_output
+
+        a = _decoded_output("Exit code: 0\nWall time: 0.1 seconds\nOutput:\ndb.out")
+        b = _decoded_output(
+            "Wall time: 0.1 seconds\nProcess exited with code 0\nOutput:\ndb.out"
+        )
+        assert a["exit_code"] == b["exit_code"] == 0
+        assert a["output"] == b["output"] == "db.out"
+
+    def test_all_fields(self):
+        from codess.adapters.codex import _decoded_output
+
+        decoded = _decoded_output(
+            "Chunk ID: 112967\nWall time: 0.1578 seconds\n"
+            "Process exited with code 0\nOriginal token count: 16\nOutput:\nx"
+        )
+        assert decoded == {
+            "chunk_id": "112967", "wall_seconds": 0.1578,
+            "exit_code": 0, "output_tokens": 16, "output": "x",
+        }
+
+    def test_script_completed(self):
+        """A script that ran to completion without a stated code is not the same
+        fact as `exit_code: 0`, so it is its own marker."""
+        from codess.adapters.codex import _decoded_output
+
+        decoded = _decoded_output("Script completed\nWall time 15.4 seconds\nOutput:\n")
+        assert decoded["script_completed"] is True
+        assert "exit_code" not in decoded
+
+    def test_envelope_and_list_transports(self):
+        """Three transports carry the same payload; one header decode serves all."""
+        import json as _json
+
+        from codess.adapters.codex import _decoded_output
+
+        body = "Exit code: 2\nWall time: 1.5 seconds\nOutput:\nboom"
+        envelope = _json.dumps({"output": body})
+        blocks = [{"type": "input_text", "text": body}]
+        for value in (body, envelope, blocks):
+            assert _decoded_output(value)["exit_code"] == 2
+
+    def test_no_header(self):
+        from codess.adapters.codex import _decoded_output
+
+        assert _decoded_output("exec command rejected by user") is None
+
+    def test_output_marker_in_body_only(self):
+        """An unrecognized line before the marker means it was body text, so
+        nothing is claimed rather than half a header."""
+        from codess.adapters.codex import _decoded_output
+
+        assert _decoded_output("here is what I found\nOutput:\nstuff") is None

@@ -42,10 +42,10 @@
     "sessionData": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["session_id", "global_session_id", "source", "release", "started_at", "ended_at", "source_project_path", "metadata"],
+      "required": ["session_id", "session_entity_id", "source", "release", "started_at", "ended_at", "source_project_path", "metadata"],
       "properties": {
         "session_id": {"type": "string"},
-        "global_session_id": {"type": "string"},
+        "session_entity_id": {"type": "string"},
         "source": {"type": "string"},
         "release": {"type": ["string", "null"]},
         "started_at": {"type": ["number", "null"]},

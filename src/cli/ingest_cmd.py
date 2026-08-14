@@ -50,7 +50,6 @@ from codess.cursor_source import (
 )
 from codess.evidence import summarize_store_evidence
 from codess.fileio import write_json_atomic
-from codess.hashing import codess_hash
 from codess.ingest_publication import (
     VENDOR_DISPLAY_NAMES,
     PublicationOutcome,
@@ -1110,11 +1109,12 @@ def _ingest_project(
             project_index=project_index + 1, project_total=project_total,
         )
         if settings["validate_only"]:
-            # A within-run label for a Project preflight never persists.
-            # 128 bits keeps the width the previous 24-hex value had
-            # headroom at, now declared rather than ad hoc (13.4.8).
-            digest = codess_hash(256, 128, [str(project_path)])
-            binding = {"project_id": f"codess:preflight-project:{digest}", "location_id": f"preflight:{digest}"}
+            # A within-run label for a Project preflight, used only in the dict
+            # built below and never persisted or recomputed. The index makes it
+            # unique within the run, which is all it has to be: hashing the path
+            # implied a stable identity the value neither has nor needs.
+            label = f"{project_index + 1}"
+            binding = {"project_id": f"codess:preflight-project:{label}", "location_id": f"preflight:{label}"}
             project_entry = {
                 "project_id": binding["project_id"], "logical_name": project_path.name,
                 "locations": [{"location_id": binding["location_id"], "machine_id": "preflight", "path": str(project_path), "state": "active", "platform": sys.platform}],

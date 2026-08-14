@@ -25,7 +25,7 @@ from codess.fileio import (
     hash_file,
     load_versioned_policy,
     open_readonly,
-    source_fingerprint,
+    read_source_revision,
     write_json_atomic,
 )
 from codess.hashing import codess_digest
@@ -50,13 +50,13 @@ REPORT_FORMAT = "codess.validation-report/1"
 
 
 _GLOBAL_IDENTITY_DUPLICATE_QUERIES = (
-    ("sources.global_id", "SELECT COUNT(*)-COUNT(DISTINCT global_id) FROM sources"),
-    ("sessions.global_id", "SELECT COUNT(*)-COUNT(DISTINCT global_id) FROM sessions"),
+    ("sources.entity_id", "SELECT COUNT(*)-COUNT(DISTINCT entity_id) FROM sources"),
+    ("sessions.entity_id", "SELECT COUNT(*)-COUNT(DISTINCT entity_id) FROM sessions"),
     (
         "sessions.observation_id",
         "SELECT COUNT(*)-COUNT(DISTINCT observation_id) FROM sessions",
     ),
-    ("events.global_id", "SELECT COUNT(*)-COUNT(DISTINCT global_id) FROM events"),
+    ("events.entity_id", "SELECT COUNT(*)-COUNT(DISTINCT entity_id) FROM events"),
 )
 
 _INVALID_JSON_QUERIES = (
@@ -198,13 +198,13 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM workspace_bindings ORDER BY id
         """,
         "sources": """
-            SELECT global_id, source_system_id, source_uri, storage_format, source_revision,
+            SELECT entity_id, source_system_id, source_path, storage_format, source_revision,
                    source_mtime, source_size, availability, capture_method,
                    consistency, content_sha256, metadata
-            FROM sources ORDER BY source_system_id, source_uri, source_revision
+            FROM sources ORDER BY source_system_id, source_path, source_revision
         """,
         "sessions": """
-            SELECT id, global_id, observation_id, source_system_id, vendor_session_id, vendor_name,
+            SELECT id, entity_id, observation_id, source_system_id, vendor_session_id, vendor_name,
                    product_name, harness_name, storage_format, surface_kind,
                    session_purpose, harness_version, source_cwd,
                    path_obsolete, started_at,
@@ -224,7 +224,7 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM model_turns ORDER BY session_id, sequence_no
         """,
         "events": """
-            SELECT global_id, session_id, event_id, sequence_no, source_record_locator,
+            SELECT entity_id, session_id, event_id, sequence_no, source_record_locator,
                    source_record_type, source_record_subtype, event_kind,
                    actor_kind, content_role, origin_kind, interaction_id,
                    model_turn_id, parent_event_id, caused_by_event_id, content,
@@ -235,11 +235,11 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM events ORDER BY session_id, sequence_no, event_id
         """,
         "source_records": """
-            SELECT r.id, s.global_id, r.source_locator, r.source_sequence,
+            SELECT r.id, s.entity_id, r.source_locator, r.source_sequence,
                    r.source_record_type, r.source_record_subtype, r.parent_locator,
                    r.record_at, r.classification, r.parameters_json
             FROM source_records r JOIN sources s ON s.id=r.source_id
-            ORDER BY s.global_id, r.source_sequence, r.source_locator
+            ORDER BY s.entity_id, r.source_sequence, r.source_locator
         """,
         "content_objects": """
             SELECT id, content_sha256, media_type, charset, byte_length,
@@ -248,10 +248,10 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM content_objects ORDER BY id
         """,
         "event_content": """
-            SELECT e.global_id, ec.content_id, ec.relation_kind, ec.sequence_no,
+            SELECT e.entity_id, ec.content_id, ec.relation_kind, ec.sequence_no,
                    ec.start_offset, ec.end_offset, ec.integrity_state
             FROM event_content ec JOIN events e ON e.id=ec.event_id
-            ORDER BY e.global_id, ec.relation_kind, ec.sequence_no
+            ORDER BY e.entity_id, ec.relation_kind, ec.sequence_no
         """,
         "source_record_content": """
             SELECT source_record_id, content_id, relation_kind, sequence_no,
@@ -278,8 +278,7 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM processing_runs ORDER BY id
         """,
         "content_derivations": """
-            SELECT processing_run_id, input_content_id, output_content_id,
-                   sequence_no, actions_json, rejection_reason
+            SELECT processing_run_id, sequence_no, actions_json, rejection_reason
             FROM content_derivations ORDER BY processing_run_id, sequence_no
         """,
         "tool_invocations": """
@@ -428,7 +427,7 @@ def _validate_store(
             for label, query in _GLOBAL_IDENTITY_DUPLICATE_QUERIES
         }
         _add_check(
-            report, f"{prefix}.global_identity",
+            report, f"{prefix}.entity_identity",
             all(value == 0 for value in identity_failures.values()),
             identity_failures,
         )
@@ -556,7 +555,7 @@ def _validate_raw(
             locator = record.get("source_locator")
             if locator and verify_reference_current:
                 try:
-                    current_revision = source_fingerprint(Path(locator))[0]
+                    current_revision = read_source_revision(Path(locator))[0]
                     matches = current_revision == record.get("source_revision_id")
                     _add_check(
                         report, f"{label}.current_reference", matches,

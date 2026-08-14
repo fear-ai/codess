@@ -438,7 +438,7 @@ def test_task_results_select_task_result_records(store):
 # --- sessions and events ----------------------------------------------------
 
 def test_a_store_without_the_identity_columns_still_reports_sessions(tmp_path):
-    """Older stores predate `global_id` and `project_id`; both are projected.
+    """Older stores predate `entity_id` and `project_id`; both are projected.
 
     The columns are NOT NULL where they exist, so a Session cannot be stored
     without an identity -- the fallback covers a store whose schema lacks the
@@ -450,10 +450,10 @@ def test_a_store_without_the_identity_columns_still_reports_sessions(tmp_path):
         add_session(conn, "s1")
         conn.commit()
         columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
-        assert {"global_id", "project_id"} <= columns
+        assert {"entity_id", "project_id"} <= columns
         scope = Scope([{"conn": conn, "path": path, "project_path": tmp_path}])
         [session] = selected_sessions(scope, lambda row: row["id"])
-        assert session["global_id"].startswith("codess:session:")
+        assert session["entity_id"].startswith("codess:session:")
     finally:
         conn.close()
 

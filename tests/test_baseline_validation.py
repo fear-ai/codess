@@ -12,7 +12,7 @@ from codess.baseline_validation import (
     semantic_digest,
     validate_project,
 )
-from codess.fileio import source_fingerprint
+from codess.fileio import read_source_revision
 from codess.raw_store import RawStore
 from codess.snapshot import create_snapshot, current_stores
 from codess.store import connect, init_db, replace_session_events
@@ -359,7 +359,7 @@ def test_reference_validation_rejects_legacy_md5_revision(tmp_path):
 def test_reference_validation_keeps_sha256_mismatch_fatal(tmp_path):
     source = tmp_path / "current.jsonl"
     source.write_text('{"current":true}\n', encoding="utf-8")
-    current_revision = source_fingerprint(source)[0]
+    current_revision = read_source_revision(source)[0]
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     (snapshot / "raw-manifest.jsonl").write_text(

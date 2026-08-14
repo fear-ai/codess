@@ -42,7 +42,7 @@ questions. Conflating them would force a rebuild whenever any one changed:
 | `package_digest` | The exact released package -- DDL, contracts, mapping profiles, fixtures | Something in the package changed; see 13.4.4 for why fixtures should not be included |
 | `DECODER_VERSION` (0.2) | How vendor records are interpreted into common Events | The same source would now decode differently, so existing rows are not comparable to new ones |
 | `VALIDATOR_VERSION` (0.2) | What is accepted, rejected, or diagnosed | The same records would now be admitted or refused differently |
-| `IDENTITY_FORMAT` (`codess.id/1`) | How entity identities are derived | Every `global_id` changes; nothing resolves across the boundary |
+| `IDENTITY_FORMAT` (`codess.id/1`) | How entity identities are derived | Every `entity_id` changes; nothing resolves across the boundary |
 | Software version (`created_by`) | Which Codess release wrote the store | Recorded as provenance only; never gates anything |
 
 Every store records all of them in `store_meta` at creation. That record is
@@ -60,7 +60,7 @@ qualifies:
 | `DECODER_VERSION` | `processing_contract.py` | `store_meta.decoder_version` | `require_store` (writes), plus the manifest and every mapping profile at load |
 | `VALIDATOR_VERSION` | `processing_contract.py` | `store_meta.validator_version` | `require_store` (writes), plus the manifest |
 | Software version | `codess/__init__.py` | `store_meta.created_by` | Nothing; provenance only |
-| `IDENTITY_FORMAT` | `identity.py` | Hashed into every `global_id`, but not visible in it | Not recorded and not checked; see below |
+| `IDENTITY_FORMAT` | `identity.py` | Hashed into every `entity_id`, but not visible in it | Not recorded and not checked; see below |
 
 `IDENTITY_FORMAT` is the gap. It is fed into the digest, so changing it
 changes every derived identity, but it appears nowhere in the resulting
@@ -191,14 +191,14 @@ reverse, and never from a value stored in the row being identified:
 
 ```mermaid
 flowchart TD
-    SS["source system namespace"] --> SES["session global_id"]
+    SS["source system namespace"] --> SES["session entity_id"]
     VS["vendor session id"] --> SES
     SS --> REV["source revision id"]
     URI["source URI"] --> REV
     FP["content fingerprint"] --> REV
     REV --> REC["source record id"]
     LOC["record locator"] --> REC
-    SES --> EV["event global_id"]
+    SES --> EV["event entity_id"]
     VE["vendor event id"] --> EV
     SES --> OBS["observation_id"]
     REV --> OBS
@@ -239,12 +239,12 @@ question. Four classes exist, and the prefix names the class:
 | `observation_id` | `codess:observation:sha256:<64 hex>` | One extraction of one entity | Which act of observing produced this row |
 | `vendor_`/`source_` value | Exact upstream text | The vendor's own namespace | What did the source system call it |
 
-**`global_` designates independence from storage.** A `global_id` is
+**`global_` designates independence from storage.** A `entity_id` is
 derived only from upstream evidence -- a source-system namespace plus
 vendor-supplied identifiers -- never from a row number, file path, insertion
 order, or the database that happens to hold it. Two consequences follow, and
 they are the reason the field exists at all. The same Session ingested into
-two Project stores receives the same `global_id`, so a cross-store query can
+two Project stores receives the same `entity_id`, so a cross-store query can
 merge results without a join key that only one store knows. And rebuilding a
 store from vendor sources reproduces the same values, so a saved query
 result still resolves after a regeneration.
@@ -252,12 +252,12 @@ result still resolves after a regeneration.
 Row keys cannot do this: an integer `id` is meaningful only inside one file
 and changes on rebuild. This is the specific justification for maintaining
 identity fields in addition to what SQLite and the runtime provide -- a
-`global_id` is not a duplicate primary key but the only value that survives
+`entity_id` is not a duplicate primary key but the only value that survives
 crossing a store boundary or a rebuild. Identifiers without that
 justification should not be added; every one below states which of the four
 questions it answers.
 
-`global_id` values are always the full 32-byte digest. They are qualified by
+`entity_id` values are always the full 32-byte digest. They are qualified by
 a format tag and entity kind and are compared and stored, never truncated.
 
 The current form embeds the digest algorithm, as
@@ -275,7 +275,7 @@ rewritten, since any change to them alters documents already written.
 
 **`observation_id` separates the entity from its observation.** One logical
 Session can be seen through several Source revisions, and the same entity
-can be extracted into different Projects. `global_id` stays equal across all
+can be extracted into different Projects. `entity_id` stays equal across all
 of those, which is what makes it useful; `observation_id` distinguishes
 them, binding a row additionally to its Project and Source revision. Query
 results carry an observation identity so a reader can tell which extraction

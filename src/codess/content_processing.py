@@ -14,7 +14,6 @@ import unicodedata
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from codess.hashing import codess_text_hash
 from codess.sanitize import apply_sanitization, sanitize_text
 
 
@@ -250,7 +249,6 @@ def apply_processing(
     result = method(value, context)
     actions = opts.get("content_actions")
     if actions is not None:
-        input_text = str(value)
         output_text = result.content
         actions.append({
             "phase": phase,
@@ -262,11 +260,6 @@ def apply_processing(
             "actions": list(result.actions),
             "original_length": result.original_length,
             "output_length": len(output_text),
-            "input_sha256": codess_text_hash(256, 256, input_text),
-            "output_sha256": (
-                codess_text_hash(256, 256, output_text)
-                if result.accepted else None
-            ),
         })
     if not result.accepted:
         diagnostics = opts.get("diagnostics")

@@ -237,7 +237,7 @@ def test_record_raw_writes_source_availability_into_the_store(tmp_path):
         conn.execute(
             """
             INSERT INTO sources(
-              global_id, source_system_id, source_uri, storage_format,
+              entity_id, source_system_id, source_path, storage_format,
               source_revision, observed_at, ingested_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
@@ -248,7 +248,7 @@ def test_record_raw_writes_source_availability_into_the_store(tmp_path):
             ),
         )
         opts = decoder_options(raw_store=RawStore(tmp_path / "raw"))
-        _record_raw(opts, source, "Claude", conn, source_uri=str(source))
+        _record_raw(opts, source, "Claude", conn, source_path=str(source))
         conn.commit()
         availability, method = conn.execute(
             "SELECT availability, capture_method FROM sources"

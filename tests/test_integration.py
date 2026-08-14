@@ -667,8 +667,8 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(durable_tmp_p
             ])
         with sqlite3.connect(project / ".codess" / "sessions_cursor.db") as conn:
             source_rows.append(conn.execute(
-                "SELECT source_uri, source_revision, capture_method, consistency "
-                "FROM sources WHERE source_uri=?",
+                "SELECT source_path, source_revision, capture_method, consistency "
+                "FROM sources WHERE source_path=?",
                 (str(global_db.resolve()),),
             ).fetchone())
     global_records = [

@@ -28,9 +28,9 @@ def build_investigation(
     if not isinstance(processor_id, str) or not processor_id.strip():
         raise QueryContractError("investigation processor_id must be non-empty")
     by_event = {
-        str(row["global_event_id"]): row
+        str(row["event_entity_id"]): row
         for row in result.get("rows") or []
-        if row.get("global_event_id")
+        if row.get("event_entity_id")
     }
     requested = sorted({str(value) for value in event_ids if value})
     if requested:
@@ -50,9 +50,9 @@ def build_investigation(
     citations = []
     for row in selected:
         citations.append({
-            "global_event_id": row["global_event_id"],
+            "event_entity_id": row["event_entity_id"],
             "observation_id": row.get("observation_id"),
-            "global_session_id": row.get("global_session_id"),
+            "session_entity_id": row.get("session_entity_id"),
             "project_id": row.get("project_id"),
             "snapshot_id": row.get("snapshot_id"),
             "source_system_id": row.get("source_system_id"),

@@ -4,6 +4,13 @@
   "purpose": "Single-vendor column gaps that are accepted, each with the evidence for accepting it. tools/field_coverage.py --fail-on-gap fails on any gap absent from this list. An entry belongs here only when the source has been checked and shown not to carry the value, or when the null is a property of the sample rather than the decoder. A gap that is merely unexamined does not belong here: it fails the check until someone looks.",
   "accepted": [
     {
+      "column": "events.parent_event_id",
+      "empty_for": "codex, cursor",
+      "reason": "Checked. Only Claude states a per-Event parent: every record carries parent_uuid against record_uuid, and 30,197 Events resolve to a parent in the same Session. Sampling 22,342 Codex and 18,022 Cursor Events found no parent or uuid key in metadata at all, so neither vendor names one. Session-level lineage is separate and lives in sessions.parent_session_id.",
+      "evidence": "metadata key sweep over both vendors' Events: zero parent/uuid keys; Claude parent_uuid resolves for 30,197 of 42,138",
+      "work_item": null
+    },
+    {
       "column": "sessions.session_model_param_id",
       "empty_for": "claude",
       "reason": "Checked. Claude states the model per assistant record rather than once for the Session, so there is no session-level statement to record: 0 of 374 Claude Sessions. Codex names one in session_meta and Cursor in composerData.modelConfig, which is why both populate it. The per-turn evidence is in model_turns.",

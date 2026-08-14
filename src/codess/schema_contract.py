@@ -290,7 +290,7 @@ def column_names(conn: sqlite3.Connection, table: str) -> set[str]:
     """Which columns one table has.
 
     Readers project a literal in place of a column an older store predates --
-    `NULL AS global_id` rather than a failing query -- and each asked SQLite
+    `NULL AS entity_id` rather than a failing query -- and each asked SQLite
     for the column list itself. The identifier is quoted because it cannot be
     a bound parameter; callers pass a table name from the schema, not input.
     """

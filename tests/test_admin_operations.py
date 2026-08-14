@@ -156,13 +156,13 @@ def test_session_names_resolve_prefix_without_replacing_identity(tmp_path):
 
     named = set_session_name(registry, project_id, "s1", "slash_model")
     assert named["name"] == "slash_model"
-    assert named["global_session_id"].startswith("codess:session:")
+    assert named["session_entity_id"].startswith("codess:session:")
     assert alias_index(registry)[
-        (project_id, named["global_session_id"])
+        (project_id, named["session_entity_id"])
     ] == "slash_model"
 
     removed = remove_session_name(registry, project_id, "s1")
-    assert removed["global_session_id"] == named["global_session_id"]
+    assert removed["session_entity_id"] == named["session_entity_id"]
     assert alias_index(registry) == {}
 
 
@@ -178,7 +178,7 @@ def test_session_name_registry_rejects_session_id_as_the_mapping_field(
             "source": "user_alias",
         }],
     })
-    with pytest.raises(ValueError, match="global_session_id"):
+    with pytest.raises(ValueError, match="session_entity_id"):
         alias_index(tmp_path)
 
 

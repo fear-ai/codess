@@ -210,3 +210,91 @@ def test_a_restored_stat_reads_as_stable(tmp_path):
     before = _stat_for(path, b"aaaaa", 1_000_000_000)
     after = _stat_for(path, b"bbbbb", 1_000_000_000)
     assert stat_consistency(before, after) == "stable"
+
+
+class TestFileState:
+    """One shared answer to "has this file changed since we read it"."""
+
+    def test_unchanged(self, tmp_path):
+        from codess.fileio import file_state, file_unchanged
+
+        path = tmp_path / "x"
+        path.write_text("hello")
+        assert file_unchanged(path, file_state(path))
+
+    def test_edited(self, tmp_path):
+        from codess.fileio import file_state, file_unchanged
+
+        path = tmp_path / "x"
+        path.write_text("hello")
+        state = file_state(path)
+        path.write_text("hello world")
+        assert not file_unchanged(path, state)
+
+    def test_replacement_with_matching_size_and_mtime(self, tmp_path):
+        """Size and mtime alone miss a file replaced by rename: the replacement
+        can carry the same length and a copied timestamp. The inode catches it."""
+        import os
+
+        from codess.fileio import file_state, file_unchanged
+
+        path = tmp_path / "x"
+        path.write_text("AAAAA")
+        state = file_state(path)
+        other = tmp_path / "y"
+        other.write_text("BBBBB")
+        os.utime(other, ns=(state["mtime_ns"], state["mtime_ns"]))
+        other.replace(path)
+        current = file_state(path)
+        assert current["size"] == state["size"]
+        assert current["mtime_ns"] == state["mtime_ns"]
+        assert not file_unchanged(path, state)
+
+    def test_missing_reads_as_changed(self, tmp_path):
+        """A first observation and a vanished file both read as changed, which is
+        the safe direction: the caller re-reads rather than trusting a comparison
+        it could not make."""
+        from codess.fileio import file_state, file_unchanged
+
+        path = tmp_path / "x"
+        path.write_text("hello")
+        assert file_state(tmp_path / "absent") is None
+        assert not file_unchanged(tmp_path / "absent", file_state(path))
+        assert not file_unchanged(path, None)
+
+    def test_changes_names_the_field(self, tmp_path):
+        """A boolean says a file changed; this says how. "size 5 to 10" and
+        "same size, new inode" are different findings, and a hash comparison
+        flattens both to "differs"."""
+        from codess.fileio import file_changes, file_state
+
+        path = tmp_path / "x"
+        path.write_text("AAAAA")
+        state = file_state(path)
+        assert file_changes(path, state) is None
+        path.write_text("AAAAAAAAAA")
+        assert file_changes(path, state)["size"] == (5, 10)
+
+    def test_changes_isolates_a_replacement(self, tmp_path):
+        from codess.fileio import file_changes, file_state
+
+        path = tmp_path / "x"
+        path.write_text("AAAAA")
+        state = file_state(path)
+        other = tmp_path / "y"
+        other.write_text("BBBBB")
+        import os
+
+        os.utime(other, ns=(state["mtime_ns"], state["mtime_ns"]))
+        other.replace(path)
+        assert list(file_changes(path, state)) == ["inode"]
+
+    def test_changes_unknown(self, tmp_path):
+        """An unreadable or unrecorded file is neither unchanged nor an
+        attributable difference."""
+        from codess.fileio import file_changes, file_state
+
+        path = tmp_path / "x"
+        path.write_text("x")
+        assert file_changes(path, None) == {}
+        assert file_changes(tmp_path / "absent", file_state(path)) == {}

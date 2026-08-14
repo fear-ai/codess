@@ -21,42 +21,48 @@ def _qualified(kind: str, *components: object) -> str:
     return f"codess:{kind}:sha256:{digest.hexdigest()}"
 
 
-def global_session_id(source_system_id: str, vendor_session_id: str) -> str:
+def session_entity_id(source_system_id: str, vendor_session_id: str) -> str:
     """Identify one vendor session independently of a DB or local path."""
     if not source_system_id or not vendor_session_id:
-        raise ValueError("global session identity requires source system and vendor ID")
+        raise ValueError("session entity identity requires source system and vendor ID")
     return _qualified("session", source_system_id, vendor_session_id)
 
 
-def global_event_id(session_id: str, vendor_event_id: str) -> str:
+def event_entity_id(session_id: str, vendor_event_id: str) -> str:
     """Identify one event within a globally qualified session."""
     if not session_id or not vendor_event_id:
-        raise ValueError("global event identity requires session and event IDs")
+        raise ValueError("event entity identity requires session and event IDs")
     return _qualified("event", session_id, vendor_event_id)
 
 
-def global_source_revision_id(
-    source_system_id: str, source_uri: str, source_revision: str
+def source_revision_entity_id(
+    source_system_id: str, source_path: str, source_revision: str
 ) -> str:
     """Identify one immutable observation of an upstream source."""
-    return _qualified("source-revision", source_system_id, source_uri, source_revision)
+    return _qualified("source-revision", source_system_id, source_path, source_revision)
 
 
-def global_source_record_id(source_revision_id: str, source_locator: str) -> str:
+def source_record_entity_id(source_revision_id: str, source_locator: str) -> str:
     """Identify one record position within an observed source revision."""
     return _qualified("source-record", source_revision_id, source_locator)
 
 
 def source_observation_id(
-    global_entity_id: str,
+    observed_entity_id: str,
     source_system_id: str,
-    source_uri: str,
+    source_path: str,
     source_revision: str,
     project_id: str | None = None,
 ) -> str:
-    """Identify one extraction observation of a logical entity."""
+    """Identify one extraction observation of a logical entity.
+
+    `observed_entity_id` is the `entity_id` of whatever was observed -- a Session, an
+    Event -- so the observation is named for the entity plus where and when it was
+    read. Qualified because a bare `entity_id` here would read as this function's own
+    return value rather than its input.
+    """
     return _qualified(
-        "observation", global_entity_id, source_system_id, source_uri,
+        "observation", observed_entity_id, source_system_id, source_path,
         source_revision, project_id or "",
     )
 

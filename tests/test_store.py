@@ -298,7 +298,7 @@ class TestInitDb:
             },
         )
         row = conn.execute(
-            "SELECT source_uri, source_revision, source_size, availability, "
+            "SELECT source_path, source_revision, source_size, availability, "
             "capture_method, consistency FROM sources WHERE id=?",
             (source_id,),
         ).fetchone()
@@ -529,7 +529,7 @@ class TestSharedStoreReads:
         conn = connect(db)
         try:
             columns = column_names(conn, "sessions")
-            assert {"id", "global_id", "project_id"} <= columns
+            assert {"id", "entity_id", "project_id"} <= columns
         finally:
             conn.close()
 
@@ -764,3 +764,125 @@ def test_harness_name_carries_no_surface():
         harness = profile["harness_name"]
         for surface in ("cli", "ide", "desktop", "api", "tui"):
             assert not harness.endswith(f"-{surface}"), f"{key}: {harness}"
+
+
+class TestParentEventResolution:
+    """A vendor names the parent by its own record id; the column holds the Event id."""
+
+    def events(self, *pairs):
+        out = []
+        for event_id, record_uuid, parent_uuid in pairs:
+            metadata = {}
+            if record_uuid:
+                metadata["record_uuid"] = record_uuid
+            if parent_uuid:
+                metadata["parent_uuid"] = parent_uuid
+            out.append({
+                "event_id": event_id,
+                "metadata": json.dumps(metadata) if metadata else None,
+            })
+        return out
+
+    def test_resolves(self):
+        from codess.store import _resolve_parent_events
+
+        events = self.events(("1", "aaa", None), ("2", "bbb", "aaa"))
+        _resolve_parent_events(events)
+        assert events[0].get("parent_event_id") is None
+        assert events[1]["parent_event_id"] == "1"
+
+    def test_parent_decoded_later(self):
+        """A parent may be decoded after its child, which is why resolution needs
+        the whole Session rather than a streaming pass."""
+        from codess.store import _resolve_parent_events
+
+        events = self.events(("1", "aaa", "bbb"), ("2", "bbb", None))
+        _resolve_parent_events(events)
+        assert events[0]["parent_event_id"] == "2"
+
+    def test_unresolvable_stays_null(self):
+        """A parent naming a record that produced no Event is left null rather than
+        asserting a link to an Event that does not exist."""
+        from codess.store import _resolve_parent_events
+
+        events = self.events(("1", "aaa", "missing"))
+        _resolve_parent_events(events)
+        assert events[0].get("parent_event_id") is None
+
+    def test_existing_value_wins(self):
+        from codess.store import _resolve_parent_events
+
+        events = self.events(("1", "aaa", None), ("2", "bbb", "aaa"))
+        events[1]["parent_event_id"] = "stated"
+        _resolve_parent_events(events)
+        assert events[1]["parent_event_id"] == "stated"
+
+
+class TestToolNamespace:
+    """MCP tool names state their server; built-in names have none."""
+
+    def test_server(self):
+        from codess.store import _tool_namespace
+
+        assert _tool_namespace("mcp__visualize__show_widget") == "visualize"
+        assert _tool_namespace("mcp__codex_apps__github_search") == "codex_apps"
+
+    def test_builtin_has_none(self):
+        """A built-in tool belongs to the harness, not a server; inventing a
+        namespace would make the column answer a question nobody asked."""
+        from codess.store import _tool_namespace
+
+        assert _tool_namespace("Bash") is None
+        assert _tool_namespace("read_file_v2") is None
+
+    def test_cursor_underscore_form(self):
+        from codess.store import _tool_namespace
+
+        assert _tool_namespace("mcp_Notion_search") == "Notion"
+
+    def test_cursor_hyphen_form_needs_a_declared_server(self):
+        """Single hyphens run through both halves of the name and no field states
+        the server, so the boundary comes from a declared list. Splitting on the
+        first hyphen would record `cursor`."""
+        from codess.store import _tool_namespace
+
+        assert _tool_namespace(
+            "mcp-cursor-app-control-open_resource"
+        ) == "cursor-app-control"
+
+    def test_undeclared_hyphen_server_is_unresolved(self):
+        from codess.store import _tool_namespace
+
+        assert _tool_namespace("mcp-unknown-server-tool") is None
+
+    def test_malformed(self):
+        from codess.store import _tool_namespace
+
+        assert _tool_namespace("mcp__only") is None
+        assert _tool_namespace("mcp____tool") is None
+        assert _tool_namespace("mcp--") is None
+        assert _tool_namespace(None) is None
+        assert _tool_namespace(42) is None
+
+
+class TestBoundedOutputJson:
+    """Structured tool output is retained, but not past the text column's bound."""
+
+    def test_structure(self):
+        from codess.store import _bounded_output_json
+
+        assert json.loads(_bounded_output_json({"stdout": "x", "stderr": ""})) == {
+            "stdout": "x", "stderr": "",
+        }
+
+    def test_absent(self):
+        from codess.store import _bounded_output_json
+
+        assert _bounded_output_json(None) is None
+
+    def test_oversized_is_omitted(self):
+        """Truncating JSON yields a value that is no longer JSON, so an oversized
+        result is omitted rather than cut; the text projection still records it."""
+        from codess.store import MAX_OUTPUT_JSON_BYTES, _bounded_output_json
+
+        assert _bounded_output_json({"x": "y" * (MAX_OUTPUT_JSON_BYTES + 10)}) is None

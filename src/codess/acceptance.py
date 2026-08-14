@@ -19,7 +19,7 @@ from codess.schema_contract import require_store
 
 # Fields whose per-row divergence blocks promotion (identity / ordering / lineage).
 CRITICAL_FIELDS = frozenset({
-    "global_id", "observation_id", "event_id", "session_id",
+    "entity_id", "observation_id", "event_id", "session_id",
     "sequence_no", "interaction_id", "model_turn_id",
     "parent_event_id", "caused_by_event_id", "source_call_id",
     "row_identity",
@@ -150,7 +150,7 @@ def compare_snapshot_rows(
                         "row": index,
                     }
                     # Missing rows are an identity vacancy even in tables
-                    # without a column literally named global_id.
+                    # without a column literally named entity_id.
                     old_identity = (
                         f"{store_name}:{table}:{index}" if old else None
                     )

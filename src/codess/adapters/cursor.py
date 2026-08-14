@@ -452,6 +452,28 @@ def _process_composer(
     request_contexts.clear()
 
 
+def _parsed_result(value: object) -> object | None:
+    """Cursor's tool result as structure, where the vendor serialized structure.
+
+    The result arrives as a string; where that string is a JSON object or array it is
+    the vendor's own encoding of a structured result, so it is parsed on the same terms
+    as `rawArgs`. A plain string result stays text: quoting it as JSON would assert a
+    structure the vendor did not record.
+    """
+    if isinstance(value, (dict, list)):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if text[:1] not in "{[":
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, (dict, list)) else None
+
+
 def _bubble_to_events(
     composer_id: str,
     bubble_id: str,
@@ -779,6 +801,11 @@ def _bubble_to_events(
                             result["event_id"] = f"{event_id}:tool-result"
                             result["tool_name"] = str(tool_name or "unknown")
                             result["tool_output"] = result_text
+                            # Cursor serializes both its arguments and its results as
+                            # JSON strings; `rawArgs` is already parsed into
+                            # `tool_input`, so the result is parsed on the same terms.
+                            # The text projection is bounded and keeps the whole value.
+                            result["tool_output_structured"] = _parsed_result(result_value)
                             result["metadata"] = metadata
                             result["source_status"] = status
                             result["normalized_status"] = normalized

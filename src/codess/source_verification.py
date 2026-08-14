@@ -1,4 +1,11 @@
-"""Resolve a normalized event to exact, explicitly qualified source evidence."""
+"""Locate an Event's original bytes and report whether they still match.
+
+Named for what it answers rather than for the step it performs. Given an Event, it
+reports every place the source can still be read -- the sealed snapshot, a raw capture,
+the live vendor file -- and for each, whether the bytes are still the ones the store was
+built from. "Resolver" described the mechanism and left the question implicit; the
+question is whether a citation still stands.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from codess.config import MANIFEST_FILE, RAW_MANIFEST_FILE
-from codess.fileio import hash_file, source_fingerprint
+from codess.fileio import hash_file, read_source_revision
 from codess.raw_store import RawCaptureError, verify_raw
 
-EVIDENCE_FORMAT = "codess.evidence-resolution/1"
+VERIFICATION_FORMAT = "codess.source-verification/1"
 
 
 def _snapshot_root(store_path: Path) -> Path | None:
@@ -59,19 +66,19 @@ def _locate_raw_object(snapshot: Path, relpath: str) -> tuple[Path | None, str]:
     return None, "captured"
 
 
-def resolve_event(store: dict[str, Any], event_identifier: str) -> dict[str, Any]:
-    """Resolve by stable global event ID or unambiguous local event ID."""
+def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[str, Any]:
+    """Resolve by stable event entity ID or unambiguous local event ID."""
     conn = store["conn"]
     matches = conn.execute("""
-        SELECT e.global_id,e.event_id,e.session_id,e.source_record_locator,
-               e.source_record_type,e.source_file,s.global_id AS global_session_id,
-               src.id AS source_id,src.source_system_id,src.source_uri,
+        SELECT e.entity_id,e.event_id,e.session_id,e.source_record_locator,
+               e.source_record_type,e.source_file,s.entity_id AS session_entity_id,
+               src.id AS source_id,src.source_system_id,src.source_path,
                src.source_revision,src.source_mtime,src.source_size,
                src.availability,src.capture_method,
                src.consistency,src.content_sha256
         FROM events e JOIN sessions s ON s.id=e.session_id
         LEFT JOIN sources src ON src.id=e.source_id
-        WHERE e.global_id=? OR e.event_id=?
+        WHERE e.entity_id=? OR e.event_id=?
     """, (event_identifier, event_identifier)).fetchall()
     if not matches:
         raise LookupError(f"event {event_identifier!r} was not found")
@@ -89,11 +96,11 @@ def resolve_event(store: dict[str, Any], event_identifier: str) -> dict[str, Any
         """, (row["source_id"], row["source_record_locator"])).fetchone()
         if found:
             source_record = dict(found)
-    source_uri = row["source_uri"] or row["source_file"]
+    source_path = row["source_path"] or row["source_file"]
     candidates: list[dict[str, Any]] = []
     snapshot = _snapshot_root(Path(store["path"]))
     for record in _raw_records(snapshot):
-        if source_uri and record.get("source_locator") != source_uri:
+        if source_path and record.get("source_locator") != source_path:
             continue
         relpath = record.get("object_relpath")
         object_path, object_kind = (
@@ -124,8 +131,8 @@ def resolve_event(store: dict[str, Any], event_identifier: str) -> dict[str, Any
                 candidate["equality"] = "verification_failed"
                 candidate["error"] = str(exc)
         candidates.append(candidate)
-    if source_uri:
-        live_path = Path(source_uri)
+    if source_path:
+        live_path = Path(source_path)
         live = {
             "kind": "live", "location": str(live_path),
             "available": live_path.is_file(), "equality": "unavailable",
@@ -155,7 +162,7 @@ def resolve_event(store: dict[str, Any], event_identifier: str) -> dict[str, Any
                     })
             else:
                 revision, _mtime, _size, method, consistency = (
-                    source_fingerprint(live_path)
+                    read_source_revision(live_path)
                 )
                 live.update({
                     "revision": revision,
@@ -181,15 +188,15 @@ def resolve_event(store: dict[str, Any], event_identifier: str) -> dict[str, Any
     if any(candidate["equality"] == "mismatch" for candidate in candidates):
         limitations.append("one or more available candidates belongs to a different revision")
     return {
-        "format": EVIDENCE_FORMAT,
+        "format": VERIFICATION_FORMAT,
         "event": {
-            "global_event_id": row["global_id"], "event_id": row["event_id"],
-            "global_session_id": row["global_session_id"], "session_id": row["session_id"],
+            "event_entity_id": row["entity_id"], "event_id": row["event_id"],
+            "session_entity_id": row["session_entity_id"], "session_id": row["session_id"],
             "source_record_locator": row["source_record_locator"],
             "source_record_type": row["source_record_type"],
         },
         "source": {
-            "source_system_id": row["source_system_id"], "source_uri": source_uri,
+            "source_system_id": row["source_system_id"], "source_path": source_path,
             "source_revision": row["source_revision"],
             "source_mtime": row["source_mtime"], "source_size": row["source_size"],
             "availability": row["availability"],

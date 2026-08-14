@@ -10,7 +10,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from codess.hashing import codess_text_hash
 from codess.resources import ResourceLimitError
 
 
@@ -102,7 +101,6 @@ def record_ingest_review(
     path = Path(source_text).expanduser()
     observation: dict[str, Any] = {
         "source_suffix": path.suffix.lower() or None,
-        "source_locator_sha256": codess_text_hash(256, 256, source_text),
     }
     try:
         stat = path.stat()

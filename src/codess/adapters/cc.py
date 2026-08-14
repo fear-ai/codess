@@ -1256,6 +1256,16 @@ def normalize_user(
                 "tool_name": tool_name,
                 "tool_input": None,
                 "tool_output": truncated,
+                # Claude states the result as a structured object on 12,863 real
+                # records -- `stdout` and `stderr` separately, `structuredPatch`,
+                # `interrupted` -- which the text projection flattens into one blob.
+                # The structure is carried so a reader can select on stderr or find
+                # an interrupted result without re-parsing the text.
+                "tool_output_structured": (
+                    record.get("toolUseResult")
+                    if isinstance(record.get("toolUseResult"), (dict, list))
+                    else None
+                ),
                 # What the source said, not what was inferred from it.
                 # `result_failure` is a text-pattern inference used only for MCP
                 # results; `is_error` is Claude's own flag on the result block. Reading

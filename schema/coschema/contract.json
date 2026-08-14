@@ -177,11 +177,11 @@
     "sources": {
       "identity": [
         "source_system_id",
-        "source_uri",
+        "source_path",
         "source_revision"
       ],
       "fields": {
-        "global_id": {
+        "entity_id": {
           "type": "text",
           "nullable": false
         },
@@ -189,7 +189,7 @@
           "type": "text",
           "nullable": false
         },
-        "source_uri": {
+        "source_path": {
           "type": "text",
           "nullable": false
         },
@@ -247,7 +247,7 @@
         "vendor_session_id"
       ],
       "fields": {
-        "global_id": {
+        "entity_id": {
           "type": "text",
           "nullable": false
         },
@@ -455,7 +455,7 @@
         "sequence_no"
       ],
       "fields": {
-        "global_id": {
+        "entity_id": {
           "type": "text",
           "nullable": false
         },
@@ -819,16 +819,6 @@
           "type": "reference",
           "nullable": false,
           "target": "processing_runs"
-        },
-        "input_content_id": {
-          "type": "reference",
-          "nullable": false,
-          "target": "content_objects"
-        },
-        "output_content_id": {
-          "type": "reference",
-          "nullable": true,
-          "target": "content_objects"
         },
         "sequence_no": {
           "type": "integer",

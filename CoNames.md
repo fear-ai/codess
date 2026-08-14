@@ -185,6 +185,49 @@ path produced it, so a curated mapping is distinguishable from a parsed one.
 `claude-4.6-sonnet-medium-thinking` resolves to `claude-sonnet-4-6` because the
 alias table says so. Correcting a mapping is a data edit, not a code change.
 
+**MCP tool names state their server, in three spellings.** Claude and Codex write
+`mcp__<server>__<tool>`; Cursor writes both `mcp_<Server>_<tool>` and
+`mcp-<server>-<tool>`, and the hyphen form gives no boundary -- no field states
+the server, and splitting on the first hyphen would record `cursor` rather than
+`cursor-app-control`. That server is therefore declared in `store._MCP_HYPHEN_SERVERS`
+rather than parsed, and an undeclared one stays unresolved. A built-in tool has no
+namespace: it belongs to the harness, not a server.
+
+**Hashing is for identity, integrity, and content addressing -- not for naming.**
+Evaluated across all 55 call sites: 4 derive a cross-store identity, 10 are integrity
+digests a reader recomputes, 6 are the raw store's content addresses, and 9 are change
+detection. The rest were convenience -- a dict or a path hashed to get a name for it --
+and two were written and never read at all.
+
+**A name a process invents needs no digest.** A within-run label takes an index; a
+temporary directory takes the platform's own facility. Hashing a path to name a staging
+directory implied a stable identity the value neither had nor needed.
+
+**A file test records four `stat` facts, and each earns its place**: `size` catches
+any length change and is the cheapest discriminator; `mtime_ns` catches an in-place
+edit of the same length, at nanosecond resolution because a second-resolution stamp
+misses fast successive writes; `inode` catches a replacement by rename, which can carry
+the same size and a copied timestamp; `device` because an inode is unique only within a
+filesystem. `st_ctime` is excluded -- it moves on a permission change, which is not a
+content change -- as are `st_nlink` and `st_mode`, which describe the link rather than
+the bytes.
+
+**Three questions, three functions, chosen by what the caller does with the answer.**
+`file_unchanged` returns a boolean and suits a caller deciding whether to re-read.
+`file_changes` returns `{field: (was, is)}` and suits a caller explaining a difference,
+because "size 4,096 to 8,192" and "same size, new inode" are different findings that a
+hash comparison flattens into "differs". `read_source_revision` reads content and answers
+byte identity, by one size-driven policy: full read under the configured maximum,
+sampled windows above it, inode-and-size for a SQLite container.
+
+**Change detection asks a different question from integrity.** `fileio.file_state`
+records `(size, mtime_ns, inode)` and `file_unchanged` compares it: that answers "is
+this the same file", which is what decides whether to re-read. `read_source_revision`
+reads content and answers "are these the same bytes". The first is 216x cheaper on the
+real corpus and sufficient for its question; the second is required where byte identity
+is the claim. **The inode matters**: a file replaced by rename can carry the same size
+and a copied mtime, so those two alone report it unchanged.
+
 ## 4. Identifier Suffixes
 
 `_id` currently carries four incompatible formats, so a reader cannot tell from
@@ -194,7 +237,37 @@ the suffix whether a value is derived, assigned, or borrowed.
 |---|---|---|
 | `_id` on a rowid | SQLite surrogate key, assigned locally | `sources.id`, `model_params.id` |
 | `_id` from a vendor | Identifier the source system assigned | `sessions.id` (vendor UUID) |
-| `global_id` | Derived by Codess from declared components | `codess:session:sha256:…` |
+| `entity_id` | Derived by Codess from declared components | `codess:session:sha256:…` |
+
+**`entity_id` is a poor name, and for `sources` it is also wrong.** The value is a
+digest of vendor-stated facts, so two machines ingesting the same Session derive the
+same identity -- that is the property "global" is claiming, and for Sessions, Events,
+and Artifacts it holds. But the name defines the value by where it is *not* valid
+rather than by what it identifies, and it invites reading "global" as registered or
+resolvable, which nothing does. The scope is also already visible in the value, which
+begins `codess:<kind>:`.
+
+**Three kinds do not have the property their column claims.** `source-revision`
+derives from `source_path`, `source-record` and `observation` inherit it, and every one
+of 405 real Source rows has an absolute local path there -- so the same Source
+observed on two machines yields two identities, and cross-store deduplication on
+`sources.entity_id` silently fails. `location_id` is honest in its function name,
+taking `machine_id` explicitly, but lands in a column that is not.
+
+The settled name is **`entity_id`** for the portable kinds, with the scope stated per
+kind here rather than asserted in the column name. `sources.entity_id` needs the
+derivation corrected before any rename, since that one is a defect rather than a
+wording problem.
+
+**The correction**: drop the path from the derivation, leaving
+`hash(source_system_id, source_revision)`. `source_revision` is already a content
+fingerprint and therefore portable, so the identity becomes machine-independent
+without a new component. Measured over 405 real Sources, that pair is already
+unique -- zero collisions -- so nothing is lost. The path stays on the row as an
+observation attribute, which is the split `projects` and `project_locations`
+already model: identity is what the entity is, the path is where a machine found
+it. `source-record` and `observation` inherit the fix, since both derive from the
+source-revision identity.
 | `_key` | Composed literal, not an identifier | `sessions.source_system_id` (pending rename) |
 
 The rule: **`_id` names an identifier something assigned; a composed or
@@ -221,6 +294,9 @@ regenerating every store.
 
 | From | To | Why |
 |---|---|---|
+| `global_id` | `entity_id` | Named the value by where it was *not* valid; the scope is already in the value's `codess:<kind>:` prefix |
+| `sources.source_uri` | `source_path` | Held a bare absolute path on all 407 real rows -- none carried a scheme, which RFC 3986 requires, while `artifacts.uri` does |
+| `content_derivations.input_content_id`, `output_content_id` | *dropped* | Required a hash of every processed input and output that nothing compared |
 | `model_configurations` | `model_params` | Independent parameters a user selects, not a configuration Codess composes |
 | `model_config_id` | `model_param_id` | Follows the table |
 | `sessions.default_model_config_id` | `session_model_param_id` | `default_` asserted a fallback role; the value is a Session-level statement Codex and Cursor make and Claude does not |
@@ -237,7 +313,8 @@ regenerating every store.
 | `sessions.vendor_name` | *records the company* | `cursor` is a product; Anysphere is the vendor |
 | `sessions.product_name` | *dropped* | A pure function of `source_system_id` |
 | `package_digest` | `contract_digest` | Covers the six-file contract, not the Python package |
-| `content_sha256`, `policy_sha256` | `content_digest`, `policy_digest` | Algorithm names live in `hashing` alone |
+| `*_sha256` suffixes (78 sites) | `*_hash` | Algorithm names live in `hashing` alone, and `codess_hash` is already the function that produces them |
+| `sha256:` inside stored values (33 sites) | *with the identity rewrite* | Changes stored bytes compared across stores; rides with the `entity_id` change rather than landing twice |
 | `tool_invocations.started_at` | `source_started_at` | Distinguishes vendor-reported from Codess-recorded times |
 | `mapping_diagnostics.level` | *names granularity* | Holds `source`/`record`/`field`, a granularity, while `field_state` uses `level` for severity |
 | `events.state.product` | four kinds | `session.label`, `harness.setting`, `content.attachment`, `session.marker` |

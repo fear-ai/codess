@@ -69,7 +69,7 @@ def stat_consistency(
 
     Both readers of a source compare the same pair of facts around a read --
     modification time and size -- and differed only in what they do with the
-    answer. `source_fingerprint` records it, because its digest covers a
+    answer. `read_source_revision` records it, because its digest covers a
     defined prefix and an appending session file is ordinary rather than an
     error; raw capture rejects it, because a raw object claims to be the exact
     bytes of one source state. Deciding is therefore shared and the
@@ -202,12 +202,121 @@ def read_exactly(stream: Any, limit: int, chunk_size: int) -> Iterator[bytes]:
         yield chunk
 
 
-def source_fingerprint(
+def file_state(path: Path) -> dict[str, Any] | None:
+    """What `stat` says about a file, as one comparable record.
+
+    **Arguments.** `path` is the file to examine; it is not followed to a target's
+    target, opened, or read. No other input, because the answer must not depend on
+    caller opinion: two callers asking about the same file get the same record.
+
+    **Returns** a dict of four `stat` facts, or None when the path cannot be stat'ed --
+    a missing file is not a state, and returning one would let a previous absence
+    compare equal to a present absence.
+
+    **What is recorded, and why each earns its place.**
+
+    | Field | Detects | Why not omitted |
+    |---|---|---|
+    | `size` | any length change | cheapest discriminator; most edits change it |
+    | `mtime_ns` | in-place edit of the same length | nanoseconds, because a second-resolution stamp misses fast successive writes |
+    | `inode` | replacement by rename | a new file can carry the same size and a copied mtime |
+    | `device` | inode reuse across filesystems | an inode number is unique only within its device, so the pair is the identity |
+
+    **What is deliberately not recorded.** `st_ctime` changes on metadata-only events
+    such as a permission change, which is not a content change and would report a false
+    difference. `st_nlink` and `st_mode` describe the link and permissions rather than
+    the bytes. Content is not read here at all -- that is `read_source_revision`.
+
+    **Order of comparison.** `file_changes` reports every differing field, so the order
+    is presentational rather than a short-circuit: size first because it is the field a
+    reader can most often act on, then mtime, then the identity pair. A caller wanting
+    the cheapest possible rejection compares `size` alone and re-reads on a mismatch;
+    the full record exists so that a *match* means more than equal lengths.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return {
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "inode": stat.st_ino,
+        "device": stat.st_dev,
+    }
+
+
+def file_changes(path: Path, previous: object) -> dict[str, tuple[Any, Any]] | None:
+    """Which recorded facts differ now, as `{field: (was, is)}`, or None if none do.
+
+    A boolean says a file changed; this says how, which is what a report needs. Callers
+    deciding only whether to re-read want `file_unchanged`; callers explaining a
+    difference to a reader want this, because "size 4,096 to 8,192" and "same size, new
+    inode" are different findings and a hash comparison flattens both to "differs".
+
+    Returns `{}` for an unreadable or previously unrecorded file, which is neither
+    "unchanged" nor an attributable difference.
+    """
+    if not isinstance(previous, dict):
+        return {}
+    current = file_state(path)
+    if current is None:
+        return {}
+    differences = {
+        key: (previous.get(key), value)
+        for key, value in current.items()
+        if previous.get(key) != value
+    }
+    return differences or None
+
+
+def file_unchanged(path: Path, previous: object) -> bool:
+    """Whether `path` still matches a `file_state` recorded earlier.
+
+    False when either side is missing, so a first observation and a vanished file both
+    read as changed -- the safe direction, since the caller then re-reads rather than
+    trusting a comparison it could not make.
+
+    **This answers "is it the same file", not "is the content the same".** Two files
+    with identical bytes and different timestamps compare as changed. Where byte
+    identity is the question, `read_source_revision` reads the content; where the
+    question is whether to re-read at all, this is the cheaper and sufficient check --
+    a full hash of the same corpus measured 216x the cost of the stat.
+    """
+    if not isinstance(previous, dict):
+        return False
+    current = file_state(path)
+    if current is None:
+        return False
+    return all(previous.get(key) == value for key, value in current.items())
+
+
+def read_source_revision(
     path: Path,
     *,
     _include_sidecars: bool = True,
 ) -> tuple[str, float | None, int | None, str, str]:
-    """Fingerprint a stable source with bounded SHA-256 I/O."""
+    """Fingerprint a stable source with bounded I/O, by one size-driven policy.
+
+    **Which method a file gets is decided here and nowhere else**, so a caller asks for
+    a fingerprint rather than choosing how to compute one:
+
+    | Size | Method | What the value attests |
+    |---|---|---|
+    | 0 to `SOURCE_FULL_HASH_MAX` | every byte the first `stat` announced | byte identity |
+    | above it | `SOURCE_SAMPLE_WINDOWS` windows plus size and mtime | identity of the sampled regions |
+    | a SQLite container | inode, size, and mtime of the main file and its sidecars | identity of the file set |
+
+    Over 405 real Sources, 395 take the full read, 1 is sampled, and 9 are containers.
+
+    **The bounded form is a deliberate weaker claim, not an approximation of the
+    stronger one.** A file large enough to sample is one whose every byte cannot be
+    read on each pass, so the value says the sampled regions and the size agree -- and
+    `method` records which question was answered, because a reader comparing two
+    fingerprints must know whether equality means identical bytes.
+
+    Where the question is only whether to re-read at all, `file_unchanged` answers it
+    from `stat` for a fraction of the cost.
+    """
     try:
         before = path.stat()
     except OSError:
@@ -265,7 +374,7 @@ def source_fingerprint(
     wal_path = Path(str(path) + "-wal")
     if _include_sidecars and wal_path.is_file():
         wal_revision, wal_mtime, wal_size, wal_method, wal_consistency = (
-            source_fingerprint(wal_path, _include_sidecars=False)
+            read_source_revision(wal_path, _include_sidecars=False)
         )
         combined_digest = codess_digest()
         combined_digest.update(

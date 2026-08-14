@@ -20,7 +20,7 @@ from codess.config import (
     raw_mode_error,
 )
 from codess.fileio import hash_file, read_json, write_json_atomic
-from codess.hashing import codess_canonical_hash, codess_text_hash
+from codess.hashing import codess_canonical_hash
 from codess.project_annotations import build_project_annotations
 from codess.project_catalog import durable_project_root, load_catalog
 from codess.refresh_receipts import REFRESH_RECEIPT_FORMAT
@@ -408,7 +408,6 @@ def _run_project_ingest(
         "elapsed_seconds": round(time.monotonic() - start_tick, 3),
         "command": command,
         "stdout_bytes": len(stdout.encode("utf-8")),
-        "stdout_sha256": codess_text_hash(256, 256, stdout),
         "stdout_tail": stdout[-4_000:] if stdout else "",
         "stderr_tail": stderr[-4_000:] if stderr else "",
         "ingest_summary": _result_summary(project, stdout=stdout),

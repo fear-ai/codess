@@ -18,7 +18,6 @@ from codess.config import (
 )
 from codess.configuration_audit import audit as audit_configurations
 from codess.coverage_report import store_coverage
-from codess.evidence_resolver import resolve_event
 from codess.investigation import build_investigation
 from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
 from codess.project_catalog import resolve_project_query_scopes
@@ -69,6 +68,7 @@ from codess.snapshot import (
     snapshot_store_paths,
     snapshot_store_paths_from_base,
 )
+from codess.source_verification import verify_event_source
 from codess.store import connect as connect_store
 
 log = logging.getLogger(__name__)
@@ -325,7 +325,7 @@ def _get_sessions_ordered(scope: QueryScope, limit: int | None = None) -> list[d
     for session in sessions:
         project_id = session["project_id"]
         session["name"] = (
-            scope.session_names.get((str(project_id), session["global_id"]))
+            scope.session_names.get((str(project_id), session["entity_id"]))
             if project_id else None
         )
     return sessions
@@ -344,7 +344,7 @@ def _session_by_identifier(scope: QueryScope, identifier: str) -> dict | None:
     matches = [
         row for row in _get_sessions_ordered(scope)
         if (
-            row["global_id"] == identifier
+            row["entity_id"] == identifier
             or row["id"] == identifier
             or (
                 row.get("name") is not None
@@ -705,7 +705,7 @@ def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
         matches = []
         for store in scope.stores:
             try:
-                matches.append(resolve_event(store, event_ids[0]))
+                matches.append(verify_event_source(store, event_ids[0]))
             except LookupError as exc:
                 if "ambiguous" in str(exc):
                     print(f"codess: {exc}", file=sys.stderr)
@@ -943,7 +943,7 @@ def _jsonl_output(
     if args.sessions:
         for number, row in enumerate(_get_sessions_ordered(scope, limit), 1):
             _emit_jsonl("sessions", {
-                "session_id": row["id"], "global_session_id": row["global_id"],
+                "session_id": row["id"], "session_entity_id": row["entity_id"],
                 "source": row["source"], "release": row["release"],
                 "started_at": row["started_at"], "ended_at": row["ended_at"],
                 "source_project_path": row["project_path"],
@@ -983,13 +983,13 @@ def _csv_output(
     writer = csv.writer(sys.stdout, lineterminator="\n")
     if args.sessions:
         writer.writerow([
-            "session_id", "global_session_id", "row_number", "source",
+            "session_id", "session_entity_id", "row_number", "source",
             "release", "started_at", "ended_at", "source_project_path",
             "query_project_path", "metadata_json",
         ])
         for number, row in enumerate(_get_sessions_ordered(scope, limit), 1):
             writer.writerow(protect_csv_row([
-                row["id"], row["global_id"], number, row["source"],
+                row["id"], row["entity_id"], number, row["source"],
                 row["release"], row["started_at"], row["ended_at"],
                 row["project_path"], row["query_project"],
                 json.dumps(_json_metadata(row["metadata"]), sort_keys=True),
@@ -1229,12 +1229,12 @@ def _sessions(scope: QueryScope, with_id: bool, limit: int | None = None) -> int
     if not rows:
         return 0
     if with_id:
-        print("id\tglobal_id\tnum\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
+        print("id\tentity_id\tnum\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for i, row in enumerate(rows, 1):
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
             print(
-                f"{sanitize_tabular(row['id'])}\t{row['global_id']}\t{i}\t"
+                f"{sanitize_tabular(row['id'])}\t{row['entity_id']}\t{i}\t"
                 f"{sanitize_tabular(row['source'])}\t"
                 f"{sanitize_tabular(row['name'])}\t"
                 f"{sanitize_tabular(row['release'])}\t{details}\t"
@@ -1242,12 +1242,12 @@ def _sessions(scope: QueryScope, with_id: bool, limit: int | None = None) -> int
                 f"{row['ended_at']}\t{sanitize_tabular(project)}"
             )
     else:
-        print("id\tglobal_id\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
+        print("id\tentity_id\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for row in rows:
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
             print(
-                f"{sanitize_tabular(row['id'])}\t{row['global_id']}\t"
+                f"{sanitize_tabular(row['id'])}\t{row['entity_id']}\t"
                 f"{sanitize_tabular(row['source'])}\t"
                 f"{sanitize_tabular(row['name'])}\t"
                 f"{sanitize_tabular(row['release'])}\t{details}\t"

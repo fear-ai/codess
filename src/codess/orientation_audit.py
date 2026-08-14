@@ -98,7 +98,7 @@ def _sqlite_observations(
             SELECT s.source_system_id,e.event_kind,
                    COALESCE(e.event_at,e.timestamp),
                    LENGTH(COALESCE(e.content,'')),e.tool_name,e.artifact_path,
-                   COALESCE(e.actor_kind,'unknown'),e.content_role,s.global_id,
+                   COALESCE(e.actor_kind,'unknown'),e.content_role,s.entity_id,
                    e.interaction_id,
                    COALESCE(s.session_relation_kind,'top_level'),
                    LENGTH(COALESCE(e.tool_input,'')),

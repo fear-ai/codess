@@ -13,7 +13,7 @@ from typing import Any
 
 from codess.config import RAW_CAPTURE_CHUNK_BYTES
 from codess.config import RAW_MODES as RAW_MODE_VALUES
-from codess.fileio import hash_file, open_readonly, source_fingerprint, stat_consistency
+from codess.fileio import hash_file, open_readonly, read_source_revision, stat_consistency
 from codess.hashing import codess_digest, codess_text_hash
 
 try:
@@ -269,7 +269,7 @@ class RawStore:
             "redaction": "none",
         }
         if mode in {"none", "reference"}:
-            revision, _mtime, size, method, consistency = source_fingerprint(path)
+            revision, _mtime, size, method, consistency = read_source_revision(path)
             record.update({
                 "source_revision_id": revision,
                 "source_size": size,

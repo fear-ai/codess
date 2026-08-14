@@ -300,7 +300,7 @@ def source_paths(
             conn = open_readonly(store)
             try:
                 for (uri,) in conn.execute(
-                    "SELECT source_uri FROM sources WHERE source_system_id=?",
+                    "SELECT source_path FROM sources WHERE source_system_id=?",
                     (source_system_id,),
                 ):
                     path = Path(str(uri))
@@ -324,7 +324,7 @@ def collect_token_usage(
             conn = open_readonly(store)
             try:
                 for system, uri in conn.execute(
-                    "SELECT source_system_id, source_uri FROM sources"
+                    "SELECT source_system_id, source_path FROM sources"
                 ):
                     path = Path(str(uri))
                     if path.is_file():
