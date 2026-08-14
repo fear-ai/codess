@@ -69,18 +69,24 @@ CREATE TABLE sources (
   UNIQUE(source_system_id, source_uri, source_revision)
 );
 
-CREATE TABLE model_configurations (
+CREATE TABLE model_params (
   id INTEGER PRIMARY KEY,
   provider TEXT,
-  model_family TEXT,
+  model_line TEXT,
+  model_generation TEXT,
+  model_version TEXT,
+  model_gradation TEXT,
+  model_variant TEXT,
   model_name_exact TEXT,
   model_revision TEXT,
   reasoning_effort TEXT,
   speed_tier TEXT,
   service_tier TEXT,
   mode TEXT,
-  source_config TEXT CHECK (source_config IS NULL OR json_valid(source_config)),
-  UNIQUE(provider, model_family, model_name_exact, model_revision, reasoning_effort, speed_tier, service_tier, mode)
+  source_params TEXT CHECK (source_params IS NULL OR json_valid(source_params)),
+  UNIQUE(provider, model_line, model_generation, model_version, model_gradation,
+         model_variant, model_name_exact, model_revision, reasoning_effort,
+         speed_tier, service_tier, mode)
 );
 
 CREATE TABLE sessions (
@@ -110,7 +116,7 @@ CREATE TABLE sessions (
   session_relation_kind TEXT CHECK (session_relation_kind IN ('subagent','fork','resume','continuation','unknown') OR session_relation_kind IS NULL),
   archive_state TEXT CHECK (archive_state IN ('active','archived','unknown') OR archive_state IS NULL),
   archive_source TEXT,
-  default_model_config_id INTEGER REFERENCES model_configurations(id),
+  session_model_param_id INTEGER REFERENCES model_params(id),
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
 
   -- Read compatibility for the legacy flat query surface. These are
@@ -140,7 +146,7 @@ CREATE TABLE model_turns (
   interaction_id TEXT REFERENCES interactions(id) ON DELETE SET NULL,
   sequence_no INTEGER NOT NULL CHECK (sequence_no > 0),
   source_turn_id TEXT,
-  model_config_id INTEGER REFERENCES model_configurations(id),
+  model_param_id INTEGER REFERENCES model_params(id),
   boundary_source TEXT NOT NULL CHECK (boundary_source IN ('vendor','mapping','inferred')),
   UNIQUE(session_id, sequence_no)
 );
@@ -379,11 +385,11 @@ CREATE INDEX idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX idx_sessions_global ON sessions(global_id);
 CREATE INDEX idx_sessions_observation ON sessions(observation_id);
 CREATE INDEX idx_sessions_source ON sessions(source_id);
-CREATE INDEX idx_sessions_default_model_config ON sessions(default_model_config_id)
-  WHERE default_model_config_id IS NOT NULL;
+CREATE INDEX idx_sessions_model_param ON sessions(session_model_param_id)
+  WHERE session_model_param_id IS NOT NULL;
 CREATE INDEX idx_events_global ON events(global_id);
-CREATE INDEX idx_model_turns_model_config ON model_turns(model_config_id)
-  WHERE model_config_id IS NOT NULL;
+CREATE INDEX idx_model_turns_model_param ON model_turns(model_param_id)
+  WHERE model_param_id IS NOT NULL;
 CREATE INDEX idx_project_locations_project ON project_locations(project_id);
 CREATE INDEX idx_workspace_bindings_project ON workspace_bindings(project_id);
 CREATE INDEX idx_source_records_source ON source_records(source_id, source_sequence);
@@ -395,13 +401,19 @@ CREATE INDEX idx_artifact_content_content ON artifact_content(content_id);
 CREATE INDEX idx_tools_name ON tool_invocations(canonical_tool_name);
 CREATE INDEX idx_artifacts_project_path ON artifacts(project_id, relative_path);
 CREATE INDEX idx_event_artifacts_artifact ON event_artifacts(artifact_id);
-CREATE UNIQUE INDEX idx_model_configurations_identity
-  ON model_configurations(
-    coalesce(provider,''), coalesce(model_family,''),
+CREATE UNIQUE INDEX idx_model_params_identity
+  ON model_params(
+    coalesce(provider,''), coalesce(model_line,''),
+    coalesce(model_generation,''), coalesce(model_version,''),
+    coalesce(model_gradation,''), coalesce(model_variant,''),
     coalesce(model_name_exact,''), coalesce(model_revision,''),
     coalesce(reasoning_effort,''), coalesce(speed_tier,''),
     coalesce(service_tier,''), coalesce(mode,'')
   );
+CREATE INDEX idx_model_params_line ON model_params(model_line)
+  WHERE model_line IS NOT NULL;
+CREATE INDEX idx_model_params_gradation ON model_params(model_gradation)
+  WHERE model_gradation IS NOT NULL;
 CREATE UNIQUE INDEX idx_artifacts_identity_path
   ON artifacts(project_id, artifact_kind, relative_path)
   WHERE relative_path IS NOT NULL;

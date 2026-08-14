@@ -20,8 +20,8 @@ def _store(path: Path) -> None:
           event_at REAL, content_len INTEGER, event_kind TEXT,
           model_turn_id TEXT
         );
-        CREATE TABLE model_turns (id TEXT PRIMARY KEY, model_config_id INTEGER);
-        CREATE TABLE model_configurations (
+        CREATE TABLE model_turns (id TEXT PRIMARY KEY, model_param_id INTEGER);
+        CREATE TABLE model_params (
           id INTEGER PRIMARY KEY, model_name_exact TEXT
         );
         """
@@ -31,7 +31,7 @@ def _store(path: Path) -> None:
         (2, "claude-opus-4-8"),
         (3, "claude-sonnet-5"),
     )
-    conn.executemany("INSERT INTO model_configurations VALUES (?, ?)", models)
+    conn.executemany("INSERT INTO model_params VALUES (?, ?)", models)
     base = 1_783_234_800_000
     for index, (config_id, _model) in enumerate(models, 1):
         turn = f"turn-{index}"

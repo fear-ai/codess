@@ -19,7 +19,7 @@ from codess.vendor_audits.codex_features import audit_codex_features
 _TOTAL_COUNT_QUERIES = {
     "tool_invocations": "SELECT COUNT(*) FROM tool_invocations",
     "tool_results": "SELECT COUNT(*) FROM tool_results",
-    "model_configurations": "SELECT COUNT(*) FROM model_configurations",
+    "model_params": "SELECT COUNT(*) FROM model_params",
     "correlation_assertions": "SELECT COUNT(*) FROM correlation_assertions",
 }
 
@@ -29,7 +29,7 @@ def summarize_store_evidence(paths: Iterable[Path]) -> dict[str, Any]:
     totals = {
         "tool_invocations": 0,
         "tool_results": 0,
-        "model_configurations": 0,
+        "model_params": 0,
         "events_missing_time": 0,
         "correlation_assertions": 0,
     }
@@ -47,7 +47,7 @@ def summarize_store_evidence(paths: Iterable[Path]) -> dict[str, Any]:
             ).fetchone()[0]
             for row in conn.execute(
                 "SELECT reasoning_effort,speed_tier,service_tier "
-                "FROM model_configurations"
+                "FROM model_params"
             ):
                 for key in settings:
                     settings[key] += int(row[key] is not None)

@@ -109,6 +109,10 @@ Common filters include:
 --tool-name
 --status
 --model
+--model-line
+--model-generation
+--model-version
+--model-gradation
 --reasoning-effort
 --service-tier
 --artifact
@@ -208,7 +212,7 @@ capture. Storage deletion remains a reviewed maintenance operation.
 | [Functional Design](Designs.md) | Decided functional behavior, rationale, invariants, and explicitly optional directions |
 | [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, current state, code review, and task list |
 | [CoSchema](CoSchema.md) | Common entities, relationships, fields, vocabularies, and query/store contracts |
-| [CoNames](CoNames.md) | What each vendor, harness, surface, and provider designator is called in the database, the code, and the CLI |
+| [CoNames](CoNames.md) | **Authoritative** for every designator: vendor, harness, surface, provider, and the model name parts, in the database, the code, and the CLI |
 | [Claude Code Source Schema](CCSchema.md) | Claude Code storage, records, selective access, mapping, and limitations |
 | [Codex Source Schema](CodexSchema.md) | Codex storage, records, selective access, mapping, and limitations |
 | [Cursor Source Schema](CursorSchema.md) | Cursor storage, records, selective access, mapping, and limitations |
@@ -291,11 +295,13 @@ analytics service.
   agent, subagent, harness, or model traffic that the local source actually
   records; it is not a proxy capturing the complete network exchange.
 
-- **Observed model configuration.** Exact model names and supported provider,
-  family, revision, reasoning-effort, speed-tier, service-tier, and mode values
-  can be queried when directly recorded or justifiably inherited. Missing
-  settings remain unknown rather than being inferred from unrelated defaults
-  or current product behavior.
+- **Observed model parameters.** Exact model names are retained verbatim, and
+  provider, line, generation, version, gradation, variant, revision,
+  reasoning-effort, speed-tier, service-tier, and mode can be queried when
+  directly recorded or resolvable from the name. A name Codess does not
+  recognize leaves the derived values null rather than guessed, and missing
+  settings remain unknown rather than being inferred from unrelated defaults or
+  current product behavior.
 
 - **Cross-Project and cross-vendor investigation.** Explicitly selected
   Project store sets can be queried as one bounded scope with deterministic

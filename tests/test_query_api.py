@@ -129,7 +129,10 @@ def test_configuration_filters_and_occurrence_provenance_are_queryable(
     init_db(store)
     configuration = {
         "model_provider": "openai",
-        "model_family": "gpt",
+        "model_line": "gpt",
+        "model_generation": "5",
+        "model_version": "5.6",
+        "model_gradation": "sol",
         "model": "gpt-test-2026-07",
         "model_revision": "2026-07",
         "reasoning_effort": "high",
@@ -188,7 +191,10 @@ def test_configuration_filters_and_occurrence_provenance_are_queryable(
     filters = {
         "models": ["gpt-test-2026-07"],
         "model_providers": ["openai"],
-        "model_families": ["gpt"],
+        "model_lines": ["gpt"],
+        "model_generations": ["5"],
+        "model_versions": ["5.6"],
+        "model_gradations": ["sol"],
         "model_revisions": ["2026-07"],
         "reasoning_efforts": ["high"],
         "speed_tiers": ["fast"],
@@ -1032,7 +1038,7 @@ def test_configuration_audit_keeps_nullable_settings_independent(tmp_path):
     project, store, _source = _store(tmp_path)
     conn = connect(store)
     conn.execute("""
-        INSERT INTO model_configurations(provider,model_name_exact,reasoning_effort,source_config)
+        INSERT INTO model_params(provider,model_name_exact,reasoning_effort,source_params)
         VALUES ('openai','gpt-test','high',?)
     """, (json.dumps({"model": {"field": "payload.model", "value": "gpt-test"}}),))
     conn.commit()

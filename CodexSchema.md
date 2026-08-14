@@ -143,7 +143,7 @@ field does not discard an otherwise supported record.
   reasoning state remains raw evidence, token accounting remains a specialized
   utilization input, and snapshots/turn context are not collapsed into chat
   messages. Selected scalar turn settings are normalized into
-  `model_configurations`.
+  `model_params`.
 - **Compaction is directly stored.** Current local transcripts contain
   top-level `type=compacted` envelopes. Each envelope has a
   `replacement_history` containing one dedicated `type=compaction` item plus

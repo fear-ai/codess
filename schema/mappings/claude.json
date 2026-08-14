@@ -18,7 +18,7 @@
     {"id": "claude.lifecycle", "source": "queue-operation|system.turn_duration|system.scheduled_task_fire", "target": "events.lifecycle.vendor", "operation": "from_any", "retention": "core"},
     {"id": "claude.fork-context", "source": "fork-context-ref", "target": "events.lifecycle.vendor+sessions.parent_session_id", "operation": "from", "retention": "core"},
     {"id": "claude.lineage", "source": "uuid,parentUuid,tool_use_id,parentSessionId", "target": "events.mapping_trace+sessions.parent_session_id", "operation": "from_any", "retention": "core"},
-    {"id": "claude.configuration", "source": "assistant.message.model|assistant.message.usage.service_tier", "target": "model_configurations+model_turns.model_config_id", "operation": "from_any", "retention": "specialized"},
+    {"id": "claude.configuration", "source": "assistant.message.model|assistant.message.usage.service_tier", "target": "model_params+model_turns.model_param_id", "operation": "from_any", "retention": "specialized"},
     {"id": "claude.harness-version", "source": "version|claudeCodeVersion", "target": "sessions.harness_version", "operation": "from_any", "retention": "core"}
   ],
   "hazards": ["source-role-is-not-actor", "user-envelope-may-be-harness-origin", "sidechain-parent-may-be-unresolved", "external-content-path-must-remain-in-session-tree", "system-records-are-heterogeneous"]

@@ -3,19 +3,6 @@
   "format_version": 1,
   "purpose": "Resolves a vendor model string to its API name, family, generation, and strength. Data rather than code so a vendor's new model name does not require a release. A name absent from here is recorded unresolved, never guessed: the harness label is retained verbatim in every case, and only the derived fields are left null.",
   "matching": "Case-folded exact match on the whole string. Not a substring or prefix match -- 'claude' appears inside Cursor's model names as well as Anthropic's, so a token match cannot tell provider from family.",
-  "families": {
-    "vocabulary": [
-      "opus",
-      "sonnet",
-      "haiku",
-      "fable",
-      "mython"
-    ],
-    "reserved": [
-      "mythos"
-    ],
-    "note": "Mythos exists but is not generally available, so it is declared and unobserved. A family outside this list resolves unresolved rather than being accepted as new."
-  },
   "sentinels": {
     "<synthetic>": {
       "vendor": "Claude",
@@ -33,132 +20,170 @@
       "label": "claude-opus-5",
       "api": "claude-opus-5",
       "provider": "anthropic",
-      "family": "opus",
-      "generation": "5"
+      "line": "claude",
+      "generation": "5",
+      "version": "5",
+      "gradation": "opus"
     },
     {
       "label": "claude-sonnet-5",
       "api": "claude-sonnet-5",
       "provider": "anthropic",
-      "family": "sonnet",
-      "generation": "5"
+      "line": "claude",
+      "generation": "5",
+      "version": "5",
+      "gradation": "sonnet"
     },
     {
       "label": "claude-fable-5",
       "api": "claude-fable-5",
       "provider": "anthropic",
-      "family": "fable",
-      "generation": "5"
+      "line": "claude",
+      "generation": "5",
+      "version": "5",
+      "gradation": "fable"
     },
     {
       "label": "claude-opus-4-8",
       "api": "claude-opus-4-8",
       "provider": "anthropic",
-      "family": "opus",
-      "generation": "4.8"
+      "line": "claude",
+      "generation": "4",
+      "version": "4.8",
+      "gradation": "opus"
     },
     {
       "label": "claude-opus-4-7",
       "api": "claude-opus-4-7",
       "provider": "anthropic",
-      "family": "opus",
-      "generation": "4.7"
+      "line": "claude",
+      "generation": "4",
+      "version": "4.7",
+      "gradation": "opus"
     },
     {
       "label": "claude-sonnet-4-6",
       "api": "claude-sonnet-4-6",
       "provider": "anthropic",
-      "family": "sonnet",
-      "generation": "4.6"
+      "line": "claude",
+      "generation": "4",
+      "version": "4.6",
+      "gradation": "sonnet"
     },
     {
       "label": "claude-haiku-4-5-20251001",
       "api": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "family": "haiku",
-      "generation": "4.5",
+      "line": "claude",
+      "generation": "4",
+      "version": "4.5",
+      "gradation": "haiku",
       "revision": "20251001"
     },
     {
       "label": "gpt-5.6-sol",
       "api": "gpt-5.6-sol",
       "provider": "openai",
-      "generation": "5.6",
-      "variant": "sol"
+      "line": "gpt",
+      "generation": "5",
+      "version": "5.6",
+      "gradation": "sol"
     },
     {
       "label": "gpt-5.6-terra",
       "api": "gpt-5.6-terra",
       "provider": "openai",
-      "generation": "5.6",
-      "variant": "terra"
+      "line": "gpt",
+      "generation": "5",
+      "version": "5.6",
+      "gradation": "terra"
     },
     {
       "label": "gpt-5.5",
       "api": "gpt-5.5",
       "provider": "openai",
-      "generation": "5.5"
+      "line": "gpt",
+      "generation": "5",
+      "version": "5.5"
     },
     {
       "label": "gpt-5.4",
       "api": "gpt-5.4",
       "provider": "openai",
-      "generation": "5.4"
+      "line": "gpt",
+      "generation": "5",
+      "version": "5.4"
     },
     {
       "label": "gpt-5.3-codex",
       "api": "gpt-5.3-codex",
       "provider": "openai",
-      "generation": "5.3",
+      "line": "gpt",
+      "generation": "5",
+      "version": "5.3",
       "variant": "codex"
     },
     {
       "label": "gpt-5.2-codex",
       "api": "gpt-5.2-codex",
       "provider": "openai",
-      "generation": "5.2",
+      "line": "gpt",
+      "generation": "5",
+      "version": "5.2",
       "variant": "codex"
     },
     {
       "label": "gpt-5.1-codex-max",
       "api": "gpt-5.1-codex-max",
       "provider": "openai",
-      "generation": "5.1",
+      "line": "gpt",
+      "generation": "5",
+      "version": "5.1",
       "variant": "codex-max"
     },
     {
       "label": "claude-4.6-opus-high-thinking",
       "api": "claude-opus-4-6",
       "provider": "anthropic",
-      "family": "opus",
-      "generation": "4.6",
+      "line": "claude",
+      "generation": "4",
+      "version": "4.6",
+      "gradation": "opus",
       "strength": "high"
     },
     {
       "label": "claude-4.6-sonnet-medium-thinking",
       "api": "claude-sonnet-4-6",
       "provider": "anthropic",
-      "family": "sonnet",
-      "generation": "4.6",
+      "line": "claude",
+      "generation": "4",
+      "version": "4.6",
+      "gradation": "sonnet",
       "strength": "medium"
     },
     {
       "label": "grok-4.6",
       "api": "grok-4.6",
       "provider": "xai",
-      "generation": "4.6"
+      "line": "grok",
+      "generation": "4",
+      "version": "4.6"
     },
     {
       "label": "grok-4.5",
       "api": "grok-4.5",
       "provider": "xai",
-      "generation": "4.5"
+      "line": "grok",
+      "generation": "4",
+      "version": "4.5"
     },
     {
       "label": "cursor-grok-4.5-high-fast",
       "api": "grok-4.5",
       "provider": "xai",
-      "generation": "4.5",
+      "line": "grok",
+      "generation": "4",
+      "version": "4.5",
       "strength": "high",
       "speed": "fast"
     },
@@ -166,39 +191,88 @@
       "label": "composer-2.5",
       "api": "composer-2.5",
       "provider": "anysphere",
-      "generation": "2.5"
+      "line": "composer",
+      "generation": "2",
+      "version": "2.5"
     },
     {
       "label": "composer-2.5-fast",
       "api": "composer-2.5",
       "provider": "anysphere",
-      "generation": "2.5",
+      "line": "composer",
+      "generation": "2",
+      "version": "2.5",
       "speed": "fast"
     },
     {
       "label": "composer-2",
       "api": "composer-2",
       "provider": "anysphere",
-      "generation": "2"
+      "line": "composer",
+      "generation": "2",
+      "version": "2"
     },
     {
       "label": "composer-2-fast",
       "api": "composer-2",
       "provider": "anysphere",
+      "line": "composer",
       "generation": "2",
+      "version": "2",
       "speed": "fast"
     },
     {
       "label": "composer-1.5",
       "api": "composer-1.5",
       "provider": "anysphere",
-      "generation": "1.5"
+      "line": "composer",
+      "generation": "1",
+      "version": "1.5"
     },
     {
       "label": "composer-1",
       "api": "composer-1",
       "provider": "anysphere",
-      "generation": "1"
+      "line": "composer",
+      "generation": "1",
+      "version": "1"
     }
-  ]
+  ],
+  "dimensions": {
+    "strength": "Reasoning effort a user selected: high, medium, low. Independent of speed. A model offering only one level states it the same way as one where it was chosen, so a recorded strength does not by itself prove the user picked it.",
+    "speed": "A separate dimension, filled only when the vendor names it. Only `fast` is ever stated across the observed corpus -- there is no `slow` or `standard` token -- so an absent speed means not stated rather than standard, and the column stays null.",
+    "note": "One label can state both: cursor-grok-4.5-high-fast is a high strength at a fast speed."
+  },
+  "axes": {
+    "line": "The vendor's model line: claude, gpt, grok, composer. Names the series, not one model.",
+    "generation": "The major step of a line, counted in whole numbers. Claude has gone 3, 4, 5; GPT likewise 3, 4, 5. A generation is a family of models, not a single one.",
+    "version": "The release within a generation: GPT 5.6 and Claude 4.8 are versions of generations 5 and 4. Recorded whole, so generation is recoverable from it but never conflated with it.",
+    "gradation": "The capability level within a version. Anthropic names these after a mythology and a form -- opus, sonnet, haiku, fable, mythos; OpenAI names them for a purpose -- codex, sol, terra. The axis is the same one, and 'thinking' or 'coding' in other vendors' names occupies it too.",
+    "strength": "Reasoning effort selected: high, medium, low. Independent of gradation and of speed. A model offering only one level states it the same way as one where it was chosen, so a recorded strength does not prove the user picked it.",
+    "speed": "A separate dimension, filled only when the vendor names it. Only `fast` is ever stated across the observed corpus -- there is no `slow` or `standard` -- so an absent speed means not stated rather than standard."
+  },
+  "gradations": {
+    "anthropic": [
+      "haiku",
+      "sonnet",
+      "opus",
+      "fable",
+      "mythos"
+    ],
+    "openai": [
+      "luna",
+      "terra",
+      "sol"
+    ],
+    "order": "ascending",
+    "note": "The capability level within one version, listed from lowest to highest. Anthropic names these after literary and mythological forms, OpenAI after celestial bodies; other vendors write `thinking` or `coding` in the same slot. Mythos is named and not generally available. The order is the vendor's own ranking and is recorded because it is not recoverable from the names."
+  },
+  "variants": {
+    "observed": [
+      "codex",
+      "codex-max",
+      "latest"
+    ],
+    "note": "Superseded or purpose-marking designators a vendor has used in the gradation position at other times. Kept distinct from gradation so a historical `codex` is not read as a current capability level."
+  }
 }

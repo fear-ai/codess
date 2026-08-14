@@ -16,7 +16,7 @@
     {"id": "codex.task-lifecycle", "source": "event_msg.task_started|task_complete", "target": "events.lifecycle", "operation": "from_any", "retention": "core"},
     {"id": "codex.compaction", "source": "compacted.payload.replacement_history[].compaction", "target": "events.context.compact", "operation": "from_each", "retention": "core"},
     {"id": "codex.session-meta", "source": "session_meta.payload", "target": "sessions", "operation": "from", "retention": "extension"},
-    {"id": "codex.configuration", "source": "turn_context.payload|event_msg.thread_settings_applied.payload.thread_settings", "target": "model_configurations+model_turns.model_config_id", "operation": "from_any", "retention": "specialized"},
+    {"id": "codex.configuration", "source": "turn_context.payload|event_msg.thread_settings_applied.payload.thread_settings", "target": "model_params+model_turns.model_param_id", "operation": "from_any", "retention": "specialized"},
     {"id": "codex.turn-identity", "source": "turn_context.payload.turn_id", "target": "model_turns.source_turn_id", "operation": "from", "retention": "core"},
     {"id": "codex.archive-location", "source": "session source root", "target": "sessions.archive_state+sessions.archive_source", "operation": "from", "retention": "extension"}
   ],

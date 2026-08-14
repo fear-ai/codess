@@ -173,7 +173,7 @@ class TestInitDb:
             """
             SELECT mc.model_name_exact,mc.reasoning_effort
             FROM model_turns mt
-            JOIN model_configurations mc ON mc.id=mt.model_config_id
+            JOIN model_params mc ON mc.id=mt.model_param_id
             WHERE mt.session_id='s1'
             """
         ).fetchone()
@@ -226,7 +226,7 @@ class TestInitDb:
             SELECT e.metadata,mc.model_name_exact
             FROM events e
             JOIN model_turns mt ON mt.id=e.model_turn_id
-            JOIN model_configurations mc ON mc.id=mt.model_config_id
+            JOIN model_params mc ON mc.id=mt.model_param_id
             WHERE e.event_id='response'
             """
         ).fetchone()

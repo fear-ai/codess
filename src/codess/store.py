@@ -470,63 +470,63 @@ def ensure_source(
     return int(row[0])
 
 
-def _ensure_model_configuration(
+def _ensure_model_params(
     conn: sqlite3.Connection, metadata: dict[str, Any], adapter_key: str | None = None
 ) -> int | None:
+    """Intern one set of model parameters, deriving the name's parts where stated.
+
+    A vendor states some parts and encodes others in the name. `model_names` resolves the
+    encoded ones; a value the vendor stated always wins over a derived one, and an
+    unresolved name leaves the derived columns null rather than guessed, so "not
+    recognized" stays distinct from "has none".
+    """
     exact = metadata.get("model") or metadata.get("model_name")
-    provider = metadata.get("model_provider")
-    family = metadata.get("model_family")
-    revision = metadata.get("model_revision")
-    effort = metadata.get("reasoning_effort") or metadata.get("effort")
-    speed = metadata.get("speed") or metadata.get("speed_tier")
-    service = metadata.get("service_tier")
-    mode = metadata.get("mode")
-    if not any((exact, provider, family, effort, speed, service, mode)):
+    values: dict[str, Any] = {
+        "provider": metadata.get("model_provider"),
+        "model_line": metadata.get("model_line"),
+        "model_generation": metadata.get("model_generation"),
+        "model_version": metadata.get("model_version"),
+        "model_gradation": metadata.get("model_gradation"),
+        "model_variant": metadata.get("model_variant"),
+        "model_name_exact": exact,
+        "model_revision": metadata.get("model_revision"),
+        "reasoning_effort": (
+            metadata.get("reasoning_effort") or metadata.get("effort")
+        ),
+        "speed_tier": metadata.get("speed") or metadata.get("speed_tier"),
+        "service_tier": metadata.get("service_tier"),
+        "mode": metadata.get("mode"),
+    }
+    if not any(values.values()):
         return None
-    # Derived from the name only where the vendor did not state the value; a stated one
-    # always wins. An unresolved name leaves these null rather than guessed, so "not
-    # recognized" stays distinct from "has none". Speed and strength are separate
-    # columns because Cursor states both in one label: `cursor-grok-4.5-high-fast` is a
-    # high reasoning strength at a fast speed tier, and collapsing them would lose one.
     if exact:
         resolved = resolve_model_name(exact, adapter_key)
-        provider = provider or resolved.provider
-        family = family or resolved.family
-        revision = revision or resolved.revision
-        speed = speed or resolved.speed
-        effort = effort or resolved.strength
+        for column, derived in (
+            ("provider", resolved.provider),
+            ("model_line", resolved.line),
+            ("model_generation", resolved.generation),
+            ("model_version", resolved.version),
+            ("model_gradation", resolved.gradation),
+            ("model_variant", resolved.variant),
+            ("model_revision", resolved.revision),
+            ("speed_tier", resolved.speed),
+            ("reasoning_effort", resolved.strength),
+        ):
+            values[column] = values[column] or derived
+    columns = list(values)
+    predicate = " AND ".join(f"{name} IS ?" for name in columns)
     existing = conn.execute(
-        """
-        SELECT id FROM model_configurations
-        WHERE provider IS ? AND model_name_exact IS ? AND model_revision IS ?
-          AND model_family IS ?
-          AND reasoning_effort IS ? AND speed_tier IS ? AND service_tier IS ?
-          AND mode IS ?
-        ORDER BY id LIMIT 1
-        """,
-        (
-            provider, exact, revision, family,
-            effort, speed, service, mode,
-        ),
+        f"SELECT id FROM model_params WHERE {predicate} ORDER BY id LIMIT 1",
+        tuple(values[name] for name in columns),
     ).fetchone()
     if existing is not None:
         return int(existing[0])
+    placeholders = ", ".join("?" for _ in columns)
     conn.execute(
-        """
-        INSERT OR IGNORE INTO model_configurations(
-          provider, model_family, model_name_exact, model_revision,
-          reasoning_effort, speed_tier, service_tier, mode, source_config)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
+        f"INSERT OR IGNORE INTO model_params({', '.join(columns)}, source_params) "
+        f"VALUES ({placeholders}, ?)",
         (
-            provider,
-            family,
-            exact,
-            revision,
-            effort,
-            speed,
-            service,
-            mode,
+            *(values[name] for name in columns),
             canonical_json(metadata) if metadata else None,
         ),
     )
@@ -545,7 +545,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         else raw_metadata
     )
     project_id = _ensure_project(conn, session)
-    model_config_id = _ensure_model_configuration(conn, metadata, source)
+    model_param_id = _ensure_model_params(conn, metadata, source)
     parent = session.get("parent_session_id") or metadata.get("parent_session_id")
     relation = session.get("session_relation_kind")
     if relation is None and (
@@ -605,7 +605,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         relation,
         archive_state or "unknown",
         archive_source,
-        model_config_id,
+        model_param_id,
         stored_metadata,
         source,
         session.get("type", "Code"),
@@ -620,7 +620,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
           harness_version, source_id, project_id, source_cwd, path_obsolete,
           started_at, ended_at, source_mtime, observed_at, ingested_at, time_basis,
           parent_session_id, session_relation_kind, archive_state, archive_source,
-          default_model_config_id, metadata, source, type, release, project_path)
+          session_model_param_id, metadata, source, type, release, project_path)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
           global_id=excluded.global_id,
@@ -648,7 +648,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
           session_relation_kind=excluded.session_relation_kind,
           archive_state=excluded.archive_state,
           archive_source=excluded.archive_source,
-          default_model_config_id=excluded.default_model_config_id,
+          session_model_param_id=excluded.session_model_param_id,
           metadata=excluded.metadata,
           source=excluded.source,
           type=excluded.type,
@@ -1331,15 +1331,15 @@ def _prepare_event_groups(
 ) -> list[dict[str, Any]]:
     prepared: list[dict[str, Any]] = []
     session_row = conn.execute(
-        "SELECT source,default_model_config_id FROM sessions WHERE id=?",
+        "SELECT source,session_model_param_id FROM sessions WHERE id=?",
         (session_id,),
     ).fetchone()
     session_source = session_row[0] if session_row else "Unknown"
     interaction_counter = 0
     model_turn_counter = 0
     current_interaction: str | None = None
-    current_model_config_id: int | None = (
-        session_row["default_model_config_id"] if session_row else None
+    current_model_param_id: int | None = (
+        session_row["session_model_param_id"] if session_row else None
     )
     current_configuration_provenance: dict[str, Any] | None = None
     current_configuration_anchor: dict[str, Any] | None = None
@@ -1365,11 +1365,11 @@ def _prepare_event_groups(
                 (current_interaction, session_id, interaction_counter, event.get("event_id")),
             )
             prompt_metadata = _json_dict(event.get("metadata"))
-            prompt_model_config_id = _ensure_model_configuration(
+            prompt_model_param_id = _ensure_model_params(
                 conn, prompt_metadata, session_source
             )
-            if prompt_model_config_id is not None:
-                current_model_config_id = prompt_model_config_id
+            if prompt_model_param_id is not None:
+                current_model_param_id = prompt_model_param_id
                 prompt_provenance = prompt_metadata.get(
                     "configuration_provenance"
                 )
@@ -1386,10 +1386,10 @@ def _prepare_event_groups(
                 }
         if semantics["actor_kind"] == "model":
             event_metadata = _json_dict(event.get("metadata"))
-            observed_model_config_id = _ensure_model_configuration(
+            observed_model_param_id = _ensure_model_params(
                 conn, event_metadata, session_source
             )
-            if observed_model_config_id is not None:
+            if observed_model_param_id is not None:
                 observed_provenance = event_metadata.get(
                     "configuration_provenance"
                 )
@@ -1403,12 +1403,12 @@ def _prepare_event_groups(
                             "source_record_locator"
                         ),
                     }
-                elif observed_model_config_id != current_model_config_id:
+                elif observed_model_param_id != current_model_param_id:
                     current_configuration_provenance = None
                     current_configuration_anchor = None
-                current_model_config_id = observed_model_config_id
+                current_model_param_id = observed_model_param_id
             if (
-                current_model_config_id is not None
+                current_model_param_id is not None
                 and current_configuration_provenance is not None
                 and not isinstance(
                     event_metadata.get("configuration_provenance"), dict
@@ -1459,14 +1459,14 @@ def _prepare_event_groups(
                     """
                     INSERT INTO model_turns(
                       id, session_id, interaction_id, sequence_no, source_turn_id,
-                      model_config_id, boundary_source)
+                      model_param_id, boundary_source)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         turn_id, session_id, current_interaction,
                         model_turn_counter,
                         None if session_source == "Cursor" else record_key,
-                        current_model_config_id,
+                        current_model_param_id,
                         boundary_source,
                     ),
                 )
@@ -1549,11 +1549,11 @@ def prune_unreferenced_records(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        DELETE FROM model_configurations
+        DELETE FROM model_params
         WHERE NOT EXISTS (
-          SELECT 1 FROM model_turns WHERE model_turns.model_config_id=model_configurations.id
+          SELECT 1 FROM model_turns WHERE model_turns.model_param_id=model_params.id
         ) AND NOT EXISTS (
-          SELECT 1 FROM sessions WHERE sessions.default_model_config_id=model_configurations.id
+          SELECT 1 FROM sessions WHERE sessions.session_model_param_id=model_params.id
         )
         """
     )

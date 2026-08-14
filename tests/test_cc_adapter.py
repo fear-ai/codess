@@ -1130,3 +1130,36 @@ class TestAssistantEffort:
             "type": "assistant", "message": {"model": "claude-opus-4-8"},
         })
         assert "reasoning_effort" not in values
+
+
+class TestModelFallback:
+    """One model asked for, another answered, both stated."""
+
+    def record(self):
+        return {
+            "type": "system", "subtype": "model_consent_fallback",
+            "uuid": "u1", "timestamp": "2026-07-20T07:27:25.493Z",
+            "originalModel": "claude-fable-5",
+            "fallbackModel": "claude-sonnet-5",
+            "choice": "switch_default", "persistedAsDefault": False,
+            "content": "Switched to Sonnet 5 for this session",
+        }
+
+    def test_fallback(self):
+        """Without this the Session shows only the model that ran, and the
+        model that was asked for is lost."""
+        from codess.adapters.cc import normalize_product_state
+
+        event = normalize_product_state(self.record(), 1, "s1", "/f", {})
+        assert event["subtype"] == "model_fallback"
+        metadata = json.loads(event["metadata"])
+        assert metadata["requested_model"] == "claude-fable-5"
+        assert metadata["fallback_model"] == "claude-sonnet-5"
+        assert metadata["fallback_choice"] == "switch_default"
+
+    def test_not_skipped(self):
+        """The record has no `message.content`, so the generic system rule
+        would drop it; the named branch runs first."""
+        from codess.adapters.cc import normalize_product_state
+
+        assert normalize_product_state(self.record(), 1, "s1", "/f", {}) is not None

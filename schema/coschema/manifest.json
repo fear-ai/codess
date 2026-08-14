@@ -4,7 +4,7 @@
   "files": {
     "contract": {
       "path": "schema/coschema/contract.json",
-      "sha256": "df15b9995cb3fea98c5f63d270e4aa757fbf6580cc6cc93f3b274bb93ded98ee"
+      "sha256": "819c9c8e42e6acca252d1ff366889b210a9c8b437c350173c2d2a0ae4bdc17b8"
     },
     "fixture_compatibility_store_meta_v2": {
       "path": "schema/coschema/fixtures/compatibility/store-meta-v2.json",
@@ -48,11 +48,11 @@
     },
     "mapping_claude": {
       "path": "schema/mappings/claude.json",
-      "sha256": "0291aeb1af4acb666905994e763514980785a2e458149ae16140f83ab934494c"
+      "sha256": "8903cd598d9539b7612e57becbfd0d0f82933cc39b593925171b349481e3f353"
     },
     "mapping_codex": {
       "path": "schema/mappings/codex.json",
-      "sha256": "a7737e8887cd0d17d83ae845ce9bd3dc7996a62d89bb630d50a902011584aa5d"
+      "sha256": "f9d44e822b445e1cc3f8e1a5026db32396177c6f0ece4b05f17c5649f295ae28"
     },
     "mapping_contract": {
       "path": "schema/coschema/mapping-contract.json",
@@ -60,11 +60,11 @@
     },
     "mapping_cursor": {
       "path": "schema/mappings/cursor.json",
-      "sha256": "5d91b9e2ce4db5da040b3cc9070ecd1a82855ea7d2bc9f4ed37123ebe4e1b826"
+      "sha256": "84ae3f3f02201b5141f897857ea7d690e51dd6bcd511b9316cf774ac9d834a1d"
     },
     "sqlite_schema": {
       "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "d4837c4939cd80ef4278d2cf3a8a29d7d96891c0a55afba2672c1ed69a922ae4"
+      "sha256": "e0f7641b1ee1111e3764747b2239e3af2035c693cdc350e477f62154a085d2b3"
     }
   },
   "format_id": "codess.coschema",

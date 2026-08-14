@@ -4,28 +4,21 @@
   "purpose": "Single-vendor column gaps that are accepted, each with the evidence for accepting it. tools/field_coverage.py --fail-on-gap fails on any gap absent from this list. An entry belongs here only when the source has been checked and shown not to carry the value, or when the null is a property of the sample rather than the decoder. A gap that is merely unexamined does not belong here: it fails the check until someone looks.",
   "accepted": [
     {
-      "column": "model_configurations.model_family",
-      "empty_for": "codex",
-      "reason": "Checked. OpenAI model names carry no family token: gpt-5.6-sol, gpt-5.5, and gpt-5.1-codex-max decompose into a generation and an optional variant, with nothing in the family position. Anthropic and Anysphere names do carry one, which is why the column is populated for the other two vendors. This became single-vendor when name resolution landed; before that it was empty for every vendor.",
-      "evidence": "codess/model_names.py resolves every observed Codex name with family=None; schema/model-aliases.json records no family for any gpt-* entry",
-      "work_item": null
-    },
-    {
-      "column": "sessions.default_model_config_id",
+      "column": "sessions.session_model_param_id",
       "empty_for": "claude",
       "reason": "Checked. Claude states the model per assistant record rather than once for the Session, so there is no session-level statement to record: 0 of 374 Claude Sessions. Codex names one in session_meta and Cursor in composerData.modelConfig, which is why both populate it. The per-turn evidence is in model_turns.",
       "evidence": "0 of 374 real Claude Sessions carry the column; no Claude record states a session-level model",
       "work_item": null
     },
     {
-      "column": "model_configurations.reasoning_effort",
+      "column": "model_params.reasoning_effort",
       "empty_for": "cursor",
       "reason": "Checked. Cursor states no effort field: across 3000 sampled bubble records the only reasoning-related key is allThinkingBlocks, which is generated content rather than a setting. The strength does appear inside the model label (claude-4.6-opus-high-thinking), but recovering it is name parsing rather than reading a stated field, so it is not a decode gap on this column. This gap became single-vendor when Claude effort decoding landed; before that the column was empty for Claude too.",
       "evidence": "cursorDiskKV bubbleId records, 3000 sampled: no key matching effort/reasoning/thinking except allThinkingBlocks",
       "work_item": null
     },
     {
-      "column": "model_configurations.service_tier",
+      "column": "model_params.service_tier",
       "empty_for": "cursor",
       "reason": "Checked. Cursor bubble records carry no tier field -- the only mode-like key across 400 sampled records is unifiedMode, which is not a service tier. Claude and Codex record one when the harness reports it.",
       "evidence": "cursorDiskKV bubbleId records, 400 sampled: no key matching tier/effort/speed",

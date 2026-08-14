@@ -218,7 +218,7 @@ def test_cursor_prompt_model_selection_configures_following_model_turn(tmp_path)
     row = conn.execute(
         """
         SELECT c.model_name_exact
-        FROM model_turns t JOIN model_configurations c ON c.id=t.model_config_id
+        FROM model_turns t JOIN model_params c ON c.id=t.model_param_id
         """
     ).fetchone()
     assert row[0] == "composer-2.5"
@@ -234,7 +234,7 @@ def test_cursor_prompt_model_selection_configures_following_model_turn(tmp_path)
             "role": "assistant", "content": "hi",
         },
     ], session_id="cursor-1")
-    assert conn.execute("SELECT COUNT(*) FROM model_configurations").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM model_params").fetchone()[0] == 1
     conn.close()
 
 
@@ -264,14 +264,14 @@ def test_model_event_settings_override_session_or_prompt_defaults(tmp_path):
     row = conn.execute(
         """
         SELECT c.model_name_exact,c.provider,c.reasoning_effort,
-               c.service_tier,c.mode,c.source_config
-        FROM model_turns t JOIN model_configurations c ON c.id=t.model_config_id
+               c.service_tier,c.mode,c.source_params
+        FROM model_turns t JOIN model_params c ON c.id=t.model_param_id
         """
     ).fetchone()
     assert tuple(row[:5]) == (
         "gpt-test", "openai", "high", "priority", "default"
     )
-    assert json.loads(row["source_config"])["configuration_provenance"]
+    assert json.loads(row["source_params"])["configuration_provenance"]
     conn.close()
 
 
@@ -280,11 +280,11 @@ def test_model_configuration_null_safe_identity_is_enforced(tmp_path):
     init_db(path)
     conn = connect(path)
     conn.execute(
-        "INSERT INTO model_configurations(model_name_exact) VALUES ('model-x')"
+        "INSERT INTO model_params(model_name_exact) VALUES ('model-x')"
     )
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO model_configurations(model_name_exact) VALUES ('model-x')"
+            "INSERT INTO model_params(model_name_exact) VALUES ('model-x')"
         )
     conn.close()
 

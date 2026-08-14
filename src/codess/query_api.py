@@ -26,7 +26,8 @@ SUPPORTED_ACTIONS = frozenset({"sessions", "overview", "events", "search"})
 SUPPORTED_FILTERS = frozenset({
     "session_ids", "event_ids", "interaction_ids", "model_turn_ids",
     "source_system_ids", "event_kinds", "statuses", "models",
-    "model_providers", "model_families", "model_revisions",
+    "model_providers", "model_lines", "model_generations",
+    "model_versions", "model_gradations", "model_variants", "model_revisions",
     "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
     "tool_names", "actor_kinds", "content_roles", "origin_kinds",
     "parent_session_ids", "session_relation_kinds", "initiation_kinds",
@@ -36,7 +37,8 @@ ACTION_FILTERS = {
     "sessions": frozenset({
         "session_ids", "source_system_ids", "parent_session_ids",
         "session_relation_kinds", "since", "until", "models",
-        "model_providers", "model_families", "model_revisions",
+        "model_providers", "model_lines", "model_generations",
+        "model_versions", "model_gradations", "model_variants", "model_revisions",
         "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
     }),
     "overview": SUPPORTED_FILTERS,
@@ -153,7 +155,8 @@ def make_request(
     for key in (
         "session_ids", "event_ids", "interaction_ids", "model_turn_ids",
         "source_system_ids", "event_kinds", "statuses", "models",
-        "model_providers", "model_families", "model_revisions",
+        "model_providers", "model_lines", "model_generations",
+        "model_versions", "model_gradations", "model_variants", "model_revisions",
         "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
         "tool_names", "actor_kinds", "content_roles", "origin_kinds",
         "parent_session_ids", "session_relation_kinds", "initiation_kinds",
@@ -265,7 +268,8 @@ def validate_request(request: dict[str, Any]) -> None:
     for key in (
         "session_ids", "event_ids", "interaction_ids", "model_turn_ids",
         "source_system_ids", "event_kinds", "statuses", "models",
-        "model_providers", "model_families", "model_revisions",
+        "model_providers", "model_lines", "model_generations",
+        "model_versions", "model_gradations", "model_variants", "model_revisions",
         "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
         "tool_names", "actor_kinds", "content_roles", "origin_kinds",
         "parent_session_ids", "session_relation_kinds", "initiation_kinds",
@@ -492,7 +496,11 @@ def session_structure_counts(
 CONFIGURATION_FILTER_COLUMNS = {
     "models": "model_name_exact",
     "model_providers": "provider",
-    "model_families": "model_family",
+    "model_lines": "model_line",
+    "model_generations": "model_generation",
+    "model_versions": "model_version",
+    "model_gradations": "model_gradation",
+    "model_variants": "model_variant",
     "model_revisions": "model_revision",
     "reasoning_efforts": "reasoning_effort",
     "speed_tiers": "speed_tier",
@@ -794,13 +802,13 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
                e.content,e.content_len,e.tool_name,e.tool_input,e.tool_output,
                COALESCE(e.normalized_status,e.source_status) AS status,
                e.artifact_path,e.source_file,
-               mc.provider,mc.model_family,mc.model_name_exact,
+               mc.provider,mc.model_gradation,mc.model_name_exact,
                mc.model_revision,mc.reasoning_effort,mc.speed_tier,
                mc.service_tier,mc.mode,e.metadata
         FROM events e JOIN sessions s ON s.id=e.session_id
         LEFT JOIN interactions i ON i.id=e.interaction_id
         LEFT JOIN model_turns mt ON mt.id=e.model_turn_id
-        LEFT JOIN model_configurations mc ON mc.id=mt.model_config_id
+        LEFT JOIN model_params mc ON mc.id=mt.model_param_id
         WHERE {predicate}
         ORDER BY (COALESCE(e.event_at,e.timestamp) IS NULL),
                  COALESCE(e.event_at,e.timestamp),s.global_id,
@@ -898,7 +906,7 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
             "source_file": record["source_file"],
             "model": record["model_name_exact"],
             "model_provider": record["provider"],
-            "model_family": record["model_family"],
+            "model_gradation": record["model_gradation"],
             "model_revision": record["model_revision"],
             "reasoning_effort": record["reasoning_effort"],
             "speed_tier": record["speed_tier"],
@@ -929,7 +937,7 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
     for field in (
         "source_system_id", "event_kind", "actor_kind", "content_role",
         "origin_kind", "tool_name", "status", "model", "model_provider",
-        "model_family", "model_revision", "reasoning_effort", "speed_tier",
+        "model_gradation", "model_revision", "reasoning_effort", "speed_tier",
         "service_tier", "model_mode",
     ):
         counts: dict[str, int] = {}
@@ -1053,10 +1061,10 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
     )
     if configuration_where:
         where.append(
-            "EXISTS (SELECT 1 FROM model_configurations mc WHERE "
-            "(mc.id=s.default_model_config_id OR EXISTS ("
+            "EXISTS (SELECT 1 FROM model_params mc WHERE "
+            "(mc.id=s.session_model_param_id OR EXISTS ("
             "SELECT 1 FROM model_turns mt WHERE mt.session_id=s.id "
-            "AND mt.model_config_id=mc.id)) AND "
+            "AND mt.model_param_id=mc.id)) AND "
             + " AND ".join(configuration_where)
             + ")"
         )
@@ -1139,7 +1147,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
     kinds: dict[str, int] = {}
     models: dict[str, int] = {}
     providers: dict[str, int] = {}
-    families: dict[str, int] = {}
+    gradations: dict[str, int] = {}
     efforts: dict[str, int] = {}
     speeds: dict[str, int] = {}
     service_tiers: dict[str, int] = {}
@@ -1208,7 +1216,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
             SELECT DISTINCT s.id FROM events e JOIN sessions s ON s.id=e.session_id
             LEFT JOIN interactions i ON i.id=e.interaction_id
             LEFT JOIN model_turns mt ON mt.id=e.model_turn_id
-            LEFT JOIN model_configurations mc ON mc.id=mt.model_config_id
+            LEFT JOIN model_params mc ON mc.id=mt.model_param_id
             WHERE {predicate}
         """, params)}
         totals["sessions"] += len(selected_sessions)
@@ -1222,7 +1230,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
         for row in conn.execute(f"""
             SELECT s.source_system_id,e.event_kind,COALESCE(e.event_at,e.timestamp),
                    LENGTH(COALESCE(e.content,'')),e.tool_name,e.artifact_path,
-                   mc.provider,mc.model_family,mc.model_name_exact,mc.model_revision,
+                   mc.provider,mc.model_gradation,mc.model_name_exact,mc.model_revision,
                    mc.reasoning_effort,mc.speed_tier,mc.service_tier,mc.mode,
                    e.actor_kind,e.content_role,s.global_id,e.interaction_id,e.global_id,
                    COALESCE(s.session_relation_kind,'top_level'),
@@ -1231,7 +1239,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
             FROM events e JOIN sessions s ON s.id=e.session_id
             LEFT JOIN interactions i ON i.id=e.interaction_id
             LEFT JOIN model_turns mt ON mt.id=e.model_turn_id
-            LEFT JOIN model_configurations mc ON mc.id=mt.model_config_id
+            LEFT JOIN model_params mc ON mc.id=mt.model_param_id
             WHERE {predicate}
         """, params):
             totals["events"] += 1
@@ -1346,7 +1354,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
                 models[row[8]] = models.get(row[8], 0) + 1
                 configurations.add(tuple(row[6:14]))
             for value, bucket in (
-                (row[6], providers), (row[7], families),
+                (row[6], providers), (row[7], gradations),
                 (row[10], efforts), (row[11], speeds),
                 (row[12], service_tiers), (row[13], modes),
             ):
@@ -1534,7 +1542,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
     daily_activity = daily_activity[-daily_activity_limit:]
     summary = {
         **totals,
-        "model_configurations": len(configurations),
+        "model_params": len(configurations),
         "first_event_at": times[0] if times else None,
         "last_event_at": times[-1] if times else None,
         "elapsed_span_ms": span,
@@ -1557,8 +1565,8 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
         "model_providers_by_event": dict(sorted(
             providers.items(), key=lambda item: (-item[1], item[0])
         )),
-        "model_families_by_event": dict(sorted(
-            families.items(), key=lambda item: (-item[1], item[0])
+        "model_gradations_by_event": dict(sorted(
+            gradations.items(), key=lambda item: (-item[1], item[0])
         )),
         "reasoning_efforts_by_event": dict(sorted(
             efforts.items(), key=lambda item: (-item[1], item[0])

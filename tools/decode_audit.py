@@ -176,14 +176,14 @@ def _linkage(conn) -> dict[str, object]:
     if "model_turns" in present:
         turns = conn.execute("SELECT COUNT(*) FROM model_turns").fetchone()[0]
         configured = conn.execute(
-            "SELECT COUNT(*) FROM model_turns WHERE model_config_id IS NOT NULL"
+            "SELECT COUNT(*) FROM model_turns WHERE model_param_id IS NOT NULL"
         ).fetchone()[0]
         report["model"] = {
             "turns": turns,
             "turns_with_configuration": configured,
             "turns_without_configuration": turns - configured,
             "configurations": conn.execute(
-                "SELECT COUNT(*) FROM model_configurations"
+                "SELECT COUNT(*) FROM model_params"
             ).fetchone()[0],
         }
     return report

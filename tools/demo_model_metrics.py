@@ -165,7 +165,7 @@ WITH interaction_observations AS (
          ) AS preference
     FROM events e
     JOIN model_turns mt ON mt.id = e.model_turn_id
-    JOIN model_configurations mc ON mc.id = mt.model_config_id
+    JOIN model_params mc ON mc.id = mt.model_param_id
    WHERE e.actor_kind = 'model'
      AND e.content_role = 'response'
      AND e.event_at >= ?

@@ -720,6 +720,17 @@ def normalize_product_state(
         metadata = {"duration_ms": record.get("durationMs"), "message_count": record.get("messageCount")}
     elif rtype == "system" and subtype == "scheduled_task_fire":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="scheduled_task_fire", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+    elif rtype == "system" and subtype == "model_consent_fallback":
+        # One model was asked for and another answered. Both names are stated, so the
+        # fallback is recorded as one fact rather than as two unrelated models: without
+        # it the Session shows only the model that ran, and the request is lost.
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="model_fallback", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        metadata = {
+            "requested_model": record.get("originalModel"),
+            "fallback_model": record.get("fallbackModel"),
+            "fallback_choice": record.get("choice"),
+            "persisted_as_default": record.get("persistedAsDefault"),
+        }
     elif rtype == "system" and subtype == "local_command":
         text = str(record.get("content") or "")
         text = _process_text(
