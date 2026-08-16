@@ -536,6 +536,41 @@ def _diagnostic(opts: dict, name: str, count: int = 1) -> None:
         diagnostics[name] = diagnostics.get(name, 0) + count
 
 
+def _record_refused(
+    opts: dict,
+    reason_code: str,
+    *,
+    source_file: str | None = None,
+    line_num: int | None = None,
+    record_type: str | None = None,
+    detail: str | None = None,
+) -> None:
+    """Record that one source record was read and not admitted.
+
+    The counter alone said *how many* records an adapter refused; this says
+    *which*, with the locator the call site already holds. Without it the
+    coverage report's record-level loss is structurally zero and that zero is
+    unfalsifiable rather than measured -- a reader cannot distinguish "no
+    record was refused" from "refusals are not recorded" (CoPlan W47).
+
+    Collected rather than written here: an adapter must not write SQL (3.3),
+    so these accumulate on `opts` and `store` persists them against the Source
+    once it is known.
+    """
+    _diagnostic(opts, reason_code)
+    pending = opts.get("record_diagnostics")
+    if pending is None:
+        return
+    pending.append({
+        "level": "record",
+        "reason_code": reason_code,
+        "source_locator": f"line:{line_num}" if line_num is not None else None,
+        "source_file": source_file,
+        "source_record_type": record_type,
+        "detail": detail,
+    })
+
+
 def _process_text(text: str, opts: dict, *, phase: str, record_type: str) -> str | None:
     from codess.content_processing import apply_processing
     return apply_processing(
@@ -981,7 +1016,12 @@ def normalize_user(
     # preceding compact boundary through parentUuid.
     if record.get("isCompactSummary"):
         if not isinstance(content, str):
-            _diagnostic(opts, "unsupported_records")
+            _record_refused(
+                opts, "unsupported_records",
+                source_file=source_file, line_num=line_num,
+                record_type="compact_summary",
+                detail="compact summary content is not text",
+            )
             if opts.get("strict_mapping"):
                 raise SourceCompatibilityError(
                     "Claude compact summary content is not text"
@@ -1099,7 +1139,12 @@ def normalize_user(
     if content is None:
         content = []
     elif not isinstance(content, list):
-        _diagnostic(opts, "unsupported_records")
+        _record_refused(
+            opts, "unsupported_records",
+            source_file=source_file, line_num=line_num,
+            record_type=record.get("type"),
+            detail=f"user content is {type(content).__name__}, not a list",
+        )
         if opts.get("strict_mapping"):
             raise SourceCompatibilityError(
                 f"unsupported Claude user content type: {type(content).__name__}"

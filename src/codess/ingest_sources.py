@@ -317,6 +317,9 @@ def _ingest_cc(
             opts, "source.start", project=str(project_path.resolve()),
             vendor="Claude", source=str(path.resolve()), source_bytes=st.st_size,
         )
+        # Reset per Source: a refusal names the record it read, so carrying the
+        # previous file's list would attribute one Source's losses to the next.
+        opts["record_diagnostics"] = []
         rel = path.relative_to(cc_dir)
         session_id = path.stem
         direct_lineage = get_cc_session_lineage(path)
@@ -396,6 +399,7 @@ def _ingest_cc(
                 session=session,
                 events=events_list,
                 session_id=session_id,
+                record_diagnostics=opts.get("record_diagnostics"),
                 after_replace=partial(
                     _record_cc_source, opts, path, external_sources, external_start,
                 ),

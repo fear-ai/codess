@@ -58,6 +58,69 @@ def update_project_entry(
     save_registry_data(registry_root, data)
 
 
+REPORTED_PATH_SAMPLE = 20
+"""How many removable paths a prune report lists before counting the rest."""
+
+
+def stale_entries(registry_root: Path) -> list[dict[str, Any]]:
+    """Registry entries whose Project path no longer exists.
+
+    The registry gains an entry for every Project ever scanned and drops none,
+    so a test run that scans a temporary directory leaves a permanent record:
+    an observed registry held 1,455 entries of which 1,424 were vanished
+    temporary paths and 31 were live (CoPlan W28).
+
+    A missing path is the only condition reported. It is deliberately not
+    "old" or "unused": a Project on removable media or an unmounted volume is
+    absent without being obsolete, which is why this reports candidates and
+    `prune_stale_entries` requires an explicit call rather than running on
+    every write.
+    """
+    entries = load_registry_data(registry_root).get("projects") or []
+    stale = []
+    for entry in entries:
+        path = entry.get("path")
+        if isinstance(path, str) and path and not Path(path).exists():
+            stale.append(entry)
+    return stale
+
+
+def prune_stale_entries(
+    registry_root: Path, *, dry_run: bool = False,
+) -> dict[str, Any]:
+    """Remove entries whose Project path no longer exists.
+
+    Returns what was removed and what remains, so a caller reports the outcome
+    rather than the intent. `dry_run` reports the same figures without
+    writing, which is what makes this safe to run before deciding.
+    """
+    data = load_registry_data(registry_root)
+    entries = data.get("projects") or []
+    removable = {
+        entry.get("path") for entry in entries
+        if isinstance(entry.get("path"), str)
+        and entry["path"]
+        and not Path(entry["path"]).exists()
+    }
+    retained = [e for e in entries if e.get("path") not in removable]
+    paths = sorted(p for p in removable if p)
+    result = {
+        "examined": len(entries),
+        "removed": len(entries) - len(retained),
+        "retained": len(retained),
+        # Bounded: an accumulated registry can hold over a thousand stale
+        # entries, and a caller needs the count plus a sample to recognize
+        # what it is looking at, not every path on stdout.
+        "removed_paths": paths[:REPORTED_PATH_SAMPLE],
+        "removed_paths_truncated": max(0, len(paths) - REPORTED_PATH_SAMPLE),
+        "dry_run": dry_run,
+    }
+    if not dry_run and result["removed"]:
+        data["projects"] = retained
+        save_registry_data(registry_root, data)
+    return result
+
+
 def merge_ingest_sources(entry: dict[str, Any], source_stats: dict[str, Any]) -> None:
     entry["last_ingestion"] = datetime.now(UTC).isoformat()
     src = dict(entry.get("sources") or {})

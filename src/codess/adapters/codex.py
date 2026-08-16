@@ -871,21 +871,14 @@ def process_file(
                             ) + 1
                         )
                     continue
-                text = apply_processing(
-                    text, opts, vendor="Codex",
-                    record_type="reasoning_summary",
-                    event_kind="message.reasoning_summary", phase="pre",
+                bounded = _bounded_content(
+                    text, opts, record_type="reasoning_summary",
+                    event_kind="message.reasoning_summary",
+                    limit=TRUNCATE_RESPONSE,
                 )
-                if text is None:
+                if bounded is None:
                     continue
-                truncated, content_len = _truncate(text, TRUNCATE_RESPONSE)
-                truncated = apply_processing(
-                    truncated, opts, vendor="Codex",
-                    record_type="reasoning_summary",
-                    event_kind="message.reasoning_summary", phase="post",
-                )
-                if truncated is None:
-                    continue
+                truncated, content_len = bounded
                 if diagnostics is not None:
                     diagnostics["reasoning_summary_records"] = (
                         diagnostics.get("reasoning_summary_records", 0) + 1
@@ -1083,23 +1076,13 @@ def process_file(
                 text = json.dumps(
                     tools, separators=(",", ":"), ensure_ascii=False
                 )
-                text = apply_processing(
-                    text, opts, vendor="Codex",
-                    record_type="tool_search_output",
-                    event_kind="tool.result", phase="pre",
+                bounded = _bounded_content(
+                    text, opts, record_type="tool_search_output",
+                    event_kind="tool.result", limit=TRUNCATE_TOOL_RESULT,
                 )
-                if text is None:
+                if bounded is None:
                     continue
-                truncated, content_len = _truncate(
-                    text, TRUNCATE_TOOL_RESULT
-                )
-                truncated = apply_processing(
-                    truncated, opts, vendor="Codex",
-                    record_type="tool_search_output",
-                    event_kind="tool.result", phase="post",
-                )
-                if truncated is None:
-                    continue
+                truncated, content_len = bounded
                 yield _annotate_source(_base_event(
                     line_num=line_num,
                     session_id=session_id,
@@ -1163,19 +1146,13 @@ def process_file(
                 application_failure = mcp_failures.get(call_id_text)
                 output = payload.get("output")
                 text = output if isinstance(output, str) else json.dumps(output, ensure_ascii=False)
-                text = apply_processing(
-                    text, opts, vendor="Codex", record_type="tool_result",
-                    event_kind="tool.result", phase="pre",
+                bounded = _bounded_content(
+                    text, opts, record_type="tool_result",
+                    event_kind="tool.result", limit=TRUNCATE_TOOL_RESULT,
                 )
-                if text is None:
+                if bounded is None:
                     continue
-                truncated, content_len = _truncate(text, TRUNCATE_TOOL_RESULT)
-                truncated = apply_processing(
-                    truncated, opts, vendor="Codex", record_type="tool_result",
-                    event_kind="tool.result", phase="post",
-                )
-                if truncated is None:
-                    continue
+                truncated, content_len = bounded
                 yield _annotate_source(_base_event(
                     line_num=line_num,
                     session_id=session_id,
@@ -1565,6 +1542,48 @@ def process_file(
                 diagnostics["ignored_records"] = (
                     diagnostics.get("ignored_records", 0) + 1
                 )
+
+
+def _bounded_content(
+    text: str | None,
+    opts: dict,
+    *,
+    record_type: str,
+    event_kind: str,
+    limit: int,
+) -> tuple[str, int] | None:
+    """Apply content policy, bound the result, and apply it again.
+
+    Returns `(content, original_length)`, or None when the policy dropped the
+    value at either phase -- which the caller reads as "skip this record".
+
+    Every content-bearing branch repeated the same five steps: process before
+    bounding, check for a drop, truncate, process after bounding, check again.
+    Twenty of `process_file`'s branches were those two `None` guards rather
+    than record dispatch, so the shape of the function said "many kinds of
+    record" when it mostly said "one policy applied many times" (CoPlan W42).
+
+    Both phases are kept because they answer different questions: the pre
+    phase sees the whole value and can reject it on content, while the post
+    phase sees what will actually be stored. Collapsing them into one call
+    would change what the policy is applied to, not merely how it is written.
+    """
+    if text is None:
+        return None
+    processed = apply_processing(
+        text, opts, vendor="Codex", record_type=record_type,
+        event_kind=event_kind, phase="pre",
+    )
+    if processed is None:
+        return None
+    truncated, content_len = _truncate(processed, limit)
+    truncated = apply_processing(
+        truncated, opts, vendor="Codex", record_type=record_type,
+        event_kind=event_kind, phase="post",
+    )
+    if truncated is None:
+        return None
+    return truncated, content_len
 
 
 def _truncate(text: str, limit: int) -> tuple[str, int]:

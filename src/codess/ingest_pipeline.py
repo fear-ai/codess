@@ -68,12 +68,20 @@ def commit_source_replacement(
     events: list[dict[str, Any]],
     session_id: str,
     after_replace: Callable[[Any], None] | None = None,
+    record_diagnostics: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Atomically replace normalized rows and related source observations."""
+    """Atomically replace normalized rows and related source observations.
+
+    `record_diagnostics` travel with the replacement rather than being written
+    separately, so a Source's refusals commit with the rows it did produce: a
+    rollback must not leave a diagnostic claiming a record was refused from a
+    decode that never landed.
+    """
     conn = connect(store_path)
     try:
         replace_session_events(
-            conn, session, events, session_id=session_id, prune=False
+            conn, session, events, session_id=session_id, prune=False,
+            record_diagnostics=record_diagnostics,
         )
         if after_replace is not None:
             after_replace(conn)

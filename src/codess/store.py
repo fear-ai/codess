@@ -1118,6 +1118,61 @@ def _record_diagnostic(
     )
 
 
+
+def record_source_diagnostics(
+    conn: sqlite3.Connection,
+    source_id: int | None,
+    pending: Iterable[dict[str, Any]],
+    *,
+    session_id: str | None = None,
+) -> int:
+    """Persist record- and source-level diagnostics collected during decode.
+
+    `mapping_diagnostics.level` declares `source`, `record`, and `field`, and
+    only `field` had ever been written -- so the coverage report's
+    record-level loss was structurally zero, and that zero was unfalsifiable
+    rather than measured (CoPlan W47). Adapters collect these while decoding,
+    holding the locator they would otherwise discard into a counter; this is
+    where they reach the store.
+
+    Scoped to the Source rather than an Event, which is the point: a refused
+    record produced no Event, so there is no row to hang it on. `session_id`
+    is attached when the refusal happened inside a known Session and left null
+    otherwise, since a Source-level refusal precedes any Session.
+
+    Returns how many rows were written, so a caller can report what it stored
+    rather than what it was handed.
+    """
+    written = 0
+    now = datetime.now(UTC).isoformat()
+    for item in pending:
+        detail = item.get("detail")
+        locator = item.get("source_locator")
+        if locator and detail:
+            detail = f"{locator}: {detail}"
+        elif locator:
+            detail = str(locator)
+        conn.execute(
+            """
+            INSERT INTO mapping_diagnostics(
+              source_id, session_id, event_id, level, severity, reason_code,
+              source_field, source_value, mapping_rule, detail, created_at)
+            VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                source_id, session_id,
+                str(item.get("level") or "record"),
+                str(item.get("severity") or "warn"),
+                str(item["reason_code"]),
+                item.get("source_record_type"),
+                item.get("source_file"),
+                detail, now,
+            ),
+        )
+        written += 1
+    return written
+
+
 def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -> None:
     subtype = event.get("subtype")
     result_subtypes = {"tool_result", "tool_failure", "permission_denied"}
@@ -1514,8 +1569,16 @@ def replace_session_events(
     *,
     session_id: str,
     prune: bool = True,
+    record_diagnostics: Iterable[dict[str, Any]] | None = None,
 ) -> None:
-    """Replace one transcript-backed session inside the caller's transaction."""
+    """Replace one transcript-backed session inside the caller's transaction.
+
+    `record_diagnostics` are refusals an adapter collected while decoding --
+    records it read and did not admit. They are written here rather than by
+    the adapter because an adapter must not write SQL (3.3), and here rather
+    than earlier because a refusal is scoped to the Source, whose row id is
+    only resolved below (W47).
+    """
     conn.execute("DELETE FROM events WHERE session_id=?", (session_id,))
     conn.execute("DELETE FROM tool_invocations WHERE session_id=?", (session_id,))
     conn.execute("DELETE FROM model_turns WHERE session_id=?", (session_id,))
@@ -1534,6 +1597,10 @@ def replace_session_events(
     enriched_session = dict(session)
     enriched_session["source_id"] = source_id
     upsert_session(conn, enriched_session)
+    if record_diagnostics:
+        record_source_diagnostics(
+            conn, source_id, record_diagnostics, session_id=session_id,
+        )
     for event in _prepare_event_groups(conn, session_id, events):
         event["source_id"] = source_id
         row_id = upsert_event(conn, event)

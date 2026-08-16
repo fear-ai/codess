@@ -27,6 +27,7 @@ from codess.config import (
     GB,
     LARGE_EVENT_COUNT,
     LARGE_STORE_BYTES,
+    MANIFEST_FILE,
     MAX_RECORD_BYTES,
     RAW_MODE_CHOICES,
     REGISTRY,
@@ -281,6 +282,18 @@ def build_parser() -> argparse.ArgumentParser:
     freeze.add_argument("--approved", type=Path, default=REPO_ROOT / "catalog/approved-baselines.json")
     freeze.add_argument("--reviewed", type=Path, default=REPO_ROOT / "catalog/reviewed-baselines.json")
     freeze.set_defaults(handler=_baseline_freeze)
+    recover_pointer = baseline_commands.add_parser("recover-pointer")
+    recover_pointer.add_argument("--project", type=Path, required=True)
+    recover_pointer.add_argument("--registry", type=Path, default=REGISTRY)
+    recover_pointer.add_argument("--project-id")
+    recover_pointer.set_defaults(handler=_baseline_recover_pointer)
+    recover_manifest = baseline_commands.add_parser("recover-manifest")
+    recover_manifest.add_argument("--snapshot", type=Path, required=True)
+    recover_manifest.add_argument(
+        "--apply", action="store_true",
+        help="write the reconstructed manifest; without it the run only reports",
+    )
+    recover_manifest.set_defaults(handler=_baseline_recover_manifest)
     verify = baseline_commands.add_parser("verify")
     verify.add_argument("--catalog", type=Path, default=REPO_ROOT / "catalog/reviewed-baselines.json")
     verify.set_defaults(handler=_baseline_verify)
@@ -397,6 +410,13 @@ def build_parser() -> argparse.ArgumentParser:
     prune.add_argument("--receipt", type=Path)
     prune.add_argument("--output", type=Path)
     prune.set_defaults(handler=_storage_prune)
+    registry_prune = storage_commands.add_parser("registry-prune")
+    registry_prune.add_argument("--registry", type=Path, default=REGISTRY)
+    registry_prune.add_argument(
+        "--apply", action="store_true",
+        help="remove the reported entries; without it the run only reports",
+    )
+    registry_prune.set_defaults(handler=_registry_prune)
     token_validate = storage_commands.add_parser("token-validate")
     token_validate.add_argument("--registry", type=Path, default=REGISTRY)
     token_validate.add_argument("--output", type=Path)
@@ -778,6 +798,59 @@ def _session_names(args) -> int:
     return 0
 
 
+def _baseline_recover_pointer(args) -> int:
+    """Rebuild a lost or corrupted `current.json` from a retained snapshot.
+
+    `snapshot.recover_current_snapshot` could do this and no command reached
+    it, so Operations 10.5 directed an operator with a hash mismatch to
+    `codess baseline`, which cannot (W41). The operation is safe to run
+    unconditionally: it republishes an existing snapshot that still validates
+    and creates nothing, so it needs no `--apply` gate.
+    """
+    from codess.snapshot import SnapshotError, recover_current_snapshot
+
+    try:
+        result = recover_current_snapshot(
+            args.project, registry_root=args.registry, project_id=args.project_id,
+        )
+    except SnapshotError as exc:
+        print(f"codess: cannot recover current pointer: {exc}", file=sys.stderr)
+        return 1
+    _json(result)
+    return 0
+
+
+def _baseline_recover_manifest(args) -> int:
+    """Reconstruct a corrupted `manifest.json` from the surviving stores.
+
+    Reports by default and writes only under `--apply`, because unlike the
+    pointer recovery this replaces a file: three fields (`parent_snapshot_id`,
+    `build_policy`, `build_policy_digest`) are recorded nowhere else and come
+    back as null, so an operator should see what is recoverable before
+    overwriting what is there.
+    """
+    from codess.snapshot import SnapshotError, rebuild_manifest
+
+    try:
+        manifest = rebuild_manifest(args.snapshot)
+    except SnapshotError as exc:
+        print(f"codess: cannot reconstruct manifest: {exc}", file=sys.stderr)
+        return 1
+    if args.apply:
+        write_json_atomic(args.snapshot / MANIFEST_FILE, manifest)
+    _json({
+        "snapshot": str(args.snapshot),
+        "written": bool(args.apply),
+        "unrecoverable_fields": sorted(
+            key for key in
+            ("parent_snapshot_id", "build_policy", "build_policy_digest")
+            if manifest.get(key) is None
+        ),
+        "manifest": manifest,
+    })
+    return 0
+
+
 def _storage_report(args) -> int:
     if args.codess_limit_gb <= 0 or args.cursor_limit_gb <= 0:
         raise ValueError("storage size limits must be positive")
@@ -790,6 +863,22 @@ def _storage_report(args) -> int:
         cursor_limit=GB(args.cursor_limit_gb),
     )
     _write_optional(args.output, report)
+    return 0
+
+
+def _registry_prune(args) -> int:
+    """Report, and optionally remove, registry entries whose path is gone.
+
+    The registry gains an entry per Project ever scanned and drops none, so a
+    test run that scans a temporary directory leaves a permanent record. This
+    reports by default and removes only under `--apply`, matching the other
+    storage operations: a path can be absent because a volume is unmounted
+    rather than because the Project is gone (W28).
+    """
+    from codess.registry_store import prune_stale_entries
+
+    result = prune_stale_entries(args.registry, dry_run=not args.apply)
+    _json(result)
     return 0
 
 

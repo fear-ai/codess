@@ -1080,3 +1080,62 @@ class TestDecodedOutput:
         from codess.adapters.codex import _decoded_output
 
         assert _decoded_output("here is what I found\nOutput:\nstuff") is None
+
+
+class TestBoundedContent:
+    """One helper for the process/bound/process sequence (W42).
+
+    Every content-bearing branch repeated five steps, and twenty of
+    `process_file`'s branches were the two `None` guards rather than record
+    dispatch -- so the function's shape said "many kinds of record" where it
+    mostly said "one policy applied many times".
+    """
+
+    def test_absent_text_is_dropped(self):
+        from codess.adapters.codex import _bounded_content
+
+        assert _bounded_content(
+            None, {"redact": False}, record_type="r",
+            event_kind="message.response", limit=100,
+        ) is None
+
+    def test_content_within_the_limit_is_returned_whole(self):
+        from codess.adapters.codex import _bounded_content
+
+        bounded = _bounded_content(
+            "short", {"redact": False}, record_type="r",
+            event_kind="message.response", limit=100,
+        )
+        assert bounded == ("short", 5)
+
+    def test_the_original_length_survives_truncation(self):
+        """The stored length describes the source, not the stored text.
+
+        A reader comparing `content_len` against the content sees that it was
+        bounded; reporting the truncated length would hide it.
+        """
+        from codess.adapters.codex import _bounded_content
+
+        content, original = _bounded_content(
+            "x" * 50, {"redact": False}, record_type="r",
+            event_kind="message.response", limit=10,
+        )
+        assert original == 50
+        assert len(content) == 10
+        assert content.endswith("…")
+
+    def test_a_policy_drop_at_either_phase_skips_the_record(self, monkeypatch):
+        """Both phases can refuse, and both mean the same to the caller."""
+        import codess.adapters.codex as codex
+
+        for dropped_phase in ("pre", "post"):
+            monkeypatch.setattr(
+                codex, "apply_processing",
+                lambda text, opts, *, phase, **kw: (
+                    None if phase == dropped_phase else text
+                ),
+            )
+            assert codex._bounded_content(
+                "text", {"redact": False}, record_type="r",
+                event_kind="message.response", limit=100,
+            ) is None, f"a drop at the {dropped_phase} phase must skip the record"

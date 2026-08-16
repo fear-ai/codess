@@ -1033,3 +1033,128 @@ class TestConnectionEnforcesConstraints:
             assert conn.execute("PRAGMA foreign_key_list(store_meta)").fetchall() == []
         finally:
             conn.close()
+
+
+class TestRecordLevelDiagnostics:
+    """A refused record is queryable with its reason and locator.
+
+    `mapping_diagnostics.level` declares `source`, `record`, and `field`, and
+    only `field` had ever been written -- 13,432 rows across real stores, none
+    at the other two. So the coverage report stated zero record-level loss and
+    that zero was unfalsifiable rather than measured: a reader could not tell
+    "nothing was refused" from "refusals are not recorded" (CoPlan W47).
+    """
+
+    def test_a_refusal_is_written_against_its_source(self, tmp_path):
+        from codess.store import record_source_diagnostics
+
+        db = tmp_path / "diag.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            written = record_source_diagnostics(
+                conn, None,
+                [{
+                    "level": "record",
+                    "reason_code": "unsupported_records",
+                    "source_locator": "line:7",
+                    "source_file": "/s/session.jsonl",
+                    "source_record_type": "user",
+                    "detail": "user content is dict, not a list",
+                }],
+            )
+            conn.commit()
+            assert written == 1
+            row = conn.execute(
+                "SELECT level, reason_code, source_field, source_value, detail, event_id "
+                "FROM mapping_diagnostics"
+            ).fetchone()
+            assert row["level"] == "record"
+            assert row["reason_code"] == "unsupported_records"
+            assert row["source_field"] == "user"
+            assert row["source_value"] == "/s/session.jsonl"
+            assert "line:7" in row["detail"]
+            assert row["event_id"] is None, (
+                "a refused record produced no Event to hang the diagnostic on"
+            )
+        finally:
+            conn.close()
+
+    def test_the_locator_survives_into_the_stored_detail(self, tmp_path):
+        """Which record was refused, not merely that one was."""
+        from codess.store import record_source_diagnostics
+
+        db = tmp_path / "locator.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            record_source_diagnostics(
+                conn, None,
+                [{"reason_code": "malformed_records", "source_locator": "line:42"}],
+            )
+            conn.commit()
+            detail = conn.execute(
+                "SELECT detail FROM mapping_diagnostics"
+            ).fetchone()[0]
+            assert "line:42" in detail
+        finally:
+            conn.close()
+
+    def test_a_source_level_refusal_carries_no_session(self, tmp_path):
+        """A whole Source skipped precedes any Session."""
+        from codess.store import record_source_diagnostics
+
+        db = tmp_path / "source.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            record_source_diagnostics(
+                conn, None,
+                [{"level": "source", "reason_code": "failed_sources",
+                  "source_file": "/s/broken.jsonl"}],
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT level, session_id FROM mapping_diagnostics"
+            ).fetchone()
+            assert (row["level"], row["session_id"]) == ("source", None)
+        finally:
+            conn.close()
+
+    def test_an_adapter_refusal_reaches_the_store(self, tmp_path):
+        """End to end: decode refuses, and the store can be asked about it."""
+        import json as _json
+
+        from codess.adapters.cc import process_file
+        from codess.ingest_pipeline import commit_source_replacement
+
+        source = tmp_path / "session.jsonl"
+        source.write_text(_json.dumps({
+            "type": "user", "uuid": "u1", "sessionId": "s1",
+            "message": {"role": "user", "content": {"unexpected": True}},
+        }) + "\n", encoding="utf-8")
+
+        opts = {"redact": False, "diagnostics": {}, "record_diagnostics": []}
+        assert list(process_file(source, "s1", opts)) == []
+        assert opts["diagnostics"]["unsupported_records"] == 1
+
+        db = tmp_path / "end-to-end.db"
+        init_db(db)
+        commit_source_replacement(
+            db,
+            session={"id": "s1", "source": "Claude", "type": "Code",
+                     "project_path": str(tmp_path)},
+            events=[{"session_id": "s1", "event_id": "e0",
+                     "event_type": "user_message", "subtype": "prompt",
+                     "role": "user", "content": "x", "source_file": str(source)}],
+            session_id="s1",
+            record_diagnostics=opts["record_diagnostics"],
+        )
+        conn = connect(db, read_only=True)
+        try:
+            levels = dict(
+                conn.execute("SELECT level, COUNT(*) FROM mapping_diagnostics GROUP BY 1")
+            )
+            assert levels.get("record") == 1
+        finally:
+            conn.close()

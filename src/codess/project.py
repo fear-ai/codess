@@ -37,22 +37,58 @@ CLI_VERSION = __version__
 # --- Git / slug / vendor layout ---
 
 
-def get_project_root(cwd: Path | None = None) -> Path:
-    """Run git rev-parse --show-toplevel; on failure return cwd or Path.cwd()."""
-    cwd = cwd or Path.cwd()
+def _git_output(cwd: Path, *arguments: str) -> str | None:
+    """One `git rev-parse` reading, or None when git cannot answer.
+
+    A missing git, a directory that is not a repository, and a timeout are all
+    "no Git information available" rather than failures: discovery falls back
+    to the path it was given.
+    """
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=5,
+        result = subprocess.run(
+            ["git", "rev-parse", *arguments],
+            cwd=cwd, capture_output=True, text=True, timeout=5,
         )
-        if out.returncode == 0 and out.stdout.strip():
-            return Path(out.stdout.strip())
-    except (subprocess.SubprocessError, FileNotFoundError) as e:
-        log.warning("git rev-parse failed: %s; using cwd", e)
-    return cwd
+    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+        log.warning("git rev-parse %s failed: %s", " ".join(arguments), exc)
+        return None
+    output = result.stdout.strip()
+    return output if result.returncode == 0 and output else None
+
+
+def get_project_root(cwd: Path | None = None) -> Path:
+    """The repository a path belongs to, counting worktrees as one Project.
+
+    Resolved from `--git-common-dir` rather than `--show-toplevel`, because
+    the latter returns the *worktree* root: two linked worktrees of one
+    repository reported two roots, so they became two Projects with one
+    location each. Codess.md 7 states that one repository is one Project and
+    that worktrees are observations of it, and `project_locations` exists to
+    hold them -- but discovery could not produce the multi-location case at
+    all, which is why every registered Project had exactly one (W49).
+
+    `--git-common-dir` names the shared `.git` directory: identical for every
+    worktree of a repository, distinct across repositories. Its parent is the
+    repository root. It is relative to the working directory when the
+    repository is ordinary and absolute from a linked worktree, so it is
+    resolved against `cwd` before the parent is taken.
+
+    A bare repository reports `.` and has no worktree, so it falls back to
+    `--show-toplevel`, which fails there and leaves `cwd` -- the same answer
+    as before for a case that has no checkout to attribute anyway.
+    """
+    cwd = cwd or Path.cwd()
+    common = _git_output(cwd, "--git-common-dir")
+    if common:
+        resolved = Path(common)
+        if not resolved.is_absolute():
+            resolved = cwd / resolved
+        # A bare repository's common dir is the repository itself, so it has
+        # no parent worktree to name; anything else is `<root>/.git`.
+        if resolved.name == ".git":
+            return resolved.parent.resolve()
+    toplevel = _git_output(cwd, "--show-toplevel")
+    return Path(toplevel) if toplevel else cwd
 
 
 def get_cc_projects_dir() -> Path:

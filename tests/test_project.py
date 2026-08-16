@@ -1,6 +1,8 @@
 """Project/slug corner cases and edge cases."""
 
 import json
+import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +18,7 @@ from codess.cursor_source import (
 from codess.project import (
     RootsWhenEmpty,
     find_slug_for_project,
+    get_project_root,
     path_to_slug,
     resolve_cli_roots,
     slug_to_path,
@@ -250,3 +253,70 @@ class TestGetCursorPaths:
         (ws / "state.vscdb").touch()
         monkeypatch.setattr("codess.cursor_source.CURSOR_DATA", base)
         assert get_cursor_workspace_ids(project) == []
+
+
+class TestProjectRootIdentifiesTheRepository:
+    """One repository is one Project; worktrees are observations of it.
+
+    `--show-toplevel` returns the *worktree* root, so two linked worktrees
+    reported two roots and became two Projects with one location each --
+    which is why every registered Project had exactly one, and why the
+    multi-location path `project_locations` exists for could not arise from
+    discovery at all (W49).
+    """
+
+    def _repo(self, path, *, commit=True):
+        path.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=path, check=True, timeout=30)
+        if commit:
+            subprocess.run(
+                ["git", "commit", "-q", "--allow-empty", "-m", "x"],
+                cwd=path, check=True, timeout=30,
+                env={**os.environ,
+                     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+                     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"},
+            )
+        return path
+
+    def test_an_ordinary_repository_is_its_own_root(self, tmp_path):
+        repo = self._repo(tmp_path / "repo")
+        assert get_project_root(repo) == repo.resolve()
+
+    def test_a_nested_directory_resolves_to_the_repository(self, tmp_path):
+        repo = self._repo(tmp_path / "repo")
+        nested = repo / "src" / "deep"
+        nested.mkdir(parents=True)
+        assert get_project_root(nested) == repo.resolve()
+
+    def test_two_worktrees_of_one_repository_share_a_root(self, tmp_path):
+        """The defect: these were two Projects, and are one."""
+        repo = self._repo(tmp_path / "repo")
+        worktree = tmp_path / "linked"
+        subprocess.run(
+            ["git", "worktree", "add", "-q", str(worktree)],
+            cwd=repo, check=True, timeout=30,
+        )
+        assert get_project_root(worktree) == repo.resolve()
+        assert get_project_root(repo) == get_project_root(worktree)
+
+    def test_separate_repositories_stay_separate(self, tmp_path):
+        """A clone with its own history is not merged with its origin."""
+        first = self._repo(tmp_path / "one")
+        second = self._repo(tmp_path / "two")
+        assert get_project_root(first) != get_project_root(second)
+
+    def test_a_directory_outside_any_repository_is_returned_unchanged(self, tmp_path):
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        assert get_project_root(plain) == plain
+
+    def test_a_bare_repository_does_not_derive_a_bogus_root(self, tmp_path):
+        """A bare repository reports `.` and has no worktree to attribute.
+
+        Taking the parent of that would name the directory *containing* the
+        repository, which is not a Project. It falls back instead.
+        """
+        bare = tmp_path / "bare.git"
+        bare.mkdir()
+        subprocess.run(["git", "init", "-q", "--bare"], cwd=bare, check=True, timeout=30)
+        assert get_project_root(bare) == bare

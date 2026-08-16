@@ -398,8 +398,26 @@ Investigate before bypassing: compare `current.json`'s recorded
 `manifest_sha256` against a fresh hash of the retained `manifest.json`, and
 confirm whether the snapshot directory was touched outside normal Codess
 operation (an interrupted publish, manual editing, or a restored backup are
-the ordinary causes). `codess baseline` commands can rebuild or verify a
-snapshot from its retained stores.
+the ordinary causes).
+
+Two recovery commands rebuild what was lost, and which to use depends on
+which file is damaged:
+
+```bash
+# current.json lost or corrupt: republish the newest snapshot that validates.
+codess baseline recover-pointer --project /path/to/project
+
+# manifest.json corrupt: reconstruct it from the surviving stores.
+codess baseline recover-manifest --snapshot /path/to/project/.codess/snapshots/<id>
+codess baseline recover-manifest --snapshot <...> --apply
+```
+
+`recover-pointer` republishes an existing snapshot and creates nothing, so it
+needs no confirmation. `recover-manifest` reports by default and writes only
+under `--apply`, because `parent_snapshot_id`, `build_policy`, and
+`build_policy_digest` are recorded nowhere else and come back null: review
+what is recoverable before overwriting what is there. The reconstructed
+document carries `"reconstructed": true`.
 
 `--no-hash` skips this verification; see
 [Integrity Check Overrides](#106-integrity-check-overrides) for its behavior

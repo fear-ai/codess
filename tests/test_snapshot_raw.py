@@ -17,6 +17,7 @@ from codess.raw_store import (
     restore_raw,
     verify_raw,
 )
+from codess.schema_contract import FORMAT_VERSION
 from codess.snapshot import (
     SnapshotContractMismatchError,
     SnapshotError,
@@ -909,3 +910,54 @@ def test_a_store_disagreeing_with_its_own_manifest_is_refused(tmp_path):
 
     with pytest.raises(SnapshotContractMismatchError, match="different CoSchema"):
         snapshot_store_paths(project, snapshot.name, allow_contract_mismatch=True)
+
+
+class TestRecoveryIsReachable:
+    """Both recovery operations have a command route (W41).
+
+    `recover_current_snapshot` and `rebuild_manifest` existed and no command
+    reached either, so Operations 10.5 directed an operator with a hash
+    mismatch to `codess baseline`, which could not do the job. Dead-code
+    detection reported both; the defect was the missing route.
+    """
+
+    def test_a_lost_pointer_is_rebuilt_from_a_retained_snapshot(self, tmp_path):
+        project, _store, snapshot = _snapshot_project(tmp_path)
+        pointer = project / ".codess" / "current.json"
+        assert pointer.exists()
+        pointer.unlink()
+
+        recovered = recover_current_snapshot(project)
+
+        assert pointer.exists()
+        assert recovered["snapshot_id"] == snapshot.name
+
+    def test_recovery_reports_when_nothing_can_be_recovered(self, tmp_path):
+        """An empty Project fails with the reason, not a traceback."""
+        project = tmp_path / "bare"
+        (project / ".codess").mkdir(parents=True)
+        with pytest.raises(SnapshotError, match="no retained snapshots"):
+            recover_current_snapshot(project)
+
+    def test_a_corrupt_manifest_is_reconstructed_from_the_stores(self, tmp_path):
+        _project, _store, snapshot = _snapshot_project(tmp_path)
+        (snapshot / "manifest.json").write_text("not json", encoding="utf-8")
+
+        rebuilt = rebuild_manifest(snapshot)
+
+        assert rebuilt["reconstructed"] is True
+        assert rebuilt["format_version"] == FORMAT_VERSION
+        assert rebuilt["snapshot_id"] == snapshot.name
+
+    def test_the_unrecoverable_fields_come_back_null(self, tmp_path):
+        """Stated rather than silently defaulted.
+
+        These three are recorded nowhere but the manifest itself, so a
+        reconstruction cannot restore them and must not invent them.
+        """
+        _project, _store, snapshot = _snapshot_project(tmp_path)
+        rebuilt = rebuild_manifest(snapshot)
+        for field_name in (
+            "parent_snapshot_id", "build_policy", "build_policy_digest",
+        ):
+            assert rebuilt[field_name] is None
