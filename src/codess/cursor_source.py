@@ -633,12 +633,12 @@ def _selection_marker(
             _fingerprint_value(digest, trailing)
     return {
         "source_revision": (
-            f"cursor-selection-sha256-fingerprint:{digest.hexdigest()}"
+            f"cursor-selection-digest-fingerprint:{digest.hexdigest()}"
         ),
         "source_mtime": latest_timestamp,
         "source_size": selected_bytes,
         "fingerprint_method": (
-            "cursor-workspace-header-source-key-length-edge-sha256-fingerprint-v2"
+            "cursor-workspace-header-source-key-length-edge-digest-fingerprint-v2"
         ),
         "consistency": "sqlite-read-transaction",
         "workspace_count": len(workspace_ids),

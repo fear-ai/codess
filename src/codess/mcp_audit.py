@@ -154,7 +154,7 @@ def _store_records(
             FROM tool_invocations ti
             JOIN sessions s ON s.id=ti.session_id
             LEFT JOIN tool_results tr ON tr.invocation_id=ti.id
-            ORDER BY ti.session_id,ti.started_at,ti.id,tr.sequence_no
+            ORDER BY ti.session_id,ti.source_started_at,ti.id,tr.sequence_no
             """
         ).fetchall()
         records = []

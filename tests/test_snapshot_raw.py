@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import zstandard
 
+from codess.fileio import hash_file
 from codess.ingest_sources import _record_raw
 from codess.raw_store import (
     RawCaptureError,
@@ -17,6 +18,7 @@ from codess.raw_store import (
     verify_raw,
 )
 from codess.snapshot import (
+    SnapshotContractMismatchError,
     SnapshotError,
     create_snapshot,
     current_raw_records,
@@ -222,7 +224,7 @@ def test_raw_capture_updates_normalized_source_provenance(tmp_path):
         conn,
     )
     row = conn.execute(
-        "SELECT availability, capture_method, consistency, content_sha256 FROM sources"
+        "SELECT availability, capture_method, consistency, content_digest FROM sources"
     ).fetchone()
     assert tuple(row[:3]) == ("captured", "stable-file-read", "stable")
     assert row[3] == records[0]["object_id"].removeprefix("sha256:")
@@ -300,7 +302,7 @@ def test_snapshot_is_validated_promoted_and_sealable(tmp_path):
     manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["software_version"]
     assert manifest["runtime"]["sqlite"]
-    assert len(manifest["build_policy_sha256"]) == 64
+    assert len(manifest["build_policy_digest"]) == 64
     assert (snapshot / "raw" / record["object_relpath"]).exists()
     resolved = current_stores(project)
     assert len(resolved) == 1
@@ -505,7 +507,7 @@ def test_rebuild_manifest_reproduces_recoverable_fields(tmp_path):
     assert rebuilt["reconstructed"] is True
     assert rebuilt["snapshot_id"] == original["snapshot_id"]
     assert rebuilt["format_version"] == original["format_version"]
-    assert rebuilt["package_digest"] == original["package_digest"]
+    assert rebuilt["contract_digest"] == original["contract_digest"]
     assert rebuilt["raw_manifest_sha256"] == original["raw_manifest_sha256"]
     assert rebuilt["stores"] == original["stores"]
     assert rebuilt["parent_snapshot_id"] is None
@@ -549,10 +551,10 @@ def test_retained_snapshot_requires_exact_package_unless_explicitly_compatible(
     assert snapshot_store_paths(project, snapshot_id)
 
     monkeypatch.setattr("codess.snapshot.contract_digest", lambda: "f" * 64)
-    with pytest.raises(SnapshotError, match="package digest mismatch"):
+    with pytest.raises(SnapshotError, match="different CoSchema contract"):
         snapshot_store_paths(project, snapshot_id)
     assert snapshot_store_paths(
-        project, snapshot_id, allow_package_mismatch=True
+        project, snapshot_id, allow_contract_mismatch=True
     )
 
 
@@ -749,3 +751,161 @@ def test_copy_gated_before_stamp(tmp_path, monkeypatch):
     finally:
         stamped.close()
     assert "snapshot_created_at" not in keys
+
+
+def _snapshot_project(tmp_path):
+    """One project with a store and a published snapshot."""
+    project = tmp_path / "project"
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"message":"x"}\n', encoding="utf-8")
+    store = project / ".codess" / "sessions_codex.db"
+    init_db(store)
+    conn = connect(store)
+    replace_session_events(
+        conn,
+        {"id": "s1", "source": "Codex", "type": "Code", "project_path": str(project)},
+        [{"session_id": "s1", "event_id": "1", "event_type": "user_message",
+          "subtype": "prompt", "role": "user", "content": "hello",
+          "source_file": str(source)}],
+        session_id="s1",
+    )
+    conn.commit()
+    conn.close()
+    raw = RawStore(tmp_path / "raw")
+    snapshot = create_snapshot(project, [store], [], raw_store=raw)
+    return project, store, snapshot
+
+
+class TestContractMismatchIsTyped:
+    """A contract mismatch is distinguishable without reading the message.
+
+    `project_catalog` classified this by matching message text, so rewording
+    the operator-facing string silently reclassified the Project's status.
+    The type carries the distinction now, and these tests fix that.
+    """
+
+    def test_mismatch_is_a_snapshot_error(self):
+        """Existing handlers catching SnapshotError still catch it."""
+        assert issubclass(SnapshotContractMismatchError, SnapshotError)
+
+    def test_a_differing_contract_raises_the_typed_error(self, tmp_path):
+        project, _store, snapshot = _snapshot_project(tmp_path)
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["contract_digest"] = "0" * 64
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(SnapshotContractMismatchError):
+            snapshot_store_paths(project, snapshot.name)
+
+    def test_the_message_names_the_rebuild_command(self, tmp_path):
+        """The remedy is in the message because nothing else states it.
+
+        Codess rebuilds rather than migrates, so a reader told only that the
+        contract differs has no way to learn what resolves it.
+        """
+        project, _store, snapshot = _snapshot_project(tmp_path)
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["contract_digest"] = "0" * 64
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(SnapshotContractMismatchError, match="ingest --force"):
+            snapshot_store_paths(project, snapshot.name)
+
+    def test_an_explicit_reader_may_still_open_it(self, tmp_path):
+        """`--snapshot-contract-policy read-compatible` is the opt-in.
+
+        The manifest and the store it names are tampered together, because
+        they are checked against each other independently of whether they
+        match the running software -- that internal agreement is what proves
+        the snapshot was not partly rewritten, and the opt-in does not waive
+        it.
+        """
+        project, _store, snapshot = _snapshot_project(tmp_path)
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["contract_digest"] = "0" * 64
+        for name in manifest["stores"]:
+            retained = snapshot / name
+            conn = sqlite3.connect(retained)
+            conn.execute(
+                "UPDATE store_meta SET value=? WHERE key='contract_digest'",
+                ("0" * 64,),
+            )
+            conn.commit()
+            conn.close()
+            manifest["stores"][name]["sha256"] = hash_file(retained)
+            manifest["stores"][name]["size"] = retained.stat().st_size
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        paths = snapshot_store_paths(
+            project, snapshot.name, allow_contract_mismatch=True
+        )
+        assert [path.name for path in paths] == list(manifest["stores"])
+
+
+class TestUnsupportedFormatNamesTheRemedy:
+    """A store from an older format states what resolves it.
+
+    The bare "unsupported CoSchema format" left an operator with no next
+    step, which matters more than usual here because a single-vendor
+    `--force` cannot fix it -- a store set publishes whole.
+    """
+
+    def test_an_older_snapshot_format_names_the_rebuild(self, tmp_path):
+        project, _store, snapshot = _snapshot_project(tmp_path)
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["format_version"] = 4
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(SnapshotError, match="ingest --force") as caught:
+            snapshot_store_paths(project, snapshot.name)
+        assert "format 4" in str(caught.value)
+
+    def test_a_store_on_an_older_format_names_the_whole_project(self, tmp_path):
+        """The single-vendor `--force` that cannot work is called out.
+
+        Reproduces the real failure: one vendor rebuilt to the new format
+        while the others sit at the old one, so publication refuses.
+        """
+        from codess.snapshot import _store_package_identity
+
+        _project, store, _snapshot = _snapshot_project(tmp_path)
+        conn = sqlite3.connect(store)
+        conn.execute("PRAGMA user_version=4")
+        conn.commit()
+        conn.close()
+        with pytest.raises(SnapshotContractMismatchError) as caught:
+            _store_package_identity([store])
+        message = str(caught.value)
+        assert store.name in message
+        assert "without `--source`" in message
+
+
+def test_a_store_disagreeing_with_its_own_manifest_is_refused(tmp_path):
+    """Internal agreement is checked even when a mismatch is opted into.
+
+    `allow_contract_mismatch` waives "does this snapshot match the running
+    software", not "do the manifest and the store it names agree". The second
+    is what proves a snapshot was not partly rewritten, so a store whose
+    recorded contract differs from its own manifest is refused regardless.
+    """
+    project, _store, snapshot = _snapshot_project(tmp_path)
+    manifest_path = snapshot / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # The store alone is rewritten; the manifest keeps its original digest, so
+    # the two disagree. This is what separates this case from the opt-in one
+    # above, where both are moved together and agreement therefore holds.
+    for name in manifest["stores"]:
+        retained = snapshot / name
+        conn = sqlite3.connect(retained)
+        conn.execute(
+            "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("0" * 64,)
+        )
+        conn.commit()
+        conn.close()
+        manifest["stores"][name]["sha256"] = hash_file(retained)
+        manifest["stores"][name]["size"] = retained.stat().st_size
+    assert manifest["contract_digest"] != "0" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(SnapshotContractMismatchError, match="different CoSchema"):
+        snapshot_store_paths(project, snapshot.name, allow_contract_mismatch=True)

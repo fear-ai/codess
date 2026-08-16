@@ -7,7 +7,13 @@ from codess.hashing import codess_bytes_hash
 SOURCE_CALL_ID_MAX_BYTES = 100
 _DIGEST_BITS = 256
 _DIGEST_HEX_CHARS = _DIGEST_BITS // 4
-_SUFFIX_PREFIX = "~sha256:"
+_SUFFIX_PREFIX = "~digest:"
+"""Marks the derived tail of an over-long identifier.
+
+Neutral rather than naming the algorithm: this is a stored column value, so
+naming SHA-256 here would make changing the digest a wire-format change,
+which is the rule `hashing` exists to keep in one place (CoPlan W34).
+"""
 
 
 def bounded_source_call_id(

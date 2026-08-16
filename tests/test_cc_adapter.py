@@ -720,6 +720,40 @@ class TestProcessFile:
             "message_count": 3,
         }
 
+    def test_product_state_splits_into_four_kinds(self, tmp_path):
+        """Each product-state subtype selects on its own purpose.
+
+        One kind spanning every subtype made a query for Session titles return
+        permission settings and file diffs too, because titles, harness
+        settings, attached material, and a position marker were one kind
+        (CoPlan W36). The rule id tracks the kind, so the released profile and
+        the decoder cannot disagree about which is which.
+        """
+        records = [
+            {"type": "ai-title", "aiTitle": "T", "sessionId": "s1"},
+            {"type": "custom-title", "customTitle": "T", "sessionId": "s1"},
+            {"type": "agent-name", "agentName": "R", "sessionId": "s1"},
+            {"type": "mode", "mode": "normal", "sessionId": "s1"},
+            {"type": "permission-mode", "permissionMode": "acceptEdits", "sessionId": "s1"},
+            {"type": "last-prompt", "lastPrompt": "p", "sessionId": "s1"},
+        ]
+        path = tmp_path / "session.jsonl"
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+        events = list(process_file(path, "s1", {"redact": False}))
+        by_subtype = {event["subtype"]: event for event in events}
+        assert by_subtype["ai_title"]["event_kind"] == "session.label"
+        assert by_subtype["custom_title"]["event_kind"] == "session.label"
+        assert by_subtype["agent_name"]["event_kind"] == "session.label"
+        assert by_subtype["mode"]["event_kind"] == "harness.setting"
+        assert by_subtype["permission_mode"]["event_kind"] == "harness.setting"
+        assert by_subtype["last_prompt_marker"]["event_kind"] == "session.marker"
+        assert by_subtype["ai_title"]["mapping_rule"] == "claude.session-label"
+        assert by_subtype["mode"]["mapping_rule"] == "claude.harness-setting"
+        assert by_subtype["last_prompt_marker"]["mapping_rule"] == "claude.session-marker"
+        assert not any(
+            event["event_kind"] == "state.product" for event in events
+        )
+
     def test_titles_agent_name_and_fork_reference_are_structured(self, tmp_path):
         path = tmp_path / "session.jsonl"
         records = [
@@ -781,7 +815,7 @@ class TestProcessFile:
         assert external[0]["content"] == "external result body"
         assert external[0]["caused_by_event_id"] == "2"
         metadata = json.loads(external[0]["metadata"])
-        assert metadata["content_sha256"]
+        assert metadata["content_digest"]
         assert metadata["source_locator"] == str(sidecar)
         assert external_sources == [{
             "path": str(sidecar),
@@ -1163,3 +1197,93 @@ class TestModelFallback:
         from codess.adapters.cc import normalize_product_state
 
         assert normalize_product_state(self.record(), 1, "s1", "/f", {}) is not None
+
+
+class TestProductStatePartition:
+    """The four Event kinds that replaced `state.product` (W36).
+
+    The table and the rule map are one decision expressed twice, so they are
+    checked against each other rather than each against a copy of itself: a
+    rule naming a kind the released profile does not declare would otherwise
+    reach a store and fail only at conformance time.
+    """
+
+    def test_every_subtype_maps_to_one_of_the_four_kinds(self):
+        from codess.adapters.cc import _PRODUCT_STATE_KINDS
+
+        assert set(_PRODUCT_STATE_KINDS.values()) == {
+            "session.label", "harness.setting",
+            "content.attachment", "session.marker",
+        }
+
+    def test_the_nine_observed_subtypes_are_covered(self):
+        """Every subtype the decoder emits is classified.
+
+        Measured against real stores: these nine are the whole of the family,
+        11,272 Events across the development machine's Claude stores.
+        """
+        from codess.adapters.cc import _PRODUCT_STATE_KINDS
+
+        assert set(_PRODUCT_STATE_KINDS) == {
+            "ai_title", "custom_title", "agent_name",
+            "mode", "permission_mode",
+            "context_attachment", "file_history_snapshot", "file_history_delta",
+            "last_prompt_marker",
+        }
+
+    def test_a_rule_exists_for_every_kind(self):
+        from codess.adapters.cc import _PRODUCT_STATE_KINDS, _PRODUCT_STATE_RULES
+
+        assert set(_PRODUCT_STATE_RULES) == set(_PRODUCT_STATE_KINDS)
+        for subtype, kind in _PRODUCT_STATE_KINDS.items():
+            expected = "claude." + kind.replace(".", "-")
+            assert _PRODUCT_STATE_RULES[subtype] == expected
+
+    def test_every_rule_is_declared_in_the_released_profile(self):
+        """The profile is what `validate_mapped_event` checks against.
+
+        A rule the decoder emits but the profile does not declare is the
+        failure the split could introduce, and it would surface only when a
+        conformance check ran over a store rather than here.
+        """
+        from codess.schema_contract import load_mapping
+
+        from codess.adapters.cc import _PRODUCT_STATE_RULES
+
+        declared = {rule["id"] for rule in load_mapping("claude")["rules"]}
+        assert set(_PRODUCT_STATE_RULES.values()) <= declared
+        assert "claude.product-state" not in declared
+
+    def test_an_unknown_subtype_keeps_the_general_kind(self):
+        """A newly observed Claude record is not guessed into a partition.
+
+        `event_kind` is a declared open vocabulary, so an unrecognized subtype
+        is evidence to classify deliberately rather than to force into the
+        nearest existing name.
+        """
+        from codess.adapters.cc import _product_state_kind
+
+        assert _product_state_kind("a_shape_not_yet_seen") == "state.product"
+        assert _product_state_kind(None) == "state.product"
+        assert _product_state_kind("") == "state.product"
+
+    def test_attachment_records_classify_as_attached_material(self, tmp_path):
+        """The three attachment subtypes reach `content.attachment` end to end.
+
+        Covered separately from the label and setting cases because these
+        records travel a different decode path -- they carry bounded metadata
+        about attached material rather than a single short value.
+        """
+        records = [
+            {"type": "attachment", "attachment": {"type": "file", "content": "x"},
+             "sessionId": "s1"},
+            {"type": "file-history-snapshot", "snapshot": {"a": 1}, "sessionId": "s1"},
+        ]
+        path = tmp_path / "session.jsonl"
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+        events = list(process_file(path, "s1", {"redact": False}))
+        kinds = {event["subtype"]: event["event_kind"] for event in events}
+        for subtype, kind in kinds.items():
+            if subtype in {"context_attachment", "file_history_snapshot"}:
+                assert kind == "content.attachment"
+        assert kinds, "no attachment events decoded"

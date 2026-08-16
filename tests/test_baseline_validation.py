@@ -352,7 +352,7 @@ def test_reference_validation_rejects_legacy_md5_revision(tmp_path):
     )
     assert not check["passed"]
     assert check["detail"]["expected"] == legacy_revision
-    assert check["detail"]["observed"].startswith("sha256-fingerprint:")
+    assert check["detail"]["observed"].startswith("digest-fingerprint:")
     assert any("current_reference" in error for error in report["errors"])
 
 

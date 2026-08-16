@@ -1,9 +1,9 @@
--- codess.coschema format 4
+-- codess.coschema format 5
 -- Functional meanings live in schema/coschema/contract.json and Schemas.md.
 -- This file contains only the SQLite layout, constraints, and access paths.
 
 PRAGMA application_id = 1129268293; -- 0x434F4445, "CODE"
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE store_meta (
@@ -59,12 +59,11 @@ CREATE TABLE sources (
   source_mtime REAL,
   source_size INTEGER CHECK (source_size IS NULL OR source_size >= 0),
   observed_at TEXT NOT NULL,
-  ingested_at TEXT NOT NULL,
   availability TEXT NOT NULL DEFAULT 'reference'
     CHECK (availability IN ('captured','reference','not_retained','unavailable')),
   capture_method TEXT,
   consistency TEXT,
-  content_sha256 TEXT,
+  content_digest TEXT,
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
   UNIQUE(source_system_id, source_path, source_revision)
 );
@@ -107,11 +106,14 @@ CREATE TABLE sessions (
   project_id TEXT REFERENCES projects(id),
   source_cwd TEXT,
   path_obsolete INTEGER NOT NULL DEFAULT 0 CHECK (path_obsolete IN (0,1)),
+  -- Materialized MIN/MAX(events.event_at) for the Session. Retained rather
+  -- than derived: they carry the indexed `--since`/`--until` predicate and
+  -- every Session listing, so deriving them would put an aggregate over the
+  -- events table on the common read path.
   started_at REAL,
   ended_at REAL,
   source_mtime REAL,
   observed_at TEXT,
-  ingested_at TEXT,
   time_basis TEXT CHECK (time_basis IN ('event','session','source_mtime','ingested','unknown') OR time_basis IS NULL),
   parent_session_id TEXT,
   session_relation_kind TEXT CHECK (session_relation_kind IN ('subagent','fork','resume','continuation','unknown') OR session_relation_kind IS NULL),
@@ -185,11 +187,14 @@ CREATE TABLE events (
   mapping_trace TEXT CHECK (mapping_trace IS NULL OR json_valid(mapping_trace)),
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
 
-  -- Read compatibility for existing queries.
+  -- Coarser vendor-facing projection of the classification above, retained
+  -- while the reports in `query_reports` still select on it. Measured against
+  -- 146,158 stored Events, (event_kind, actor_kind, content_role) is a strict
+  -- refinement of (event_type, role): every functional triple determines the
+  -- pair, and two of seventeen determine it more precisely than the pair does.
   event_type TEXT,
   subtype TEXT,
   role TEXT,
-  timestamp REAL,
   file_path TEXT,
 
   UNIQUE(session_id, event_id)
@@ -211,7 +216,7 @@ CREATE TABLE source_records (
 
 CREATE TABLE content_objects (
   id TEXT PRIMARY KEY,
-  content_sha256 TEXT NOT NULL,
+  content_digest TEXT NOT NULL,
   media_type TEXT,
   charset TEXT,
   byte_length INTEGER CHECK (byte_length IS NULL OR byte_length >= 0),
@@ -221,7 +226,7 @@ CREATE TABLE content_objects (
   raw_object_id TEXT,
   privacy_class TEXT,
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
-  UNIQUE(content_sha256, storage_class, raw_object_id)
+  UNIQUE(content_digest, storage_class, raw_object_id)
 );
 
 CREATE TABLE event_content (
@@ -265,7 +270,7 @@ CREATE TABLE artifact_content (
 CREATE TABLE processing_runs (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id),
-  policy_sha256 TEXT NOT NULL,
+  policy_digest TEXT NOT NULL,
   processor_name TEXT NOT NULL,
   software_version TEXT NOT NULL,
   scope_json TEXT CHECK (scope_json IS NULL OR json_valid(scope_json)),
@@ -297,8 +302,10 @@ CREATE TABLE tool_invocations (
   input_json TEXT CHECK (input_json IS NULL OR json_valid(input_json)),
   source_status TEXT,
   normalized_status TEXT,
-  started_at REAL,
-  ended_at REAL,
+  -- The instant the vendor reported for the call. `source_` marks it as a
+  -- vendor-supplied time, following `source_mtime`; no vendor reports an end,
+  -- so there is no matching column.
+  source_started_at REAL,
   UNIQUE(session_id, source_call_id)
 );
 
@@ -324,9 +331,9 @@ CREATE TABLE artifacts (
   observed_absolute_path TEXT,
   uri TEXT,
   repository_object_id TEXT,
-  content_sha256 TEXT,
+  content_digest TEXT,
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
-  UNIQUE(project_id, artifact_kind, relative_path, uri, repository_object_id, content_sha256)
+  UNIQUE(project_id, artifact_kind, relative_path, uri, repository_object_id, content_digest)
 );
 
 CREATE TABLE event_artifacts (
@@ -372,7 +379,6 @@ CREATE UNIQUE INDEX idx_events_session_sequence
   ON events(session_id, sequence_no) WHERE sequence_no IS NOT NULL;
 CREATE INDEX idx_events_session ON events(session_id);
 CREATE INDEX idx_events_event_at ON events(event_at) WHERE event_at IS NOT NULL;
-CREATE INDEX idx_events_timestamp ON events(timestamp) WHERE timestamp IS NOT NULL;
 CREATE INDEX idx_events_tool_name ON events(tool_name) WHERE tool_name IS NOT NULL;
 CREATE INDEX idx_events_source_record ON events(source_id, source_record_locator);
 CREATE INDEX idx_events_interaction ON events(interaction_id, sequence_no);
@@ -392,7 +398,7 @@ CREATE INDEX idx_model_turns_model_param ON model_turns(model_param_id)
 CREATE INDEX idx_project_locations_project ON project_locations(project_id);
 CREATE INDEX idx_workspace_bindings_project ON workspace_bindings(project_id);
 CREATE INDEX idx_source_records_source ON source_records(source_id, source_sequence);
-CREATE INDEX idx_content_sha256 ON content_objects(content_sha256);
+CREATE INDEX idx_content_digest ON content_objects(content_digest);
 CREATE INDEX idx_event_content_content ON event_content(content_id);
 CREATE INDEX idx_source_record_content_content ON source_record_content(content_id);
 CREATE INDEX idx_tool_result_content_content ON tool_result_content(content_id);
@@ -423,6 +429,6 @@ CREATE UNIQUE INDEX idx_artifacts_identity_repository_object
   ON artifacts(project_id, artifact_kind, repository_object_id)
   WHERE repository_object_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_artifacts_identity_content
-  ON artifacts(project_id, artifact_kind, content_sha256)
-  WHERE content_sha256 IS NOT NULL;
+  ON artifacts(project_id, artifact_kind, content_digest)
+  WHERE content_digest IS NOT NULL;
 CREATE INDEX idx_correlations_subject ON correlation_assertions(subject_kind, subject_id);

@@ -58,7 +58,7 @@ def build_investigation(
             "source_system_id": row.get("source_system_id"),
             "source_record_locator": row.get("source_record_locator"),
             "event_kind": row.get("event_kind"),
-            "content_sha256": content_hash(row.get("content") or ""),
+            "content_digest": content_hash(row.get("content") or ""),
             "row_sha256": content_hash(row),
             "content_complete": row.get("content_complete"),
         })

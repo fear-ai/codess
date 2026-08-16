@@ -885,7 +885,7 @@ def test_cited_investigation_binds_summary_to_exact_result_rows(tmp_path):
         )
         assert record["input_result_hash"] == result["result_hash"]
         assert record["citations"][0]["event_entity_id"] == event_id
-        assert record["citations"][0]["content_sha256"].startswith("sha256:")
+        assert record["citations"][0]["content_digest"].startswith("sha256:")
         assert record["citations"][0]["row_sha256"] == content_hash(
             result["rows"][0]
         )
@@ -984,7 +984,7 @@ def test_exact_evidence_prefers_verified_sealed_object_over_changed_live(tmp_pat
     )
     conn = connect(store)
     conn.execute(
-        "UPDATE sources SET availability='captured',content_sha256=?",
+        "UPDATE sources SET availability='captured',content_digest=?",
         (record["object_id"].removeprefix("sha256:"),),
     )
     event_id = conn.execute("SELECT event_entity_id FROM events WHERE event_id='e1'").fetchone()[0]
@@ -1012,7 +1012,7 @@ def test_exact_evidence_marks_unsupported_digest_reference_incompatible(tmp_path
         """
         UPDATE sources
         SET source_revision=?,source_mtime=?,source_size=?,
-            availability='reference',content_sha256=NULL
+            availability='reference',content_digest=NULL
         """,
         legacy[:3],
     )
@@ -1028,8 +1028,8 @@ def test_exact_evidence_marks_unsupported_digest_reference_incompatible(tmp_path
             item for item in result["candidates"] if item["kind"] == "live"
         )
         assert live["equality"] == "mismatch"
-        assert live["revision"].startswith("sha256-fingerprint:")
-        assert live["verification_method"] == "full-sha256-fingerprint"
+        assert live["revision"].startswith("digest-fingerprint:")
+        assert live["verification_method"] == "full-digest-fingerprint"
     finally:
         opened["conn"].close()
 
@@ -1143,8 +1143,8 @@ def test_monthly_tool_interactions_are_distinct_across_days(tmp_path):
         """
     )
     conn.execute(
-        "UPDATE events SET event_at=?,timestamp=? WHERE event_id='e2'",
-        (86_404_000.0, 86_404_000.0),
+        "UPDATE events SET event_at=? WHERE event_id='e2'",
+        (86_404_000.0,),
     )
     conn.commit()
     conn.close()

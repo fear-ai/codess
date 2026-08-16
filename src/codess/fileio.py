@@ -333,9 +333,9 @@ def read_source_revision(
                 ):
                     digest.update(chunk)
                     read_bytes += len(chunk)
-                method = "full-sha256-fingerprint"
+                method = "full-digest-fingerprint"
                 revision = (
-                    f"sha256-fingerprint:{digest.hexdigest()}:size:{read_bytes}"
+                    f"digest-fingerprint:{digest.hexdigest()}:size:{read_bytes}"
                 )
             else:
                 maximum_offset = max(0, before.st_size - SOURCE_SAMPLE_CHUNK_BYTES)
@@ -349,9 +349,9 @@ def read_source_revision(
                     chunk = stream.read(SOURCE_SAMPLE_CHUNK_BYTES)
                     digest.update(f"offset:{offset}:length:{len(chunk)}\0".encode("ascii"))
                     digest.update(chunk)
-                method = "bounded-sample-sha256-fingerprint"
+                method = "bounded-sample-digest-fingerprint"
                 revision = (
-                    f"sample-sha256-fingerprint:{digest.hexdigest()}:"
+                    f"sample-digest-fingerprint:{digest.hexdigest()}:"
                     f"mtime-ns:{before.st_mtime_ns}:size:{before.st_size}"
                 )
         after = path.stat()
@@ -381,7 +381,7 @@ def read_source_revision(
             f"main:{revision}\0wal:{wal_revision}".encode()
         )
         revision = (
-            "sqlite-main-wal-sha256-fingerprint:"
+            "sqlite-main-wal-digest-fingerprint:"
             f"{combined_digest.hexdigest()}"
         )
         mtime = max(value for value in (mtime, wal_mtime) if value is not None)

@@ -82,8 +82,8 @@ class TestShouldIngest:
         original = source.stat()
         state_path = tmp_path / "state.json"
         marker = ingest_state_marker(source)
-        assert marker["source_revision"].startswith("sha256-fingerprint:")
-        assert marker["fingerprint_method"] == "full-sha256-fingerprint"
+        assert marker["source_revision"].startswith("digest-fingerprint:")
+        assert marker["fingerprint_method"] == "full-digest-fingerprint"
         save_ingest_state(state_path, {"source": marker})
         assert not should_ingest(
             state_path, "source", original.st_mtime, False, path=source
@@ -102,10 +102,10 @@ class TestShouldIngest:
         state_path = tmp_path / "state.json"
         marker = ingest_state_marker(source)
         assert marker["source_revision"].startswith(
-            "sqlite-main-wal-sha256-fingerprint:"
+            "sqlite-main-wal-digest-fingerprint:"
         )
         assert marker["fingerprint_method"] == (
-            "full-sha256-fingerprint+wal:full-sha256-fingerprint"
+            "full-digest-fingerprint+wal:full-digest-fingerprint"
         )
         save_ingest_state(state_path, {"cursor": marker})
         wal.write_bytes(b"wal-two")
@@ -121,10 +121,10 @@ class TestShouldIngest:
         monkeypatch.setattr("codess.fileio.SOURCE_READ_MAX", 4)
         marker = ingest_state_marker(source)
         assert marker["source_revision"].startswith(
-            "sample-sha256-fingerprint:"
+            "sample-digest-fingerprint:"
         )
         assert marker["fingerprint_method"] == (
-            "bounded-sample-sha256-fingerprint"
+            "bounded-sample-digest-fingerprint"
         )
 
 
@@ -270,7 +270,7 @@ class TestInitDb:
             "SELECT source_call_id FROM tool_invocations"
         ).fetchone()
         assert len(row["source_call_id"].encode("utf-8")) <= 100
-        assert "~sha256:" in row["source_call_id"]
+        assert "~digest:" in row["source_call_id"]
         assert conn.execute(
             "SELECT COUNT(*) FROM tool_results"
         ).fetchone()[0] == 1
@@ -605,7 +605,7 @@ class TestSharedStoreReads:
         try:
             meta = store_metadata(conn)
             assert meta["format_id"] == "codess.coschema"
-            assert meta["package_digest"]
+            assert meta["contract_digest"]
         finally:
             conn.close()
 
@@ -886,3 +886,85 @@ class TestBoundedOutputJson:
         from codess.store import MAX_OUTPUT_JSON_BYTES, _bounded_output_json
 
         assert _bounded_output_json({"x": "y" * (MAX_OUTPUT_JSON_BYTES + 10)}) is None
+
+
+class TestFormatFiveWireChanges:
+    """Columns and metadata keys that CoSchema format 5 added or removed.
+
+    Asserted against a store the writer actually produced, not a fixture: the
+    defect these guard against is a write path still naming a column the DDL
+    no longer declares, which a fixture built from the DDL cannot show.
+    """
+
+    def test_store_meta_records_the_contract_digest(self, tmp_path):
+        """`package_digest` named the Python distribution, not what it covers.
+
+        The value gates every write, so the name a reader sees in `store_meta`
+        has to be the one the code and the documentation use (W33).
+        """
+        from codess.schema_contract import contract_digest
+
+        db = tmp_path / "meta.db"
+        init_db(db)
+        conn = connect(db)
+        meta = store_metadata(conn)
+        conn.close()
+        assert meta["contract_digest"] == contract_digest()
+        assert "package_digest" not in meta
+
+    def test_removed_time_columns_are_absent(self, tmp_path):
+        """Each was measured redundant or unwritten before removal (W25)."""
+        db = tmp_path / "columns.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            assert "timestamp" not in column_names(conn, "events")
+            assert "ingested_at" not in column_names(conn, "sources")
+            assert "ingested_at" not in column_names(conn, "sessions")
+            assert "ended_at" not in column_names(conn, "tool_invocations")
+        finally:
+            conn.close()
+
+    def test_retained_time_columns_are_present(self, tmp_path):
+        """The surviving times, including the two held for the read path.
+
+        `sessions.started_at`/`ended_at` are derivable from Events but carry
+        the indexed `--since`/`--until` predicate, so they stay materialized.
+        """
+        db = tmp_path / "retained.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            assert "event_at" in column_names(conn, "events")
+            assert "event_at_basis" in column_names(conn, "events")
+            assert "observed_at" in column_names(conn, "sources")
+            assert {"started_at", "ended_at"} <= column_names(conn, "sessions")
+            assert "source_started_at" in column_names(conn, "tool_invocations")
+            assert "started_at" not in column_names(conn, "tool_invocations")
+        finally:
+            conn.close()
+
+    def test_digest_columns_do_not_name_the_algorithm(self, tmp_path):
+        """`hashing` owns the algorithm, so no column may pin it (W34)."""
+        db = tmp_path / "digest.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            for table in ("sources", "content_objects", "artifacts"):
+                columns = column_names(conn, table)
+                assert "content_digest" in columns
+                assert "content_sha256" not in columns
+            assert "policy_digest" in column_names(conn, "processing_runs")
+            assert "policy_sha256" not in column_names(conn, "processing_runs")
+        finally:
+            conn.close()
+
+    def test_a_written_store_declares_format_five(self, tmp_path):
+        db = tmp_path / "version.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+            assert store_metadata(conn)["format_version"] == "5"
+        finally:
+            conn.close()

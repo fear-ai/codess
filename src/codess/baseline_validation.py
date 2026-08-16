@@ -200,7 +200,7 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
         "sources": """
             SELECT source_entity_id, source_system_id, source_path, storage_format, source_revision,
                    source_mtime, source_size, availability, capture_method,
-                   consistency, content_sha256, metadata
+                   consistency, content_digest, metadata
             FROM sources ORDER BY source_system_id, source_path, source_revision
         """,
         "sessions": """
@@ -242,7 +242,7 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             ORDER BY s.source_entity_id, r.source_sequence, r.source_locator
         """,
         "content_objects": """
-            SELECT id, content_sha256, media_type, charset, byte_length,
+            SELECT id, content_digest, media_type, charset, byte_length,
                    character_length, storage_class, inline_content,
                    raw_object_id, privacy_class, metadata
             FROM content_objects ORDER BY id
@@ -273,7 +273,7 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
                      c.relation_kind, c.sequence_no
         """,
         "processing_runs": """
-            SELECT id, project_id, policy_sha256, processor_name,
+            SELECT id, project_id, policy_digest, processor_name,
                    software_version, scope_json, actions_json, rejection_reason
             FROM processing_runs ORDER BY id
         """,
@@ -285,7 +285,7 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             SELECT id, session_id, interaction_id, model_turn_id, source_call_id,
                    source_tool_name, canonical_tool_name, tool_namespace,
                    invocation_kind, input_json, source_status, normalized_status,
-                   started_at, ended_at
+                   source_started_at
             FROM tool_invocations ORDER BY id
         """,
         "tool_results": """
@@ -298,15 +298,15 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
         "artifacts": """
             SELECT project_id, artifact_kind, relative_path,
                    observed_absolute_path, uri, repository_object_id,
-                   content_sha256, metadata
+                   content_digest, metadata
             FROM artifacts
             ORDER BY project_id, artifact_kind, relative_path, uri,
-                     repository_object_id, content_sha256
+                     repository_object_id, content_digest
         """,
         "event_artifacts": """
             SELECT e.session_id, e.event_id, a.project_id, a.artifact_kind,
                    a.relative_path, a.uri, a.repository_object_id,
-                   a.content_sha256, ea.operation, ea.evidence_source,
+                   a.content_digest, ea.operation, ea.evidence_source,
                    ea.confidence
             FROM event_artifacts ea
             JOIN events e ON e.id=ea.event_id
@@ -438,7 +438,7 @@ def _validate_store(
             missing_indexes,
         )
         duplicates = 0
-        for column in ("relative_path", "uri", "repository_object_id", "content_sha256"):
+        for column in ("relative_path", "uri", "repository_object_id", "content_digest"):
             duplicates += int(
                 conn.execute(
                     f"""
@@ -721,7 +721,7 @@ def validate_project(
             "project_id": manifest.get("project_id"),
             "snapshot_path": str(snapshot),
             "parent_snapshot_id": manifest.get("parent_snapshot_id"),
-            "package_digest": manifest.get("package_digest"),
+            "contract_digest": manifest.get("contract_digest"),
             "software_version": manifest.get("software_version"),
             "software_revision": manifest.get("software_revision"),
             "decoder_version": manifest.get("decoder_version"),
@@ -730,9 +730,9 @@ def validate_project(
         }
     )
     _add_check(
-        report, "package_digest",
-        manifest.get("package_digest") == contract_digest(),
-        manifest.get("package_digest"),
+        report, "contract_digest",
+        manifest.get("contract_digest") == contract_digest(),
+        manifest.get("contract_digest"),
     )
     required_decoder = policy.get(
         "required_decoder_version", DECODER_VERSION

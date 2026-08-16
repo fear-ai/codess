@@ -318,7 +318,7 @@ def test_decision_and_plan_only_onboarding_do_not_ingest(tmp_path):
     assert receipt["plan"]["projects"][0]["project_id"] == "p1"
     assert receipt["plan"]["projects"][0]["source"] == "cursor"
     assert receipt["plan"]["raw_mode"] == "capture"
-    assert len(receipt["plan"]["package_digest"]) == 64
+    assert len(receipt["plan"]["contract_digest"]) == 64
     assert not (project / ".codess").exists()
 
 
@@ -893,7 +893,7 @@ def test_a_working_archive_is_named_the_instant_its_manifest_reports(tmp_path):
     conn = connect(store)
     try:
         conn.execute(
-            "UPDATE store_meta SET value=? WHERE key='package_digest'", ("f" * 64,),
+            "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("f" * 64,),
         )
         conn.commit()
     finally:

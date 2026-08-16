@@ -507,7 +507,7 @@ def test_catalog_query_names_project_and_snapshot_on_incompatibility(tmp_path):
         / "manifest.json"
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["package_digest"] = "sha256:" + ("0" * 64)
+    manifest["contract_digest"] = "sha256:" + ("0" * 64)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     # Isolate the package-digest incompatibility this test targets: recompute
     # the pointer's manifest_sha256 to match the edited bytes above, so
@@ -534,7 +534,7 @@ def test_catalog_query_names_project_and_snapshot_on_incompatibility(tmp_path):
 
     with pytest.raises(ValueError, match="no eligible Projects"):
         resolve_project_query_scopes(registry, all_current=True)
-    assert "package digest mismatch" in result.stderr
+    assert "different CoSchema contract" in result.stderr
 
 
 def test_all_current_honors_exact_and_read_compatible_package_policy(
@@ -552,14 +552,14 @@ def test_all_current_honors_exact_and_read_compatible_package_policy(
     compatible = resolve_project_query_scopes(
         registry,
         all_current=True,
-        allow_package_mismatch=True,
+        allow_contract_mismatch=True,
     )
     assert [(item["project_id"], item["snapshot_id"]) for item in compatible] == [
         (project_id, scope["snapshot_id"]),
     ]
 
 
-def test_catalog_status_distinguishes_package_mismatch(tmp_path):
+def test_catalog_status_distinguishes_contract_mismatch(tmp_path):
     _project, registry, project_id = _captured_project(tmp_path)
     scope = resolve_project_query_scopes(registry, [project_id])[0]
     manifest_path = (
@@ -569,7 +569,7 @@ def test_catalog_status_distinguishes_package_mismatch(tmp_path):
         / "manifest.json"
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["package_digest"] = "sha256:" + ("0" * 64)
+    manifest["contract_digest"] = "sha256:" + ("0" * 64)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     # Isolate the package-digest check this test targets: recompute the
     # pointer's manifest_sha256 to match the edited bytes above, so
@@ -585,7 +585,7 @@ def test_catalog_status_distinguishes_package_mismatch(tmp_path):
         item for item in catalog_readiness(registry)["projects"]
         if item["project_id"] == project_id
     )
-    assert row["query_status"] == "package_mismatch"
+    assert row["query_status"] == "contract_mismatch"
 
 
 def test_catalog_status_reports_snapshot_fail_for_invalid_store(tmp_path):

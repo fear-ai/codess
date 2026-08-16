@@ -4,7 +4,7 @@
   "files": {
     "contract": {
       "path": "schema/coschema/contract.json",
-      "sha256": "59427a9389dc3265cdb99cc38a14e46a780d9d42b74807eaae740a7e570d93fe"
+      "sha256": "d948ac8796faf9e515573952d5181b406310760ffc9e3d5359fc46f11e274da1"
     },
     "fixture_compatibility_store_meta_v2": {
       "path": "schema/coschema/fixtures/compatibility/store-meta-v2.json",
@@ -48,7 +48,7 @@
     },
     "mapping_claude": {
       "path": "schema/mappings/claude.json",
-      "sha256": "8903cd598d9539b7612e57becbfd0d0f82933cc39b593925171b349481e3f353"
+      "sha256": "3ac4866dc42996f7b14bbc41ae3259e2b67650a8af27762bdd3d2a7ac1731d36"
     },
     "mapping_codex": {
       "path": "schema/mappings/codex.json",
@@ -64,11 +64,11 @@
     },
     "sqlite_schema": {
       "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "83de345255b97a13a4f219fb3832b4a750bef84349465545c74da7bbed4ab3ad"
+      "sha256": "78a58681a415fa347efd151dc4f46db6f0fa82708b6b6dbeee5c0c319fb05638"
     }
   },
   "format_id": "codess.coschema",
-  "format_version": 4,
+  "format_version": 5,
   "reader_compatibility": {
     "legacy_read": [
       1

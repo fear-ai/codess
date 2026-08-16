@@ -34,13 +34,13 @@ in exactly one of these:
 | Category | Meaning | Items |
 |---|---|---|
 | **A. Fixed now** | Landed in the working tree, with tests. Carries no work item. | **Decode is complete for what the three vendors state.** Every stated field is decoded, the model name is decomposed into line, generation, version, and gradation, Claude's structured tool results and per-Event parent links are retained, and Codex's output header supplies six fields plus the exit code on 14,795 results where 79 were reachable before. **Names are settled** in [CoNames](CoNames.md), which is authoritative: `entity_id` is qualified per table, `model_params` replaced `model_configurations`, `source_path` replaced a `source_uri` that held no URI. **Hashing was evaluated** at every call site; five were removed as unnecessary and the rest are identity, integrity, content addressing, or change detection. What each change established is recorded where it is checkable -- `schema/field-coverage-baseline.json` for accepted gaps, `schema/model-aliases.json` for the model vocabulary, `config.py` beside each bound -- rather than retold here. Two bounds were made configurable and named for what they govern: `SOURCE_READ_MAX` (`CODESS_SOURCE_READ_MAX`, was `SOURCE_FULL_HASH_MAX`) and `CODESS_QUERY_BYTE_LIMIT`; `MAX_TOKEN_LINE_BYTES` moved to 4 MB, still 3x the largest line in 58,106 real records. |
-| **B. Fix as WIP** | Actively in progress; the remaining work is named. | W45, W46, W52 |
-| **C. Fix later** | Accepted, unblocked, not started. Grouped and ordered below. | W04, W07, W08, W09, W13, W47, W48, W49, W50, W51, W55, W14, W15, W18, W19, W21, W24, W28, W31, W32, W38, W41, W42 |
+| **B. Fix as WIP** | Actively in progress; the remaining work is named. | W45, W46, W52 (steps 1-3 remain; step 4 landed with the F batch) |
+| **C. Fix later** | Accepted, unblocked, not started. Grouped and ordered below. | W04, W07, W08, W09, W13, W47, W48, W49, W50, W51, W55, W14, W15, W18, W19, W21, W24, W28, W38, W41, W42 |
 | **D. Postponed** | Deliberately deferred; the reason is recorded on the item. | W43 (validation table: withdrawn on inspection -- `validate_request` already groups 30 fields into 10 branches), W16 (external interfaces: no requester), W35 (fixture inventory: no longer gates anything after W03), task 28 (manual image-only review, deferred by request) |
 | **E. Needs decision** | Blocked on a judgment nobody has made, not on effort. Doing the work first would encode the wrong answer. | W05, W17 — each question stated below. Four wire-format items were decided this pass and moved to F; the identity-vocabulary item was answered by looking at the sources and became a decode gap, since fixed. |
-| **F. Decided, awaiting regeneration** | Accepted; each changes what a store records, so all land in one rebuild. | W25, W33, W34, W36, and W31/W32 which rewrite the same identity prefix. See below for what regeneration is. |
+| **F. Decided, awaiting regeneration** | **Complete.** W25, W31, W32, W33, W34, and W36 landed together as one format change: `FORMAT_VERSION` is 5, and a store written under 4 is refused with the rebuild command named. Verified by rebuilding real Projects rather than by the suite alone -- 14,267 Events over 347 Claude Sessions and 2,172 over 2 Cursor Sessions, `tools/decode_audit.py` exiting zero on the result. What each item changed is recorded on it below. |
 
-##### What Regeneration Means, and Why F Exists
+##### What Regeneration Meant, and What It Cost
 
 **Codess never migrates a store.** 5.1's reasoning is that vendor Sources
 remain the authority, so a format change is a rebuild from those Sources
@@ -59,25 +59,37 @@ change.
 **That cost is what makes F a category rather than a queue.** Each of these
 changes what a store records:
 
-| Item | What changes on disk |
+| Item | What changed on disk |
 |---|---|
-| W25 | Nineteen time columns become seven; one rename |
-| W33 | `package_digest` becomes `contract_digest` in `store_meta` |
-| W34 | `sha256` leaves 4 columns, ~20 JSON keys, and the identity prefix |
-| W36 | One Event kind becomes four; the Claude mapping profile splits |
-| W31, W32 | Every `entity_id` gains a format qualifier and a new derivation |
+| W25 | Four time columns removed, one renamed to `source_started_at` |
+| W33 | `package_digest` became `contract_digest` in `store_meta` |
+| W34 | `sha256` left 4 columns, the identity prefix, the `source_revision` fingerprints, and the bounded `source_call_id` tail |
+| W36 | One Event kind became four; the Claude mapping profile split into four rules |
+| W31, W32 | Every `entity_id` carries `id1` and derives through `codess_hash` |
 
-Landing them together costs one rebuild of every Project. Landing them
-separately costs up to six, and each intervening state has stores some
-tools read and others refuse. W34 and W31/W32 additionally rewrite the
-*same* identity prefix, so splitting those two would rewrite every stored
-identity twice.
+They landed together as one rebuild, which is what the category existed to
+arrange. Landing them separately would have cost up to six, and W34 and
+W31/W32 rewrite the *same* identity prefix, so splitting those two would
+have rewritten every stored identity twice.
 
-**The decision they wait on is therefore not "is each one right" -- all six
-are accepted -- but "when."** The trigger is the next regeneration that is
-owed for another reason; one is already due from the W03 and W20 changes.
-F holds them until then so a reviewer does not read "Planned" as "start
-this now" and force a rebuild for one rename.
+**Writing the tests found two more wire-tied sites.** W34's inventory listed
+the identity prefix and the column names; adding coverage for the changed
+values surfaced `tool_identity`'s `~sha256:` marker inside `source_call_id`
+and `fileio`'s `sha256-fingerprint:` prefixes on 370 stored `source_revision`
+values. Both are stored and compared, so both were in the batch's class rather
+than outside it, and both are now `digest`-spelled. The general point is that
+an inventory taken by reading finds the sites a reader thinks to look at; the
+sites that reach a stored value are found by asking what a test would have to
+assert.
+
+**Two things were learned by doing it.** First, the guard has to come first:
+W52 step 4 was built before any rename, and it then located every affected
+site for W25 and W34 by name -- including an `UPDATE ... SET` clause a
+projection-only check would have missed. Second, a single-vendor
+`ingest --force` cannot complete a format change, because a store set is
+published whole and the untouched vendors' stores are still on the old
+format. That now fails with the whole-Project command named rather than a
+bare "unsupported CoSchema format".
 
 Two rules keep the categories honest. **A finding is never left uncategorized**:
 if it is not fixed in the same change, it gets an item and a category before
@@ -94,7 +106,7 @@ within each the order is a real dependency rather than a preference:
 |---|---|---|
 | **1. Decode correctness** -- what the stores say is true | **Complete** | Gaps validated against real sources, the coverage sweep worked, and coverage reported last, since a report built earlier describes an incomplete decoder. |
 | **2. Contract enforcement** -- what the code is held to | W04 → W13 → W14 | W04 puts the candidate contract at the decode boundary; W13 enforces the architecture paths mechanically, which needs the boundary to exist; W14 is the narrow Project-identity case within it. |
-| **3. Identity and naming** -- what a value means | W31 → W32 → W15 → W24 | W31 makes `IDENTITY_FORMAT` observable and W32 routes derivation through `hashing`; both change stored identities, so they land together. W15 and W24 are independent naming resolutions that ride along. |
+| **3. Identity and naming** -- what a value means | W15 → W24 | W31 and W32 are **complete**: `IDENTITY_FORMAT` is observable as `id1` and derivation routes through `hashing`. W15 and W24 are the independent naming resolutions that remain. |
 | **4. Reporting and interface** -- how results leave the system | W18 → W38 → W21 | W18 defines the reporting contract; W38's row emitter is where a row becomes output, so it attaches to W18; W21 routes `walk_sessions`'s debug prints through the same contract; The worked examples that were W11 now belong to W05. |
 | **5. Scale and structure** -- what happens under load | W07 → W08 → W09 → W19 | W07 bounds ancillary reads, W08 establishes the workloads that measure them, W09 confirms Cursor selectivity under those workloads, W19 decomposes `walk_sessions` so the Project logic is testable apart from vendor scanning. |
 
@@ -112,8 +124,8 @@ nine independent proposals:
 |---|---|---|
 | 1. Settle the names | **Complete** -- [CoNames](CoNames.md) | Names every designator once, across DB, module, file, structure, method, and field. Every step below checks against it. |
 | 2. Decide the vocabulary | **W40** (identity terms), **W50** (glossary correspondence), **W51** (source identity), **W48** (constant and unread columns) | Each answers *what a thing is called and whether it is kept*. None writes a store. |
-| 3. Protect the change | **W52** (SQL construction) | A renamed column must fail a test, not a query. Its value is entirely in guarding step 4. |
-| 4. Land the wire format | **W25**, **W33**, **W34**, **W36** | One regeneration, after the names are settled and the SQL is guarded. |
+| 3. Protect the change | **W52** (SQL construction) | **Step 4 complete.** A renamed column now fails a test rather than a query, and it did the work: it located every site the format-5 batch broke. |
+| 4. Land the wire format | **Complete** | W25, W31, W32, W33, W34, W36 regenerated together as CoSchema format 5, after the guard was in place. |
 
 **W47** (record and source diagnostics) sits outside this: it adds evidence
 rather than renaming any, and can run at any point.
@@ -137,7 +149,7 @@ wait on this**, and **what does it cost to be wrong for another month.**
 | 3 | **2. Contract enforcement** (W04 → W13 → W14) | Baseline 2's substance, and coverage reporting in group 1 reports against the profiles W04 enforces. Ranked below group 1 only because a coverage gap you can see beats a conformance check you have not written. |
 | 4 | **4. Reporting and interface** (W18 → W38 → W21) | The first group whose absence a user feels rather than a maintainer. Held below contract enforcement because W18's contract should describe a decode that is already correct and enforced. |
 | 5 | **7. Recovery and hygiene** (W41, W42) | Independent of everything, small, and W41 fixes a real operational hole -- Operations 10.5 directs an operator to a command that cannot do the job. Ranked here rather than lower because it can be done in any gap between larger items. |
-| 6 | **3. Identity and naming** (W31 → W32 → W15 → W24) | Correctness-neutral: no reader gets a wrong answer today. It is in F for the regeneration, so its real trigger is that event, not this ranking. |
+| 6 | **3. Identity and naming** (W15 → W24) | W31/W32 landed with the format-5 regeneration. What remains is correctness-neutral: no reader gets a wrong answer today. |
 | 7 | **5. Scale and structure** (W07 → W08 → W09 → W19) | Deferred deliberately. No measured workload is failing, and W08 exists to establish what "too slow" means -- until that is defined, optimizing is guesswork. W19 is the exception and may be pulled forward with group 6, since both restructure the same ingest path. |
 
 **The one cross-group constraint worth stating:** W19 (group 7) and W45/W46
@@ -146,6 +158,19 @@ duplicate blocks live at exactly that seam. Whichever runs first should
 take the duplicates with it.
 
 **Two new groups.** **6. Ingest state and layering** -- W45 → W46 → W06 step 4 -- is the one defect this review kept re-finding, now partly landed: grouping the parameters (W45) had to precede moving the Cursor phase (W46), and splitting `opts` finishes both. **7. Recovery and hygiene** -- W41 (snapshot recovery has no CLI route) and W42 (the adapters' bound-process-check helper) -- are independent and can run any time.
+
+**W05 can run immediately after the format-5 regeneration, and should.**
+Its blocker was never code -- the predicates exist and 31 tests exercise
+them -- but naming three to five investigations and a reader who judges the
+answers. Two things the regeneration changed make it cheaper now rather than
+later. Real format-5 stores exist to investigate against, rebuilt and
+audited during this batch, so the work does not start by rebuilding
+anything. And W36 changed what a Session-title query returns: `session.label`
+now selects titles without also returning permission settings and file
+diffs, which is exactly the kind of "is the expansion the one they needed"
+question W05 exists to ask. Running it before the next wire-format change
+also means any missing predicate it finds can join that batch instead of
+owing its own rebuild.
 
 **W05, W16, and W17 left C.** Each waits on something other than code, which
 is not the same as being queued. W16 is **postponed to D**: 12.3.3 already
@@ -163,33 +188,17 @@ is answered, not when someone starts the work.
 |---|---|---|
 | **W05** | Which three to five investigations, and who judges the answers adequate? | The predicates exist and 31 tests exercise them against fixtures, so the code is not in question. What the item asks is whether the surface answers *real* questions -- given a distinctive phrase, can a reader reach the Interaction that produced it, and is the expansion the one they needed? A fixture cannot check that, because it contains the answer by construction. **W11 is merged in**: it asked for better search reports and examples without saying what was inadequate, and running the investigations is what produces both a worked example and evidence of any missing facet. What remains unanswered is only which investigations, named before the data is examined. |
 | **W17** | What entities, fields, and grain does a cross-Project consumer need? | Cross-Project querying already works over selected store sets with retained identity. This item asks for *expanded inputs*, which is unspecifiable without a consumer. Deciding whether the Misses project counts as that consumer -- Codess.md 4.4 names it as one -- would answer the question or confirm the item should be postponed with W16. |
-| **W25** | Accept CoSchema 5.1.1's resolution -- nineteen time columns to seven, six removals plus three unread stamps, one rename? | The measurements are done and unambiguous: three byte-identical duplicate pairs, two columns exactly equal to `MIN`/`MAX(events.event_at)`, one null in all 85,840 rows. What remains is agreeing that removal beats retention. |
-| **W33** | What replaces `package_digest`? | `contract_digest` matches the function name and what W03 narrowed the value to cover. `matching_set` was the earlier candidate and is now weaker. The question is only which name. |
-| **W34** | Where may an algorithm name appear at all? | 13.4.8 proposes keeping it in integrity fields a reader recomputes and removing it elsewhere. The alternative -- no algorithm name outside `hashing`, with callers passing an expected width -- has not been evaluated against it. 144 occurrences depend on which rule wins. |
-| **W36** | Is `state.product` split into `session.label`, `harness.setting`, and `content.marker`? | The evidence is complete: Claude-only, 19,528 Events, nine subtypes spanning three unrelated purposes, and `event_kind` is a declared open vocabulary so adding kinds is expected. The question is whether three kinds is the right partition. |
-| **W40** | Which of `vendor_name`, `product_name`, `harness_name`, `surface_kind` are independently observed? | All four are constants of each other across 507 Sessions and none is a query filter. Either they are the axes a fourth source system would separate -- keep and record the degeneracy -- or they are one fact spelled four ways. |
 
-**The regeneration decision.** W25, W33, and W36 each change what a store
-records, so each requires every store to be rebuilt from vendor sources
-before it can be read again. Codess does not migrate stores: 5.1's own
-reasoning is that vendor Sources remain the authority, so a format change is
-a rebuild rather than an `ALTER TABLE`.
+**The regeneration happened.** W25, W33, W34, W36, and W31/W32 each changed
+what a store records, so each required every store to be rebuilt from vendor
+sources. They landed as one CoSchema format 5 change rather than separately,
+which cost one rebuild instead of up to six.
 
-That makes rebuild count the thing to decide, not each rename separately. A
-regeneration is already owed from the W03 and W20 changes. Landing all three
-inside it costs one rebuild; landing them separately costs three, and each
-intervening state has stores that some tools read and others do not.
-
-So the decision is: **accept or reject W25, W33, and W36 together, then
-regenerate once.** Accepting two and deferring the third is the outcome to
-avoid, because the deferred one then owes its own rebuild later. This is why
-all three sit in E rather than being worked in priority order -- their
-sequencing is coupled even though their subject matter is not.
-
-W34 and W40 are not wire-format items and are independent of that decision.
-W34 gates W32's emitted identity prefix, so it should be answered before
-group 3 runs; W40 gates whether W36's `product` reasoning holds, so it
-should be answered before or with W36.
+W40's question -- which identity terms the source actually supplies -- was
+answered before the batch and turned out to be a decode gap rather than a
+naming one: `harness_name` and `surface_kind` are now decoded from Codex's
+`originator` and `source`, so a Desktop or VS Code Session is no longer
+recorded as CLI. Dropping `product_name` remains pending with W51.
 
 | ID | Priority | Status | Work |
 |---|---|---|---|
@@ -199,12 +208,7 @@ should be answered before or with W36.
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. |
 | W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. |
 | W28 | Normal | Planned | Give the central registry a retention policy; it accumulates an entry per Project ever scanned, including test temporary directories. |
-| W31 | High | Planned | Make `IDENTITY_FORMAT` observable and enforced: it is hashed into every identity but recorded nowhere, so two derivation schemes cannot be told apart. |
-| W32 | Normal | Planned | Route `identity._qualified` through `codess_hash`; it hand-rolls component hashing and hardcodes `sha256` in the emitted value. |
-| W33 | Low | **Accepted** | Rename `package_digest` to **`contract_digest`**, matching the function that computes it and the six files W03 narrowed it to. Wire-format change; regenerate with W25 and W36. Superseded text: rename `package_digest` to name the contract it now records; the current name reads as the Python distribution and no longer matches what the value covers. W03 narrowed it to six files, so the rename should follow that meaning. Batch with W20's `store_meta` change. |
-| W34 | Normal | **Accepted** | **The algorithm name appears only inside `codess/hashing.py`** -- not in general code, messages, or documentation. A reader recomputes with `codess_hash`, which already knows the algorithm, so naming it in a field taught them nothing actionable. **The remaining occurrences are wire-tied, and split into two classes that should not land together.** **(a) 71 are name-only**: a `_sha256` suffix on a column or JSON key -- `content_sha256`, `policy_sha256`, `selection_sha256`, `plan_sha256`, `stored_sha256`. Renaming these changes what a field is called, not what any value contains, so on disk it is a key rename and the substitution is mechanical. **The replacement is `_hash`, not `digest`**: `codess_hash` is already the function name and `hash_file` the helper, so `content_hash` matches the code that produces it. **(b) 32 are inside stored values**: `codess:session:sha256:…` on every identity and `sha256-fingerprint:…` on 259 `source_revision` values, where `fileio` composes the algorithm into the string. Renaming these rewrites stored bytes that are compared across stores, and it collides with W31/W32, which rewrite the same identity prefix -- so class (b) is theirs to land, not this item's. **Sequencing**: (a) joins the W25/W33/W36 regeneration; (b) waits for W31/W32 so no identity is rewritten twice. | A reviewed rule states where an algorithm name may appear; code outside `hashing` follows it; changing the algorithm touches one module plus the scheduled wire-format change. |
 | W35 | Low | **Postponed** | Decide whether the eight manifest fixtures no test reads should be wired into tests or removed from the released set. Not an integrity question: W03 took them out of the write gate, so they now affect only `codess package verify`. |
-| W36 | Normal | **Accepted** | Split the Claude-only `product_state` family into four kinds: `session.label`, `harness.setting`, `content.attachment`, `session.marker`. Nine subtypes spanning titles, permission settings, file diffs, and a transcript pointer are one kind today, so a query for any is a query for all. Four, not three: `last_prompt_marker` is a position pointer, not attached material. Wire-format change; regenerate with W25, W33, W34. |
 | W38 | Normal | Planned | Give `query_cmd` one row emitter. 105 `print` calls and 27 hand-assembled rows each re-decide separator, column order, and which fields to sanitize. Pairs with W18's reporting contract. |
 | W46 | Normal | **Partly done** | Move Cursor preflight out of the CLI layer. `_cursor_preflight` sits in `cli.ingest_cmd`, but of its calls **six are domain operations** -- `load_selection_marker_cache`, `save_selection_marker_cache`, `get_selection_markers`, `combine_selection_markers`, `cohort_needed`, `prepare_cursor_cohort` -- against **seven `progress_trace` calls and one `print`**, which are the only parts that belong to a command. `cursor_cohort` already declares it "owns caching" and decides when a cached cohort is valid; the sequencing of scan-versus-reuse, the container-stability bracket, and the cohort decision are that module's subject, not the CLI's. 5.2's layering says a command adapts arguments and renders results, so a 247-line phase deciding Cursor read strategy is on the wrong side of it. Move the decision to `cursor_cohort`, returning a result the command reports; the `progress_trace` calls become that result's fields or a callback. Pairs with **W45**: doing this first would move a 10-parameter function rather than a 3-parameter one. **Landed this pass:** `CursorSelection` now lives in `cursor_cohort` and carries `workspace_ids`, `global_db`, and `project_headers` with `roots`, `empty`, and `selections()` derived, replacing four parallel parameters. **Remaining:** the decision itself is still in `ingest_cmd` -- six domain calls against seven `progress_trace` calls and one `print` -- so the phase body should move to `cursor_cohort` and return a result the command reports. | Cursor read strategy lives with the module that owns Cursor caching; `ingest_cmd` reports the outcome instead of computing it; the phase is testable without a CLI. |
 **A value survey extends the coverage sweep from absence to constancy.**
@@ -260,7 +264,7 @@ report states `record=0 (not recorded)` rather than a bare zero, so its own
 output does not repeat the error this survey found.
 
 | W55 | Normal | Planned | Unify text and record parsing across the decode layer. **Measured**: 98 `json.loads`, 42 SQLite `json_extract`, 38 `startswith`, 31 `re`, 20 `split`, 4 `removeprefix`, 7 `fromisoformat`, 8 `urllib.parse` -- spread over 38, 6, 17, 9, 15, 4, 6, and 4 modules. The ordering is sound (a parser first, a regular expression last) but the spread is not: 17 modules classify a prefix by hand where 4 use `removeprefix`, and 15 split on a separator with no shared helper. **Three specific candidates.** (1) The `mcp__`/`mcp_`/`mcp-` server split is implemented twice, in `store._tool_namespace` and `mcp_audit._mcp_candidate`, against the same three vendor spellings. (2) Timestamp parsing appears in all three adapters with slightly different fallbacks, where one bounded parser would serve. (3) The Codex output header is the only free-text regex that carries decoded fields; it should stay regex but its field table belongs beside the other vendor vocabularies rather than inside the adapter. **Also assess whether a library replaces hand-rolled work** -- `email.parser` or `dateutil` for the timestamp fallbacks, and whether SQLite's own JSON functions can replace materializing rows Python then re-parses, which is the 98-against-42 imbalance. Correctness-neutral, so it batches with no regeneration. | One helper per parsing concern; no vendor spelling is matched in two modules; a new adapter reaches for the same tools in the same order. |
-| W52 | Normal | WIP | Unify SQL construction and narrow where it lives. **Measured**: 186 statements across **24 modules**; **37 are built with f-strings in 11 modules**, and only 8 modules validate an interpolated name against the live schema. Four distinct interpolation patterns are in use and only the first is reviewed: (a) a predicate composed internally with bound parameters (`query_api`, the S608-exempt pattern); (b) a table or column name from the schema quoted by hand (`store.table_counts`, `schema_contract.column_names`, `value_survey`); (c) a fragment constant such as `cursor_source._BUBBLE_ROWS`; (d) an aggregate or projection list assembled per call (`query_reports`, 11 statements). **The risk is not injection** -- no site interpolates external input -- **it is drift**: a column renamed in the DDL is caught by (b) where `column_names` is consulted and silently produces an empty or failing query everywhere else, which is exactly what W25, W33, W34, W36, W50, and W51 are about to do to twelve column names at once. **Steps.** (1) One helper for quoting an identifier, replacing the four hand-rolled `replace('"', '""')` sites. (2) Every interpolated table or column name resolved through `table_names`/`column_names` so a rename fails loudly at the call site rather than returning nothing. (3) The three read-only audit modules that SELECT core tables from outside the query layer (7.3: 21 statements in 9 modules) either move behind `query_reports` or state at the call site why they read directly. (4) A test that parses every `execute` call and asserts each interpolated identifier appears in the released DDL, so the next rename cannot pass silently. Sequence before the regeneration batch, since its value is protecting exactly that change. | One identifier-quoting helper; every interpolated name checked against the schema; a renamed column fails a test rather than a query; SQL-executing modules reduced from 24 toward the store and query layers. **This session supplied the evidence the item predicted.** Renaming `global_id` to three table-qualified names broke **34 tests**, each traced by hand: a `JOIN sources s` where the `s.` prefix meant sources rather than sessions, an events upsert given the session qualifier, a double prefix from two overlapping passes, and eight row-access keys. Every one failed at runtime rather than at a check, which is exactly what step 4 exists to prevent. **The interpolation surface is now measured precisely**: one site interpolates a table *name* (`store.table_counts`, from the store's own catalog, never a caller); the rest interpolate `?` placeholder lists, which are safe because values stay bound. So the risk is drift, not injection, and the check needed is that every interpolated identifier appears in the released DDL. |
+| W52 | Normal | WIP | Unify SQL construction and narrow where it lives. **Measured**: 186 statements across **24 modules**; **37 are built with f-strings in 11 modules**, and only 8 modules validate an interpolated name against the live schema. Four distinct interpolation patterns are in use and only the first is reviewed: (a) a predicate composed internally with bound parameters (`query_api`, the S608-exempt pattern); (b) a table or column name from the schema quoted by hand (`store.table_counts`, `schema_contract.column_names`, `value_survey`); (c) a fragment constant such as `cursor_source._BUBBLE_ROWS`; (d) an aggregate or projection list assembled per call (`query_reports`, 11 statements). **The risk is not injection** -- no site interpolates external input -- **it is drift**: a column renamed in the DDL is caught by (b) where `column_names` is consulted and silently produces an empty or failing query everywhere else, which is exactly what W25, W33, W34, W36, W50, and W51 are about to do to twelve column names at once. **Steps.** (1) One helper for quoting an identifier, replacing the four hand-rolled `replace('"', '""')` sites. (2) Every interpolated table or column name resolved through `table_names`/`column_names` so a rename fails loudly at the call site rather than returning nothing. (3) The three read-only audit modules that SELECT core tables from outside the query layer (7.3: 21 statements in 9 modules) either move behind `query_reports` or state at the call site why they read directly. (4) **Landed.** `tests/test_sql_identifiers.py` parses every SQL string in `src/`, resolves each alias to the table it stands for, and asserts that every qualified column, every `INSERT` column list, and every `UPDATE ... SET` assignment names a column the released DDL declares. It ran before the format-5 batch, as this item required, and located every site W25 and W34 broke -- by file and statement, including `ingest_sources`'s `UPDATE sources SET content_sha256=?`, which a projection-only check would have missed and which no test exercised. Vendor-storage modules are excluded by name (`cursor_source` owns Cursor's camelCase vendor tables), and CTE-bound aliases are skipped rather than resolved against the wrong table. | One identifier-quoting helper; every interpolated name checked against the schema; a renamed column fails a test rather than a query; SQL-executing modules reduced from 24 toward the store and query layers. **This session supplied the evidence the item predicted.** Renaming `global_id` to three table-qualified names broke **34 tests**, each traced by hand: a `JOIN sources s` where the `s.` prefix meant sources rather than sessions, an events upsert given the session qualifier, a double prefix from two overlapping passes, and eight row-access keys. Every one failed at runtime rather than at a check, which is exactly what step 4 exists to prevent. **The interpolation surface is now measured precisely**: one site interpolates a table *name* (`store.table_counts`, from the store's own catalog, never a caller); the rest interpolate `?` placeholder lists, which are safe because values stay bound. So the risk is drift, not injection, and the check needed is that every interpolated identifier appears in the released DDL. |
 | W51 | Normal | Planned | Resolve the source-identity naming, measured against peer projects rather than against our own v1. **v1 is not evidence**: `schema/legacy/coschema-v1.sql` has two tables, was generated, and was never reviewed or approved, so it cannot settle a convention. Four other local SQLite schemas can: `Misses` (48 tables), `OSINT` (4), `spank-py` (3), `spank-rs` (1). Of 56 tables across them, 11 are singular and **every one is a mass noun** -- `metadata`, `evidence`, `coverage`, `usage`, `provenance`, `audit`, `store_meta`. Countable-entity tables are plural without exception. **That settles CoSchema's four `*_content` tables**: `event_content` averages 1.27 rows per Event, so it is a countable set and should be `event_contents` -- or, better, renamed to what it holds. `store_meta` is correctly singular by the same rule. **`_id` carries four incompatible formats**, which is the sharper defect: `sessions.id` is a vendor UUID, `sessions.entity_id` a `codess:session:sha256:` derivation, `sources.id` a bare SQLite rowid, `sessions.source_system_id` a dotted literal `anthropic.claude-code`. A reader cannot tell from the suffix whether a value is derived, assigned, or borrowed. **`source_system_id` is not an identifier under that reading** -- it is `vendor + "." + product` composed in the mapping profile, so `source_system` or `source_system_key` says what it is. **Superseded in part**: `vendor_name` is not merely a redundant tag but the wrong fact for a harness running another provider's model, so [CoNames](CoNames.md) owns its disposition rather than this item. **`product` is required by `mapping-contract.json` and defined nowhere**: no vocabulary, no examples, no CoSchema entry, and `sessions.product_name` holds only the three literals the profiles supply. Either define it or drop it with W40. **`sessions.source` is the `SOURCE_PROFILES` dict key** -- `Claude`, `Codex`, `Cursor`, confirmed across 601 real Sessions -- so `adapter_key` names it honestly and frees `source` for the Source entity the glossary defines. Wire-format; batch with the regeneration. | One suffix rule states whether a value is derived, assigned, or borrowed; `source` names the Source entity only; every contract-required field has a definition and examples; plurality follows the mass-noun rule the peer schemas already use. |
 | W50 | Normal | Planned | Reconcile schema names with the terminology Codess.md 7 defines. Measured against a live store rather than the DDL text: of twenty terms checked, **six are glossary entities and appear in table or column names** (Project, Session, Interaction, Event, Artifact, Source, workspace), **five appear in names but are not defined** (`location` 1 table + 2 columns, `path` 9 columns, `content` 6 tables + 8 columns, `text`, `raw`), and several defined concepts have no schema presence at all. Four specific defects. **(1) `source` carries three meanings**: `sources.id` is a transcript file, `source_system_id` is a vendor, and `sessions.source` is an adapter key (`Claude`) -- 26 columns share the prefix. The glossary defines Source as "logical upstream evidence container", which is only the first. **(2) `level` is used for two different things, and the parallel to code location was mine and is withdrawn.** The column holds `source`/`record`/`field`, which is a granularity and not an ordering -- summing its values overstates loss, which is the actual defect. But `field_state.diagnostic` builds a dict carrying **both** `"level"` (meaning severity: `info`/`warn`) and `"diagnostic_level"` (meaning granularity), and `store` reads the second into the column named after the first. That is the naming collision worth fixing; the store rows themselves are correct (`level=field, severity=info`). `field` and `record` here name storage granularity, which is the one place that is genuinely the subject, so they are justified -- but only after `level` is renamed to say granularity, and only because no better word distinguishes "a whole record" from "one of its values". **(3) Plurality is inconsistent, and v1 shows the convention**: the one archived schema (`schema/legacy/coschema-v1.sql`) had two tables, `sessions` and `events`, both plural. Twenty-two of twenty-four current tables are plural; the exceptions are `store_meta` (correct -- a mass noun) and the four `*_content` link tables, which name sets. `event_artifacts` and `event_content` are both link tables from `events` and disagree. **Recommend plural throughout**, since a table holds rows, with `store_meta` as the stated exception. **(4) `location` and `path` are used interchangeably** in `project_locations.observed_path` and `sessions.project_path` while the glossary defines "Project location" as an entity and leaves `path` undefined. Wire-format changes; batch with the regeneration. | Every term in a table or column name is either defined in Codess.md 7 or is a plain English word carrying no Codess meaning; `source` names one thing; plurality has one rule and one stated exception. |
 | W49 | High | Planned | Identify a worktree as the repository it belongs to. Codess.md 7 states "one repository is one Project; clones, worktrees, editor workspaces, and filesystem locations are bindings or observations of it", and `project_locations` exists to hold those observations -- but **the capability is unreachable in practice**. `project.get_project_root` resolves identity with `git rev-parse --show-toplevel`, which returns the *worktree* root, so two worktrees of one repository become two Projects. Measured: `~/Work/ZK/Zero400` and `~/Work/ZK/ZeroPerf` are worktrees of the same repository -- identical `--git-common-dir` (`Zero400/.git`), different `--show-toplevel` -- and carry different `project_id`s, each with one location. All 21 registered Projects have exactly one location for the same reason, which is why `project_locations` looked like a table that is always one row: the multi-location case cannot currently arise from discovery. A `worktree` catalog state and a `worktree_of` relation exist but require `--related-project-id` on the command line, so the relation is only ever recorded by hand. **`--git-common-dir` is the signal**: identical for worktrees of one repository, distinct across repositories, and already a subprocess shape the codebase uses. Resolving identity by it makes a second worktree a second `project_locations` row rather than a second Project. | Two worktrees of one repository share a `project_id` and appear as two locations; a clone with its own history does not; the multi-location path is exercised by discovery rather than only by manual catalog edits. |
@@ -274,7 +278,6 @@ output does not repeat the error this survey found.
 | W41 | Normal | Planned | Expose snapshot recovery through the CLI. `snapshot.recover_current_snapshot` and `rebuild_manifest` reconstruct a lost `current.json` and a corrupted `manifest.json`, but no command reaches either, so Operations 10.5 directs an operator with a hash mismatch to `codess baseline`, which cannot do it. Dead-code detection reports both; the defect is the missing route, not the code. |
 | W40 | High | **Answered; now a decode gap** | Which of the four identity terms does the source actually supply? **`vendor_name` is real but unobserved** (never in a record; correctly inferred from which store a Session came from). **`harness_name` and `surface_kind` are real, observable, and currently wrong for Codex**: `session_meta` carries `originator` (`codex_cli_rs`, `Codex Desktop`, `codex-tui`, `codex_exec`) and `source` (`cli`, `vscode`), while Codess stores the constant `codex-cli`/`cli` for all 13 Sessions -- so a Desktop or VS Code Session is recorded as CLI. **`product_name` is struck**: it is a pure function of `source_system_id` (`anthropic.claude-code` -> `claude-code`), never observed in any record, and filtered by nothing, so it stored a derivable constant on every Session. Decode the two observable fields; drop the column. |
 | W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES`. |
-| W25 | Normal | **Accepted** | Reduce nineteen time columns to seven and rename the one ambiguous survivor, per CoSchema 5.1.1. Six removals: three byte-identical duplicate pairs, two columns exactly equal to `MIN`/`MAX(events.event_at)`, one null in all 85,840 rows. Wire-format change; regenerate with W33 and W36. |
 | W13 | Normal | TODO | Mechanically enforce architecture/contract paths; observe child-process coverage. Query-request validation-library adoption is Postponed (13.4.2). |
 | W14 | Normal | TODO | Require or explicitly mark Project identity for direct library writes. |
 | W15 | Normal | **Under review** | Resolve the meaning and name of raw mode `none` -- it retains no raw bytes but still creates a raw-manifest observation. Blocked on deciding whether `none` means no bytes or no raw observation. |
@@ -2665,16 +2668,13 @@ something unenforced. W05 pairs with the decode validation in Baseline 1
 rather than running separately, since both want real investigations to check
 against.
 
-**The wire-format items belong here.** W25's time-column rename, W33's
-`package_digest` rename, and W36's `product_state` split all change what a
-store records. A regeneration is already due from the W03 and W20 changes, so
-landing these before the next rebuild costs nothing and landing them after
-means a second one. That is a sequencing fact rather than a priority claim.
-
-W36 is the one that is not merely a rename, and it should be settled before
-the batch rather than inside it. Splitting one Event kind into three changes
-what a query returns, so it wants the decision made on its own terms; the
-regeneration is then the cheap part.
+**The wire-format items landed.** W25's time columns, W33's
+`contract_digest` rename, W34's algorithm-name removal, W31/W32's identity
+derivation, and W36's `state.product` split all changed what a store records
+and were regenerated together as CoSchema format 5. W36 was the one that was
+not merely a rename -- splitting one Event kind into four changes what a
+query returns -- and it was verified against 11,758 real Claude records
+before the profile was split, then against 4,866 Events in a rebuilt store.
 
 #### 12.3.3 Why a Third Baseline Is Not Defined
 
@@ -5043,7 +5043,7 @@ group the items are largely independent; between groups the order matters.
 | Group | Items | Impact if wrong | Risk of doing it |
 |---|---|---|---|
 | Decode correctness | W01, W02 | Stored evidence is wrong or missing, and nothing downstream can detect it | Low: additive, verified against real Sources |
-| Store identity and integrity | W14, W15, W25, W31, W32, W33, W34, W35 | A store cannot be written, or an identity means two things | High: changes force a rebuild, and W25 changes column names |
+| Store identity and integrity | W14, W15, W35 | A store cannot be written, or an identity means two things | Low now: the rebuild-forcing items (W25, W31-W34, W36) landed together in format 5 |
 | Structure and boundaries | W19, W21, W24 | Nothing breaks; the code stays hard to change | Medium: behavior-preserving, but wide diffs |
 | Query and contract surface | W04, W05, W13, W17 | Results are unclear or unverifiable | Low to medium |
 | Operations and reporting | W16, W18, W28 | Operators cannot see what happened or scope what runs | Low: mostly additive |
@@ -5077,41 +5077,35 @@ deeper one over the families W01 would flag.
 
 #### 14.1.2 Store Identity and Integrity
 
-**W14, W15, W25, W31, W32, W33, W34, W35. Still the largest group, and
-no longer the most blocked.** W03 closed: the write gate consults the
-executable contract only, which removes the tax that was paid on every
-packaged-file edit whether or not anyone was working on identity (13.4.4).
+**W14, W15, W35. The group is now small**, because the six items that forced
+a rebuild landed together as CoSchema format 5: W25 (time columns), W31 and
+W32 (identity derivation and its emitted tag), W33 (`contract_digest`), W34
+(`sha256` out of column and value names), and W36 (the `state.product`
+split). What each changed is recorded on the F category above and in
+CoSchema 5.1.1; the outcome is that a store written under format 4 is refused
+with the rebuild command named.
 
-Two items remain Under review -- W15 and W34 -- meaning an established
-problem with no accepted resolution, so scheduling them before the decision
-is scheduling an argument. W35 is Postponed by decision rather than blocked.
+**W15 remains Under review** -- an established problem with no accepted
+resolution, so scheduling it before the decision is scheduling an argument.
+W35 is Postponed by decision rather than blocked. W14 is small and
+independent.
 
-**What W03's closure freed.** Three things, in order of usefulness:
+**What the batch established for the next one.** The guard has to precede the
+rename, not follow it: W52 step 4 landed first and then located every site
+W25 and W34 touched, including an `UPDATE ... SET` clause that a
+projection-only check misses and that no test would have failed on until the
+statement ran. And `ingest --force --source <one vendor>` cannot complete a
+format change, because a store set publishes whole; that now says so, naming
+the whole-Project command.
 
-| Freed | Why |
-|---|---|
-| W33 | `package_digest` is the field it renames; the gate that reads it is now settled, so the rename lands once instead of racing a semantic change to the same value |
-| W34's retained-check half | The "should runtime checks become optional" question is answered -- no, because the cost that motivated it measured at 3 ms once per process. What remains in W34 is only the algorithm-naming rule |
-| Ordinary schema work | A DDL or mapping edit no longer makes unrelated published stores unwritable, so W25 and the decode items can proceed without a rebuild per edit |
-
-**W20 is closed.** `path_key` is `local_path_key` and names a machine-local
-location; `snapshot_id` stays a creation identity and no longer sits in
-`store_meta`, so the circularity W31 and W32 would have inherited is gone;
-and every derivation routes through `codess_hash` at a declared width, with
-a contract test failing if a `hashlib` call or an undeclared width appears
-(13.4.8). W31 and W32 are the group's remaining identity work and land
-together, since both change the emitted identity string.
-
-W25 remains the expensive one and should go last: renaming every time column
-is a breaking schema change, and doing it before W33 lands would mean
-regenerating stores twice. W31 and W32 land together. W14 and W15 are small
-and independent.
-
-**A rebuild is already due.** W03's digest split and W20's `store_meta`
-removal both changed what a store records, so stores written before them
-need regenerating. W33's rename changes the same metadata again; landing it
-before the next rebuild costs nothing extra, and landing it after means a
-second one.
+**One proposed removal was reversed on measurement.** W25 listed
+`sessions.started_at`/`ended_at` for removal as derivable from Events, which
+is true -- they are exactly `MIN`/`MAX(event_at)` in all 448 measured
+Sessions. They are retained because they carry the indexed `--since`/`--until`
+predicate and 46 read sites, so deriving them puts an aggregate over the
+events table on the common read path. The original item weighed the
+redundancy and not the read cost; whether a view is better belongs with the
+workloads W08 establishes.
 
 #### 14.1.3 Structure and Boundaries
 
@@ -5201,13 +5195,7 @@ active list, where they read as work someone intends to start.
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. | Small correctness and representative scale cases report timing, query plans, rows, memory, and stable result identities. |
 | W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. | Selection, fingerprinting, decode, and query remain bounded as unrelated Cursor content grows. |
 | W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES` so discovery, refresh, review, Project handling, and the command modules stop re-deriving partial vendor views from bare keys (3.5.5). The vendor table describes vendors; adapters interpret them, and decode behavior must not migrate into it. Do not name it a registry -- that term already denotes the central `~/.codess` store. | One vendor description supplies keys, display names, identity fields, paths, and store filenames; no module repeats the vendor key set or a key-to-name mapping; adding a vendor touches the vendor table and its adapter, not the command layer. |
-| W25 | Normal | Planned | Resolve CoSchema time-column naming, and reduce nineteen time columns to seven. **The defect**: `started_at` is `REAL` in `sessions` and `tool_invocations` but `TEXT` in `processing_runs` -- one name, two representations. **The larger finding**: vendors supply about one time each, so most of the nineteen are duplicates or derivations. Measured over 21 store sets, `events.event_at` and `events.timestamp` are byte-identical across all 250,427 rows, and `sources.observed_at`/`ingested_at` across all 422; `sessions.started_at`/`ended_at` are exactly `MIN`/`MAX(events.event_at)` in all 497 Sessions; `tool_invocations.ended_at` is null in all 85,840 rows and no vendor reports an invocation end. **Six removals plus three unread row-creation stamps leave seven columns, each answering a question no other answers.** One rename survives: `tool_invocations.started_at` becomes `source_started_at`, since the other half of the collision is removed rather than renamed. **Name the provenance, not the encoding** -- `_at` for times Codess recorded, a `source_` prefix for times a vendor supplied, following the precedent `source_mtime` already sets -- so changing a representation never forces a rename. Land the removals with the rename so no column is renamed on its way out. Breaking schema change; regenerate rather than migrate. | No column name denotes two representations; a name states who reported the time; the DDL, contract, and query paths agree. |
 | W28 | Normal | Planned | Give the central registry a retention policy. `ingested_projects.json` gains an entry for every Project ever scanned and drops none: an observed registry held 1,452 entries of which 1,424 were temporary directories from test runs and 28 were live. `tools/prune_project_catalog.py` prunes temporary paths from the reviewed catalog but nothing prunes the registry. | Entries for paths that no longer exist are reported and removable; a test run cannot silently enlarge a developer's registry; retention is stated rather than implied. |
-| W31 | High | Planned | Make `IDENTITY_FORMAT` observable and enforced. It is hashed into every `entity_id` but appears neither in the value nor in `store_meta`, so a store cannot report which derivation produced its identities and nothing prevents appending identities from a second scheme. Because identities are compared across stores, the qualifier must travel in the value (`codess:session:id1:sha256:...`) rather than in one store's metadata. | The derivation format is readable from any identity; a store records it; a write whose format differs is refused as the other identifiers already are. **A second defect on the same column**: `entity_id` is derived from vendor-stated facts for Sessions, Events, and Artifacts, so two machines derive the same value -- but `source-revision` derives from `source_path`, and `source-record` and `observation` inherit it. All 405 real Source rows hold an absolute local path there, so the same Source observed on two machines yields two identities and cross-store deduplication on `sources.entity_id` fails silently. The column claims a property three of its kinds do not have. Correct the derivation before the rename to `entity_id` ([CoNames](CoNames.md)), since this one is a defect rather than a wording problem. |
-| W32 | Normal | Planned | Route entity-identity derivation through `codess/hashing.py`. `identity._qualified` calls `codess_digest()` -- the escape hatch reserved for callers whose read pattern is the policy -- and then hand-rolls the NUL-separated component hashing that `codess_hash` exists to provide, so the one construction the module was written for is the one place not using it. The emitted value also hardcodes `sha256`, which 13.4.8's naming rule reserves for integrity claims a reader recomputes. Changing the emitted prefix alters every stored identity, so this lands with W31 rather than alone. | Identity derivation calls the shared component mode; no module outside `hashing` composes a digest by hand; the algorithm name is not part of a value nothing recomputes. |
-| W33 | Low | Planned | Rename `package_digest` to name what it now records. `package` reads as the Python distribution in a codebase that is one, and after W03 the value no longer covers the released *set* at all: it covers the six-file executable contract, while the full set keeps its own digest for release verification. The name should follow that meaning -- `contract_digest` is already the function name, so the stored field and the documentation should agree with it rather than retaining `package_digest` for a value that is not the package. `matching_set` was the earlier candidate (CoSchema 1.1) and is now the weaker one, since it describes the released set that the write gate no longer consults. The field is in `store_meta`, so this is a wire-format change: batch it with W20's `snapshot_id` removal into one regeneration. | One name describes the value across code, `store_meta`, and documentation; it does not collide with Python packaging; the released-set digest and the contract digest are separately named; 14.4 records the vocabulary. |
-| W34 | Normal | **Accepted** | **The algorithm name appears only inside `codess/hashing.py`** -- not in general code, messages, or documentation. A reader recomputes with `codess_hash`, which already knows the algorithm, so naming it in a field taught them nothing actionable. **All 129 remaining occurrences are wire-tied**: 4 schema columns plus 2 UNIQUE constraints and 2 indexes (`content_sha256` on `sources`, `content_objects`, `artifacts`; `policy_sha256` on `processing_runs`), roughly 63 JSON keys in receipts, manifests, and catalogs, the `codess:...:sha256:` identity prefix, and **259 stored `source_revision` values** where `fileio` composes the algorithm into a fingerprint string such as `sha256-fingerprint:{digest}`. That last class was previously read as code-only naming; it is not, which is why no code-only residue remains to clean and the rename cannot be done without the regeneration. The replacement is the neutral `digest`: `content_sha256` becomes `content_digest`, `codess:content:sha256:` becomes `codess:content:digest:`. Width and algorithm stay recoverable from `hashing`, the module that would change if either did. **Sequencing**: wire-format, so it joins the W25/W33/W36 regeneration, and it overlaps W31/W32, which rewrite the same identity prefix -- landing them separately would rewrite every stored identity twice. | A reviewed rule states where an algorithm name may appear; code outside `hashing` follows it; changing the algorithm touches one module plus the scheduled wire-format change. |
-| W36 | Normal | Accepted | Split the Claude-only `state.product` family into four Event kinds and rename what survives. **Accepted partition, separable by a field a reader can see**: `session.label` (`ai_title`, `custom_title`, `agent_name` -- 6,012 Events, carrying content and no metadata), `harness.setting` (`mode`, `permission_mode` -- 3,938, one setting each), `content.attachment` (`context_attachment`, `file_history_snapshot`, `file_history_delta` -- 5,789, describing material the harness attached), and `session.marker` (`last_prompt_marker` -- 3,740, a position pointer rather than attached material). The current single kind is the largest in Claude -- more Events than `tool.call` -- so a query for titles returns permission settings and file diffs too. `event_kind` is a declared open vocabulary, so adding kinds is expected rather than a break. The mapping rule `claude.product-state` and its `events.state.product` target split the same way. Wire-format; batch with W25 and W33. | Four kinds, each answering one question, replace one that answers none; a reader can select titles without receiving file diffs; the released Claude profile names each. |
 | W38 | Normal | Planned | Give `query_cmd` one tabular row emitter. The module has **105 `print` calls** and **27 sites that assemble a row by hand**, each joining sanitized fields with tabs or interpolating several into an f-string, so every site independently re-decides the separator, the column order, and which fields need sanitizing. Adding a field to one report reaches the others only if someone edits each. This surfaced from a call-count review: `sanitize_tabular` is called 43 times in this one file against 1 elsewhere, and the concentration measures the repetition *around* the helper rather than the helper itself, which is correct at five lines. A single emitter taking fields and a format would own the joining and reduce the count to one call inside it, without removing a capability. Pairs with **W18**: the reporting contract needs one place where a row becomes output, and building the emitter first gives W18 something to attach a format to. | One function emits a tabular row; separator and sanitizing are decided once; a new output format is added in one place; `query_cmd` prints through it rather than around it. |
 | W35 | Low | Postponed | Resolve the validation-fixture inventory. Ten of the sixteen released manifest entries are fixtures; two are read by tests, by direct path rather than through the manifest, and the remaining eight are referenced by nothing but the manifest itself. They therefore cannot fail a test, because no test reads them. W03 removed them from the write gate, so they no longer gate anything a store does, which is why this is Low rather than Critical: it is now a question about what the released set should contain, not about whether stores can be written. Either wire each fixture into a test that reads it through the manifest, or remove it from the released set; carrying a released file no consumer reads is a claim the repository cannot check. | Every entry in the released manifest has a named consumer, or is removed; a test fails if an entry acquires none. |
 

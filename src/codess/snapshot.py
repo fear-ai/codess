@@ -39,6 +39,7 @@ from codess.schema_contract import (
     FORMAT_ID,
     FORMAT_VERSION,
     SUPPORTED_READ_FORMATS,
+    UnsupportedStoreError,
     contract_digest,
     database_identity,
     require_store,
@@ -49,6 +50,17 @@ from codess.schema_contract import (
 
 class SnapshotError(RuntimeError):
     """Snapshot construction or verification failed."""
+
+
+class SnapshotContractMismatchError(SnapshotError):
+    """The snapshot is well-formed but records a different CoSchema contract.
+
+    Separate from a general failure because callers act on it differently: a
+    catalog reports the Project as needing a rebuild rather than as broken,
+    and a reader may opt into it explicitly. It was previously distinguished
+    by matching the message text, which made the wording a silent interface --
+    rewording the message reclassified the status.
+    """
 
 
 def read_manifest(snapshot_dir: Path) -> dict[str, Any]:
@@ -233,25 +245,37 @@ def _store_package_identity(
     """Return the common on-disk format/package without relabeling old stores."""
     paths = [path for path in store_paths if path.exists()]
     versions: set[int] = set()
-    package_digests: set[str] = set()
+    contract_digests: set[str] = set()
     for path in paths:
         conn = open_readonly(path)
         try:
-            versions.add(require_store(conn, write=False))
+            try:
+                versions.add(require_store(conn, write=False))
+            except UnsupportedStoreError as exc:
+                # A store set is published as a whole, so one vendor rebuilt
+                # under a new format leaves the others unreadable here. Naming
+                # the store and the whole-Project remedy matters because the
+                # obvious next step -- re-running the same single-vendor
+                # `--force` -- cannot resolve it.
+                raise SnapshotContractMismatchError(
+                    f"{path.name} cannot join this snapshot: {exc}. Every store "
+                    f"in a Project is published together, so rebuild them all "
+                    f"with `codess ingest --force` without `--source`"
+                ) from exc
             meta = store_metadata(conn)
-            digest = meta.get("package_digest")
+            digest = meta.get("contract_digest")
             if not digest:
-                raise SnapshotError(f"store lacks package_digest: {path}")
-            package_digests.add(digest)
+                raise SnapshotError(f"store lacks contract_digest: {path}")
+            contract_digests.add(digest)
         finally:
             conn.close()
     if not paths:
         raise SnapshotError("cannot create a snapshot without a CoSchema store")
-    if len(versions) != 1 or len(package_digests) != 1:
+    if len(versions) != 1 or len(contract_digests) != 1:
         raise SnapshotError(
             "snapshot stores use mixed CoSchema formats or package digests"
         )
-    return versions.pop(), package_digests.pop(), paths
+    return versions.pop(), contract_digests.pop(), paths
 
 
 def _pointer_document(
@@ -323,7 +347,7 @@ def publish_snapshot(
     # read contract before publication can change a pointer. Current-format
     # package equality was already enforced during construction.
     snapshot_store_paths_from_base(
-        expected_base, snapshot.name, allow_package_mismatch=True
+        expected_base, snapshot.name, allow_contract_mismatch=True
     )
     manifest = read_manifest(snapshot)
     if manifest.get("project_id") != project_id:
@@ -398,7 +422,7 @@ def recover_current_snapshot(
     for candidate in candidates:
         try:
             snapshot_store_paths_from_base(
-                expected_base, candidate.name, allow_package_mismatch=True
+                expected_base, candidate.name, allow_contract_mismatch=True
             )
         except SnapshotError as exc:
             errors.append(f"{candidate.name}: {exc}")
@@ -434,12 +458,12 @@ def create_snapshot(
     )
     snapshots = base / SNAPSHOTS_DIR
     snapshots.mkdir(parents=True, exist_ok=True)
-    store_format_version, package_digest, source_stores = _store_package_identity(
+    store_format_version, store_digest, source_stores = _store_package_identity(
         store_paths
     )
-    if store_format_version == FORMAT_VERSION and package_digest != contract_digest():
+    if store_format_version == FORMAT_VERSION and store_digest != contract_digest():
         raise SnapshotError(
-            "current-format store package differs from the current package"
+            "current-format store was written under a different CoSchema contract"
         )
     created_at = datetime.now(UTC)
     created_at_text = created_at.isoformat()
@@ -450,7 +474,7 @@ def create_snapshot(
     # supported width is ample (13.4.8).
     identity = codess_hash(
         256, 64,
-        [str(project_path.resolve()), created_at_text, package_digest, policy_digest],
+        [str(project_path.resolve()), created_at_text, store_digest, policy_digest],
     )
     snapshot_id = (
         f"{created_at.strftime('%Y%m%dT%H%M%S.%fZ')}-"
@@ -515,10 +539,10 @@ def create_snapshot(
                 "platform": platform.platform(),
             },
             "build_policy": policy,
-            "build_policy_sha256": policy_digest,
+            "build_policy_digest": policy_digest,
             "format_id": FORMAT_ID,
             "format_version": store_format_version,
-            "package_digest": package_digest,
+            "contract_digest": store_digest,
             "project_id": project_id,
             "raw_format": RAW_FORMAT,
             "sealed": seal,
@@ -552,7 +576,7 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
 
     Most fields are recoverable from each store's own store_meta table or
     recomputed from the files themselves. `parent_snapshot_id`,
-    `build_policy`, and `build_policy_sha256` are not recorded anywhere
+    `build_policy`, and `build_policy_digest` are not recorded anywhere
     else and come back as None. Result carries `"reconstructed": True`.
     Raises SnapshotError if no store DB or raw-manifest.jsonl survives.
     """
@@ -574,7 +598,7 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
     stores: dict[str, Any] = {}
     meta_by_key: dict[str, str] = {}
     format_version: int | None = None
-    package_digest: str | None = None
+    contract_digest: str | None = None
     project_id: str | None = None
     for path in store_paths:
         conn = open_readonly(path)
@@ -584,10 +608,10 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
             meta = store_metadata(conn)
             for key in (
                 "snapshot_created_at", "snapshot_software_version",
-                "decoder_version", "validator_version", "package_digest",
+                "decoder_version", "validator_version", "contract_digest",
             ):
                 meta_by_key.setdefault(key, meta.get(key))
-            package_digest = package_digest or meta.get("package_digest")
+            contract_digest = contract_digest or meta.get("contract_digest")
             if project_id is None:
                 row = conn.execute("SELECT id FROM projects LIMIT 1").fetchone()
                 project_id = row[0] if row else None
@@ -610,10 +634,10 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
         "decoder_version": meta_by_key.get("decoder_version"),
         "validator_version": meta_by_key.get("validator_version"),
         "build_policy": None,
-        "build_policy_sha256": None,
+        "build_policy_digest": None,
         "format_id": FORMAT_ID,
         "format_version": format_version,
-        "package_digest": package_digest,
+        "contract_digest": contract_digest,
         "project_id": project_id,
         "raw_format": RAW_FORMAT,
         "sealed": (snapshot_dir / "raw").is_dir(),
@@ -627,7 +651,7 @@ def snapshot_store_paths_from_base(
     base: Path,
     snapshot_id: str,
     *,
-    allow_package_mismatch: bool = False,
+    allow_contract_mismatch: bool = False,
 ) -> list[Path]:
     """Resolve and validate one retained snapshot under a snapshot base.
 
@@ -659,10 +683,23 @@ def snapshot_store_paths_from_base(
             manifest["format_id"] != FORMAT_ID
             or manifest["format_version"] not in SUPPORTED_READ_FORMATS
         ):
-            raise SnapshotError("retained snapshot format is unsupported")
-        package_matches = manifest.get("package_digest") == contract_digest()
-        if not package_matches and not allow_package_mismatch:
-            raise SnapshotError("retained snapshot exact CoSchema package digest mismatch")
+            # Codess rebuilds rather than migrates, so the remedy is named
+            # here: a reader who is told only that the format is unsupported
+            # has no way to learn that re-ingesting is what resolves it.
+            raise SnapshotError(
+                f"retained snapshot is CoSchema format "
+                f"{manifest.get('format_version')}, and this build reads "
+                f"{sorted(SUPPORTED_READ_FORMATS)}; rebuild it from the vendor "
+                f"sources with `codess ingest --force --dir <project>`"
+            )
+        contract_matches = manifest.get("contract_digest") == contract_digest()
+        if not contract_matches and not allow_contract_mismatch:
+            raise SnapshotContractMismatchError(
+                "retained snapshot was written under a different CoSchema "
+                "contract; rebuild it with `codess ingest --force`, or pass "
+                "--snapshot-contract-policy read-compatible to read it as it "
+                "stands"
+            )
         raw_manifest = snapshot / RAW_MANIFEST_FILE
         try:
             verify_hash(raw_manifest, manifest.get("raw_manifest_sha256"))
@@ -677,7 +714,7 @@ def snapshot_store_paths_from_base(
                 raise SnapshotError(f"retained store hash mismatch: {name}") from exc
             conn = open_readonly(path)
             try:
-                if package_matches:
+                if contract_matches:
                     require_store(conn, write=False)
                 else:
                     application_id, version = database_identity(conn)
@@ -687,8 +724,10 @@ def snapshot_store_paths_from_base(
                 # Membership is established by the manifest hash verified
                 # above, which names this exact file; a `snapshot_id` copied
                 # into the store would only restate it.
-                if meta.get("package_digest") != manifest.get("package_digest"):
-                    raise SnapshotError(f"retained store package digest mismatch: {name}")
+                if meta.get("contract_digest") != manifest.get("contract_digest"):
+                    raise SnapshotContractMismatchError(
+                        f"retained store records a different CoSchema contract: {name}"
+                    )
                 if _logical_counts(path, entry.get("counts", {}).keys()) != entry.get("counts"):
                     raise SnapshotError(f"retained store logical counts mismatch: {name}")
             finally:
@@ -705,13 +744,13 @@ def snapshot_store_paths(
     project_path: Path,
     snapshot_id: str,
     *,
-    allow_package_mismatch: bool = False,
+    allow_contract_mismatch: bool = False,
 ) -> list[Path]:
     """Resolve one retained snapshot from a Project's local snapshot base."""
     return snapshot_store_paths_from_base(
         project_path / STORE_DIR,
         snapshot_id,
-        allow_package_mismatch=allow_package_mismatch,
+        allow_contract_mismatch=allow_contract_mismatch,
     )
 
 

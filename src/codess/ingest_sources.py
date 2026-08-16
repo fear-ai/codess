@@ -126,7 +126,7 @@ def _record_raw(
         conn.execute(
             """
             UPDATE sources
-            SET availability=?, capture_method=?, consistency=?, content_sha256=?
+            SET availability=?, capture_method=?, consistency=?, content_digest=?
             WHERE id=(
               SELECT id FROM sources
               WHERE source_system_id=? AND source_path=?

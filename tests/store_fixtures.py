@@ -27,8 +27,8 @@ def insert_session(conn, session_id, *, source="Claude", **columns):
     """
     row = {
         "id": session_id,
-        "session_entity_id": f"codess:session:sha256:{session_id}",
-        "observation_id": f"codess:observation:sha256:{session_id}",
+        "session_entity_id": f"codess:session:id1:{session_id}",
+        "observation_id": f"codess:observation:id1:{session_id}",
         "source_system_id": VENDOR_SOURCE_SYSTEMS.get(source, "anthropic.claude-code"),
         "source": source,
         "type": "Code",
@@ -51,8 +51,13 @@ def insert_event(conn, session_id, event_id, **columns):
     row = {
         "session_id": session_id,
         "event_id": event_id,
-        "event_entity_id": f"codess:event:sha256:{session_id}-{event_id}",
+        "event_entity_id": f"codess:event:id1:{session_id}-{event_id}",
     }
+    # `timestamp` was a stored duplicate of `event_at`, byte-identical across
+    # every measured row, and is gone from the schema. Tests that named it are
+    # asking for the Event's instant, so it resolves to the surviving column.
+    if "timestamp" in columns:
+        columns["event_at"] = columns.pop("timestamp")
     row.update(columns)
     names = ", ".join(row)
     placeholders = ", ".join("?" for _ in row)

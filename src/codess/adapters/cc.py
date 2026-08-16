@@ -319,7 +319,7 @@ def _mapping_rule(event: dict) -> str:
     if subtype in {"tool_result", "tool_failure", "permission_denied"}:
         return "claude.tool-result"
     if event_type == "product_state":
-        return "claude.product-state"
+        return _PRODUCT_STATE_RULES.get(subtype or "", "claude.product-state")
     if subtype == "fork_context_reference":
         return "claude.fork-context"
     if event_type == "lifecycle_event":
@@ -638,6 +638,52 @@ NAMED_LABEL_RECORDS = {
 """Records that carry one short label and differ only in where it lives."""
 
 
+_PRODUCT_STATE_KINDS = {
+    "ai_title": "session.label",
+    "custom_title": "session.label",
+    "agent_name": "session.label",
+    "mode": "harness.setting",
+    "permission_mode": "harness.setting",
+    "context_attachment": "content.attachment",
+    "file_history_snapshot": "content.attachment",
+    "file_history_delta": "content.attachment",
+    "last_prompt_marker": "session.marker",
+}
+"""Which Event kind each Claude product-state record belongs to.
+
+One kind spanning all nine subtypes made a query for Session titles return
+permission settings and file diffs as well -- it was Claude's largest kind,
+with more Events than `tool.call`. The four kinds separate what a reader
+actually selects on: what the Session is called, how the harness was
+configured, what material was attached, and where a position was marked.
+`last_prompt_marker` is its own kind rather than attached material because it
+points at a position rather than carrying content (CoPlan W36).
+"""
+
+
+_PRODUCT_STATE_RULES = {
+    subtype: f"claude.{kind.replace('.', '-')}"
+    for subtype, kind in _PRODUCT_STATE_KINDS.items()
+}
+"""The released rule id for each subtype, derived from the kind it maps to.
+
+Kept in step with `_PRODUCT_STATE_KINDS` by construction: a rule and the kind
+it produces are the same decision, and deriving one from the other is what
+stops the profile and the decoder disagreeing.
+"""
+
+
+def _product_state_kind(subtype: str | None) -> str:
+    """The Event kind for one product-state subtype.
+
+    An unrecognized subtype keeps the general kind rather than being forced
+    into one of the four: `event_kind` is a declared open vocabulary, and a
+    newly observed Claude record is evidence to classify deliberately, not to
+    guess at from the nearest existing name.
+    """
+    return _PRODUCT_STATE_KINDS.get(subtype or "", "state.product")
+
+
 def normalize_product_state(
     record: dict, line_num: int, session_id: str, source_file: str, opts: dict,
 ) -> dict | None:
@@ -776,7 +822,7 @@ def normalize_product_state(
     if not event.get("event_kind"):
         event.update({
             "event_kind": (
-                "state.product"
+                _product_state_kind(event.get("subtype"))
                 if event["event_type"] == "product_state"
                 else "lifecycle.vendor"
             ),
@@ -1359,7 +1405,7 @@ def normalize_user(
                 "content_role": "tool_result_detail", "origin_kind": "tool_generated",
                 "metadata": _event_metadata(record, extra={
                     "source_locator": str(path),
-                    "content_sha256": codess_bytes_hash(256, 256, raw),
+                    "content_digest": codess_bytes_hash(256, 256, raw),
                     "byte_size": len(raw), "character_length": full_len,
                     "extraction": "complete" if len(extracted) == full_len else "bounded",
                     "media_type": "text/plain",

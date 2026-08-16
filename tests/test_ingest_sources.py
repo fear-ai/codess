@@ -238,13 +238,12 @@ def test_record_raw_writes_source_availability_into_the_store(tmp_path):
             """
             INSERT INTO sources(
               source_entity_id, source_system_id, source_path, storage_format,
-              source_revision, observed_at, ingested_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+              source_revision, observed_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 "codess:source_revision:test", "anthropic.claude-code", str(source),
                 "claude-jsonl", "rev-1", "2026-01-01T00:00:00+00:00",
-                "2026-01-01T00:00:00+00:00",
             ),
         )
         opts = decoder_options(raw_store=RawStore(tmp_path / "raw"))

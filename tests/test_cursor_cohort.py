@@ -60,14 +60,14 @@ def test_selection_marker_cache_requires_exact_container_and_scope(tmp_path):
 
 def test_combined_selection_marker_uses_sha256():
     marker = combine_selection_markers({
-        "/one": {"source_revision": "sha256-fingerprint:one"},
-        "/two": {"source_revision": "sha256-fingerprint:two"},
+        "/one": {"source_revision": "digest-fingerprint:one"},
+        "/two": {"source_revision": "digest-fingerprint:two"},
     })
     assert marker["source_revision"].startswith(
-        "cursor-cohort-selection-sha256-fingerprint:"
+        "cursor-cohort-selection-digest-fingerprint:"
     )
     assert marker["fingerprint_method"].endswith(
-        "selection-sha256-fingerprint"
+        "selection-digest-fingerprint"
     )
 
 

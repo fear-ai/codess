@@ -95,7 +95,7 @@ def resolve_session_id(
     paths = snapshot_store_paths_from_base(
         Path(selection["snapshot_base"]),
         selection["snapshot_id"],
-        allow_package_mismatch=True,
+        allow_contract_mismatch=True,
     )
     matches: set[str] = set()
     for path in paths:

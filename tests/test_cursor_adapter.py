@@ -111,7 +111,7 @@ def test_workspace_composer_index_recovers_missing_global_headers(tmp_path):
     assert markers["project"]["bubble_count"] == 2
     assert markers["project"]["source_mtime"] == 1700000003000
     assert markers["project"]["fingerprint_method"].endswith(
-        "sha256-fingerprint-v2"
+        "digest-fingerprint-v2"
     )
 
 
@@ -254,11 +254,11 @@ class TestSelectionMarker:
             )
         first = get_selection_markers(db, {"selection": {"ws1"}})["selection"]
         assert first["source_revision"].startswith(
-            "cursor-selection-sha256-fingerprint:"
+            "cursor-selection-digest-fingerprint:"
         )
         assert first["fingerprint_method"] == (
             "cursor-workspace-header-source-key-length-edge-"
-            "sha256-fingerprint-v2"
+            "digest-fingerprint-v2"
         )
         assert first["workspace_count"] == 1
         assert first["composer_count"] == 1

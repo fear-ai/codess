@@ -23,10 +23,10 @@ DDL_PATH = PACKAGE_ROOT / "sqlite" / "schema.sql"
 MAPPINGS_ROOT = REPO_ROOT / "schema" / "mappings"
 
 FORMAT_ID = "codess.coschema"
-FORMAT_VERSION = 4
+FORMAT_VERSION = 5
 APPLICATION_ID = 0x434F4445
-SUPPORTED_READ_FORMATS = frozenset({4})
-SUPPORTED_WRITE_FORMATS = frozenset({4})
+SUPPORTED_READ_FORMATS = frozenset({5})
+SUPPORTED_WRITE_FORMATS = frozenset({5})
 
 
 class SchemaContractError(RuntimeError):
@@ -385,12 +385,12 @@ def require_store(conn: sqlite3.Connection, *, write: bool) -> int:
     meta = store_metadata(conn)
     if meta.get("format_id") != FORMAT_ID or int(meta.get("format_version", -1)) != version:
         raise UnsupportedStoreError("store_meta disagrees with SQLite format identity")
-    if write and meta.get("package_digest") != contract_digest():
+    if write and meta.get("contract_digest") != contract_digest():
         if contract_check_disabled():
             log.warning(
                 "writing a store recorded under contract %s with %s in effect; "
                 "records written under different rules may be mixed",
-                meta.get("package_digest"), CONTRACT_OVERRIDE_ENV,
+                meta.get("contract_digest"), CONTRACT_OVERRIDE_ENV,
             )
         else:
             raise UnsupportedStoreError(

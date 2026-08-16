@@ -296,7 +296,7 @@ the suffix whether a value is derived, assigned, or borrowed.
 |---|---|---|
 | `_id` on a rowid | SQLite surrogate key, assigned locally | `sources.id`, `model_params.id` |
 | `_id` from a vendor | Identifier the source system assigned | `sessions.id` (vendor UUID) |
-| `entity_id` | Derived by Codess from declared components | `codess:session:sha256:…` |
+| `entity_id` | Derived by Codess from declared components | `codess:session:id1:…` |
 
 **`entity_id` is a poor name, and for `sources` it is also wrong.** The value is a
 digest of vendor-stated facts, so two machines ingesting the same Session derive the
@@ -385,6 +385,17 @@ regenerating every store.
 | `source_config` | `source_params` | Follows the table |
 | *(new)* | `model_line`, `model_generation`, `model_version`, `model_variant` | Axes the decomposition separated, each with a CLI filter |
 
+**Landed in CoSchema format 5:**
+
+| From | To | Why |
+|---|---|---|
+| `package_digest` | `contract_digest` | Covers the six-file contract, not the Python package |
+| `content_sha256`, `policy_sha256` | `content_digest`, `policy_digest` | Algorithm names live in `hashing` alone. `digest` rather than `hash`: the column holds a digest value, and `codess_hash` is the function that produces it |
+| `codess:<kind>:sha256:` in stored values | `codess:<kind>:id1:` | Names the derivation scheme instead of the algorithm, so a reader can tell two schemes apart and changing the algorithm is not a wire-format change |
+| `tool_invocations.started_at` | `source_started_at` | Distinguishes vendor-reported from Codess-recorded times |
+| `events.state.product` | four kinds | `session.label`, `harness.setting`, `content.attachment`, `session.marker` |
+| `allow_package_mismatch`, `--snapshot-package-policy` | `allow_contract_mismatch`, `--snapshot-contract-policy` | The value compared is the contract digest. The old flag spelling stays as a hidden alias, since it is a published CLI surface |
+
 **Pending**, for the next regeneration:
 
 | From | To | Why |
@@ -393,12 +404,7 @@ regenerating every store.
 | `sessions.source_system_id` | `source_system_key` | A composed literal, not an assigned identifier |
 | `sessions.vendor_name` | *records the company* | `cursor` is a product; Anysphere is the vendor |
 | `sessions.product_name` | *dropped* | A pure function of `source_system_id` |
-| `package_digest` | `contract_digest` | Covers the six-file contract, not the Python package |
-| `*_sha256` suffixes (71 sites) | `*_hash` | Algorithm names live in `hashing` alone, and `codess_hash` is already the function that produces them |
-| `sha256:` inside stored values (32 sites) | *with the identity rewrite* | Changes stored bytes compared across stores; rides with the `entity_id` change rather than landing twice |
-| `tool_invocations.started_at` | `source_started_at` | Distinguishes vendor-reported from Codess-recorded times |
 | `mapping_diagnostics.level` | *names granularity* | Holds `source`/`record`/`field`, a granularity, while `field_state` uses `level` for severity |
-| `events.state.product` | four kinds | `session.label`, `harness.setting`, `content.attachment`, `session.marker` |
 
 **Not renamed, and why.** `sources.id` -- a bare rowid is unremarkable.
 `event_content` -- mass noun, see [5](#5-plurality). `surface_kind`,

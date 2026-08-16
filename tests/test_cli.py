@@ -180,18 +180,18 @@ def test_query_duplicate_session_ids_route_by_global_number():
             insert_session(
                 conn, "same", source=source, started_at=timestamp,
                 ended_at=timestamp, project_path=str(proj),
-                session_entity_id=f"codess:session:sha256:{source}-same",
+                session_entity_id=f"codess:session:id1:{source}-same",
             )
             insert_event(
                 conn, "same", "e1", event_type="user_message", subtype="prompt",
                 role="user", content=content, timestamp=timestamp,
-                event_entity_id=f"codess:event:sha256:{source}-same-e1",
+                event_entity_id=f"codess:event:id1:{source}-same-e1",
             )
             insert_event(
                 conn, "same", "e2", event_type="tool_call",
                 tool_name="Read" if source == "Codex" else "Bash",
                 timestamp=timestamp,
-                event_entity_id=f"codess:event:sha256:{source}-same-e2",
+                event_entity_id=f"codess:event:id1:{source}-same-e2",
             )
             conn.commit()
             conn.close()
@@ -214,8 +214,8 @@ def test_query_duplicate_session_ids_route_by_global_number():
         assert codex_fields[2:4] == ["1", "Codex"]
         assert claude_fields[0] == "same"
         assert claude_fields[2:4] == ["2", "Claude"]
-        assert codex_fields[1].startswith("codess:session:sha256:")
-        assert claude_fields[1].startswith("codess:session:sha256:")
+        assert codex_fields[1].startswith("codess:session:id1:")
+        assert claude_fields[1].startswith("codess:session:id1:")
         assert codex_fields[1] != claude_fields[1]
         assert shown.returncode == 0
         assert "new" in shown.stdout
@@ -358,8 +358,8 @@ def test_query_lineage_and_session_metadata_report():
         conn.executemany(
             "INSERT INTO events "
             "(session_id, event_entity_id, event_id, event_type, subtype, tool_name, "
-            "content_len, timestamp, metadata) "
-            "VALUES ('s1', 'codess:event:sha256:s1-' || ?, ?, ?, ?, ?, ?, ?, ?)",
+            "content_len, event_at, metadata) "
+            "VALUES ('s1', 'codess:event:id1:s1-' || ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     "call-1", "call-1", "tool_call", None, "shell", None, 1,

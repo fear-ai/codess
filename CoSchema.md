@@ -38,11 +38,11 @@ questions. Conflating them would force a rebuild whenever any one changed:
 
 | Identifier | Declares | Changing it means |
 |---|---|---|
-| `FORMAT_VERSION` (4) | The CoSchema layout: tables, columns, constraints | Stores must be rebuilt; a different layout cannot be read |
-| `package_digest` | The exact released package -- DDL, contracts, mapping profiles, fixtures | Something in the package changed; see 13.4.4 for why fixtures should not be included |
+| `FORMAT_VERSION` (5) | The CoSchema layout: tables, columns, constraints | Stores must be rebuilt; a different layout cannot be read |
+| `contract_digest` | The executable contract -- the DDL, the logical and mapping contracts, and the three vendor profiles | Something that determines how a store is written or decoded changed. Validation fixtures are deliberately outside it (13.4.4) |
 | `DECODER_VERSION` (0.2) | How vendor records are interpreted into common Events | The same source would now decode differently, so existing rows are not comparable to new ones |
 | `VALIDATOR_VERSION` (0.2) | What is accepted, rejected, or diagnosed | The same records would now be admitted or refused differently |
-| `IDENTITY_FORMAT` (`codess.id/1`) | How entity identities are derived | Every `entity_id` changes; nothing resolves across the boundary |
+| `IDENTITY_FORMAT` (`codess.id/1`, emitted as `id1`) | How entity identities are derived | Every `entity_id` changes; nothing resolves across the boundary. The tag travels in the value, so two schemes are distinguishable |
 | Software version (`created_by`) | Which Codess release wrote the store | Recorded as provenance only; never gates anything |
 
 Every store records all of them in `store_meta` at creation. That record is
@@ -56,25 +56,26 @@ qualifies:
 | Identifier | Defined in | Written to | Checked by |
 |---|---|---|---|
 | `FORMAT_VERSION` | `schema_contract.py` | `store_meta.format_version`, and SQLite `PRAGMA user_version` | `require_store`, both directions |
-| `package_digest` | Computed by `verify_package()` over the manifest | `store_meta.package_digest` | `require_store`, writes only |
+| `contract_digest` | Computed by `contract_digest()` over the six executable files | `store_meta.contract_digest` | `require_store`, writes only |
 | `DECODER_VERSION` | `processing_contract.py` | `store_meta.decoder_version` | `require_store` (writes), plus the manifest and every mapping profile at load |
 | `VALIDATOR_VERSION` | `processing_contract.py` | `store_meta.validator_version` | `require_store` (writes), plus the manifest |
 | Software version | `codess/__init__.py` | `store_meta.created_by` | Nothing; provenance only |
-| `IDENTITY_FORMAT` | `identity.py` | Hashed into every `entity_id`, but not visible in it | Not recorded and not checked; see below |
+| `IDENTITY_FORMAT` | `identity.py` | Hashed into every `entity_id` and named in it as `id1` | Readable from any identity; see below |
 
-`IDENTITY_FORMAT` is the gap. It is fed into the digest, so changing it
-changes every derived identity, but it appears nowhere in the resulting
-value (`codess:session:sha256:...`) and is not written to `store_meta`. A
-store therefore cannot report which derivation produced its identities, and
-nothing refuses to append identities from a second scheme alongside a first.
-Because identities are compared *across* stores, the qualifier has to travel
-with the value rather than sit in one store's metadata: two stores built
-under different schemes would otherwise appear to disagree about the same
-Session. Supporting a change to it means recording the format in the value
-itself -- `codess:session:id1:sha256:...` or equivalent -- so a reader can
-tell two schemes apart, and refusing a write whose recorded format differs,
-as the other identifiers already do. Until then, treat a change to
-`IDENTITY_FORMAT` as a format change requiring a full rebuild.
+`IDENTITY_FORMAT` was the gap and is now closed. It was fed into the digest,
+so changing it changed every derived identity, but it appeared nowhere in the
+resulting value and was not written to `store_meta` -- so a store could not
+report which derivation produced its identities. Because identities are
+compared *across* stores, the qualifier has to travel with the value rather
+than sit in one store's metadata: two stores built under different schemes
+would otherwise appear to disagree about the same Session.
+
+Every identity is therefore now `codess:<kind>:id1:<64 hex>`. The tag names
+the derivation scheme; the algorithm is deliberately absent, because a reader
+recomputes through `codess_hash`, which owns that choice, and naming it in
+the value would make changing the algorithm a wire-format change (13.4.8).
+A change to `IDENTITY_FORMAT` remains a format change requiring a full
+rebuild, but a reader can now tell which scheme produced a value.
 
 **What is enforced, and when.** Reads require only that the store is a
 Codess store of the current format. Writes additionally require the package
@@ -85,11 +86,11 @@ digest, decoder version, and validator version to match the running software:
 | `application_id` is Codess | Yes | Yes |
 | `format_version` supported | Yes | Yes |
 | `store_meta` agrees with SQLite header | Yes | Yes |
-| `package_digest` matches | No | Yes |
+| `contract_digest` matches | No | Yes |
 | `decoder_version` matches | No | Yes |
 | `validator_version` matches | No | Yes |
 
-So a change to `FORMAT_VERSION`, `package_digest`, `DECODER_VERSION`, or
+So a change to `FORMAT_VERSION`, `contract_digest`, `DECODER_VERSION`, or
 `VALIDATOR_VERSION` forces a rebuild before the next write. A change to the
 software version does not, and `IDENTITY_FORMAT` does not either -- it would
 instead make previously derived identities cease to match, which is a
@@ -235,8 +236,8 @@ question. Four classes exist, and the prefix names the class:
 | Class | Form | Scope | Answers |
 |---|---|---|---|
 | Row key | `id`, integer or text | One database file | Which row is this, for joins and foreign keys |
-| `global_` identity | `codess:<kind>:sha256:<64 hex>` | Every store, machine, and rebuild | Which logical entity is this, independently of any database |
-| `observation_id` | `codess:observation:sha256:<64 hex>` | One extraction of one entity | Which act of observing produced this row |
+| `entity_id` | `codess:<kind>:id1:<64 hex>` | Every store, machine, and rebuild | Which logical entity is this, independently of any database |
+| `observation_id` | `codess:observation:id1:<64 hex>` | One extraction of one entity | Which act of observing produced this row |
 | `vendor_`/`source_` value | Exact upstream text | The vendor's own namespace | What did the source system call it |
 
 **`global_` designates independence from storage.** A `entity_id` is
@@ -260,18 +261,25 @@ questions it answers.
 `entity_id` values are always the full 32-byte digest. They are qualified by
 a format tag and entity kind and are compared and stored, never truncated.
 
-The current form embeds the digest algorithm, as
-`codess:<kind>:sha256:<digest>`. That is a recognized weakness rather than a
-guarantee: nothing recomputes these values to verify them, so the algorithm
-name states an implementation choice inside a value that is stored,
-compared, and quoted by operators, and changing the algorithm would
-therefore be a wire-format change. Names should describe a value's use --
-`_id` for a stable entity name, `_key` for a derived lookup value promising
-only equality, `_hash` or `_digest` for an integrity claim a reader
-recomputes -- and only the last needs the algorithm named. Integrity fields
-such as `stored_sha256` and `manifest_sha256` are correctly named on that
-basis. The identity prefixes are under review; existing values are not
-rewritten, since any change to them alters documents already written.
+The form is `codess:<kind>:id1:<digest>`, where `id1` names the derivation
+scheme rather than the algorithm. Nothing recomputes an identity to verify
+it, so naming the algorithm stated an implementation choice inside a value
+that is stored, compared, and quoted by operators, and made changing the
+algorithm a wire-format change. Names describe a value's use -- `_id` for a
+stable entity name, `_key` for a derived lookup value promising only
+equality, `_hash` or `_digest` for an integrity claim a reader recomputes --
+and only the last needs an algorithm named at all. The scheme tag is what a
+reader needs instead: it says which derivation produced the value, so two
+schemes are distinguishable across stores.
+
+**A Source identity is derived from vendor-stated facts, not from a local
+path.** `source-revision` previously took the absolute path, so the same
+transcript read on two machines produced two identities and cross-store
+deduplication on `sources.entity_id` failed silently. It now takes the
+source system, the vendor-assigned name within that store (the trailing two
+path segments), and the revision fingerprint. The name is retained because a
+fingerprint alone does not identify a Source: a Claude subagent transcript
+can be byte-identical to its parent, and they are two Sources.
 
 **`observation_id` separates the entity from its observation.** One logical
 Session can be seen through several Source revisions, and the same entity
@@ -409,8 +417,10 @@ observation -- roughly six, which is close to what the sources support.
 
 #### 5.1.1 Resolution
 
-**Nineteen columns become seven.** Six removals, two renames, and every
-survivor justified against a specific question no other column answers.
+**Four removals and one rename are implemented; two proposed removals are
+held.** The duplicates and the unwritten column are gone, the collision is
+renamed, and `sessions.started_at`/`ended_at` are retained for a reason the
+original resolution did not weigh -- stated below with the rest.
 
 *Removed -- duplicates.* Three pairs store one instant twice, measured over
 21 real store sets:
@@ -424,19 +434,26 @@ survivor justified against a specific question no other column answers.
 Each pair was meant to separate reading a Source from committing it. Nothing
 writes them apart, so the distinction exists only in the column names.
 
-*Removed -- derivable or unwritten.*
+*Removed -- unwritten.*
 
 | Column | Evidence |
 |---|---|
-| `sessions.started_at` | Exactly `MIN(events.event_at)` for the Session in all 497 rows. |
-| `sessions.ended_at` | Exactly `MAX(events.event_at)` in all 497 rows. |
-| `tool_invocations.ended_at` | Null in all 85,840 rows; no vendor reports an invocation end. |
+| `tool_invocations.ended_at` | Null in all 85,840 rows; no vendor reports an invocation end. Re-measured before removal: null in all 59,375 rows across 25 current store sets. |
 
-The Session span is a query over Events, not an independent fact. Storing it
-denormalizes for a convenience no measured workload has asked for, and a
-denormalization that can drift from its source is worse than the join it
-avoids. If a scan cost later justifies it, it returns as an index or a view
-with the derivation stated -- not as a column that silently disagrees.
+*Held -- derivable, but on the read path.* `sessions.started_at` and
+`ended_at` are exactly `MIN`/`MAX(events.event_at)` in all 497 rows (448 of
+448 on re-measurement), so the original resolution proposed removing them as
+a denormalization no workload had asked for. Removing them was attempted and
+reversed: they carry the indexed `--since`/`--until` predicate in
+`query_api` and are read by 46 sites, so deriving them puts an aggregate over
+the events table on every Session listing and every time-filtered query.
+
+That is the cost the original reasoning did not weigh, and it inverts the
+conclusion: the denormalization has a measured consumer. The columns stay,
+with the DDL stating that they are materialized `MIN`/`MAX(event_at)` so a
+reader is not left to infer it. Whether they should instead become a view
+depends on the workloads W08 establishes; until those exist, removing a
+column that carries the common read path would be optimizing against a guess.
 
 *Kept -- seven, each answering a distinct question.*
 
@@ -447,7 +464,7 @@ with the derivation stated -- not as a column that silently disagrees.
 | `source_records.record_at` | When did the *raw record* occur, at the 195,591-row source grain rather than the 250,427-row Event grain? |
 | `sources.source_mtime`, `sessions.source_mtime` | What did the filesystem say when the read started? Taken from the same `stat` that admits the Source, so it pairs with the bytes actually read -- a Source changing mid-read is detected by comparing against it, which a post-read stamp could not do. |
 | `sources.observed_at` | When did Codess read this Source? |
-| `tool_invocations.started_at` → `source_started_at` | When did the vendor say the invocation began? **Renamed** -- this is the collision. |
+| `tool_invocations.started_at` → `source_started_at` | When did the vendor say the invocation began? **Renamed, implemented** -- this was the collision, and the other half (`ended_at`) is removed rather than renamed. |
 | `processing_runs.started_at`, `completed_at` | When did a content-policy run begin and end? Empty because the policy is opt-in, not because nothing writes it: `record_processing_run` is called from `ingest_publication` and both are test-covered. |
 
 Counting the pair columns once, that is the vendor instant and its basis,
@@ -455,11 +472,14 @@ the raw-record instant, the filesystem mtime, the read observation, the
 invocation start, and the processing-run span -- **seven facts, against the
 roughly four the sources supply plus three Codess genuinely adds**.
 
-*Also removed by consequence.* `project_locations.observed_at`,
+*Proposed and not acted on.* `project_locations.observed_at`,
 `mapping_diagnostics.created_at`, and `correlation_assertions.asserted_at`
 are row-creation stamps on derived tables whose rows are rebuilt whenever
-their inputs change. None is read by any query. They are dropped with the
-rest rather than carried because each was individually small.
+their inputs change, and no query reads them. They were listed for removal
+"by consequence"; they are retained for now because each is a bookkeeping
+stamp on a table this change does not otherwise touch, and dropping a column
+whose only argument is that it is small is the kind of change that belongs
+with a reason of its own.
 
 The renames are trivial beside the removals, which is the point: renaming
 twelve columns that should not exist would have been the larger and less

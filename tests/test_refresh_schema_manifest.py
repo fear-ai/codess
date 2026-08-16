@@ -1,0 +1,131 @@
+"""The released manifest stays in step with the files it records.
+
+Manifest hashes were maintained by hand, so a deliberate change to the DDL or
+a mapping profile left every loader raising until someone edited a digest
+correctly. The tool makes that a command; these tests fix what it may and may
+not do, because a tool that rewrites an integrity record is one that must not
+paper over an accidental edit.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TOOL = REPO_ROOT / "tools" / "refresh_schema_manifest.py"
+
+
+def _run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(TOOL), *args],
+        cwd=str(cwd or REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def test_the_released_manifest_is_current():
+    """The checked-in manifest matches the checked-in files.
+
+    This is the assertion the tool exists to keep true: a released contract
+    whose recorded hashes disagree with the files disables every loader, not
+    only the write gate.
+    """
+    result = _run("--check")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "manifest is current" in result.stdout
+
+
+class TestAgainstACopiedTree:
+    """Exercised against a copy, so a test never rewrites the real manifest."""
+
+    @pytest.fixture
+    def tree(self, tmp_path):
+        root = tmp_path / "repo"
+        (root / "tools").mkdir(parents=True)
+        shutil.copytree(REPO_ROOT / "schema", root / "schema")
+        shutil.copy(TOOL, root / "tools" / TOOL.name)
+        shutil.copytree(REPO_ROOT / "src", root / "src")
+        return root
+
+    def _manifest(self, tree: Path) -> dict:
+        return json.loads(
+            (tree / "schema/coschema/manifest.json").read_text(encoding="utf-8")
+        )
+
+    def _run_in(self, tree: Path, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(tree / "tools" / TOOL.name), *args],
+            cwd=str(tree), capture_output=True, text=True, timeout=120,
+        )
+
+    def test_check_reports_a_stale_entry_without_writing(self, tree):
+        """`--check` is the verification mode, so it must not repair."""
+        ddl = tree / "schema/coschema/sqlite/schema.sql"
+        before = self._manifest(tree)["files"]["sqlite_schema"]["sha256"]
+        ddl.write_text(ddl.read_text(encoding="utf-8") + "\n-- edit\n", encoding="utf-8")
+
+        result = self._run_in(tree, "--check")
+
+        assert result.returncode == 1
+        assert "stale: sqlite_schema" in result.stdout
+        assert self._manifest(tree)["files"]["sqlite_schema"]["sha256"] == before
+
+    def test_refresh_updates_only_the_changed_entry(self, tree):
+        ddl = tree / "schema/coschema/sqlite/schema.sql"
+        before = self._manifest(tree)["files"]
+        ddl.write_text(ddl.read_text(encoding="utf-8") + "\n-- edit\n", encoding="utf-8")
+
+        result = self._run_in(tree)
+
+        assert result.returncode == 0
+        after = self._manifest(tree)["files"]
+        assert after["sqlite_schema"]["sha256"] != before["sqlite_schema"]["sha256"]
+        unchanged = {
+            role for role in before
+            if role != "sqlite_schema"
+            and before[role]["sha256"] == after[role]["sha256"]
+        }
+        assert unchanged == set(before) - {"sqlite_schema"}
+
+    def test_a_refreshed_manifest_then_checks_clean(self, tree):
+        ddl = tree / "schema/coschema/sqlite/schema.sql"
+        ddl.write_text(ddl.read_text(encoding="utf-8") + "\n-- edit\n", encoding="utf-8")
+        assert self._run_in(tree).returncode == 0
+        assert self._run_in(tree, "--check").returncode == 0
+
+    def test_a_missing_released_file_is_an_error_not_a_refresh(self, tree):
+        """A file that is gone is a broken release, not a stale hash.
+
+        Recording its absence would turn a detectable fault into a manifest
+        that describes a tree nobody can rebuild from.
+        """
+        (tree / "schema/coschema/sqlite/schema.sql").unlink()
+
+        result = self._run_in(tree)
+
+        assert result.returncode == 2
+        assert "missing" in result.stderr
+
+    def test_the_manifest_keeps_its_shape(self, tree):
+        """Only the hashes move; roles, paths, and the format stay put."""
+        ddl = tree / "schema/coschema/sqlite/schema.sql"
+        before = self._manifest(tree)
+        ddl.write_text(ddl.read_text(encoding="utf-8") + "\n-- edit\n", encoding="utf-8")
+        self._run_in(tree)
+        after = self._manifest(tree)
+
+        assert set(before) == set(after)
+        assert before["format_version"] == after["format_version"]
+        assert set(before["files"]) == set(after["files"])
+        assert all(
+            before["files"][role]["path"] == after["files"][role]["path"]
+            for role in before["files"]
+        )

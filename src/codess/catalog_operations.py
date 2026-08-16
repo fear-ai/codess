@@ -48,7 +48,7 @@ def resolve_reviewed_selection(
         "catalog": str(catalog_path.resolve()),
         "catalog_sha256": codess_bytes_hash(256, 256, catalog_path.read_bytes()),
         "selection_sha256": codess_canonical_hash(256, 256, projects),
-        "package_digest": contract_digest(),
+        "contract_digest": contract_digest(),
         "review_decision": decision,
         "projects": projects,
     }
@@ -134,7 +134,7 @@ def onboard_catalog(
             )
             if current["selection_sha256"] != plan["selection_sha256"]:
                 raise RuntimeError("reviewed selection changed between preflight and apply")
-            if current["package_digest"] != plan["package_digest"]:
+            if current["contract_digest"] != plan["contract_digest"]:
                 raise RuntimeError("CoSchema package changed between preflight and apply")
             applied = _run_ingest_stage(
                 plan, validate=False, source=source, raw_mode=raw_mode,

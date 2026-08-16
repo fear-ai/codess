@@ -418,7 +418,7 @@ The two answer different questions and are not interchangeable.
 | Override | Environment | Question the check answers | What it covers |
 |---|---|---|---|
 | `--no-hash` | `CODESS_NO_HASH=1` | Is this file the bytes we recorded? | Content verification of an individual retained file against a hash stored beside it: snapshot manifests, pointer documents, and raw-capture objects. |
-| `--no-check` | `CODESS_NO_CONTRACT_CHECK=1` | Were these records written under the rules in force now? | Verification of the released CoSchema package -- DDL, contract, mapping profiles -- and comparison of a store's recorded `package_digest` against the current one before a write. |
+| `--no-check` | `CODESS_NO_CONTRACT_CHECK=1` | Were these records written under the rules in force now? | Verification of the released CoSchema package -- DDL, contract, mapping profiles -- and comparison of a store's recorded `contract_digest` against the current one before a write. |
 
 The distinction that matters operationally: `--no-hash` concerns **one file's
 integrity**, and a mismatch means the file changed since it was recorded.

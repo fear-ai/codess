@@ -482,11 +482,15 @@ def _assess_query_status(
     `not_selected` rather than as a failure: it has no published snapshot
     because none was asked for, which is not the same as a broken one.
 
-    `package_mismatch` is separated from `snapshot_fail` because they call
+    `contract_mismatch` is separated from `snapshot_fail` because they call
     for different actions -- regenerating the store versus investigating a
     damaged snapshot -- and a caller cannot tell them apart from a message.
     """
-    from codess.snapshot import SnapshotError, snapshot_store_paths_from_base
+    from codess.snapshot import (
+        SnapshotContractMismatchError,
+        SnapshotError,
+        snapshot_store_paths_from_base,
+    )
 
     if not eligible:
         return "not_selected", None, None
@@ -498,13 +502,15 @@ def _assess_query_status(
         snapshot_store_paths_from_base(base, current_id)
         return "query_ready", current_id, None
     except (OSError, ValueError, SnapshotError) as exc:
-        detail = str(exc)
+        # Classified by exception type rather than by message text: the
+        # wording is operator-facing and changes, and matching on it made the
+        # message a silent interface that reclassified the status when edited.
         status = (
-            "package_mismatch"
-            if "package digest mismatch" in detail
+            "contract_mismatch"
+            if isinstance(exc, SnapshotContractMismatchError)
             else "snapshot_fail"
         )
-        return status, None, detail
+        return status, None, str(exc)
 
 
 def _readiness_row(
@@ -638,7 +644,7 @@ def resolve_project_query_scopes(
     *,
     project_set: Path | None = None,
     all_current: bool = False,
-    allow_package_mismatch: bool = False,
+    allow_contract_mismatch: bool = False,
 ) -> list[dict[str, Any]]:
     """Resolve one exact, saved, or all-current Project scope without mutation."""
     registry_root = registry_root.expanduser().resolve()
@@ -680,7 +686,7 @@ def resolve_project_query_scopes(
                 snapshot_store_paths_from_base(
                     base,
                     snapshot_id,
-                    allow_package_mismatch=allow_package_mismatch,
+                    allow_contract_mismatch=allow_contract_mismatch,
                 )
             except (OSError, ValueError, SnapshotError):
                 return None

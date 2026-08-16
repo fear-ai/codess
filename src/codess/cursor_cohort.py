@@ -125,12 +125,12 @@ def combine_selection_markers(
         if isinstance(marker.get("source_mtime"), (int, float))
     ]
     return {
-        "source_revision": f"cursor-cohort-selection-sha256-fingerprint:{digest}",
+        "source_revision": f"cursor-cohort-selection-digest-fingerprint:{digest}",
         "source_mtime": max(mtimes) if mtimes else None,
         "source_size": sum(
             int(marker.get("source_size") or 0) for marker in markers.values()
         ),
-        "fingerprint_method": "cursor-combined-project-selection-sha256-fingerprint",
+        "fingerprint_method": "cursor-combined-project-selection-digest-fingerprint",
         "consistency": "composed-sqlite-read-transactions",
         "project_count": len(markers),
     }

@@ -76,7 +76,7 @@ def update_approved_catalog(
     old.update(entry)
     entries[entry["path"]] = old
     data["projects"] = sorted(entries.values(), key=lambda item: item["path"])
-    data["package_digest"] = contract_digest()
+    data["contract_digest"] = contract_digest()
     write_json_atomic(path, data)
 
 
@@ -96,7 +96,7 @@ def load_baseline_selection(path: Path) -> dict[str, Any]:
 def _accepted_from_reports(
     projects: Iterable[dict[str, Any]], *, repo_root: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
-    package_digest = contract_digest()
+    current_digest = contract_digest()
     approved: list[dict[str, Any]] = []
     reviewed: list[dict[str, Any]] = []
     registries: set[str] = set()
@@ -112,8 +112,8 @@ def _accepted_from_reports(
             or final.get("status") not in ACCEPTED_STATES
         ):
             raise RuntimeError(f"project is not fully accepted: {project}")
-        if final.get("package_digest") != package_digest:
-            raise RuntimeError(f"project package differs from current package: {project}")
+        if final.get("contract_digest") != current_digest:
+            raise RuntimeError(f"project contract differs from the current one: {project}")
         if not (report.get("fixed_point") or {}).get("passed"):
             raise RuntimeError(f"project lacks a fixed point: {project}")
         pointer = read_json(project / ".codess/current.json")
@@ -127,7 +127,7 @@ def _accepted_from_reports(
         )
         if current.get("status") not in ACCEPTED_STATES:
             raise RuntimeError(f"current baseline validation rejected: {project}")
-        for field in ("snapshot_id", "semantic_digest", "package_digest"):
+        for field in ("snapshot_id", "semantic_digest", "contract_digest"):
             if current.get(field) != final.get(field):
                 raise RuntimeError(f"accepted report {field} is stale: {project}")
         final = {**current, "query_smoke": final.get("query_smoke", {})}
@@ -154,7 +154,7 @@ def verify_reviewed_catalog(path: Path, *, repo_root: Path) -> dict[str, Any]:
     catalog = read_json(path)
     if catalog.get("catalog_format") != REVIEWED_FORMAT:
         raise ValueError("unsupported reviewed-baseline catalog format")
-    if catalog.get("package_digest") != contract_digest():
+    if catalog.get("contract_digest") != contract_digest():
         raise ValueError("reviewed package digest differs from the current package")
     registry = Path(catalog["registry"]).expanduser().resolve()
     results = []
@@ -202,11 +202,11 @@ def freeze_reviewed_catalogs(
     approved_projects, reviewed_projects, registry = _accepted_from_reports(
         selection["projects"], repo_root=repo_root
     )
-    package_digest = contract_digest()
+    current_digest = contract_digest()
     approved = {
         "catalog_format": APPROVED_FORMAT,
         "coschema_format": FORMAT_VERSION,
-        "package_digest": package_digest,
+        "contract_digest": current_digest,
         "registry": registry,
         "projects": approved_projects,
     }
@@ -214,7 +214,7 @@ def freeze_reviewed_catalogs(
         "catalog_format": REVIEWED_FORMAT,
         "reviewed_at": datetime.now(UTC).isoformat(),
         "review_state": "accepted_with_known_gaps",
-        "package_digest": package_digest,
+        "contract_digest": current_digest,
         "registry": registry,
         "projects": reviewed_projects,
         "known_gaps": selection.get("known_gaps", []),
@@ -238,7 +238,7 @@ def freeze_reviewed_catalogs(
         raise
     return {
         "status": "frozen",
-        "package_digest": package_digest,
+        "contract_digest": current_digest,
         "projects": len(reviewed_projects),
         "registry": registry,
         "verification": verification,

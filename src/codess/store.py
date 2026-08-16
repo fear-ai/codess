@@ -17,14 +17,16 @@ from codess.fileio import open_readonly, read_source_revision
 from codess.hashing import (
     codess_bytes_hash,
     codess_canonical_hash,
-    codess_text_hash,
 )
 from codess.identity import (
+    content_object_id,
     event_entity_id,
+    processing_run_id,
     session_entity_id,
     source_observation_id,
     source_record_entity_id,
     source_revision_entity_id,
+    workspace_binding_id,
 )
 from codess.mapping import canonical_json, structured_json
 from codess.model_names import resolve as resolve_model_name
@@ -166,12 +168,11 @@ def init_db(db_path: Path) -> None:
             require_store(conn, write=True)
             return
         conn.executescript(load_ddl())
-        package_digest = contract_digest()
         meta = {
             "format_id": FORMAT_ID,
             "format_version": str(FORMAT_VERSION),
             "application_id": str(APPLICATION_ID),
-            "package_digest": package_digest,
+            "contract_digest": contract_digest(),
             "decoder_version": DECODER_VERSION,
             "validator_version": VALIDATOR_VERSION,
             "created_by": __version__,
@@ -359,11 +360,8 @@ def sync_project_catalog(
             ),
         )
     for workspace in project.get("workspace_bindings", []):
-        workspace_key = "\0".join((
+        binding_id = workspace_binding_id(
             project_id, workspace["source_system_id"], workspace["workspace_id"]
-        ))
-        binding_id = "codess:workspace:sha256:" + codess_text_hash(
-            256, 256, workspace_key
         )
         conn.execute(
             """
@@ -442,12 +440,11 @@ def ensure_source(
         """
         INSERT INTO sources(
           source_entity_id, source_system_id, source_path, storage_format, source_revision,
-          source_mtime, source_size, observed_at, ingested_at, availability,
+          source_mtime, source_size, observed_at, availability,
           capture_method, consistency)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_system_id, source_path, source_revision) DO UPDATE SET
           observed_at=excluded.observed_at,
-          ingested_at=excluded.ingested_at,
           availability=excluded.availability
         """,
         (
@@ -458,7 +455,6 @@ def ensure_source(
             revision,
             mtime,
             size,
-            now,
             now,
             availability,
             capture_method,
@@ -608,7 +604,6 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         session.get("ended_at"),
         session.get("source_mtime"),
         session.get("observed_at") or now,
-        session.get("ingested_at") or now,
         time_basis,
         parent,
         relation,
@@ -627,10 +622,10 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
           id, session_entity_id, observation_id, source_system_id, vendor_session_id, vendor_name, product_name,
           harness_name, storage_format, surface_kind, session_purpose,
           harness_version, source_id, project_id, source_cwd, path_obsolete,
-          started_at, ended_at, source_mtime, observed_at, ingested_at, time_basis,
+          started_at, ended_at, source_mtime, observed_at, time_basis,
           parent_session_id, session_relation_kind, archive_state, archive_source,
           session_model_param_id, metadata, source, type, release, project_path)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
           session_entity_id=excluded.session_entity_id,
           observation_id=excluded.observation_id,
@@ -651,7 +646,6 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
           ended_at=excluded.ended_at,
           source_mtime=excluded.source_mtime,
           observed_at=excluded.observed_at,
-          ingested_at=excluded.ingested_at,
           time_basis=excluded.time_basis,
           parent_session_id=excluded.parent_session_id,
           session_relation_kind=excluded.session_relation_kind,
@@ -806,7 +800,7 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
         event.get("artifact_path") or event.get("file_path"), mapping_rule,
         mapping_trace,
         stored_metadata, event.get("event_type"), event.get("subtype"),
-        event.get("role"), event.get("timestamp"), event.get("file_path"),
+        event.get("role"), event.get("file_path"),
     )
     conn.execute(
         """
@@ -817,8 +811,8 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
           parent_event_id, caused_by_event_id, content, content_len, tool_name,
           tool_input, tool_output, event_at, event_at_basis, source_status,
           normalized_status, source_file, artifact_path, mapping_rule,
-          mapping_trace, metadata, event_type, subtype, role, timestamp, file_path)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          mapping_trace, metadata, event_type, subtype, role, file_path)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(session_id, event_id) DO UPDATE SET
           event_entity_id=excluded.event_entity_id, source_id=excluded.source_id, sequence_no=excluded.sequence_no,
           source_record_locator=excluded.source_record_locator,
@@ -836,7 +830,7 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
           artifact_path=excluded.artifact_path, mapping_rule=excluded.mapping_rule,
           mapping_trace=excluded.mapping_trace, metadata=excluded.metadata,
           event_type=excluded.event_type, subtype=excluded.subtype,
-          role=excluded.role, timestamp=excluded.timestamp, file_path=excluded.file_path
+          role=excluded.role, file_path=excluded.file_path
         """,
         values,
     )
@@ -855,11 +849,11 @@ def _ensure_content_object(
 ) -> str:
     encoded = value.encode("utf-8")
     digest = codess_bytes_hash(256, 256, encoded)
-    content_id = f"codess:content:sha256:{digest}"
+    content_id = content_object_id(digest)
     conn.execute(
         """
         INSERT INTO content_objects(
-          id, content_sha256, media_type, charset, byte_length,
+          id, content_digest, media_type, charset, byte_length,
           character_length, storage_class, inline_content, privacy_class)
         VALUES (?, ?, 'text/plain', 'utf-8', ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
@@ -1044,9 +1038,8 @@ def record_processing_run(
     # non-ASCII content, so equal policies could hash differently.
     policy_sha = codess_canonical_hash(256, 256, policy)
     now = datetime.now(UTC).isoformat()
-    run_id = "codess:processing:sha256:" + codess_canonical_hash(
-        256, 256,
-        {"project_id": project_id, "policy_sha256": policy_sha, "actions": actions},
+    run_id = processing_run_id(
+        project_id, policy_sha, codess_canonical_hash(256, 256, actions)
     )
     rejection = next(
         (str(item.get("reason")) for item in actions if not item.get("accepted", True)),
@@ -1055,7 +1048,7 @@ def record_processing_run(
     conn.execute(
         """
         INSERT OR REPLACE INTO processing_runs(
-          id, project_id, policy_sha256, processor_name, software_version,
+          id, project_id, policy_digest, processor_name, software_version,
           scope_json, actions_json, rejection_reason, started_at, completed_at)
         VALUES (?, ?, ?, 'codess.content_processing', ?, ?, ?, ?, ?, ?)
         """,
@@ -1181,7 +1174,8 @@ def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -
         INSERT INTO tool_invocations(
           id, session_id, interaction_id, model_turn_id, requested_event_id,
           source_call_id, source_tool_name, canonical_tool_name, tool_namespace,
-          invocation_kind, input_json, source_status, normalized_status, started_at)
+          invocation_kind, input_json, source_status, normalized_status,
+          source_started_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           requested_event_id=COALESCE(excluded.requested_event_id, tool_invocations.requested_event_id),
@@ -1277,7 +1271,7 @@ def _record_artifact(conn: sqlite3.Connection, event: dict[str, Any], row_id: in
         """
         SELECT id FROM artifacts WHERE project_id IS ? AND artifact_kind='file'
           AND relative_path IS ? AND uri IS ? AND repository_object_id IS NULL
-          AND content_sha256 IS NULL
+          AND content_digest IS NULL
         """,
         (project_id, relative, uri),
     ).fetchone()

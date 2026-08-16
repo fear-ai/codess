@@ -640,10 +640,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="query: select one retained snapshot (requires exactly one project)",
     )
     p.add_argument(
+        "--snapshot-contract-policy",
         "--snapshot-package-policy",
+        dest="snapshot_contract_policy",
         choices=("exact", "read-compatible"),
         default="exact",
-        help="query: require matching package, or explicitly allow same-format historical reads",
+        help="query: require the store's recorded contract to match, or explicitly "
+             "allow same-format historical reads",
     )
     p.add_argument(
         "--output-format", choices=("table", "jsonl", "csv"), default="table",

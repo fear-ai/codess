@@ -40,14 +40,14 @@ def archive_stale_working_stores(project: Path) -> Path | None:
     if not databases:
         return None
     current_digest = contract_digest()
-    package_digests: set[str | None] = set()
+    contract_digests: set[str | None] = set()
     for path in databases:
         conn = open_readonly(path)
         try:
-            package_digests.add(store_metadata(conn).get("package_digest"))
+            contract_digests.add(store_metadata(conn).get("contract_digest"))
         finally:
             conn.close()
-    if package_digests == {current_digest} or not package_digests:
+    if contract_digests == {current_digest} or not contract_digests:
         return None
     pointer_path = base / CURRENT_POINTER_FILE
     if not pointer_path.exists():
@@ -55,22 +55,22 @@ def archive_stale_working_stores(project: Path) -> Path | None:
             "working stores use another package and no retained current snapshot exists"
         )
     pointer = read_json(pointer_path)
-    snapshot_store_paths(project, pointer["snapshot_id"], allow_package_mismatch=True)
+    snapshot_store_paths(project, pointer["snapshot_id"], allow_contract_mismatch=True)
     # One archival event, one instant. The directory name and the manifest's
     # `archived_at` are two renderings of the same moment, so reading the clock
     # twice would let a directory claim a different second than the manifest
     # inside it -- and the directory name is what an operator sorts by.
     archived_at = datetime.now(UTC)
     stamp = archived_at.strftime("%Y%m%dT%H%M%SZ")
-    old_label = "-".join(sorted((value or "unknown")[:12] for value in package_digests))
+    old_label = "-".join(sorted((value or "unknown")[:12] for value in contract_digests))
     destination = base / WORKING_ARCHIVES_DIR / f"pre-package-{old_label}-{stamp}"
     destination.mkdir(parents=True, exist_ok=False)
     manifest: dict[str, Any] = {
         "archive_format": "codess.working-archive/1",
         "archived_at": archived_at.isoformat(),
         "reason": "released-package-change-requires-source-rebuild",
-        "prior_package_digests": sorted(value or "unknown" for value in package_digests),
-        "replacement_package_digest": current_digest,
+        "prior_contract_digests": sorted(value or "unknown" for value in contract_digests),
+        "replacement_contract_digest": current_digest,
         "retained_snapshot_id": pointer["snapshot_id"],
         "files": {},
     }
@@ -240,12 +240,12 @@ def apply_project(
         prior_paths = snapshot_store_paths_from_base(
             first_snapshot.parent.parent,
             first["snapshot_id"],
-            allow_package_mismatch=False,
+            allow_contract_mismatch=False,
         )
         rebuilt_paths = snapshot_store_paths_from_base(
             second_snapshot.parent.parent,
             second["snapshot_id"],
-            allow_package_mismatch=False,
+            allow_contract_mismatch=False,
         )
         value_acceptance = compare_snapshots(
             prior_paths,

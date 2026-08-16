@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from codess.hashing import codess_bytes_hash
+from codess.identity import observation_row_id
 from codess.schema_contract import column_names
 
 REQUEST_FORMAT = "codess.query-request/1"
@@ -562,10 +563,10 @@ def _event_predicate(filters: dict[str, Any]) -> tuple[str, list[Any]]:
         _in_clause("COALESCE(e.normalized_status,e.source_status)", statuses, where, params)
     _configuration_predicates(filters, where, params)
     if filters.get("since") is not None:
-        where.append("COALESCE(e.event_at,e.timestamp)>=?")
+        where.append("e.event_at>=?")
         params.append(filters["since"])
     if filters.get("until") is not None:
-        where.append("COALESCE(e.event_at,e.timestamp)<=?")
+        where.append("e.event_at<=?")
         params.append(filters["until"])
     if filters.get("artifact"):
         where.append("e.artifact_path LIKE ? ESCAPE '\\'")
@@ -674,7 +675,7 @@ def _store_provenance(store: dict[str, Any]) -> dict[str, Any]:
     conn = store["conn"]
     meta = dict(conn.execute("SELECT key,value FROM store_meta"))
     policies = [row[0] for row in conn.execute(
-        "SELECT DISTINCT policy_sha256 FROM processing_runs ORDER BY policy_sha256"
+        "SELECT DISTINCT policy_digest FROM processing_runs ORDER BY policy_digest"
     )] if conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='processing_runs'"
     ).fetchone() else []
@@ -690,11 +691,11 @@ def _store_provenance(store: dict[str, Any]) -> dict[str, Any]:
         # lives in the manifest above the stores (13.4.8).
         "snapshot_id": _store_snapshot_id(store),
         "snapshot_created_at": meta.get("snapshot_created_at"),
-        "package_digest": meta.get("package_digest"),
+        "contract_digest": meta.get("contract_digest"),
         "format_version": meta.get("format_version"),
         "decoder_version": meta.get("decoder_version"),
         "validator_version": meta.get("validator_version"),
-        "policy_sha256": policies,
+        "policy_digest": policies,
         "source_availability": availability,
         "selection_kind": store.get("selection_kind"),
         "selection_sha256": store.get("selection_sha256"),
@@ -758,7 +759,7 @@ def _observation_id(
         "entity_kind": entity_kind,
         "entity_id": entity_id,
     }).removeprefix("sha256:")
-    return f"codess:observation:sha256:{digest}"
+    return observation_row_id(digest)
 
 
 def _event_heap_sort_key(record, store: dict[str, Any]) -> tuple:
@@ -798,7 +799,7 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
                s.project_id,s.source_system_id,s.project_path,
                e.sequence_no,e.interaction_id,
                e.model_turn_id,e.event_kind,e.actor_kind,e.content_role,e.origin_kind,
-               COALESCE(e.event_at,e.timestamp) AS event_at,e.event_at_basis,
+               e.event_at AS event_at,e.event_at_basis,
                e.source_record_locator,e.source_record_type,e.source_record_subtype,
                e.content,e.content_len,e.tool_name,e.tool_input,e.tool_output,
                COALESCE(e.normalized_status,e.source_status) AS status,
@@ -811,8 +812,8 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
         LEFT JOIN model_turns mt ON mt.id=e.model_turn_id
         LEFT JOIN model_params mc ON mc.id=mt.model_param_id
         WHERE {predicate}
-        ORDER BY (COALESCE(e.event_at,e.timestamp) IS NULL),
-                 COALESCE(e.event_at,e.timestamp),s.session_entity_id,
+        ORDER BY (e.event_at IS NULL),
+                 e.event_at,s.session_entity_id,
                  e.sequence_no,e.event_entity_id,e.id
         {limit_sql}
     """
@@ -1229,7 +1230,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
         for initiation, count in structure["initiation_kinds"].items():
             initiation_kinds[initiation] = initiation_kinds.get(initiation, 0) + count
         for row in conn.execute(f"""
-            SELECT s.source_system_id,e.event_kind,COALESCE(e.event_at,e.timestamp),
+            SELECT s.source_system_id,e.event_kind,e.event_at,
                    LENGTH(COALESCE(e.content,'')),e.tool_name,e.artifact_path,
                    mc.provider,mc.model_gradation,mc.model_name_exact,mc.model_revision,
                    mc.reasoning_effort,mc.speed_tier,mc.service_tier,mc.mode,
@@ -1665,7 +1666,7 @@ def execute(
     result["result_hash"] = content_hash({
         "request_hash": result["request_hash"],
         "snapshots": sorted(
-            {(item.get("snapshot_id"), item.get("package_digest"))
+            {(item.get("snapshot_id"), item.get("contract_digest"))
              for item in result["provenance"]},
             key=lambda item: tuple(str(value or "") for value in item),
         ),

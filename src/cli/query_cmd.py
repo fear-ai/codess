@@ -174,7 +174,7 @@ def _open_query_scope(
     roots: list[Path],
     *,
     snapshot_id: str | None = None,
-    allow_package_mismatch: bool = False,
+    allow_contract_mismatch: bool = False,
     source_tokens: set[str] | None = None,
 ) -> tuple[QueryScope, list[Path]]:
     """Open every existing project store read-only without an attachment limit."""
@@ -186,7 +186,7 @@ def _open_query_scope(
             stores = (
                 snapshot_store_paths(
                     resolved_root, snapshot_id,
-                    allow_package_mismatch=allow_package_mismatch,
+                    allow_contract_mismatch=allow_contract_mismatch,
                 )
                 if snapshot_id
                 else get_project_stores(resolved_root)
@@ -209,7 +209,7 @@ def _open_project_id_query_scope(
     project_scopes: list[dict],
     *,
     snapshot_id: str | None = None,
-    allow_package_mismatch: bool = False,
+    allow_contract_mismatch: bool = False,
     source_tokens: set[str] | None = None,
 ) -> tuple[QueryScope, list[Path]]:
     """Open central snapshots selected by exact Project identity."""
@@ -224,7 +224,7 @@ def _open_project_id_query_scope(
                     snapshot_store_paths_from_base(
                         base,
                         selected_snapshot_id,
-                        allow_package_mismatch=allow_package_mismatch,
+                        allow_contract_mismatch=allow_contract_mismatch,
                     )
                     if selected_snapshot_id
                     else current_store_paths_from_base(base)
@@ -422,7 +422,7 @@ def run(args) -> int:
     requested_project_ids = list(getattr(args, "project_ids", None) or [])
     project_set = getattr(args, "project_set", None)
     all_current = bool(getattr(args, "all_current", False))
-    package_policy = getattr(args, "snapshot_package_policy", "exact")
+    contract_policy = getattr(args, "snapshot_contract_policy", "exact")
     explicit_paths = bool(getattr(args, "dirs", None)) or bool(
         getattr(args, "dir_list", None)
     )
@@ -447,7 +447,7 @@ def run(args) -> int:
                 requested_project_ids or None,
                 project_set=project_set,
                 all_current=all_current,
-                allow_package_mismatch=package_policy == "read-compatible",
+                allow_contract_mismatch=contract_policy == "read-compatible",
             )
         except (OSError, ValueError, json.JSONDecodeError, SnapshotError) as exc:
             print(f"codess: cannot resolve Project scope: {exc}", file=sys.stderr)
@@ -480,14 +480,14 @@ def run(args) -> int:
             scope, missing_roots = _open_project_id_query_scope(
                 project_scopes,
                 snapshot_id=snapshot_id,
-                allow_package_mismatch=package_policy == "read-compatible",
+                allow_contract_mismatch=contract_policy == "read-compatible",
                 source_tokens=source_tokens,
             )
         else:
             scope, missing_roots = _open_query_scope(
                 resolved_roots,
                 snapshot_id=snapshot_id,
-                allow_package_mismatch=package_policy == "read-compatible",
+                allow_contract_mismatch=contract_policy == "read-compatible",
                 source_tokens=source_tokens,
             )
     except (sqlite3.Error, SchemaContractError, SnapshotError) as exc:
@@ -502,7 +502,7 @@ def run(args) -> int:
             f"codess: warning: no store found for {sanitize_tabular(root)}",
             file=sys.stderr,
         )
-    if snapshot_id and package_policy == "read-compatible":
+    if snapshot_id and contract_policy == "read-compatible":
         print(
             "codess: warning: historical snapshot package differs or was not "
             "required to match; hashes and format were verified, mapping parity was not",
@@ -1375,7 +1375,7 @@ def _permissions(scope: QueryScope, limit: int | None = None) -> int:
         print(
             f"{sanitize_tabular(row['session_id'])}\t"
             f"{sanitize_tabular(row['project_path'])}\t"
-            f"{row['timestamp']}\t{sanitize_tabular(row['tool_name'])}"
+            f"{row['event_at']}\t{sanitize_tabular(row['tool_name'])}"
         )
     return 0
 
@@ -1404,7 +1404,7 @@ def _audit(scope: QueryScope, limit: int | None = None) -> int:
         print(
             f"{sanitize_tabular(row['project_path'])}\t"
             f"{sanitize_tabular(row['session_id'])}\t"
-            f"{sanitize_tabular(row['source'])}\t{row['timestamp']}\t"
+            f"{sanitize_tabular(row['source'])}\t{row['event_at']}\t"
             f"{row['subtype']}\t{sanitize_tabular(row['tool_name'])}\t"
             f"{sanitize_tabular(detail)}"
         )

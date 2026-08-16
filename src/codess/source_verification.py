@@ -75,7 +75,7 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
                src.id AS source_id,src.source_system_id,src.source_path,
                src.source_revision,src.source_mtime,src.source_size,
                src.availability,src.capture_method,
-               src.consistency,src.content_sha256
+               src.consistency,src.content_digest
         FROM events e JOIN sessions s ON s.id=e.session_id
         LEFT JOIN sources src ON src.id=e.source_id
         WHERE e.event_entity_id=? OR e.event_id=?
@@ -120,7 +120,7 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
             candidate["available"] = True
             try:
                 observed = verify_raw(object_path, record)
-                expected = row["content_sha256"]
+                expected = row["content_digest"]
                 candidate["equality"] = (
                     "exact" if observed["object_id"] == record.get("object_id")
                     and (expected is None or observed["object_id"] == f"sha256:{expected}")
@@ -138,7 +138,7 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
             "available": live_path.is_file(), "equality": "unavailable",
         }
         if live_path.is_file():
-            if row["content_sha256"]:
+            if row["content_digest"]:
                 stat = live_path.stat()
                 recorded_mtime = row["source_mtime"]
                 if (
@@ -157,7 +157,7 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
                     observed = hash_file(live_path)
                     live.update({
                         "revision": f"sha256:{observed}",
-                        "equality": "exact" if observed == row["content_sha256"] else "mismatch",
+                        "equality": "exact" if observed == row["content_digest"] else "mismatch",
                         "verification_method": "complete-sha256",
                     })
             else:
@@ -201,7 +201,7 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
             "source_mtime": row["source_mtime"], "source_size": row["source_size"],
             "availability": row["availability"],
             "capture_method": row["capture_method"], "consistency": row["consistency"],
-            "content_sha256": row["content_sha256"],
+            "content_digest": row["content_digest"],
         },
         "source_record": source_record,
         "candidates": candidates,

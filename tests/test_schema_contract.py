@@ -167,7 +167,7 @@ def test_writer_refuses_store_from_another_released_package(tmp_path):
     init_db(path)
     conn = sqlite3.connect(path)
     conn.execute(
-        "UPDATE store_meta SET value=? WHERE key='package_digest'", ("0" * 64,)
+        "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("0" * 64,)
     )
     conn.commit()
     assert require_store(conn, write=False) == FORMAT_VERSION
@@ -321,10 +321,10 @@ def test_event_graph_tools_and_artifacts_are_materialized(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM tool_result_content").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM artifact_content").fetchone()[0] == 1
     assert conn.execute(
-        "SELECT COUNT(*) FROM sessions WHERE session_entity_id LIKE 'codess:session:sha256:%'"
+        "SELECT COUNT(*) FROM sessions WHERE session_entity_id LIKE 'codess:session:id1:%'"
     ).fetchone()[0] == 1
     assert conn.execute(
-        "SELECT COUNT(*) FROM events WHERE event_entity_id LIKE 'codess:event:sha256:%'"
+        "SELECT COUNT(*) FROM events WHERE event_entity_id LIKE 'codess:event:id1:%'"
     ).fetchone()[0] == 3
     call = conn.execute("SELECT source_status, normalized_status FROM tool_invocations").fetchone()
     assert tuple(call) == ("completed", "succeeded")
@@ -646,7 +646,7 @@ def test_a_new_store_records_the_contract_digest(tmp_path):
     init_db(path)
     conn = sqlite3.connect(path)
     try:
-        assert store_metadata(conn)["package_digest"] == contract_digest()
+        assert store_metadata(conn)["contract_digest"] == contract_digest()
     finally:
         conn.close()
 
@@ -792,7 +792,7 @@ def test_a_refused_write_names_the_override(tmp_path):
     init_db(path)
     conn = sqlite3.connect(path)
     conn.execute(
-        "UPDATE store_meta SET value=? WHERE key='package_digest'", ("0" * 64,)
+        "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("0" * 64,)
     )
     conn.commit()
     with pytest.raises(UnsupportedStoreError, match=CONTRACT_OVERRIDE_ENV):
@@ -808,7 +808,7 @@ def test_the_override_allows_writing_a_mismatched_store(
     init_db(path)
     conn = sqlite3.connect(path)
     conn.execute(
-        "UPDATE store_meta SET value=? WHERE key='package_digest'", ("0" * 64,)
+        "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("0" * 64,)
     )
     conn.commit()
     try:
@@ -840,7 +840,7 @@ def test_the_override_is_reported_when_it_is_used(
     init_db(path)
     conn = sqlite3.connect(path)
     conn.execute(
-        "UPDATE store_meta SET value=? WHERE key='package_digest'", ("0" * 64,)
+        "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("0" * 64,)
     )
     conn.commit()
     try:

@@ -258,12 +258,12 @@ def tool_lineage(
             for row in store["conn"].execute(
                 f"""
                 SELECT e.session_id, e.event_id, e.event_type, e.subtype,
-                       e.tool_name, e.content_len, e.timestamp, e.metadata
+                       e.tool_name, e.content_len, e.event_at, e.metadata
                 FROM events e JOIN sessions s ON s.id=e.session_id
                 WHERE (e.event_type = 'tool_call'
                    OR e.subtype IN ({result_subtypes}))
                   AND {predicate}
-                ORDER BY e.timestamp, e.id
+                ORDER BY e.event_at, e.id
                 """,
                 params,
             )
@@ -299,7 +299,7 @@ def tool_lineage(
                 "store_index": store_index,
                 "project_path": project,
                 "session_id": call["session_id"],
-                "timestamp": call["timestamp"],
+                "timestamp": call["event_at"],
                 "tool_name": call["tool_name"] or (
                     result["tool_name"] if result else ""
                 ),
@@ -315,7 +315,7 @@ def tool_lineage(
                 "store_index": store_index,
                 "project_path": project,
                 "session_id": result["session_id"],
-                "timestamp": result["timestamp"],
+                "timestamp": result["event_at"],
                 "tool_name": result["tool_name"] or "",
                 "lineage_id": result.get("lineage_id", ""),
                 "status": "",
@@ -338,7 +338,7 @@ def permission_denials(
         predicate, params = scope.source_predicate()
         for row in store["conn"].execute(
             f"""
-            SELECT e.session_id, e.timestamp, e.tool_name
+            SELECT e.session_id, e.event_at, e.tool_name
             FROM events e JOIN sessions s ON s.id=e.session_id
             WHERE e.subtype = 'permission_denied' AND {predicate}
             """,
@@ -348,7 +348,7 @@ def permission_denials(
             item["project_path"] = str(store["project_path"])
             rows.append(item)
     rows.sort(key=lambda row: (
-        _timestamp_first(row["timestamp"]),
+        _timestamp_first(row["event_at"]),
         row["project_path"], row["session_id"], row["tool_name"] or "",
     ))
     return limited(rows, limit)
@@ -366,7 +366,7 @@ def audit_events(
         predicate, source_params = scope.source_predicate()
         for row in store["conn"].execute(
             f"""
-            SELECT e.session_id, e.event_id, e.timestamp, e.subtype,
+            SELECT e.session_id, e.event_id, e.event_at, e.subtype,
                    e.tool_name, e.content_len, e.metadata, s.source
             FROM events e
             JOIN sessions s ON s.id = e.session_id
@@ -379,7 +379,7 @@ def audit_events(
             item["store_index"] = store_index
             rows.append(item)
     rows.sort(key=lambda row: sort_key(
-        row["timestamp"], row["project_path"], row["store_index"],
+        row["event_at"], row["project_path"], row["store_index"],
         row["session_id"], row["event_id"],
     ))
     return limited(rows, limit)
@@ -436,7 +436,7 @@ def task_invocations(scope: ReportScope) -> list[dict[str, Any]]:
             for row in store["conn"].execute(
                 f"""
                 SELECT e.session_id, e.event_id, e.tool_name, e.tool_input,
-                       e.timestamp
+                       e.event_at
                 FROM events e JOIN sessions s ON s.id=e.session_id
                 WHERE e.event_type = 'tool_call'
                   AND (e.tool_name LIKE '%Task%'
@@ -447,7 +447,7 @@ def task_invocations(scope: ReportScope) -> list[dict[str, Any]]:
             )
         )
     calls.sort(key=lambda row: (
-        _timestamp_first(row["timestamp"]), row["session_id"], row["event_id"],
+        _timestamp_first(row["event_at"]), row["session_id"], row["event_id"],
     ))
     return calls
 
@@ -525,7 +525,7 @@ def session_events(session: dict[str, Any]) -> list[dict[str, Any]]:
             FROM events
             WHERE session_id = ?
             ORDER BY CASE WHEN sequence_no IS NULL THEN 1 ELSE 0 END,
-                     sequence_no, COALESCE(event_at, timestamp), id
+                     sequence_no, event_at, id
             """,
             (session["id"],),
         )

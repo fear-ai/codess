@@ -301,7 +301,7 @@ def resolve_refresh_selection(
         "catalog_sha256": (
             hash_file(catalog_path) if catalog_path.is_file() else None
         ),
-        "package_digest": contract_digest(),
+        "contract_digest": contract_digest(),
     }
 
 
@@ -522,7 +522,7 @@ def refresh_projects(
     for key, label in (
         ("selection_sha256", "refresh selection"),
         ("catalog_sha256", "Project catalog"),
-        ("package_digest", "CoSchema package"),
+        ("contract_digest", "CoSchema package"),
     ):
         if current[key] != plan[key]:
             changed.append(label)
@@ -534,7 +534,7 @@ def refresh_projects(
         receipt["current_plan_fingerprints"] = {
             key: current[key]
             for key in (
-                "selection_sha256", "catalog_sha256", "package_digest"
+                "selection_sha256", "catalog_sha256", "contract_digest"
             )
         }
         checkpoint()
