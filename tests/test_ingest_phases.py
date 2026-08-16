@@ -890,3 +890,58 @@ def _ingest_args(project, registry):
         "ingest", "--dir", str(project), "--registry", str(registry),
         "--source", "cc", "--force", "--no-progress",
     ])
+
+
+class TestProjectScope:
+    """The per-Project lifetime, as a value rather than seven loose keys."""
+
+    def _scope(self, **overrides):
+        from cli.ingest_cmd import ProjectScope
+
+        base = {
+            "project_id": "p1", "location_id": "l1",
+            "raw_records": [], "raw_store": None,
+        }
+        return ProjectScope(**{**base, **overrides})
+
+    def test_it_writes_every_project_scoped_key(self):
+        """A key left unset would carry the previous Project's value."""
+        from cli.ingest_cmd import PROJECT_SCOPED_OPTIONS
+
+        opts: dict = {}
+        self._scope().into(opts)
+        assert set(opts) == set(PROJECT_SCOPED_OPTIONS)
+
+    def test_advancing_replaces_rather_than_merges(self):
+        """The defect this guards: one Project's evidence reaching the next.
+
+        `content_actions` and `raw_records` are accumulators, so a merge would
+        attribute the first Project's content processing to the second.
+        """
+        opts: dict = {}
+        first = self._scope(raw_records=[{"a": 1}])
+        first.into(opts)
+        opts["content_actions"].append("from-first")
+        opts["raw_records_changed"] = True
+
+        self._scope(project_id="p2", location_id="l2").into(opts)
+
+        assert opts["project_id"] == "p2"
+        assert opts["content_actions"] == []
+        assert opts["raw_records"] == []
+        assert opts["raw_records_changed"] is False
+
+    def test_a_key_missing_from_the_tuple_fails_loudly(self, monkeypatch):
+        """The tuple and the reset cannot silently disagree.
+
+        They previously could: the tuple was read by nothing outside a test,
+        which asserted agreement without enforcing it.
+        """
+        import cli.ingest_cmd as ingest
+
+        monkeypatch.setattr(
+            ingest, "PROJECT_SCOPED_OPTIONS",
+            (*ingest.PROJECT_SCOPED_OPTIONS, "a_key_no_scope_sets"),
+        )
+        with pytest.raises(KeyError, match="a_key_no_scope_sets"):
+            self._scope().into({})

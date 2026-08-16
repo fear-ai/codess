@@ -1,4 +1,12 @@
 """Independent reconciliation of typed orientation results against SQLite.
+
+**Reads core tables directly, deliberately.** This module exists to check the
+typed executor's answers against the stores, so routing its own reads through
+`query_reports` would compare the query layer with itself and agree by
+construction. The direct SQL *is* the second opinion (CoPlan W52 step 3).
+
+The reads are bounded and read-only, and every identifier they name is
+checked against the released DDL by `tests/test_sql_identifiers.py`.
 """
 
 from __future__ import annotations

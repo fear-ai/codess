@@ -25,10 +25,8 @@ from codess.content_processing import ContentPolicy, ContentProcessor
 from codess.cursor_cohort import (
     CursorSelection,
     cohort_needed,
-    combine_selection_markers,
-    load_selection_marker_cache,
     prepare_cursor_cohort,
-    save_selection_marker_cache,
+    resolve_selection_markers,
 )
 from codess.cursor_source import (
     get_global_db as get_cursor_global_db,
@@ -172,6 +170,56 @@ PROJECT_SCOPED_OPTIONS = (
     "external_sources",
 )
 """Keys of `opts` that belong to one Project rather than to the whole run."""
+
+
+@dataclass
+class ProjectScope:
+    """The per-Project half of `opts`, as a value rather than seven keys.
+
+    `opts` carries three lifetimes in one dict -- run-wide settings mirrored
+    from the resolved options, run-wide collectors that accumulate across
+    Projects, and these seven, which are replaced on every loop iteration. A
+    reader at a call site could not tell which kind a key was, so
+    `opts["raw_store"]` read the same whether it was configuration or this
+    iteration's store (W06 step 4, W45).
+
+    Naming the per-Project set makes the boundary checkable: `into` is the one
+    place these reach `opts`, and a key added here without being added to
+    `PROJECT_SCOPED_OPTIONS` fails rather than silently persisting into the
+    next Project. The dict itself stays, because the adapters take it as their
+    diagnostics sink and changing that is a separate decision.
+    """
+
+    project_id: str
+    location_id: str
+    raw_records: list[dict]
+    raw_store: "RawStore | None"
+    content_actions: list = field(default_factory=list)
+    external_sources: list = field(default_factory=list)
+    raw_records_changed: bool = False
+
+    def into(self, opts: dict) -> None:
+        """Replace the per-Project keys of `opts` with this Project's.
+
+        Every key is written, never merged: a stale `raw_store` or a
+        carried-over `content_actions` would attribute one Project's evidence
+        to the next, and a partial reset is the way that happens.
+        """
+        fresh = {
+            "project_id": self.project_id,
+            "location_id": self.location_id,
+            "content_actions": self.content_actions,
+            "raw_records": self.raw_records,
+            "raw_store": self.raw_store,
+            "raw_records_changed": self.raw_records_changed,
+            "external_sources": self.external_sources,
+        }
+        missing = set(PROJECT_SCOPED_OPTIONS) - set(fresh)
+        if missing:
+            raise KeyError(
+                f"per-Project options not reset: {', '.join(sorted(missing))}"
+            )
+        opts.update({key: fresh[key] for key in PROJECT_SCOPED_OPTIONS})
 
 
 @dataclass
@@ -493,33 +541,18 @@ def _begin_project(
 ) -> None:
     """Point the decoder options at one Project, clearing the previous one.
 
-    These are the per-Project portion of `opts`, and every one must be
-    replaced when the loop advances -- a stale `raw_store` or a carried-over
-    `content_actions` list would attribute one Project's evidence to the next.
-    Setting them together makes that a single, checkable step rather than
-    seven assignments a future edit could partly forget.
-
-    The values are built against `PROJECT_SCOPED_OPTIONS` rather than
-    assigned one by one, so the tuple that names the per-Project keys and the
-    code that resets them cannot disagree. They previously could: the tuple
-    was read by nothing outside a test, which asserted the two agreed without
-    making them.
+    Builds the per-Project state as a `ProjectScope` and writes it in one
+    step, so the lifetime is a type a reader can see rather than seven keys
+    they must recognize. Every key is replaced when the loop advances: a stale
+    `raw_store` or a carried-over `content_actions` list would attribute one
+    Project's evidence to the next.
     """
-    fresh = {
-        "project_id": binding["project_id"],
-        "location_id": binding["location_id"],
-        "content_actions": [],
-        "raw_records": raw_records,
-        "raw_store": raw_store,
-        "raw_records_changed": False,
-        "external_sources": [],
-    }
-    missing = set(PROJECT_SCOPED_OPTIONS) - set(fresh)
-    if missing:
-        raise KeyError(
-            f"per-Project options not reset: {', '.join(sorted(missing))}"
-        )
-    opts.update({key: fresh[key] for key in PROJECT_SCOPED_OPTIONS})
+    ProjectScope(
+        project_id=binding["project_id"],
+        location_id=binding["location_id"],
+        raw_records=raw_records,
+        raw_store=raw_store,
+    ).into(opts)
 
 
 def _resolve_ingest_request(
@@ -862,39 +895,20 @@ def _cursor_preflight(
                         },
                     }
 
-                container_marker = observe_containers()
-                project_markers = None
-                marker_status = "scanned"
-                if not force:
-                    project_markers = load_selection_marker_cache(
-                        selection_cache_path,
-                        source=live_global,
-                        container_marker=container_marker,
-                        selections=selections,
-                    )
-                    if project_markers is not None:
-                        marker_status = "reused"
-                if project_markers is None:
-                    for _attempt in range(2):
-                        container_before = observe_containers()
-                        project_markers = get_cursor_selection_markers(
-                            live_global,
-                            selections,
-                            supplemental_headers=cursor_project_headers,
-                        )
-                        container_after = observe_containers()
-                        if container_before == container_after:
-                            save_selection_marker_cache(
-                                selection_cache_path,
-                                source=live_global,
-                                container_marker=container_after,
-                                selections=selections,
-                                project_markers=project_markers,
-                            )
-                            break
-                    else:
-                        marker_status = "scanned-unstable"
-                marker = combine_selection_markers(project_markers)
+                # The cache decision belongs to `cursor_cohort`, which owns
+                # Cursor caching; the command reports what it resolved.
+                resolved = resolve_selection_markers(
+                    selection_cache_path,
+                    source=live_global,
+                    selections=selections,
+                    supplemental_headers=cursor_project_headers,
+                    observe_containers=observe_containers,
+                    read_markers=get_cursor_selection_markers,
+                    force=force,
+                )
+                project_markers = resolved.per_project
+                marker_status = resolved.status
+                marker = resolved.combined
                 marker_elapsed = round(time.monotonic() - marker_started, 6)
                 progress_trace(
                     "cursor.marker.done", source=str(live_global.resolve()),

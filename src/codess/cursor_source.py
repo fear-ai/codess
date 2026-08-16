@@ -37,7 +37,7 @@ from codess.config import (
     SOURCE_LINKS_FORMAT,
     STORE_DIR,
 )
-from codess.fileio import open_readonly
+from codess.fileio import open_readonly, quote_identifier
 from codess.hashing import codess_digest
 from codess.helpers import local_path_from_uri
 
@@ -70,16 +70,25 @@ def connect_readonly(db_path: Path) -> sqlite3.Connection:
 
 
 def table_columns(conn: sqlite3.Connection, table: str) -> dict[str, str]:
-    quoted = table.replace('"', '""')
+    """Map each of `table`'s columns, lowercased, to its actual spelling.
+
+    Cursor's vendor tables are camelCase and vary by release, so a reader
+    matches case-insensitively and then uses the spelling the store reports.
+    """
     return {
         str(row[1]).lower(): str(row[1])
-        for row in conn.execute(f'PRAGMA table_info("{quoted}")')
+        for row in conn.execute(f"PRAGMA table_info({quote_identifier(table)})")
     }
 
 
 def quoted_column(columns: dict[str, str], name: str) -> str | None:
+    """The quoted spelling of `name`, or None if this store has no such column.
+
+    None rather than a raise: an absent column is the ordinary case across
+    Cursor releases, and callers project a literal in its place.
+    """
     actual = columns.get(name.lower())
-    return None if actual is None else '"' + actual.replace('"', '""') + '"'
+    return None if actual is None else quote_identifier(actual)
 
 
 def parse_timestamp(value) -> float | None:

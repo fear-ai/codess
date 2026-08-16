@@ -26,7 +26,12 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from codess.schema_contract import table_names
+from codess.fileio import quote_identifier
+from codess.schema_contract import (
+    SchemaContractError,
+    column_names,
+    table_names,
+)
 
 # Diagnostic levels, ordered by what a reader does about them. `source` and
 # `record` mean something was not mapped; `field` means a record was mapped
@@ -36,11 +41,22 @@ _LOSS_LEVELS = ("source", "record")
 
 
 def _counts_by(conn: sqlite3.Connection, column: str, where: str = "") -> dict[str, int]:
+    """Count `mapping_diagnostics` rows grouped by one column.
+
+    The column is resolved against the live store before it reaches the SQL,
+    so a rename fails here naming the column rather than returning an empty
+    report from a query that no longer matches anything (CoPlan W52 step 2).
+    """
+    if column not in column_names(conn, "mapping_diagnostics"):
+        raise SchemaContractError(
+            f"mapping_diagnostics has no column {column!r}; "
+            "the released DDL and this report disagree"
+        )
     clause = f" WHERE {where}" if where else ""
     return {
         str(row[0] if row[0] is not None else "[none]"): int(row[1])
         for row in conn.execute(
-            f"SELECT {column}, COUNT(*) FROM mapping_diagnostics{clause} "  # noqa: S608
+            f"SELECT {quote_identifier(column)}, COUNT(*) FROM mapping_diagnostics{clause} "  # noqa: S608
             "GROUP BY 1 ORDER BY 2 DESC"
         )
     }

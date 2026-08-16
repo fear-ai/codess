@@ -101,6 +101,11 @@ ignore = [
 # ingest phases and adapter helpers are private because no other module
 # should call them, not because their behaviour is unchecked.
 "tests/*" = ["S101", "ARG001", "ARG002", "ARG004", "ARG005", "SLF001"]
+# One site, verified: `test_fileio` interpolates a literal column name through
+# `quote_identifier` to prove the quoted form addresses the column SQLite
+# created. Schema-introspected identifier, CoPlan 10.4.2.3 -- no rewrite avoids
+# the warning, because SQLite has no placeholder for an identifier.
+"tests/test_fileio.py" = ["S101", "ARG001", "ARG002", "ARG004", "ARG005", "SLF001", "S608"]
 # S608 rationale and per-site pattern: CoPlan.md 10.4.
 "src/codess/baseline_validation.py" = ["S608"]
 "src/codess/configuration_audit.py" = ["S608"]

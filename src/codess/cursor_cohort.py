@@ -136,6 +136,97 @@ def combine_selection_markers(
     }
 
 
+@dataclass(frozen=True)
+class SelectionMarkers:
+    """The selection fingerprint for a run, and how it was obtained.
+
+    `status` is evidence rather than decoration: `reused` means the cache
+    answered, `scanned` means the store was read and the result cached, and
+    `scanned-unstable` means Cursor wrote to its own database while the read
+    was in progress, so the markers describe a state that no longer holds and
+    were deliberately not cached.
+    """
+
+    per_project: dict[str, dict[str, Any]]
+    combined: dict[str, Any]
+    status: str
+
+
+def resolve_selection_markers(
+    cache_path: Path,
+    *,
+    source: Path,
+    selections: dict[str, Any],
+    supplemental_headers: Any,
+    observe_containers: Callable[[], dict],
+    read_markers: Callable[..., dict[str, dict[str, Any]]],
+    force: bool = False,
+    attempts: int = 2,
+) -> SelectionMarkers:
+    """Resolve the Cursor selection markers, from cache or by reading.
+
+    **Why this decision lives here.** It is the cache question this module
+    exists to answer -- may a previously computed selection be reused, and if
+    not, is a freshly read one safe to keep? It ran inside the ingest command,
+    where a 247-line phase decided Cursor read strategy on the wrong side of
+    the layering: a command adapts arguments and renders results (5.2), and
+    `cursor_cohort` already declares that it owns caching (W46).
+
+    **The container bracket is the correctness argument, not an optimization.**
+    `read_markers` holds one read transaction, so the markers it returns are
+    internally consistent -- but SQLite's snapshot ends with that transaction,
+    and Cursor writes to its own store continuously. Observing the container
+    before and after and requiring equality is what detects a write landing
+    across the read. Caching an unstable result would persist a fingerprint
+    for a state not on disk, and a later run would then skip a Project whose
+    evidence had in fact changed.
+
+    Reading is retried once on instability rather than failing: a single
+    concurrent write is ordinary. A second failure returns `scanned-unstable`
+    markers that are used for this run and not cached, which is the honest
+    outcome -- the fingerprint describes what was read, and nothing claims it
+    still holds.
+    """
+    container_marker = observe_containers()
+    per_project: dict[str, dict[str, Any]] | None = None
+    status = "scanned"
+
+    if not force:
+        per_project = load_selection_marker_cache(
+            cache_path,
+            source=source,
+            container_marker=container_marker,
+            selections=selections,
+        )
+        if per_project is not None:
+            status = "reused"
+
+    if per_project is None:
+        for _attempt in range(attempts):
+            container_before = observe_containers()
+            per_project = read_markers(
+                source, selections, supplemental_headers=supplemental_headers,
+            )
+            container_after = observe_containers()
+            if container_before == container_after:
+                save_selection_marker_cache(
+                    cache_path,
+                    source=source,
+                    container_marker=container_after,
+                    selections=selections,
+                    project_markers=per_project,
+                )
+                break
+        else:
+            status = "scanned-unstable"
+
+    return SelectionMarkers(
+        per_project=per_project or {},
+        combined=combine_selection_markers(per_project or {}),
+        status=status,
+    )
+
+
 def cohort_state_key(source: Path) -> str:
     return f"cursor:global:{source.resolve()}"
 

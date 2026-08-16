@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from codess.config import LARGE_EVENT_COUNT, LARGE_STORE_BYTES
-from codess.fileio import open_readonly
+from codess.fileio import open_readonly, quote_identifier
 from codess.project_catalog import (
     catalog_readiness,
     durable_project_root,
@@ -78,14 +78,19 @@ def _snapshot_facts(snapshot: Path | None) -> dict[str, Any]:
                     "source_system_id"
                     if "source_system_id" in columns else "source"
                 )
+                quoted_source = quote_identifier(source_column)
                 for source, count in conn.execute(
-                    f"SELECT {source_column},COUNT(*) FROM sessions "
-                    f"GROUP BY {source_column}"
+                    f"SELECT {quoted_source},COUNT(*) FROM sessions "
+                    f"GROUP BY {quoted_source}"
                 ):
                     source_counts[str(source or "unknown")] += int(count)
             finally:
                 conn.close()
-    except (OSError, sqlite3.Error) as exc:
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        # `ValueError` covers a malformed identifier from `quote_identifier`.
+        # This report degrades on an unreadable store rather than failing, and
+        # a name this module cannot render is the same class of fault: one bad
+        # store must not cost the annotations for every other Project.
         facts["snapshot_read_error"] = str(exc)
     facts["source_systems"] = dict(sorted(source_counts.items()))
     return facts

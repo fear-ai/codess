@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -966,5 +967,69 @@ class TestFormatFiveWireChanges:
         try:
             assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
             assert store_metadata(conn)["format_version"] == "5"
+        finally:
+            conn.close()
+
+
+class TestConnectionEnforcesConstraints:
+    """`store.connect` enforces foreign keys; a raw connection does not.
+
+    SQLite defaults `foreign_keys` to off *per connection*, so enforcement is
+    a property of how a store was opened rather than of the file. These pin
+    the current contract, and are the regression guard for W56: if the write
+    path is later unified, the managed behavior below must not change.
+    """
+
+    def test_the_managed_connection_enforces_foreign_keys(self, tmp_path):
+        db = tmp_path / "managed.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO events(event_entity_id, session_id, event_id) "
+                    "VALUES ('x', 'no-such-session', 'e1')"
+                )
+        finally:
+            conn.close()
+
+    def test_a_raw_connection_does_not_and_this_is_why_w56_exists(self, tmp_path):
+        """Records the gap rather than asserting it is acceptable.
+
+        No current path writes an FK-bearing table through a raw connection --
+        the four raw sites write `store_meta`, which has none, or use
+        `backup()`, which copies pages. This test states what would happen if
+        one did, so the next writer added to such a connection is a visible
+        decision rather than a silent orphan.
+        """
+        db = tmp_path / "raw.db"
+        init_db(db)
+        raw = sqlite3.connect(db)
+        try:
+            assert raw.execute("PRAGMA foreign_keys").fetchone()[0] == 0
+            raw.execute(
+                "INSERT INTO events(event_entity_id, session_id, event_id) "
+                "VALUES ('y', 'no-such-session', 'e2')"
+            )
+            raw.commit()
+            orphans = raw.execute(
+                "SELECT COUNT(*) FROM events WHERE session_id='no-such-session'"
+            ).fetchone()[0]
+            assert orphans == 1
+        finally:
+            raw.close()
+
+    def test_store_meta_has_no_foreign_keys(self, tmp_path):
+        """Why the four raw write sites are safe today.
+
+        Each writes only `store_meta` or uses `backup()`. If `store_meta` ever
+        gains a reference, those writes become unchecked and this fails.
+        """
+        db = tmp_path / "meta.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            assert conn.execute("PRAGMA foreign_key_list(store_meta)").fetchall() == []
         finally:
             conn.close()

@@ -1,4 +1,10 @@
-"""Evidence-backed audit of discovered and invoked MCP-related tools."""
+"""Evidence-backed audit of discovered and invoked MCP-related tools.
+
+**Reads core tables directly**, because the audit distinguishes an MCP tool
+that was *discovered* from one that was *invoked*, which is a join over
+`events` and `tool_invocations` against vendor tool-name spellings rather than
+a selection the typed request contract expresses (CoPlan W52 step 3).
+"""
 
 from __future__ import annotations
 

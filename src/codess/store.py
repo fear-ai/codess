@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from codess import __version__
-from codess.fileio import open_readonly, read_source_revision
+from codess.fileio import open_readonly, quote_identifier, read_source_revision
 from codess.hashing import (
     codess_bytes_hash,
     codess_canonical_hash,
@@ -228,7 +228,7 @@ def table_counts(
     # The table name cannot be a parameter, so it is quoted as an identifier;
     # every name comes from the store's own catalog rather than from a caller.
     return {
-        name: int(conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0])
+        name: int(conn.execute(f"SELECT COUNT(*) FROM {quote_identifier(name)}").fetchone()[0])
         for name in sorted(selected)
     }
 

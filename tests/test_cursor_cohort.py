@@ -10,6 +10,7 @@ from codess.cursor_cohort import (
     combine_selection_markers,
     load_selection_marker_cache,
     prepare_cursor_cohort,
+    resolve_selection_markers,
     save_selection_marker_cache,
 )
 from codess.raw_store import RawStore
@@ -229,3 +230,103 @@ def test_capture_records_source_advanced_when_revision_moves(tmp_path):
     assert cd["capture_stability"] == "source_advanced"
     assert cd["post_capture_revision"] != stale_marker["source_revision"]
     assert any(e == "cursor.cohort.source_advanced" for e, _ in progress_events)
+
+
+class TestResolveSelectionMarkers:
+    """The cache decision, now testable without a live Cursor store.
+
+    It ran inside a 247-line ingest phase, so its three outcomes could only be
+    exercised by running an ingest against a real Cursor database (W46). The
+    unstable branch in particular could not be reached deliberately at all.
+    """
+
+    def _selections(self):
+        return {"/p": ["ws-1"]}
+
+    def _markers(self, *_args, **_kwargs):
+        return {"/p": {"source_mtime": 10, "source_size": 20}}
+
+    def test_a_stable_read_is_cached_and_reported_as_scanned(self, tmp_path):
+        cache = tmp_path / "selection.json"
+        source = tmp_path / "state.vscdb"
+        source.write_bytes(b"x")
+        resolved = resolve_selection_markers(
+            cache, source=source, selections=self._selections(),
+            supplemental_headers=None,
+            observe_containers=lambda: {"main": 1},
+            read_markers=self._markers,
+        )
+        assert resolved.status == "scanned"
+        assert resolved.per_project == self._markers()
+        assert cache.exists(), "a stable read must be cached"
+
+    def test_a_second_call_reuses_the_cache(self, tmp_path):
+        cache = tmp_path / "selection.json"
+        source = tmp_path / "state.vscdb"
+        source.write_bytes(b"x")
+        common = {
+            "source": source,
+            "selections": self._selections(),
+            "supplemental_headers": None,
+            "observe_containers": lambda: {"main": 1},
+        }
+        resolve_selection_markers(cache, read_markers=self._markers, **common)
+
+        def refuse(*_args, **_kwargs):
+            raise AssertionError("a reused marker set must not read the store")
+
+        resolved = resolve_selection_markers(cache, read_markers=refuse, **common)
+        assert resolved.status == "reused"
+
+    def test_force_bypasses_the_cache(self, tmp_path):
+        cache = tmp_path / "selection.json"
+        source = tmp_path / "state.vscdb"
+        source.write_bytes(b"x")
+        common = {
+            "source": source,
+            "selections": self._selections(),
+            "supplemental_headers": None,
+            "observe_containers": lambda: {"main": 1},
+            "read_markers": self._markers,
+        }
+        resolve_selection_markers(cache, **common)
+        resolved = resolve_selection_markers(cache, force=True, **common)
+        assert resolved.status == "scanned"
+
+    def test_a_write_landing_across_the_read_is_not_cached(self, tmp_path):
+        """The correctness case the container bracket exists for.
+
+        Cursor writes to its own store while Codess reads. Caching a
+        fingerprint taken across a write would describe a state not on disk,
+        and a later run would skip a Project whose evidence had changed.
+        """
+        cache = tmp_path / "selection.json"
+        source = tmp_path / "state.vscdb"
+        source.write_bytes(b"x")
+        observations = iter(range(100))
+
+        resolved = resolve_selection_markers(
+            cache, source=source, selections=self._selections(),
+            supplemental_headers=None,
+            # Never twice the same: every read looks like a concurrent write.
+            observe_containers=lambda: {"main": next(observations)},
+            read_markers=self._markers,
+        )
+        assert resolved.status == "scanned-unstable"
+        assert not cache.exists(), "an unstable read must not be cached"
+        assert resolved.per_project == self._markers(), (
+            "the markers are still used for this run; only caching is refused"
+        )
+
+    def test_the_combined_marker_is_derived_from_the_per_project_set(self, tmp_path):
+        cache = tmp_path / "selection.json"
+        source = tmp_path / "state.vscdb"
+        source.write_bytes(b"x")
+        resolved = resolve_selection_markers(
+            cache, source=source, selections=self._selections(),
+            supplemental_headers=None,
+            observe_containers=lambda: {"main": 1},
+            read_markers=self._markers,
+        )
+        assert resolved.combined == combine_selection_markers(resolved.per_project)
+        assert resolved.combined["project_count"] == 1

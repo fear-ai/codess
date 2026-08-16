@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from codess.fileio import hash_file
+from codess.fileio import hash_file, quote_identifier
 from codess.hashing import codess_digest
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 
@@ -295,7 +295,8 @@ def column_names(conn: sqlite3.Connection, table: str) -> set[str]:
     a bound parameter; callers pass a table name from the schema, not input.
     """
     return {
-        str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')
+        str(row[1])
+        for row in conn.execute(f"PRAGMA table_info({quote_identifier(table)})")
     }
 
 

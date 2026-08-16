@@ -26,6 +26,7 @@ from codess.config import (
 from codess.fileio import (
     HashMismatchError,
     hash_file,
+    quote_identifier,
     open_readonly,
     read_hash,
     verify_hash,
@@ -232,7 +233,7 @@ def _logical_counts(
             "mapping_diagnostics",
         )
         return {
-            table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            table: int(conn.execute(f"SELECT COUNT(*) FROM {quote_identifier(table)}").fetchone()[0])
             for table in requested if table in available
         }
     finally:

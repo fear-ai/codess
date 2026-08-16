@@ -27,6 +27,33 @@ class HashMismatchError(RuntimeError):
     """A file's content did not match the hash a caller expected."""
 
 
+
+def quote_identifier(name: str) -> str:
+    """Render `name` as one SQLite identifier, safe to interpolate.
+
+    SQLite binds *values* through `?` but has no equivalent for a table or
+    column name, so every dynamic identifier reaches the SQL text through
+    string composition. That is unavoidable; doing it four different ways is
+    not. Sites variously wrote `"{table}"`, a bare `{table}`, and their own
+    `replace('"', '""')`, so whether an embedded quote was handled depended on
+    which site a reader happened to be in.
+
+    Quoting uses SQLite's double-quote form, doubling any embedded quote. A
+    name containing a NUL is refused rather than quoted: SQLite truncates at
+    the NUL, so quoting it would silently address a different object.
+
+    This does not make a caller-supplied name safe. It makes a *schema* name
+    unambiguous. Callers pass names from the released DDL or from SQLite's own
+    catalog, which `tests/test_sql_identifiers.py` checks; the escaping here
+    is the second line, not the first.
+    """
+    if not isinstance(name, str) or not name:
+        raise ValueError("SQL identifier must be a non-empty string")
+    if "\0" in name:
+        raise ValueError("SQL identifier must not contain a NUL character")
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
 def open_readonly(
     db_path: Path, *, timeout: float = 5.0, immutable: bool = False,
 ) -> sqlite3.Connection:

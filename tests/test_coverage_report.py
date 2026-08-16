@@ -222,3 +222,25 @@ class TestEventAtBasis:
         assert store.execute(
             "SELECT event_at_basis FROM events"
         ).fetchone()[0] == "session"
+
+
+def test_a_column_the_store_lacks_fails_naming_it(tmp_path):
+    """A renamed column fails loudly rather than reporting nothing.
+
+    `_counts_by` interpolates a column name, so a rename that reached the DDL
+    but not this report would otherwise produce a query matching no rows --
+    an empty coverage section that reads as "no diagnostics" rather than as a
+    broken report (CoPlan W52 step 2).
+    """
+    from codess.coverage_report import _counts_by
+    from codess.schema_contract import SchemaContractError
+
+    store = tmp_path / "store.db"
+    init_db(store)
+    conn = connect(store)
+    try:
+        with pytest.raises(SchemaContractError, match="no column 'severity_level'"):
+            _counts_by(conn, "severity_level")
+        assert _counts_by(conn, "level") == {}
+    finally:
+        conn.close()

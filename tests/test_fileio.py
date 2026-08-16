@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 
 import pytest
 
 from codess.fileio import (
     HashMismatchError,
     hash_file,
+    quote_identifier,
     read_hash,
     rewrite_hash,
     verify_hash,
@@ -298,3 +300,141 @@ class TestFileState:
         path.write_text("x")
         assert file_changes(path, None) == {}
         assert file_changes(tmp_path / "absent", file_state(path)) == {}
+
+
+class TestQuoteIdentifier:
+    """One rendering for every dynamic table or column name.
+
+    SQLite binds values through `?` but has no equivalent for an identifier,
+    so a dynamic name must reach the SQL text as a string. Sites variously
+    wrote `"{table}"`, a bare `{table}`, and their own `replace('"', '""')`,
+    so whether an embedded quote was handled depended on which site a reader
+    was in. This is the one answer (CoPlan W52).
+    """
+
+    def test_an_ordinary_name_is_quoted(self):
+        assert quote_identifier("events") == '"events"'
+
+    def test_an_embedded_quote_is_doubled(self):
+        """The case the bare-interpolation sites got wrong.
+
+        Without doubling, a name containing `"` closes the identifier early
+        and the remainder is parsed as SQL.
+        """
+        assert quote_identifier('a"b') == '"a""b"'
+        assert quote_identifier('"') == '""""'
+
+    def test_a_name_needing_quoting_round_trips(self, tmp_path):
+        """The quoted form addresses the column SQLite actually created."""
+        conn = sqlite3.connect(tmp_path / "quoting.db")
+        conn.execute('CREATE TABLE t ("odd ""name" TEXT)')
+        conn.execute('INSERT INTO t VALUES (?)', ("value",))
+        column = quote_identifier('odd "name')
+        assert conn.execute(f"SELECT {column} FROM t").fetchone()[0] == "value"
+        conn.close()
+
+    def test_a_reserved_word_is_addressable(self):
+        """Quoting is what lets a schema name a column `order` or `select`."""
+        assert quote_identifier("order") == '"order"'
+
+    def test_a_nul_is_refused_rather_than_quoted(self):
+        """SQLite truncates at a NUL, so quoting one addresses another object.
+
+        Refusing is the only safe answer: the quoted text would parse, and
+        would silently name a different column than the caller asked for.
+        """
+        with pytest.raises(ValueError, match="NUL"):
+            quote_identifier("ev\0ents")
+
+    @pytest.mark.parametrize("value", ["", None, 5])
+    def test_an_empty_or_non_string_name_is_refused(self, value):
+        with pytest.raises(ValueError):
+            quote_identifier(value)
+
+    def test_unicode_names_pass_through(self):
+        """Only the quote character is special; the rest is UTF-8 text."""
+        assert quote_identifier("sessión") == '"sessión"'
+
+
+class TestQuoteIdentifierRaiseReachesACaller:
+    """A refused identifier surfaces where a reader can act on it.
+
+    `quote_identifier` raises `ValueError`, which is neither `sqlite3.Error`
+    nor `OSError` -- so the handlers wrapping several call sites do not catch
+    it by accident. That is the intended behavior at every site except the one
+    best-effort report, and it is pinned here because the distinction is
+    invisible at the call site: a reader sees a `try` and cannot tell whether
+    the raise escapes it.
+    """
+
+    def _store(self, tmp_path):
+        from codess.store import init_db
+        db = tmp_path / "sessions_cc.db"
+        init_db(db)
+        return db
+
+    def test_a_nul_name_is_refused_before_it_reaches_sqlite(self, tmp_path):
+        """The check runs ahead of `execute`, so no partial query is issued."""
+        from codess.schema_contract import column_names
+        from codess.store import connect
+
+        conn = connect(self._store(tmp_path))
+        try:
+            with pytest.raises(ValueError, match="NUL"):
+                column_names(conn, "ev\0ents")
+        finally:
+            conn.close()
+
+    def test_validation_lets_the_refusal_escape_its_sqlite_handler(self, tmp_path):
+        """`baseline_validation` gates a publication, so it must not degrade.
+
+        Its store loop catches `sqlite3.Error`; a name it cannot render is a
+        different fault, and swallowing it would let a snapshot validate on a
+        check that never ran.
+        """
+        from unittest.mock import patch
+
+        import codess.baseline_validation as validation
+
+        report = {"checks": [], "errors": [], "limitations": []}
+        with patch(
+            "codess.baseline_validation.quote_identifier",
+            side_effect=ValueError("refused identifier"),
+        ), pytest.raises(ValueError, match="refused identifier"):
+            validation._validate_store(self._store(tmp_path), {}, report)
+
+    def test_the_best_effort_annotation_degrades_instead(self, tmp_path):
+        """`project_annotations` records the fault and keeps going.
+
+        It is a report row, not a gate: CoPlan 3.4 records it as a best-effort
+        read that already degrades on an unreadable store, so one Project's
+        bad name must not cost the annotations for every other.
+        """
+        from unittest.mock import patch
+
+        import codess.project_annotations as annotations
+
+        self._store(tmp_path)
+        with patch(
+            "codess.project_annotations.quote_identifier",
+            side_effect=ValueError("refused identifier"),
+        ):
+            facts = annotations._snapshot_facts(tmp_path)
+        assert "refused identifier" in facts["snapshot_read_error"]
+        assert facts["sessions"] == 0
+
+    def test_a_name_absent_from_the_store_is_dropped_not_refused(self, tmp_path):
+        """`table_counts` filters against the catalog before quoting.
+
+        Omitting an absent table is its stated contract -- a missing table is
+        a different fact from an empty one -- so the name never reaches
+        `quote_identifier` and no raise is involved.
+        """
+        from codess.store import connect, table_counts
+
+        conn = connect(self._store(tmp_path))
+        try:
+            assert table_counts(conn, ["ev\0ents"]) == {}
+            assert table_counts(conn, ["events"]) == {"events": 0}
+        finally:
+            conn.close()

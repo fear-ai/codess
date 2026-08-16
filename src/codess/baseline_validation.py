@@ -25,6 +25,7 @@ from codess.fileio import (
     hash_file,
     load_versioned_policy,
     open_readonly,
+    quote_identifier,
     read_source_revision,
     write_json_atomic,
 )
@@ -439,13 +440,14 @@ def _validate_store(
         )
         duplicates = 0
         for column in ("relative_path", "uri", "repository_object_id", "content_digest"):
+            quoted = quote_identifier(column)
             duplicates += int(
                 conn.execute(
                     f"""
                     SELECT COUNT(*) FROM (
-                      SELECT project_id, artifact_kind, {column}, COUNT(*) n
-                      FROM artifacts WHERE {column} IS NOT NULL
-                      GROUP BY project_id, artifact_kind, {column} HAVING n>1
+                      SELECT project_id, artifact_kind, {quoted}, COUNT(*) n
+                      FROM artifacts WHERE {quoted} IS NOT NULL
+                      GROUP BY project_id, artifact_kind, {quoted} HAVING n>1
                     )
                     """
                 ).fetchone()[0]
