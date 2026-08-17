@@ -1087,7 +1087,7 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
         )
         for row in store["conn"].execute(f"""
             SELECT s.session_entity_id,s.id,s.source_system_id,s.vendor_session_id,
-                   s.vendor_name,s.product_name,s.harness_name,s.harness_version,
+                   s.vendor_name,s.harness_name,s.harness_version,
                    s.started_at,s.ended_at,s.time_basis,s.source_cwd,
                    s.project_id,s.project_path,s.parent_session_id,
                    s.session_relation_kind,

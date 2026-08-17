@@ -7,8 +7,15 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from codess import reporting
 from codess.codex_source import build_session_index as build_codex_session_index
-from codess.config import CODESS_DAYS, get_stats_path
+from codess.config import (
+    CC_PROJECTS,
+    CODESS_DAYS,
+    CODEX_SESSIONS,
+    CURSOR_DATA,
+    get_stats_path,
+)
 from codess.helpers import unsafe_traversal_root_reason, write_csv
 from codess.project import (
     RootsWhenEmpty,
@@ -114,6 +121,21 @@ def run(args) -> int:
     had_error = False
     diagnostics: dict = {}
     write_root = resolve_registry_directory(args)
+    # `--debug` selects the reporting profile rather than a per-call flag: the
+    # discovery diagnostics are debug-level events, and the level gate is what
+    # decides whether they are emitted (W21). Roots are registered so a
+    # `located` field renders against them under a sharing profile.
+    reporting.configure(
+        getattr(args, "report_profile", None) or ("debug" if opts["debug"] else None),
+        privacy=getattr(args, "report_privacy", None),
+        roots={
+            "home": Path.home(),
+            "registry": write_root,
+            "cc-projects": CC_PROJECTS,
+            "codex-sessions": CODEX_SESSIONS,
+            "cursor-data": CURSOR_DATA,
+        },
+    )
     codex_index = None
     if opts["vendors"] is None or "codex" in opts["vendors"]:
         codex_index = build_codex_session_index(
@@ -243,4 +265,8 @@ def run(args) -> int:
         print(f"Wrote {len(merged)} rows to {out_path}")
 
     _print_scan_diagnostics(diagnostics)
+    # A command boundary: whatever is still buffered must reach the sink before
+    # the process ends, or a batch smaller than the flush threshold is silently
+    # lost (Report 8).
+    reporting.flush()
     return 1 if had_error else 0

@@ -7,12 +7,18 @@ from __future__ import annotations
 import csv
 import os
 import subprocess
+import time
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from codess.codex_source import build_session_index as build_codex_session_index
+from codess.config import (
+    MAX_SCAN_DIRECTORIES,
+    SCAN_DEADLINE_SECONDS,
+    VENDOR_KEYS,
+)
 from codess.fileio import check_policy_format, read_json, write_json_atomic
 from codess.helpers import should_prune_directory, unsafe_traversal_root_reason
 from codess.path_label import classify_project_path, local_path_key
@@ -194,18 +200,120 @@ def observe_git(
     return observed
 
 
-def discover_git_roots(roots: Iterable[Path], *, max_depth: int) -> list[Path]:
+class ScanBudget:
+    """What a traversal is allowed to spend, and what it actually spent.
+
+    A scan of an unknown tree needs to be able to stop (CoPlan W62). Before
+    this, `discover_git_roots` took a root, a depth limit, and no bound on the
+    work itself: on a slow or enormous tree it ran until it finished, and the
+    operator's only signal was that it had not returned. Operations 10.5.2
+    recommends a quick probe first precisely because the full scan is unbounded,
+    which is a documentation workaround for a missing control.
+
+    **A partial result is returned and marked, not discarded.** A scan that
+    examined 90% of a tree has found 90% of the Projects, and throwing that away
+    to report nothing is the worse failure.
+
+    The device count is W61: `os.walk` crosses a filesystem boundary without
+    saying so, so a network mount inside the work root turns a seconds-long scan
+    into a minutes-long one with no explanation. Reporting rather than refusing,
+    because the common case -- an external disk holding real Projects -- is one a
+    refusal would break.
+    """
+
+    __slots__ = (
+        "crossings", "deadline_seconds", "directories", "max_directories",
+        "started", "stopped_reason",
+    )
+
+    def __init__(
+        self, *, max_directories: int = 0, deadline_seconds: int = 0,
+    ) -> None:
+        self.max_directories = max_directories
+        self.deadline_seconds = deadline_seconds
+        self.directories = 0
+        self.crossings: list[str] = []
+        self.stopped_reason: str | None = None
+        self.started = time.monotonic()
+
+    def visit(self) -> bool:
+        """Count one directory; return whether the traversal may continue.
+
+        Monotonic rather than wall clock, for the reason CoPlan 14.4 records: a
+        backward NTP step would extend the deadline unpredictably.
+        """
+        self.directories += 1
+        if self.max_directories and self.directories > self.max_directories:
+            self.stopped_reason = "directory_budget"
+            return False
+        if (
+            self.deadline_seconds
+            and time.monotonic() - self.started > self.deadline_seconds
+        ):
+            self.stopped_reason = "deadline"
+            return False
+        return True
+
+    @property
+    def partial(self) -> bool:
+        return self.stopped_reason is not None
+
+    def report(self) -> dict[str, Any]:
+        """What the scan spent and whether it finished, for an operator."""
+        return {
+            "directories": self.directories,
+            "partial": self.partial,
+            "stopped_reason": self.stopped_reason,
+            "max_directories": self.max_directories or None,
+            "deadline_seconds": self.deadline_seconds or None,
+            "elapsed_seconds": round(time.monotonic() - self.started, 3),
+            "filesystem_crossings": list(self.crossings),
+        }
+
+
+def discover_git_roots(
+    roots: Iterable[Path],
+    *,
+    max_depth: int,
+    budget: ScanBudget | None = None,
+    same_filesystem: bool = False,
+) -> list[Path]:
+    """Repository roots under `roots`, bounded by depth, count, and time.
+
+    `budget` accumulates what the traversal spent and is the caller's to read
+    afterwards; passing None means depth is the only bound, which is the
+    behaviour every existing caller had. `same_filesystem` refuses to cross a
+    device boundary rather than reporting it -- off by default, because a Project
+    on an external disk is still a Project.
+    """
     found: set[Path] = set()
     for raw_root in roots:
         root = raw_root.expanduser().resolve()
         if not root.exists() or unsafe_traversal_root_reason(root):
             continue
+        try:
+            root_device = root.stat().st_dev
+        except OSError:
+            root_device = None
         for current, directories, _ in os.walk(root):
+            if budget is not None and not budget.visit():
+                # Stop the whole traversal, not just this subtree: the budget is
+                # a bound on the scan, and continuing into the next root would
+                # spend past it.
+                return sorted(found)
             path = Path(current)
             depth = len(path.relative_to(root).parts)
             if depth > max_depth:
                 directories[:] = []
                 continue
+            if root_device is not None:
+                crossed = _crossed_filesystem(path, root_device)
+                if crossed is not None:
+                    if budget is not None and crossed not in budget.crossings:
+                        budget.crossings.append(crossed)
+                    if same_filesystem:
+                        directories[:] = []
+                        continue
             if ".git" in directories or (path / ".git").is_file():
                 found.add(path.resolve())
                 # A repository is one candidate boundary. Do not turn nested
@@ -217,6 +325,20 @@ def discover_git_roots(roots: Iterable[Path], *, max_depth: int) -> list[Path]:
                 if not should_prune_directory(name)
             ]
     return sorted(found)
+
+
+def _crossed_filesystem(path: Path, root_device: int) -> str | None:
+    """The path, if it sits on a different device than the work root.
+
+    A `stat` per directory is what the traversal already pays through `os.walk`,
+    so testing the device adds no syscall of its own on the common path.
+    """
+    try:
+        if path.stat().st_dev != root_device:
+            return str(path)
+    except OSError:
+        return None
+    return None
 
 
 def recommend(
@@ -277,6 +399,9 @@ def refresh_candidates(
     check_remotes: bool = False,
     since: str | None = None,
     policy: dict[str, Any] | None = None,
+    max_directories: int | None = None,
+    deadline_seconds: int | None = None,
+    same_filesystem: bool = False,
 ) -> dict[str, Any]:
     existing: dict[str, Any] = {"catalog_format": CANDIDATE_LIST_FORMAT, "projects": []}
     if candidate_csv:
@@ -301,7 +426,7 @@ def refresh_candidates(
     diagnostics: dict[str, Any] = {}
     codex_index = (
         build_codex_session_index(include_record_counts=True)
-        if "codex" in (vendor_filter or ["cc", "codex", "cursor"])
+        if "codex" in (vendor_filter or VENDOR_KEYS)
         else None
     )
     for root in roots:
@@ -330,8 +455,20 @@ def refresh_candidates(
                 },
             })
             projects[key] = item
+    budget = ScanBudget(
+        max_directories=(
+            MAX_SCAN_DIRECTORIES if max_directories is None else max_directories
+        ),
+        deadline_seconds=(
+            SCAN_DEADLINE_SECONDS if deadline_seconds is None
+            else deadline_seconds
+        ),
+    )
     if discover_git:
-        for path in discover_git_roots(roots, max_depth=max_depth):
+        for path in discover_git_roots(
+            roots, max_depth=max_depth, budget=budget,
+            same_filesystem=same_filesystem,
+        ):
             key = str(path)
             projects.setdefault(key, {
                 "path_key": local_path_key(path), "path": key,
@@ -352,6 +489,10 @@ def refresh_candidates(
         "generated_at": datetime.now(UTC).isoformat(),
         "roots": [str(root.resolve()) for root in roots],
         "diagnostics": {key: value for key, value in diagnostics.items() if not key.startswith("_")},
+        # What the traversal spent and whether it finished. Reported
+        # unconditionally, so a partial scan says so rather than looking like a
+        # complete one with fewer Projects in it (W62).
+        "scan": budget.report(),
         "projects": sorted(projects.values(), key=lambda item: item["path"]),
     }
 

@@ -11,7 +11,7 @@ Public API:
 - Comparison outcomes: ``MATCH``, ``MISMATCH``, ``VACANT``.
 - Criticality: ``FATAL``, ``ADVISORY``.
 - ``classify(value)`` -> state; ``get_state(record, key)`` -> ``(value, state)``.
-- ``diagnostic_level(state)`` -> ``info``/``warn``/None.
+- ``severity(state)`` -> ``info``/``warn``/None.
 - ``criticality(state, is_critical_field)`` -> ``fatal``/``advisory``/None.
 - ``compare(prior, rebuilt)`` -> comparison outcome.
 - ``diagnose(opts, ...)`` records a field diagnostic; never raises.
@@ -83,8 +83,15 @@ def get_state(record: dict, key: str) -> tuple[Any, str]:
     return (None if value is _MISSING else value), state
 
 
-def diagnostic_level(state: str) -> str | None:
-    """Return ``"info"``, ``"warn"``, or ``None`` (present) for a state."""
+def severity(state: str) -> str | None:
+    """Return ``"info"``, ``"warn"``, or ``None`` (present) for a state.
+
+    Named for what it returns. It was `diagnostic_level`, which read as the
+    granularity column beside it in `mapping_diagnostics` and produced exactly
+    that confusion: the emitted dict carried `level` meaning severity and
+    `diagnostic_level` meaning granularity, and the store read the second into
+    the column named after the first (CoPlan W50).
+    """
     if state in _WARN_STATES:
         return "warn"
     if state in _INFO_STATES:
@@ -115,8 +122,7 @@ def diagnose(opts: dict, *, field: str, state: str, source_field: str,
              value: Any = None, mapping_rule: str | None = None) -> None:
     """Record a field diagnostic into ``opts['diagnostics']`` (name->count) and
     ``opts['field_diagnostics']`` (rows); no-op for ``present``. Never raises."""
-    level = diagnostic_level(state)
-    if level is None:
+    if severity(state) is None:
         return
     diagnostics = opts.get("diagnostics")
     if diagnostics is None:
@@ -139,13 +145,17 @@ def diagnostic(
     value: Any = None,
     mapping_rule: str | None = None,
 ) -> dict | None:
-    """Build one bounded field diagnostic suitable for an Event attachment."""
-    level = diagnostic_level(state)
-    if level is None:
+    """Build one bounded field diagnostic suitable for an Event attachment.
+
+    `severity` is how much it matters; `granularity` is which part of the input
+    it is about. Both keys name their own column in `mapping_diagnostics`.
+    """
+    field_severity = severity(state)
+    if field_severity is None:
         return None
     return {
-        "level": level,
-        "diagnostic_level": "field",
+        "severity": field_severity,
+        "granularity": "field",
         "reason_code": f"field_{state}",
         "field": field,
         "source_field": source_field,

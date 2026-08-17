@@ -208,7 +208,6 @@ recorded as CLI. Dropping `product_name` remains pending with W51.
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. |
 | W09 | High | Planned | Confirm selective Cursor work remains independent of unrelated shared-database content. **Not in progress despite an earlier WIP label**: nothing is part-done, and the question is unanswerable until W08 establishes what "bounded" means for a measured workload. Sequence after W08. |
 | W35 | Low | **Postponed** | Decide whether the eight manifest fixtures no test reads should be wired into tests or removed from the released set. Not an integrity question: W03 took them out of the write gate, so they now affect only `codess package verify`. |
-| W38 | Normal | Planned | Give `query_cmd` one row emitter. 110 `print` calls and 20 hand-assembled rows each re-decide separator, column order, and which fields to sanitize. Pairs with W18's reporting contract. |
 **A value survey extends the coverage sweep from absence to constancy.**
 `tools/field_coverage.py` asks which columns are *empty*; asking which hold
 one *constant* value finds a larger and differently-shaped class. Over 241
@@ -263,19 +262,15 @@ output does not repeat the error this survey found.
 
 | W55 | Normal | Planned | Unify text and record parsing across the decode layer. **Measured**: 98 `json.loads`, 42 SQLite `json_extract`, 38 `startswith`, 31 `re`, 20 `split`, 4 `removeprefix`, 7 `fromisoformat`, 8 `urllib.parse` -- spread over 38, 6, 17, 9, 15, 4, 6, and 4 modules. The ordering is sound (a parser first, a regular expression last) but the spread is not: 17 modules classify a prefix by hand where 4 use `removeprefix`, and 15 split on a separator with no shared helper. **Three specific candidates.** (1) The `mcp__`/`mcp_`/`mcp-` server split is implemented twice, in `store._tool_namespace` and `mcp_audit._mcp_candidate`, against the same three vendor spellings. (2) Timestamp parsing appears in all three adapters with slightly different fallbacks, where one bounded parser would serve. (3) The Codex output header is the only free-text regex that carries decoded fields; it should stay regex but its field table belongs beside the other vendor vocabularies rather than inside the adapter. **Also assess whether a library replaces hand-rolled work** -- `email.parser` or `dateutil` for the timestamp fallbacks, and whether SQLite's own JSON functions can replace materializing rows Python then re-parses, which is the 98-against-42 imbalance. Correctness-neutral, so it batches with no regeneration. | One helper per parsing concern; no vendor spelling is matched in two modules; a new adapter reaches for the same tools in the same order. |
 | W51 | Normal | Planned | Resolve the source-identity naming, measured against peer projects rather than against our own v1. **v1 is not evidence**: `schema/legacy/coschema-v1.sql` has two tables, was generated, and was never reviewed or approved, so it cannot settle a convention. **The rule, surveyed across four peer SQLite schemas holding 56 tables**: 11 are singular and **every one is a mass noun** -- `metadata`, `evidence`, `coverage`, `usage`, `provenance`, `audit`, `store_meta`. Countable-entity tables are plural without exception. The survey itself is developer context (`experiments/peer-project-references.md`); the rule is what applies here and is checkable against CoSchema alone. **That settles CoSchema's four `*_content` tables**: `event_content` averages 1.27 rows per Event, so it is a countable set and should be `event_contents` -- or, better, renamed to what it holds. `store_meta` is correctly singular by the same rule. **`_id` carries four incompatible formats**, which is the sharper defect: `sessions.id` is a vendor UUID, `sessions.entity_id` a `codess:session:sha256:` derivation, `sources.id` a bare SQLite rowid, `sessions.source_system_id` a dotted literal `anthropic.claude-code`. A reader cannot tell from the suffix whether a value is derived, assigned, or borrowed. **`source_system_id` is not an identifier under that reading** -- it is `vendor + "." + product` composed in the mapping profile, so `source_system` or `source_system_key` says what it is. **Superseded in part**: `vendor_name` is not merely a redundant tag but the wrong fact for a harness running another provider's model, so [CoNames](CoNames.md) owns its disposition rather than this item. **`product` is required by `mapping-contract.json` and defined nowhere**: no vocabulary, no examples, no CoSchema entry, and `sessions.product_name` holds only the three literals the profiles supply. Either define it or drop it with W40. **`sessions.source` is the `SOURCE_PROFILES` dict key** -- `Claude`, `Codex`, `Cursor`, confirmed across 601 real Sessions -- so `adapter_key` names it honestly and frees `source` for the Source entity the glossary defines. Wire-format; batch with the regeneration. | One suffix rule states whether a value is derived, assigned, or borrowed; `source` names the Source entity only; every contract-required field has a definition and examples; plurality follows the mass-noun rule the peer schemas already use. |
-| W50 | Normal | Planned | Reconcile schema names with the terminology Codess.md 7 defines. Measured against a live store rather than the DDL text: of twenty terms checked, **six are glossary entities and appear in table or column names** (Project, Session, Interaction, Event, Artifact, Source, workspace), **five appear in names but are not defined** (`location` 1 table + 2 columns, `path` 9 columns, `content` 6 tables + 8 columns, `text`, `raw`), and several defined concepts have no schema presence at all. Four specific defects. **(1) `source` carries three meanings**: `sources.id` is a transcript file, `source_system_id` is a vendor, and `sessions.source` is an adapter key (`Claude`) -- 26 columns share the prefix. The glossary defines Source as "logical upstream evidence container", which is only the first. **(2) `level` is used for two different things, and the parallel to code location was mine and is withdrawn.** The column holds `source`/`record`/`field`, which is a granularity and not an ordering -- summing its values overstates loss, which is the actual defect. But `field_state.diagnostic` builds a dict carrying **both** `"level"` (meaning severity: `info`/`warn`) and `"diagnostic_level"` (meaning granularity), and `store` reads the second into the column named after the first. That is the naming collision worth fixing; the store rows themselves are correct (`level=field, severity=info`). `field` and `record` here name storage granularity, which is the one place that is genuinely the subject, so they are justified -- but only after `level` is renamed to say granularity, and only because no better word distinguishes "a whole record" from "one of its values". **(3) Plurality is inconsistent, and v1 shows the convention**: the one archived schema (`schema/legacy/coschema-v1.sql`) had two tables, `sessions` and `events`, both plural. Twenty-two of twenty-four current tables are plural; the exceptions are `store_meta` (correct -- a mass noun) and the four `*_content` link tables, which name sets. `event_artifacts` and `event_content` are both link tables from `events` and disagree. **Recommend plural throughout**, since a table holds rows, with `store_meta` as the stated exception. **(4) `location` and `path` are used interchangeably** in `project_locations.observed_path` and `sessions.project_path` while the glossary defines "Project location" as an entity and leaves `path` undefined. Wire-format changes; batch with the regeneration. | Every term in a table or column name is either defined in Codess.md 7 or is a plain English word carrying no Codess meaning; `source` names one thing; plurality has one rule and one stated exception. |
-| W48 | Normal | Planned | Resolve the value-survey findings that no other item owns. `tools/value_survey.py` reports six classes; three need decisions. **Thirty-one columns hold one value across every vendor**, and only two of them are ever used as a query predicate (`artifact_kind`, `relation_kind`) -- `charset` is always `utf-8`, `media_type` always `text/plain`, `storage_class` always `inline`, `integrity_state` always `verified`, `sequence_no` always `1`, `confidence` always `1.0`, `producing_actor_kind` always `tool`, `session_purpose` always `coding`. Each is written by Codess from a literal and read back by nothing, so they are storage and reader attention spent on a value that answers no question today. Decide per column: reserved for a capability being built, or removed. **Three vendor tags are never queried** -- and the vendor/provider split supersedes the conclusion that they are simply removable, since `vendor_name` is wrong rather than redundant --: `sessions.vendor_name`, `product_name`, and `storage_format` appear in zero predicates, while `source_system_id` and `source` appear in eighteen -- so the useful denormalization is real and the rest is not, which is W40's finding measured from the query side. **Two link tables disagree on plurality**: `event_artifacts` and `event_content` both link from `events`, and both name a set. Wire-format changes, so any removal batches with the regeneration. | Every column either varies, is read, or is recorded as reserved with the capability that will fill it; the link tables agree on plurality. |
+| W50 | Normal | **Partly landed; `source` and plurality remain** | Reconcile schema names with the terminology Codess.md 7 defines. **Landed in format 6**: `mapping_diagnostics.level` became `granularity`, which was the one defect of the four that made a reader draw a wrong conclusion -- summing a granularity overstates loss -- and the `level`/`diagnostic_level` collision it named is resolved with it (13.4.12). **Remaining**: `source` still carries three meanings across 26 columns (a transcript file, a vendor, an adapter key), and the four `*_content` link tables still disagree with `event_artifacts` on plurality. Both are wire-format, so they batch with W51 rather than landing alone. | Every term in a table or column name is either defined in Codess.md 7 or is a plain English word carrying no Codess meaning; `source` names one thing; plurality has one rule and one stated exception. |
 
 **Two argument clusters recur across the codebase, and they are different problems.** Scanning every signature of four or more parameters for co-occurring names: **run-invocation** (`registry`, `repo_root`, `resource_policy`, `raw_mode`, `source`) appears in five functions -- `baseline_operations.run_ingest` and `apply_project`, `refresh_operations.refresh_projects`, `catalog_operations._run_ingest_stage` and `onboard_catalog` -- and is exactly the argv these functions build for the `python -m main` child process described in 5.4. It wants one `ChildInvocation` object, which would also give the four hand-built command lists one shape. **Record-context** (`session_id`, `source_file`, `line_num`, `opts`) appears in six adapter functions across `cc` and `codex`, and is the identity of the record being decoded; it wants a small frozen context threaded through decode rather than four positional values. Neither is fixed here: the first is a subprocess-boundary change and belongs with W18's reporting contract, the second changes adapter signatures and belongs with W06 step 4. Recording them together is the point -- the same defect appears as 17 parameters in one place and as four repeated positional arguments in another. | Ingest phases take a context and a totals object rather than a list; `opts`'s three lifetimes are separated in the same change; a call site cannot silently mis-order arguments. |
 | W43 | Low | **Withdrawn on inspection** | The table was proposed from the complexity score before reading the function, and the function already is one where it can be. Five `for key in (...)` loops apply a shared rule to **30 fields using 10 branches**; the remaining **28 branches are each a distinct rule** -- format, action, sortedness, cross-field agreement between `project_snapshots` and `project_ids`, `since <= until`. A table over those would need a per-entry predicate and message, which is the code that exists with a dictionary wrapped round it. Kept as a note: `resource_policy` raises 8 field errors with no loop and is the better candidate if this pattern is pursued. |
-| W40 | Normal | **Decode landed; column drop pending** | Which of the four identity terms does the source actually supply? **`vendor_name` is real but unobserved** (never in a record; correctly inferred from which store a Session came from). **`harness_name` and `surface_kind` are real, observable, and currently wrong for Codex**: `session_meta` carries `originator` (`codex_cli_rs`, `Codex Desktop`, `codex-tui`, `codex_exec`) and `source` (`cli`, `vscode`), while Codess stores the constant `codex-cli`/`cli` for all 13 Sessions -- so a Desktop or VS Code Session is recorded as CLI. **`product_name` is struck**: it is a pure function of `source_system_id` (`anthropic.claude-code` -> `claude-code`), never observed in any record, and filtered by nothing, so it stored a derivable constant on every Session. Decode the two observable fields; drop the column. **Decode is complete**: `adapters/codex` reads `originator` into `harness_name` and maps `source` onto `surface_kind`, so a Desktop or VS Code Session is no longer recorded as CLI. **Remaining**: drop `sessions.product_name`, which is a pure function of `source_system_id` and filtered by nothing. Wire-format, so it batches with W50/W51's renames rather than owing a rebuild of its own. |
-| W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES`. |
 | W13 | Normal | TODO | Mechanically enforce architecture/contract paths; observe child-process coverage. Query-request validation-library adoption is Postponed (13.4.2). |
 | W14 | Normal | TODO | Require or explicitly mark Project identity for direct library writes. |
 | W16 | Normal | TODO | Evaluate/plan external investigation interfaces (9.7); does not authorize implementation. |
 | W17 | Normal | **Deferred to a stable baseline** | Expand cross-Project analysis inputs. Cross-Project search is accepted as an advanced feature set, so this is no longer waiting for a requester -- it waits for the baseline it would be specified against. |
 | W18 | Normal | Planned | Structured operational-reporting subsystem (9.6.1), covering counters, timings, and summaries and separating immediate from durable sinks (9.6.2). |
-| W21 | Normal | Planned | Route `walk_sessions` inline `debug` prints through W18's reporting contract, after W19's extraction. |
 
 ## 1. Implementation Scope
 
@@ -5248,6 +5243,138 @@ classification. "Fifteen handlers catch the driver" and "one handler catches the
 driver across a boundary" were derived from the same grep, and only the second
 described work worth doing.
 
+#### 13.4.12 CoSchema Format 6
+
+**Nine columns removed, one renamed, one vendor description.** Each removal was
+measured across 90 real stores before it was made, and the measurement is the
+argument: a column holding one value on every row is storage and reader
+attention spent on a value that answers nothing.
+
+| Removed | Rows measured | Value found |
+|---|---|---|
+| `content_objects.media_type`, `.charset`, `.storage_class` | 236,535 | `text/plain`, `utf-8`, `inline` |
+| `event_content.sequence_no`, `.integrity_state` (and the three sibling link tables) | 494,384 | `1`, `verified` |
+| `tool_results.producing_actor_kind` | 127,432 | `tool` |
+| `event_artifacts.evidence_source`, `.confidence` | 44,449 | `tool_input`, `1.0` |
+| `sessions.session_purpose` | 658 | `coding` |
+| `sessions.product_name` | 658 | a pure function of `source_system_id` |
+
+**The removal was per column, not per name.** `sequence_no` appears in nine
+tables and genuinely orders rows in four of them -- measured maxima of 19,661 for
+`events` and 5,564 for `model_turns` -- so dropping the name everywhere would
+have destroyed real ordering. It was removed only from the four `*_content` link
+tables, where it was part of the primary key and no `(owner, relation_kind)` pair
+ever repeated, so the sequence distinguished nothing.
+
+**One removal found dead code.** `_ensure_content_object` took a `storage_class`
+parameter and branched on it to decide whether to store `inline_content`. No
+caller ever passed a value, so the branch was unreachable and the column
+recorded the default on every row. A constant column and an unreachable branch
+are the same defect seen from two sides.
+
+**`mapping_diagnostics.level` became `granularity`** (W50). The column holds
+`source`/`record`/`field` -- which part of the input a diagnostic is about --
+while `severity` sits beside it holding how much it matters. Named `level` it read
+as an ordering, which made summing its values look meaningful when doing so
+overstates loss. The rename also resolved the collision W50 described:
+`field_state.diagnostic` emitted `level` meaning severity *and*
+`diagnostic_level` meaning granularity, and the store read the second into the
+column named after the first. Both keys now name their own column, and
+`field_state.diagnostic_level` became `field_state.severity`.
+
+**W24's vendor table is `config.VENDORS`.** Three separate encodings of the same
+three vendors -- an if-chain selecting a store filename, a profile dict keyed by
+display name, a display-name lookup keyed by CLI token -- plus the key tuple
+`("cc", "codex", "cursor")` at a dozen call sites. All derive from one table now,
+and a test fails if the longhand returns. Two keys per vendor is not redundancy:
+`key` is what an operator types and names a file, `adapter_key` is what the
+decoder and the store record, and they differ for Claude Code.
+
+**The rebuild found a defect that had nothing to do with format 6.** The first
+attempt failed on every one of 22 Projects with
+`UNIQUE constraint failed: project_locations.machine_id, observed_path`, then on
+six with `FOREIGN KEY constraint failed`. Both trace to the *format-5* identity
+change: it re-derived every `location_id` from `sha256:` to `id1:`, and a
+registry written across both carried two catalog entries for one directory plus a
+workspace binding naming the retired one.
+
+That is worth recording for two reasons. The catalog keyed locations by
+`location_id`, which is *derived from* the path -- so a change in the derivation
+produced a second entry for one physical place. Keying on the natural key
+`(machine_id, path)` is the fix, and the general rule is that a derived value is
+never the identity of the thing it was derived from. And the failure was latent:
+nothing exercised a re-ingest across an identity change, so it surfaced only when
+a rebuild was required, which is exactly when it was most expensive. Both halves
+now have regression tests that reproduce the original `IntegrityError`.
+
+#### 13.4.13 The Reporting Facility
+
+**`src/codess/reporting/` implements [Report](Report.md).** Six modules with a
+strict dependency direction: `clock`, `buffer`, and `codes` are leaves importing
+only the standard library, which is what lets `fileio` and the adapters report
+without a cycle. A test asserts that boundary rather than trusting it.
+
+Gates G1 to G5 are met. G3 was verified the way Report 12.2 specifies -- against
+a real ingest rather than a fixture -- and the progress output is unchanged with
+`ProgressTrace` reduced to a shim over the event contract. G5 holds for scan and
+ingest: the discovery diagnostics reach stderr and stdout carries only the
+requested result, which a test asserts directly.
+
+**One measured figure is worse than Report 3 predicted, and the reason is
+structural.** R1 asks that a disabled site cost no more than a bare call:
+
+| Site | Measured | Report 3 |
+|---|---|---|
+| No sink attached | 76 ns | ~16 ns |
+| Sink attached, below `MIN_LEVEL` | 86 ns | ~14 ns |
+| Enabled and buffered | 618 ns | — |
+| `count(slot)` | 50 ns | 66 ns |
+| Compile-gated site | 16 ns | 0 ns |
+
+`**fields` packs a dict before the function body runs -- ~43 ns for two fields --
+so no gate *inside* the function can precede it, and Report's estimate assumed a
+bare call with no keyword arguments. Three things follow. The cost is still 16x
+better than the 1,245 ns it replaces, so R1's intent holds where its number does
+not. A per-record site inside a decode loop should take the compile-time gate,
+which is what R2 exists for and what the 16 ns measures. And a positional
+flat-tuple signature would recover the difference at the cost of every call site
+spelling its own tuple, which was rejected: a keyword call is what makes these
+sites readable, and the sites that cannot afford 76 ns are the ones R2 covers.
+
+**The privacy profiles work, and `shared` promises less than it appears to.**
+Measured on a real ingest, `strict` reduces every path to a root token and
+`shared` renders paths root-relative -- but a Claude source under `shared` still
+reads `-Users-<user>-Work-<group>-<project>/<uuid>.jsonl`, because the vendor
+encodes the absolute path into a directory *name* and the slug is therefore one
+path segment. Keeping the final two segments keeps it whole. The two-segment rule
+is retained because the alternative is the textual pattern-matching Report 15.4
+rejects for missing every naming convention it was not written against; `strict`
+is the profile that closes it, and a test pins both halves so the limit is
+recorded rather than assumed.
+
+#### 13.4.14 Bounded Discovery Traversal
+
+**W62 and W61 landed before the measurement they were sequenced behind**, and the
+sequence was wrong rather than the work early. Both bound *unbounded* work rather
+than optimizing measured work, so what they needed was a default that does not
+truncate an ordinary tree -- not a workload defining "too slow".
+
+`discover_git_roots` in `review_project` is the traversal, not `walk_sessions`:
+the latter reads vendor indexes, while the former is the `os.walk` over an
+operator's work root. It had a depth limit and no bound on the work itself.
+
+**A partial result is returned and marked, never discarded.** A scan that
+examined 90% of a tree found 90% of the Projects. Measured on the development
+machine's real work root: 727 directories traversed against a 200,000 default, so
+the budget bounds a pathological input rather than truncating an ordinary one, and
+a deliberate 500-directory bound stopped at 501, reported
+`stopped_reason=directory_budget`, and still returned 159 Projects.
+
+**Crossing a filesystem boundary is reported, not refused.** `--same-filesystem`
+refuses instead, and the default continues, because the common case -- a Project
+on an external disk -- is one a refusal would break. The device test costs no
+extra syscall: `os.walk` already stats each directory.
+
 ### 13.5 Mechanical Enforcement
 
 **Status: Postponed.** The test layout matches the intended validation
@@ -5455,8 +5582,6 @@ active list, where they read as work someone intends to start.
 | W07 | High | Planned | Bound ancillary reads that can encounter large source or repository content. | Persisted tool output, worktree fingerprinting, and growing manifests stream or reject by explicit policy without first materializing the complete body. |
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. | Small correctness and representative scale cases report timing, query plans, rows, memory, and stable result identities. |
 | W09 | High | Planned | Confirm selective Cursor work remains independent of unrelated shared-database content. **Not in progress despite an earlier WIP label**: nothing is part-done, and the question is unanswerable until W08 establishes what "bounded" means for a measured workload. Sequence after W08. | Selection, fingerprinting, decode, and query remain bounded as unrelated Cursor content grows. |
-| W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES` so discovery, refresh, review, Project handling, and the command modules stop re-deriving partial vendor views from bare keys (3.5.5). The vendor table describes vendors; adapters interpret them, and decode behavior must not migrate into it. Do not name it a registry -- that term already denotes the central `~/.codess` store. | One vendor description supplies keys, display names, identity fields, paths, and store filenames; no module repeats the vendor key set or a key-to-name mapping; adding a vendor touches the vendor table and its adapter, not the command layer. |
-| W38 | Normal | Planned | Give `query_cmd` one tabular row emitter. The module has **110 `print` calls** and **20 sites that assemble a row by hand**, each joining sanitized fields with tabs or interpolating several into an f-string, so every site independently re-decides the separator, the column order, and which fields need sanitizing. Adding a field to one report reaches the others only if someone edits each. **Counts remeasured**: the print calls rose from 105 to 110 while the hand-assembled rows fell from 27 to 20. The rise is drift of exactly the kind the item describes -- a field added to one report reaches the others only if someone edits each. The fall is a measurement correction: 27 came from counting *lines* carrying a tab, which double-counts one multi-line f-string as several rows, where 20 counts `print` statements that emit a tab-separated row. The second is the number of sites an emitter would replace. This surfaced from a call-count review: `sanitize_tabular` is called 44 times in this one file against 1 elsewhere, and the concentration measures the repetition *around* the helper rather than the helper itself, which is correct at five lines. A single emitter taking fields and a format would own the joining and reduce the count to one call inside it, without removing a capability. Pairs with **W18**: the reporting contract needs one place where a row becomes output, and building the emitter first gives W18 something to attach a format to. | One function emits a tabular row; separator and sanitizing are decided once; a new output format is added in one place; `query_cmd` prints through it rather than around it. |
 | W35 | Low | Postponed | Resolve the validation-fixture inventory. Ten of the sixteen released manifest entries are fixtures; two are read by tests, by direct path rather than through the manifest, and the remaining eight are referenced by nothing but the manifest itself. They therefore cannot fail a test, because no test reads them. W03 removed them from the write gate, so they no longer gate anything a store does, which is why this is Low rather than Critical: it is now a question about what the released set should contain, not about whether stores can be written. Either wire each fixture into a test that reads it through the manifest, or remove it from the released set; carrying a released file no consumer reads is a claim the repository cannot check. | Every entry in the released manifest has a named consumer, or is removed; a test fails if an entry acquires none. |
 
 ### 14.3 Next Functional Work
@@ -5468,10 +5593,6 @@ active list, where they read as work someone intends to start.
 | W16 | Normal | TODO | Evaluate, design, and plan the external investigation interfaces described in Section 9.7; this backlog item does not authorize implementation. | A written decision maps existing capabilities and gaps, selects or rejects data and code integration paths, specifies any proposed contracts, and defines staged work with licensing, privacy, security, and validation criteria. |
 | W17 | Normal | **Deferred to a stable baseline** | Expand cross-Project analysis inputs. Cross-Project search is an accepted advanced feature set rather than a hypothetical, so this is no longer waiting for a requester -- it is waiting for the baseline it would be specified against. Reopen when Baseline 2 is met, so the entities, fields, and grain are chosen against a decode that is enforced (W04) and results that state what they missed, rather than against a surface still changing underneath them. | Baseline 2 is met; a consumer then identifies entities, fields, selection, transformation, and output checks. |
 | W18 | Normal | Planned | Implement and transition to the structured operational-reporting subsystem defined in Section 9.6.1, with the counter, benchmark, summary, and permanence/immediacy scope in 9.6.2. | One event contract and its renderers govern status, progress, warnings, counters, timings, summaries, and command-boundary errors; a tight call site pays an integer add rather than a constructed event; immediate and durable sinks are separate and `mapping_diagnostics` stays outside the facility; stdout results remain clean, retained events remain bounded, and all command families pass channel, privacy, and failure-path tests. |
-| W21 | Normal | Planned | Route the `walk_sessions` inline `debug` print statements through the reporting contract W18 defines, rather than the module-local diagnostics dictionary. Starts after W19's extraction and W18's contract; excluded from W19 so the extraction stays behavior-preserving (13.4.7). | The statements emit through the shared contract with tests asserting channel and content; no direct `print` for operational status remains in the module. |
-| W63 | Normal | **Survey landed; reporting remains** | **Assess the vendor container directories for evidence Codess does not read.** **Done**: the survey is recorded below and `codex_source.unrolled_history_sessions` measures the one gap, returning counts and identifiers with no prompt text. **Remaining**: route that measurement into the coverage report, so the figure appears beside the other loss counts rather than only from a function call. Codess reads one subtree per vendor -- `~/.claude/projects`, `~/.codex/sessions` (plus `archived_sessions`, already covered), and Cursor's `globalStorage` and `workspaceStorage`. Each container holds more, and a survey of what else is there found one real gap and several correct exclusions. **The gap, and it is smaller than first measured**: `~/.codex/history.jsonl` records human prompts keyed by `session_id`, 2,671 prompts across 19 Sessions on the development machine. **Eighteen have a rollout and one does not**, carrying 2 prompts. A first count said three, having read only the active tree; two of those had archived rollouts, which is the measurement error worth recording -- the archive is a rollout location, not a different Session identity (6.3). **Decided: report, do not admit.** `codex_source.unrolled_history_sessions` measures it and returns counts and identifiers with no prompt text. Admitting a history-only Session would mean a Session with prompts and no Model Turns, which changes what a Session is and is a mapping decision under 6.5; stating that evidence exists which Codess cannot decode is a coverage statement, and is what W47's record-level diagnostics are for. **Remaining**: route the measurement into the coverage report, so the count appears beside the other loss figures rather than only from a function call. **Correctly not read, and worth recording so the question is not reopened**: Cursor's `History/` (36 MB) is VS Code's file-undo feature, storing editor snapshots of file contents rather than Session records; `~/.codex/logs_2.sqlite` (85 MB) and `log/` are client diagnostics; `plugins/`, `cache/`, `computer-use/`, and `vendor_imports/` are program state. None is a Session record, and reading any would be the alternate-decode-path 3.3 forbids. **Bound the assessment**: this is a survey of what a vendor retains, not a licence to read a container. Any addition needs the evidence audit 6.5 requires -- shape, field presence, and a mapping decision -- before an adapter touches it. | Each vendor container is surveyed once and the result recorded; a retained file that is not a Session record is listed with what it is, so the question is settled rather than re-asked; a history-only Session is either admitted or diagnosed, not silently absent. |
-| W61 | Normal | Planned | **Discovery crosses filesystem boundaries without saying so.** `walk_sessions` never inspects `st_dev`, so a network mount, an external volume, or a container bind-mount inside the work root is walked like any other directory. That is usually wanted -- a Project on an external disk is still a Project -- and is badly behaved when the mount is remote: a stat-per-directory traversal over NFS or SMB turns a seconds-long scan into a minutes-long one, and an unreachable mount blocks on I/O with no timeout (W62). It is also a disclosure surface, since a scan of a shared mount reads paths belonging to other users. **Proposal**: record the device of the work root, and on crossing to a different one emit a diagnostic naming the path and continue by default; `--same-filesystem` refuses instead. Reporting first rather than refusing first, because the common case -- an external disk holding real Projects -- is one a refusal would break. | A scan states when it left the work root's filesystem; an operator can bound it to one device; a remote mount is a reported cost rather than an unexplained delay. |
-| W62 | Normal | Planned | **Traversal has no time or size budget.** `walk_sessions` takes a work root and a recency window and no bound on the work itself: no maximum directory count, no deadline, no progress-based abort. On a large or slow tree -- a network mount (W61), a home directory with many nested checkouts -- a scan runs until it finishes, and the operator's only signal is that it has not returned. Operations 10.5.2 recommends a quick probe before a full scan precisely because the full scan is unbounded, which is a documentation workaround for a missing control. **Proposal**: a directory-count budget and a wall-clock deadline, both configurable, with the partial result returned and marked incomplete rather than discarded -- a scan that examined 90% of a tree has found 90% of the Projects, and throwing that away to report nothing is the worse failure. Pairs with W18: "examined N directories, stopped at the budget" is an operational event, and the budget is the kind of resource bound 10.2 already requires elsewhere. | A scan states its budget and whether it was reached; a partial scan reports what it found and that it is partial; no traversal runs unbounded. |
 
 ### 14.4 Secondary Maintenance
 
@@ -5700,13 +5821,16 @@ Seventeen open items in four batches. A batch is work that should land as one
 change because its parts share a cost, a rebuild, or a call site -- not merely
 because it is similar.
 
-#### 14.6.1 Batch A -- Format 6, one regeneration
+#### 14.6.1 Batch A -- Format 6, one regeneration -- **Complete**
 
-**W50, W51, W40's column drop, W48, W24.** Each changes what a store records,
-so each alone owes a full rebuild of every Project; together they cost one.
-W24 is not itself a wire change, but it consolidates the vendor descriptions
-W50 and W51 rename, so landing it inside the batch avoids renaming the same
-strings twice.
+**W40's column drop, W48, W50's `level` rename, W24 landed as CoSchema format
+6**, rebuilt across 22 Projects. `FORMAT_VERSION` is 6 and a format-5 store is
+refused with the rebuild command named. What each changed is recorded in 13.4.12.
+
+**W51 remains open**: its `source_system_id`, `sessions.source`, and plurality
+proposals were not part of this batch and now owe their own rebuild. That is the
+cost the batch existed to avoid, and it was accepted deliberately -- the
+measured, uncontested removals were ready and W51's naming questions were not.
 
 | Order within the batch | Why |
 |---|---|
@@ -5723,13 +5847,13 @@ Everything else in this list is cheaper, which is the argument for doing it
 when a rebuild is already acceptable rather than fitting it between smaller
 work.
 
-#### 14.6.2 Batch B -- Reporting, one contract
+#### 14.6.2 Batch B -- Reporting, one contract -- **Complete**
 
-**W18 → W38 → W21**, in that order and not otherwise. W18 defines the event
-contract; W38's row emitter is where a row becomes output and attaches to it;
-W21 routes `walk_sessions`'s prints into it. 13.4.7 records why W21 must not
-precede W18: converting the statements first moves them into a structure W18
-then replaces.
+**W18 → W38 → W21 landed in that order.** `src/codess/reporting/` implements the
+event contract; `sanitize.tabular_row` is the single row emitter; the
+`walk_sessions` diagnostics emit as `scan.source.*` and `scan.project.metrics`
+events. Gates G1 to G5 are met and verified against real ingests and scans;
+13.4.13 records what was measured and the one figure Report over-predicted.
 
 **Design is complete** -- [Report](Report.md) specifies measured costs, event
 structure, gates, time sources, buffering, backends, profiles, the error
@@ -5747,14 +5871,16 @@ boundary rather than creating one.
 
 #### 14.6.3 Batch C -- Measurement, then bounding
 
-**W08 → W07 → W09 → W62 → W61.** W08 establishes repeatable workloads, and
-everything after it is a bound that needs one: W07 bounds ancillary reads,
-W09 confirms Cursor selectivity, W62 gives traversal a budget, W61 reports
-crossing a filesystem boundary. Bounding before measuring means bounding by
-argument.
+**W08 → W07 → W09** remain. **W62 and W61 have landed** ahead of the
+measurement they were sequenced behind, which the stated order did not
+anticipate and which turned out to be right: both are bounds on *unbounded*
+work rather than optimizations of measured work, so they needed a default that
+does not truncate an ordinary tree rather than a workload that says what "too
+slow" means. The default is 200,000 directories against a measured real work
+root of 727. 13.4.14 records it.
 
-**W62 before W61** because a traversal budget bounds the cost that crossing a
-slow filesystem exposes; the reverse order reports a problem it cannot limit.
+W08 still gates W07 and W09: bounding an ancillary read without a repeatable
+workload means choosing the limit by argument.
 
 #### 14.6.4 Batch D -- Independent, any order
 
@@ -5765,18 +5891,20 @@ is `observe`, and the previous spelling still parses (13.4.4).
 |---|---|---|
 | **W05** | High | Needs three to five named investigations and a reader, not code. Cheapest of the four and the only one that validates the query surface against questions it was not built against |
 | **W04** | High | Precedes coverage reporting: a report against unenforced profiles attests to nothing. Baseline 2's substance |
-| **W63** remainder | Normal | Route the history measurement into the coverage report |
 | **W14** | Normal | Small; require or mark Project identity for direct library writes |
 
 #### 14.6.5 Recommended Order
 
+Batches A and B are complete, and Batch C's two bounding items with them. What
+remains, in order:
+
 | Rank | What | Why here |
 |---|---|---|
-| 1 | **W05** | Cheapest, and the only item whose output is evidence about whether the query surface answers real questions. Everything else improves machinery; this checks the product |
-| 2 | **Batch A** | Its gate is clear and the guard is proved. A rebuild is owed anyway, and deferring it means the next wire change owes a second one |
-| 3 | **Batch B** | The largest, and the one whose absence a user feels rather than a maintainer. Held below A because a reporting contract should describe a schema that is not about to change |
-| 4 | **W04** | Structural, and coverage reporting waits on it |
-| 5 | **Batch C** | Deferred deliberately: no measured workload is failing, and W08 exists to define what "too slow" means |
+| 1 | **W05** | Unchanged and now the top of the list: the only item whose output is evidence about whether the query surface answers real questions. Everything else improves machinery; this checks the product. Cheaper than when written -- format-6 stores exist, rebuilt and audited |
+| 2 | **W04** | Structural, and coverage reporting states loss against exactly the profiles it enforces. Baseline 2's substance |
+| 3 | **W51** | The naming resolutions Batch A did not carry. Owes a rebuild, so it wants a second wire batch rather than landing alone |
+| 4 | **W08 → W07 → W09** | What is left of Batch C. W08 first: bounding without a workload is bounding by argument |
+| 5 | **Report steps 6-8** | Route query and admin through the contract, add the `file` and `bridge` sinks, then delete the `ProgressTrace` shim. G5 is met for scan and ingest; the remaining families are ordinary work |
 
 **Not scheduled**: W13 (TODO; its checks are cheaper after the items that
 would otherwise fix their targets in place), W16 (Postponed, no requester),

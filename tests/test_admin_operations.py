@@ -33,6 +33,7 @@ from codess.project_catalog import (
 )
 from codess.raw_store import RawStore
 from codess.review_project import (
+    ScanBudget,
     discover_git_roots,
     observe_git,
     recommend,
@@ -272,6 +273,141 @@ def test_explicit_artifact_named_git_root_can_still_be_inspected(tmp_path):
 
 def test_git_discovery_never_walks_a_broad_system_root():
     assert discover_git_roots([Path("/")], max_depth=20) == []
+
+
+class TestScanIsBounded:
+    """A traversal states its budget and whether it reached it (CoPlan W62).
+
+    Before this, `discover_git_roots` had a depth limit and no bound on the work:
+    on a large or slow tree it ran until it finished and the operator's only
+    signal was that it had not returned.
+    """
+
+    def _tree(self, root, width):
+        for index in range(width):
+            (root / f"d{index}" / "nested").mkdir(parents=True)
+        return root
+
+    def test_a_scan_within_its_budget_is_not_partial(self, tmp_path):
+        budget = ScanBudget(max_directories=1_000)
+        discover_git_roots([self._tree(tmp_path, 3)], max_depth=5, budget=budget)
+        assert budget.partial is False
+        assert budget.report()["stopped_reason"] is None
+        assert budget.directories > 0
+
+    def test_a_scan_that_reaches_the_budget_says_so(self, tmp_path):
+        budget = ScanBudget(max_directories=2)
+        discover_git_roots([self._tree(tmp_path, 10)], max_depth=5, budget=budget)
+        assert budget.partial is True
+        assert budget.report()["stopped_reason"] == "directory_budget"
+
+    def test_a_partial_scan_returns_what_it_found(self, tmp_path):
+        """A scan that examined 90% of a tree found 90% of the Projects, and
+        discarding that to report nothing is the worse failure."""
+        for index in range(6):
+            (tmp_path / f"repo{index}" / ".git").mkdir(parents=True)
+        budget = ScanBudget(max_directories=3)
+        found = discover_git_roots([tmp_path], max_depth=3, budget=budget)
+        assert budget.partial is True
+        assert found, "a partial scan must report what it found"
+
+    def test_a_deadline_stops_the_scan(self, tmp_path):
+        """Zero seconds is already past, so the first visit trips it."""
+        budget = ScanBudget(deadline_seconds=0)
+        budget.deadline_seconds = 1
+        budget.started -= 3600
+        discover_git_roots([self._tree(tmp_path, 3)], max_depth=5, budget=budget)
+        assert budget.report()["stopped_reason"] == "deadline"
+
+    def test_a_zero_budget_disables_the_bound(self, tmp_path):
+        budget = ScanBudget(max_directories=0, deadline_seconds=0)
+        discover_git_roots([self._tree(tmp_path, 4)], max_depth=5, budget=budget)
+        assert budget.partial is False
+
+    def test_the_report_names_the_bounds_it_ran_under(self, tmp_path):
+        budget = ScanBudget(max_directories=50, deadline_seconds=30)
+        discover_git_roots([tmp_path], max_depth=2, budget=budget)
+        report = budget.report()
+        assert report["max_directories"] == 50
+        assert report["deadline_seconds"] == 30
+        assert report["elapsed_seconds"] >= 0
+
+    def test_no_budget_keeps_the_previous_behaviour(self, tmp_path):
+        """Every existing caller passed depth alone and must be unaffected."""
+        (tmp_path / "repo" / ".git").mkdir(parents=True)
+        assert discover_git_roots([tmp_path], max_depth=3) == [
+            (tmp_path / "repo").resolve()
+        ]
+
+    def test_a_candidate_refresh_reports_its_scan(self, tmp_path):
+        report = refresh_candidates(
+            [tmp_path], discover_git=True, include_git=False, max_depth=2,
+        )
+        assert "scan" in report
+        assert report["scan"]["partial"] is False
+
+
+class TestFilesystemCrossingIsReported:
+    """`os.walk` crosses a device boundary without saying so (CoPlan W61).
+
+    A network mount inside the work root turns a seconds-long scan into a
+    minutes-long one with no explanation, and is a disclosure surface besides.
+    Reporting rather than refusing, because the common case -- an external disk
+    holding real Projects -- is one a refusal would break.
+    """
+
+    def test_an_ordinary_tree_reports_no_crossing(self, tmp_path):
+        (tmp_path / "a").mkdir()
+        budget = ScanBudget(max_directories=100)
+        discover_git_roots([tmp_path], max_depth=3, budget=budget)
+        assert budget.report()["filesystem_crossings"] == []
+
+    def test_a_crossing_is_recorded_and_traversed_by_default(
+        self, tmp_path, monkeypatch,
+    ):
+        """The default continues: a Project on an external disk is a Project."""
+        (tmp_path / "mounted" / "repo" / ".git").mkdir(parents=True)
+        real_stat = Path.stat
+
+        def fake_stat(self, *args, **kwargs):
+            result = real_stat(self, *args, **kwargs)
+            if "mounted" in str(self):
+                class Shifted:
+                    st_dev = result.st_dev + 1
+                    st_mode = result.st_mode
+                return Shifted()
+            return result
+
+        monkeypatch.setattr(Path, "stat", fake_stat)
+        budget = ScanBudget(max_directories=100)
+        found = discover_git_roots([tmp_path], max_depth=4, budget=budget)
+        crossings = budget.report()["filesystem_crossings"]
+        assert crossings, "the crossing must be reported"
+        assert any("mounted" in item for item in crossings)
+        assert found, "and the tree is still traversed"
+
+    def test_same_filesystem_refuses_to_descend(self, tmp_path, monkeypatch):
+        (tmp_path / "mounted" / "repo" / ".git").mkdir(parents=True)
+        (tmp_path / "local" / "repo" / ".git").mkdir(parents=True)
+        real_stat = Path.stat
+
+        def fake_stat(self, *args, **kwargs):
+            result = real_stat(self, *args, **kwargs)
+            if "mounted" in str(self):
+                class Shifted:
+                    st_dev = result.st_dev + 1
+                    st_mode = result.st_mode
+                return Shifted()
+            return result
+
+        monkeypatch.setattr(Path, "stat", fake_stat)
+        budget = ScanBudget(max_directories=100)
+        found = discover_git_roots(
+            [tmp_path], max_depth=4, budget=budget, same_filesystem=True,
+        )
+        names = {path.name for path in found}
+        assert "repo" in names, "the local repository is still found"
+        assert not any("mounted" in str(path) for path in found)
 
 
 def test_candidate_policy_rejects_unknown_or_mistyped_fields():

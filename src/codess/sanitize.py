@@ -39,6 +39,47 @@ def sanitize_tabular(value) -> str:
     return sanitize_text(str(value)).replace("\t", " ").replace("\n", " ")
 
 
+TABULAR_SEPARATOR = "\t"
+"""One separator for every tabular row Codess emits.
+
+Tab because a value is sanitized to contain none, so a row is unambiguously
+splittable by a consumer without quoting -- which is what makes the output
+pipeable into `cut` or `awk`.
+"""
+
+
+def tabular_row(*values, separator: str = TABULAR_SEPARATOR) -> str:
+    """Render one tabular row: sanitize every field, join once.
+
+    `query_cmd` assembled a row by hand at twenty sites, each joining sanitized
+    fields with a tab or interpolating several into an f-string -- so every site
+    independently re-decided the separator, the column order, and which fields
+    needed sanitizing, and adding a field to one report reached the others only
+    if someone edited each (CoPlan W38).
+
+    The sanitizing belongs here rather than at the call site for the same reason
+    the separator does: a field that reaches output unsanitized can carry a tab
+    or a newline and split one row into two, which is a correctness property of
+    the format rather than a formatting preference.
+    """
+    return separator.join(sanitize_tabular(value) for value in values)
+
+
+def tabular_fields(*pairs, separator: str = " ") -> str:
+    """Render `key=value` pairs, dropping the pairs whose value is absent.
+
+    The other shape `query_cmd` repeats: a summary line of labelled values where
+    an absent one is omitted rather than printed empty. Sanitizing applies for
+    the same reason, and dropping `None` here means a call site does not build a
+    conditional f-string per field.
+    """
+    return separator.join(
+        f"{key}={sanitize_tabular(value)}"
+        for key, value in pairs
+        if value is not None
+    )
+
+
 def sanitize_value(value, redact_enabled: bool = False):
     """Recursively sanitize strings in JSON-like tool input structures."""
     if isinstance(value, str):

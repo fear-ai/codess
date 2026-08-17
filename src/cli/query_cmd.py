@@ -59,6 +59,7 @@ from codess.sanitize import (
     sanitize_for_display,
     sanitize_tabular,
     sanitize_text,
+    tabular_row,
 )
 from codess.schema_contract import SchemaContractError
 from codess.session_names import alias_index
@@ -586,7 +587,7 @@ def _coverage(scope: QueryScope) -> int:
     for store in scope.stores:
         report = store_coverage(store["conn"])
         coverage = report["coverage"]
-        print(f"{store['path'].name}\t{store['project_path']}")
+        print(tabular_row(store["path"].name, store["project_path"]))
         ratio = coverage["classified_ratio"]
         print(
             f"  events={coverage['admitted_events']} "
@@ -601,10 +602,21 @@ def _coverage(scope: QueryScope) -> int:
             print(
                 f"  not mapped: source={unmapped['source']} "
                 f"record={unmapped['record']}{qualifier} "
-                f"| fields incomplete={losses['by_level'].get('field', 0)}"
+                f"| fields incomplete={losses['by_granularity'].get('field', 0)}"
             )
             for reason, count in list(losses["by_reason"].items())[:5]:
-                print(f"    {reason}\t{count}")
+                print("    " + tabular_row(reason, count))
+        # Evidence no adapter admits, measured from the vendor container rather
+        # than the store: a store cannot report what was never written to it, so
+        # without this the report's zero was true by construction (W63).
+        undecoded = report["undecoded"]
+        if undecoded.get("available") and undecoded["undecodable_sessions"]:
+            print(
+                f"  not decoded: {undecoded['container']} "
+                f"sessions={undecoded['undecodable_sessions']} "
+                f"prompts={undecoded['undecodable_prompts']} "
+                f"({undecoded['disposition']})"
+            )
         shapes = report["shapes"]["by_source_record_type"]
         named = ", ".join(
             f"{name}={count}" for name, count in list(shapes.items())[:6]
@@ -1050,12 +1062,16 @@ def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
     rows = mapping_diagnostics(scope, limit)
     if not rows:
         return 0
-    print("project_path\tsession_id\tevent_id\tlevel\tseverity\treason_code\tsource_field\tsource_value\tmapping_rule\tdetail")
+    # Header and rows read one key list, so a renamed column cannot leave the
+    # header naming one that no longer exists -- which is what `level` did after
+    # it became `granularity` (W38's drift, seen in its own output).
+    columns = (
+        "project_path", "session_id", "event_id", "granularity", "severity",
+        "reason_code", "source_field", "source_value", "mapping_rule", "detail",
+    )
+    print(tabular_row(*columns))
     for row in rows:
-        print("\t".join(sanitize_tabular(row.get(key)) for key in (
-            "project_path", "session_id", "event_id", "level", "severity", "reason_code",
-            "source_field", "source_value", "mapping_rule", "detail",
-        )))
+        print(tabular_row(*(row.get(key) for key in columns)))
     return 0
 
 
@@ -1066,12 +1082,11 @@ def _artifacts(scope: QueryScope, limit: int | None = None) -> int:
         return 0
     print("project_path\tartifact_kind\tlocator\tsources\tsource_count\toperations\tsession_count\tevidence_count\tproject_correlations")
     for row in rows:
-        print(
-            f"{sanitize_tabular(row['project_path'])}\t{sanitize_tabular(row['kind'])}\t"
-            f"{sanitize_tabular(row['locator'])}\t{sanitize_tabular(row['sources'])}\t"
-            f"{row['source_count']}\t{sanitize_tabular(row['operations'])}\t"
-            f"{row['session_count']}\t{row['evidence']}\t{sanitize_tabular(row['correlations'])}"
-        )
+        print(tabular_row(
+            row["project_path"], row["kind"], row["locator"], row["sources"],
+            row["source_count"], row["operations"], row["session_count"],
+            row["evidence"], row["correlations"],
+        ))
     return 0
 
 
@@ -1240,26 +1255,21 @@ def _sessions(scope: QueryScope, with_id: bool, limit: int | None = None) -> int
         for i, row in enumerate(rows, 1):
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
-            print(
-                f"{sanitize_tabular(row['id'])}\t{row['session_entity_id']}\t{i}\t"
-                f"{sanitize_tabular(row['source'])}\t"
-                f"{sanitize_tabular(row['name'])}\t"
-                f"{sanitize_tabular(row['release'])}\t{details}\t"
-                f"{row['started_at']}\t"
-                f"{row['ended_at']}\t{sanitize_tabular(project)}"
-            )
+            print(tabular_row(
+                row["id"], row["session_entity_id"], i, row["source"],
+                row["name"], row["release"], details, row["started_at"],
+                row["ended_at"], project,
+            ))
     else:
         print("id\tsession_entity_id\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for row in rows:
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
-            print(
-                f"{sanitize_tabular(row['id'])}\t{row['session_entity_id']}\t"
-                f"{sanitize_tabular(row['source'])}\t"
-                f"{sanitize_tabular(row['name'])}\t"
-                f"{sanitize_tabular(row['release'])}\t{details}\t"
-                f"{row['started_at']}\t{row['ended_at']}\t{sanitize_tabular(project)}"
-            )
+            print(tabular_row(
+                row["id"], row["session_entity_id"], row["source"], row["name"],
+                row["release"], details, row["started_at"], row["ended_at"],
+                project,
+            ))
     return 0
 
 
@@ -1299,14 +1309,11 @@ def _lineage(scope: QueryScope, limit: int | None = None) -> int:
         "status\toutcome\tresult_len"
     )
     for row in rows:
-        print(
-            f"{sanitize_tabular(row['project_path'])}\t"
-            f"{sanitize_tabular(row['session_id'])}\t{row['timestamp']}\t"
-            f"{sanitize_tabular(row['tool_name'])}\t"
-            f"{sanitize_tabular(row['lineage_id'])}\t"
-            f"{sanitize_tabular(row['status'])}\t{row['outcome']}\t"
-            f"{row['result_len']}"
-        )
+        print(tabular_row(
+            row["project_path"], row["session_id"], row["timestamp"],
+            row["tool_name"], row["lineage_id"], row["status"], row["outcome"],
+            row["result_len"],
+        ))
     return 0
 
 
@@ -1319,15 +1326,15 @@ def _task_review(scope: QueryScope) -> int:
 
     print("=== Tool counts ===")
     for name, cnt in sorted(all_tools.items(), key=lambda x: -x[1]):
-        print(f"  {sanitize_tabular(name)}\t{cnt}")
+        print("  " + tabular_row(name, cnt))
 
     print("\n=== Task tools ===")
     for name, cnt in sorted(task_tools.items(), key=lambda x: -x[1]):
-        print(f"  {sanitize_tabular(name)}\t{cnt}")
+        print("  " + tabular_row(name, cnt))
 
     print("\n=== Web* tools ===")
     for name, cnt in sorted(web_tools.items(), key=lambda x: -x[1]):
-        print(f"  {sanitize_tabular(name)}\t{cnt}")
+        print("  " + tabular_row(name, cnt))
 
     # Task/Agent invocations: description, prompt, outcome
     task_calls = task_invocations(scope)
@@ -1367,7 +1374,7 @@ def _task_review(scope: QueryScope) -> int:
                 outcomes["unknown"] = outcomes.get("unknown", 0) + 1
         print("\n=== Task tool result outcomes (inferred from content) ===")
         for k, v in sorted(outcomes.items(), key=lambda x: -x[1]):
-            print(f"  {k}\t{v}")
+            print("  " + tabular_row(k, v))
 
     return 0
 
@@ -1379,11 +1386,10 @@ def _permissions(scope: QueryScope, limit: int | None = None) -> int:
         return 0
     print("session_id\tproject_path\ttimestamp\ttool_name")
     for row in rows:
-        print(
-            f"{sanitize_tabular(row['session_id'])}\t"
-            f"{sanitize_tabular(row['project_path'])}\t"
-            f"{row['event_at']}\t{sanitize_tabular(row['tool_name'])}"
-        )
+        print(tabular_row(
+            row["session_id"], row["project_path"], row["event_at"],
+            row["tool_name"],
+        ))
     return 0
 
 
@@ -1408,11 +1414,8 @@ def _audit(scope: QueryScope, limit: int | None = None) -> int:
             )
         elif metadata.get("status") is not None:
             detail = f"status={metadata['status']}"
-        print(
-            f"{sanitize_tabular(row['project_path'])}\t"
-            f"{sanitize_tabular(row['session_id'])}\t"
-            f"{sanitize_tabular(row['source'])}\t{row['event_at']}\t"
-            f"{row['subtype']}\t{sanitize_tabular(row['tool_name'])}\t"
-            f"{sanitize_tabular(detail)}"
-        )
+        print(tabular_row(
+            row["project_path"], row["session_id"], row["source"],
+            row["event_at"], row["subtype"], row["tool_name"], detail,
+        ))
     return 0

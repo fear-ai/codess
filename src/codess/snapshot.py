@@ -26,9 +26,9 @@ from codess.config import (
 from codess.fileio import (
     HashMismatchError,
     hash_file,
+    open_readonly,
     open_writable,
     quote_identifier,
-    open_readonly,
     read_hash,
     verify_hash,
 )

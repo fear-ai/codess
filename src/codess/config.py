@@ -129,6 +129,13 @@ _IS_ENV_TABLE = (
     ("CODESS_RESOURCE_POLICY", env_str, None),
     ("CODESS_REGISTRY", env_expanded_path, str(Path.home() / ".codess")),
     ("CODESS_STOP", env_bool, "0"),
+    # --- Discovery traversal bounds (W62) ---
+    # A scan of an unknown tree has to be able to stop. 200,000 directories
+    # is far above any real work root -- the development machine's is under
+    # 30,000 -- so the budget bounds a pathological input rather than
+    # truncating an ordinary one, and 0 disables it.
+    ("CODESS_MAX_SCAN_DIRECTORIES", env_int, 200_000),
+    ("CODESS_SCAN_DEADLINE_SECONDS", env_int, 900),
     ("CODESS_NO_HASH", env_bool, "0"),
 )
 _IS_ENV_VALUES = {key: reader(key, default) for key, reader, default in _IS_ENV_TABLE}
@@ -210,6 +217,89 @@ STORE_DB = "sessions.db"
 STORE_DB_CC = "sessions_cc.db"
 STORE_DB_CODEX = "sessions_codex.db"
 STORE_DB_CURSOR = "sessions_cursor.db"
+
+# --- Vendors -----------------------------------------------------------------
+#
+# One description per source system, and the only place the set is written down.
+# Discovery, ingest, publication, refresh, review, and the command layer each
+# used to re-derive a partial view from a bare key: three separate encodings of
+# the same three vendors (an if-chain selecting a store filename, a profile dict
+# keyed by display name, a display-name lookup keyed by CLI token) plus the key
+# tuple `("cc", "codex", "cursor")` written out at a dozen call sites. Adding a
+# vendor meant finding all of them (CoPlan W24).
+#
+# Two keys per vendor is not redundancy: `key` is what an operator types and
+# what names a file, `adapter_key` is what the decoder and the store record.
+# They differ for Claude Code -- `cc` against `Claude` -- and a single key would
+# force either an unfamiliar CLI token or a store value that does not match the
+# adapter's own name.
+#
+# This describes vendors; it does not interpret them. Decode behavior belongs to
+# the adapters, and moving any of it here would make the table a second place
+# where a vendor's records are understood. It is deliberately not called a
+# registry: that term already names the central `~/.codess` store.
+VENDORS: dict[str, dict[str, str]] = {
+    "cc": {
+        "adapter_key": "Claude",
+        "source_system_id": "anthropic.claude-code",
+        "vendor_name": "anthropic",
+        "harness_name": "claude-code",
+        "storage_format": "claude-jsonl",
+        "surface_kind": "cli",
+        "mapping": "claude",
+        "store_db": STORE_DB_CC,
+    },
+    "codex": {
+        "adapter_key": "Codex",
+        "source_system_id": "openai.codex",
+        "vendor_name": "openai",
+        "harness_name": "codex",
+        "storage_format": "codex-jsonl",
+        "surface_kind": "cli",
+        "mapping": "codex",
+        "store_db": STORE_DB_CODEX,
+    },
+    "cursor": {
+        "adapter_key": "Cursor",
+        "source_system_id": "cursor.composer",
+        "vendor_name": "cursor",
+        "harness_name": "cursor",
+        "storage_format": "cursor-sqlite",
+        "surface_kind": "ide",
+        "mapping": "cursor",
+        "store_db": STORE_DB_CURSOR,
+    },
+}
+
+VENDOR_KEYS = tuple(VENDORS)
+"""CLI and filename tokens, in a fixed order so output is deterministic."""
+
+SOURCE_CHOICES = ("all", *VENDOR_KEYS)
+"""argparse `choices` for a `--source` selector that accepts every vendor."""
+
+ADAPTER_KEYS = tuple(v["adapter_key"] for v in VENDORS.values())
+"""Names the adapters and stored rows use, in `VENDOR_KEYS` order."""
+
+VENDOR_KEY_BY_ADAPTER = {v["adapter_key"]: k for k, v in VENDORS.items()}
+"""The reverse direction, for a caller holding a stored `source` value."""
+
+MAPPING_NAMES = frozenset(v["mapping"] for v in VENDORS.values())
+"""Released mapping-profile names, which name the vendor rather than the CLI key."""
+
+
+def vendor(key: str) -> dict[str, str]:
+    """One vendor description, by CLI key or by adapter key.
+
+    Accepting both is what lets a caller stop caring which spelling it holds;
+    the alternative is the key-to-key conversion that was open-coded at the
+    boundary between the command layer and the store.
+    """
+    if key in VENDORS:
+        return VENDORS[key]
+    resolved = VENDOR_KEY_BY_ADAPTER.get(key)
+    if resolved is None:
+        raise KeyError(f"unknown vendor: {key!r}")
+    return VENDORS[resolved]
 STATE_FILE = "ingest_state.json"
 STATS_FILE = "ingested_projects.json"
 LAST_INGEST_REPORT_FILE = "last-ingest-report.json"
@@ -338,6 +428,8 @@ def raw_mode_error(name: str, value: object, *, extra: tuple[str, ...] = ()) -> 
 # Canonicalized here rather than at each reader, so `config.RAW_MODE` is always
 # the stored name and no downstream comparison has to know the alias exists.
 RAW_MODE = canonical_raw_mode(_IS_ENV_VALUES["CODESS_RAW_MODE"])
+MAX_SCAN_DIRECTORIES = _IS_ENV_VALUES["CODESS_MAX_SCAN_DIRECTORIES"]
+SCAN_DEADLINE_SECONDS = _IS_ENV_VALUES["CODESS_SCAN_DEADLINE_SECONDS"]
 STRICT_MAPPING = _IS_ENV_VALUES["CODESS_STRICT_MAPPING"]
 CONTENT_POLICY = _IS_ENV_VALUES["CODESS_CONTENT_POLICY"]
 RESOURCE_POLICY = _IS_ENV_VALUES["CODESS_RESOURCE_POLICY"]
@@ -421,15 +513,17 @@ REDACT_PATTERNS = [
 
 
 def get_store_path(project_path: Path, source: str | None = None) -> Path:
-    """Return path to sessions DB under project. source='Claude'|'Codex'|'Cursor' uses per-vendor DB."""
+    """Path to the per-vendor store under a Project, or the combined one.
+
+    `source` accepts either spelling of a vendor key. An unknown value returns
+    the combined store rather than raising, which is what the if-chain this
+    replaced did and what callers passing `None` rely on.
+    """
     base = project_path / STORE_DIR
-    if source == "Claude":
-        return base / STORE_DB_CC
-    if source == "Codex":
-        return base / STORE_DB_CODEX
-    if source == "Cursor":
-        return base / STORE_DB_CURSOR
-    return base / STORE_DB
+    try:
+        return base / vendor(source)["store_db"] if source else base / STORE_DB
+    except KeyError:
+        return base / STORE_DB
 
 
 def get_state_path(project_path: Path) -> Path:
@@ -508,7 +602,7 @@ def get_project_stores(project_path: Path) -> list[Path]:
     base = project_path / STORE_DIR
     return [
         path for path in (
-            base / STORE_DB_CC, base / STORE_DB_CODEX, base / STORE_DB_CURSOR,
+            base / VENDORS[key]["store_db"] for key in VENDOR_KEYS
         )
         if path.exists()
     ]

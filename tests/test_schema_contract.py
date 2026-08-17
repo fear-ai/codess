@@ -106,7 +106,7 @@ def test_event_field_diagnostics_materialize_scope_and_severity(tmp_path):
             "session_id": "s1", "event_id": "e1",
             "event_type": "user_message", "role": "user",
             "field_diagnostics": [{
-                "diagnostic_level": "field", "level": "info",
+                "granularity": "field", "severity": "info",
                 "reason_code": "field_absent",
                 "source_field": "modelInfo",
             }],
@@ -114,7 +114,7 @@ def test_event_field_diagnostics_materialize_scope_and_severity(tmp_path):
         session_id="s1",
     )
     row = conn.execute(
-        "SELECT level,severity,reason_code,source_field "
+        "SELECT granularity,severity,reason_code,source_field "
         "FROM mapping_diagnostics"
     ).fetchone()
     assert tuple(row) == ("field", "info", "field_absent", "modelInfo")
@@ -394,7 +394,7 @@ def test_unlinked_tool_result_is_preserved_with_diagnostic(tmp_path):
     ).fetchone()
     assert tuple(result) == (None, "orphan")
     diagnostic = conn.execute(
-        "SELECT level, reason_code FROM mapping_diagnostics"
+        "SELECT granularity, reason_code FROM mapping_diagnostics"
     ).fetchone()
     assert tuple(diagnostic) == ("field", "missing_tool_call_id")
     conn.close()

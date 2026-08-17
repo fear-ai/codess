@@ -146,17 +146,43 @@ def _merged_locations(
     rewritten. `path_obsolete` is defaulted rather than assumed false, since
     a retired or missing location is obsolete by definition and older entries
     predate the field.
+
+    **Keyed by `(machine_id, path)`, not by `location_id`.** A location's
+    identity is the physical place, and `location_id` is derived from it -- so
+    keying on the derived value means a change in the derivation produces a
+    second entry for one directory. That happened: the format-5 identity change
+    re-derived every `location_id` from `sha256:` to `id1:`, and a registry
+    written across both carried two entries per location. `project_locations`
+    declares `UNIQUE(machine_id, observed_path)`, so the second insert failed
+    and every re-ingest of an affected Project aborted.
+
+    Deduplicating here rather than at the insert is deliberate: the catalog is
+    the operator-visible record, and leaving a duplicate in it to be filtered on
+    the way into SQL would mean two documents disagreeing about how many
+    locations a Project has.
     """
-    locations = {
-        item.get("location_id"): dict(item)
-        for item in entry.get("locations", [])
-        if isinstance(item, dict) and item.get("location_id")
-    }
-    for location in locations.values():
+    locations: dict[tuple[str | None, str | None], dict[str, Any]] = {}
+    for item in entry.get("locations", []):
+        if not isinstance(item, dict) or not item.get("location_id"):
+            continue
+        location = dict(item)
         location.setdefault(
             "path_obsolete", location.get("state") in {"retired", "missing"}
         )
-    locations[observed_location_id] = {
+        key = (location.get("machine_id"), location.get("path"))
+        existing = locations.get(key)
+        # A later observation of the same place supersedes an earlier one; among
+        # equals prefer the entry whose id matches the current derivation, so
+        # repeated runs converge on one spelling rather than alternating.
+        if existing is None or (
+            str(location.get("observed_at") or ""),
+            location.get("location_id") == observed_location_id,
+        ) >= (
+            str(existing.get("observed_at") or ""),
+            existing.get("location_id") == observed_location_id,
+        ):
+            locations[key] = location
+    locations[(machine_id, resolved_path)] = {
         "location_id": observed_location_id,
         "machine_id": machine_id,
         "path": resolved_path,
@@ -166,6 +192,48 @@ def _merged_locations(
         "platform": platform.system().lower(),
     }
     return sorted(locations.values(), key=lambda item: item["location_id"])
+
+
+def _repointed_bindings(
+    bindings: list[dict[str, Any]], locations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Re-point a binding whose target location no longer exists.
+
+    `workspace_bindings.location_id` is a foreign key into `project_locations`,
+    so a binding naming a location that is not in the catalog makes the Project
+    unwritable -- the insert fails with `FOREIGN KEY constraint failed` partway
+    through and aborts the ingest.
+
+    That is reachable because a location's identity is derived from its path: the
+    format-5 identity change re-derived every `location_id`, and a binding
+    written beforehand still names the previous value. Deduplicating locations by
+    physical place then removes the row it referred to. Resolving by path is what
+    makes the repair correct rather than a guess -- the binding and the location
+    describe the same directory, so the current identity for that path is the
+    answer.
+
+    A binding whose path matches no known location is left as it is. It is
+    dangling either way, and inventing a target would attach a workspace to a
+    directory no evidence connects it to.
+    """
+    by_path = {
+        item.get("path"): item.get("location_id")
+        for item in locations
+        if item.get("path") and item.get("location_id")
+    }
+    live = {item.get("location_id") for item in locations}
+    repointed = []
+    for binding in bindings:
+        target = binding.get("target_location_id")
+        if target in live:
+            repointed.append(binding)
+            continue
+        resolved = by_path.get(binding.get("source_project_path"))
+        if resolved is None:
+            repointed.append(binding)
+            continue
+        repointed.append({**binding, "target_location_id": resolved})
+    return repointed
 
 
 def _apply_source_links(
@@ -294,6 +362,9 @@ def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str,
     )
     entry["workspace_bindings"], entry["path_aliases"] = _apply_source_links(
         entry, project_path, observed_location_id, resolved,
+    )
+    entry["workspace_bindings"] = _repointed_bindings(
+        entry["workspace_bindings"], entry["locations"],
     )
 
     by_id[project_id] = entry

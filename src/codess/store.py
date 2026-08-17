@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import sqlite3
 import uuid
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from codess import __version__
+from codess.config import VENDORS
 from codess.fileio import (
     open_readonly,
     open_writable,
@@ -53,39 +55,27 @@ from codess.schema_contract import (
 )
 from codess.tool_identity import bounded_source_call_id, mcp_namespace
 
-# `harness_name` names the program only. It carried a surface suffix -- `claude-code-cli`,
-# `codex-cli`, `cursor-ide` -- while `surface_kind` names the surface in the next column,
-# so a Desktop or SDK Session was stored as a CLI one by a constant that contradicted the
-# decoded value beside it. The surface is decoded per Session where a vendor states it;
-# the program does not change with it.
+log = logging.getLogger(__name__)
+
+# Derived from `config.VENDORS`, which is the single vendor description (W24).
+# Keyed by adapter key here because that is what a stored `sessions.source`
+# holds and what a decoder passes; `config.VENDOR_KEYS` is the CLI spelling.
+#
+# `harness_name` names the program only. It carried a surface suffix --
+# `claude-code-cli`, `codex-cli`, `cursor-ide` -- while `surface_kind` names the
+# surface in the next column, so a Desktop or SDK Session was stored as a CLI one
+# by a constant that contradicted the decoded value beside it. The surface is
+# decoded per Session where a vendor states it; the program does not change with
+# it.
 SOURCE_PROFILES = {
-    "Claude": {
-        "source_system_id": "anthropic.claude-code",
-        "vendor_name": "anthropic",
-        "product_name": "claude-code",
-        "harness_name": "claude-code",
-        "storage_format": "claude-jsonl",
-        "surface_kind": "cli",
-        "mapping": "claude",
-    },
-    "Codex": {
-        "source_system_id": "openai.codex",
-        "vendor_name": "openai",
-        "product_name": "codex",
-        "harness_name": "codex",
-        "storage_format": "codex-jsonl",
-        "surface_kind": "cli",
-        "mapping": "codex",
-    },
-    "Cursor": {
-        "source_system_id": "cursor.composer",
-        "vendor_name": "cursor",
-        "product_name": "cursor-composer",
-        "harness_name": "cursor",
-        "storage_format": "cursor-sqlite",
-        "surface_kind": "ide",
-        "mapping": "cursor",
-    },
+    description["adapter_key"]: {
+        field: description[field]
+        for field in (
+            "source_system_id", "vendor_name", "harness_name",
+            "storage_format", "surface_kind", "mapping",
+        )
+    }
+    for description in VENDORS.values()
 }
 
 
@@ -107,7 +97,6 @@ def _profile(source: str | None) -> dict[str, str]:
         {
             "source_system_id": "unknown.source-system",
             "vendor_name": "unknown",
-            "product_name": str(source or "unknown").lower(),
             "harness_name": "unknown",
             "storage_format": "unknown",
             "surface_kind": "unknown",
@@ -378,6 +367,20 @@ def sync_project_catalog(
             ),
         ),
     )
+    # Both unique constraints are handled, not just the primary key. A location
+    # is identified by its physical place, and `id` is derived from that place --
+    # so a change in the derivation yields a new `id` for a directory already
+    # recorded, and only the `UNIQUE(machine_id, observed_path)` clause catches
+    # it. Handling `id` alone raised `IntegrityError` mid-ingest and aborted the
+    # Project, which is how the format-5 identity change made every affected
+    # Project unrebuildable. The natural key wins: the place is the identity, so
+    # the row keeps its position and takes the newly derived id.
+    #
+    # Only one conflict is reachable. `identity.location_id` is a pure function
+    # of `(machine_id, path)`, so an `id` collision implies the natural key
+    # collided first and this clause already resolved it; the reverse -- one id
+    # arriving with a different path -- cannot happen while that derivation
+    # holds. If it ever does, the insert should fail rather than pick a winner.
     for location in project.get("locations", []):
         conn.execute(
             """
@@ -385,10 +388,15 @@ def sync_project_catalog(
               id, project_id, machine_id, observed_path, path_obsolete,
               location_kind, state, observed_at, metadata)
             VALUES (?, ?, ?, ?, ?, 'directory', ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET state=excluded.state,
+            ON CONFLICT(machine_id, observed_path) DO UPDATE SET
+              id=excluded.id,
+              project_id=excluded.project_id,
+              state=excluded.state,
               path_obsolete=excluded.path_obsolete,
               metadata=excluded.metadata
-            WHERE project_locations.state IS NOT excluded.state
+            WHERE project_locations.id IS NOT excluded.id
+               OR project_locations.project_id IS NOT excluded.project_id
+               OR project_locations.state IS NOT excluded.state
                OR project_locations.path_obsolete IS NOT excluded.path_obsolete
                OR project_locations.metadata IS NOT excluded.metadata
             """,
@@ -400,7 +408,25 @@ def sync_project_catalog(
                 json.dumps({"platform": location.get("platform")}, separators=(",", ":")),
             ),
         )
+    # A binding names a location by foreign key, and a catalog written under an
+    # earlier identity derivation can name one that no longer exists. The
+    # catalog repairs what it can resolve by path; what remains is skipped with a
+    # diagnostic rather than raising, because a dangling workspace binding is one
+    # unusable annotation and aborting the ingest loses the whole Project's
+    # Sessions over it.
+    known_locations = {
+        str(row[0]) for row in conn.execute(
+            "SELECT id FROM project_locations WHERE project_id=?", (project_id,)
+        )
+    }
     for workspace in project.get("workspace_bindings", []):
+        target = workspace.get("target_location_id")
+        if target is not None and target not in known_locations:
+            log.warning(
+                "skipping workspace binding for %s: location %s is not recorded",
+                workspace.get("workspace_id"), target,
+            )
+            continue
         binding_id = workspace_binding_id(
             project_id, workspace["source_system_id"], workspace["workspace_id"]
         )
@@ -631,11 +657,9 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         source_system_id,
         vendor_session_id,
         session.get("vendor_name") or profile["vendor_name"],
-        session.get("product_name") or profile["product_name"],
         session.get("harness_name") or profile["harness_name"],
         session.get("storage_format") or profile["storage_format"],
         session.get("surface_kind") or profile["surface_kind"],
-        session.get("session_purpose") or "coding",
         session.get("harness_version") or session.get("release"),
         session.get("source_id"),
         project_id,
@@ -660,24 +684,22 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
     conn.execute(
         """
         INSERT INTO sessions(
-          id, session_entity_id, observation_id, source_system_id, vendor_session_id, vendor_name, product_name,
-          harness_name, storage_format, surface_kind, session_purpose,
+          id, session_entity_id, observation_id, source_system_id, vendor_session_id, vendor_name,
+          harness_name, storage_format, surface_kind,
           harness_version, source_id, project_id, source_cwd, path_obsolete,
           started_at, ended_at, source_mtime, observed_at, time_basis,
           parent_session_id, session_relation_kind, archive_state, archive_source,
           session_model_param_id, metadata, source, type, release, project_path)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
           session_entity_id=excluded.session_entity_id,
           observation_id=excluded.observation_id,
           source_system_id=excluded.source_system_id,
           vendor_session_id=excluded.vendor_session_id,
           vendor_name=excluded.vendor_name,
-          product_name=excluded.product_name,
           harness_name=excluded.harness_name,
           storage_format=excluded.storage_format,
           surface_kind=excluded.surface_kind,
-          session_purpose=excluded.session_purpose,
           harness_version=excluded.harness_version,
           source_id=COALESCE(excluded.source_id, sessions.source_id),
           project_id=COALESCE(excluded.project_id, sessions.project_id),
@@ -885,29 +907,33 @@ def _ensure_content_object(
     conn: sqlite3.Connection,
     value: str,
     *,
-    storage_class: str = "inline",
     privacy_class: str | None = None,
 ) -> str:
+    """Store one UTF-8 text body, addressed by its digest.
+
+    Content is text stored inline, which is why format 6 has no `media_type`,
+    `charset`, or `storage_class`: every row carried the same literal, and the
+    `storage_class` parameter had no caller that passed anything but the
+    default, so its branch selecting whether to store `inline_content` was
+    unreachable. A non-text or externally stored object is a real capability and
+    reintroduces the columns along with the code that varies them.
+    """
     encoded = value.encode("utf-8")
     digest = codess_bytes_hash(256, 256, encoded)
     content_id = content_object_id(digest)
     conn.execute(
         """
         INSERT INTO content_objects(
-          id, content_digest, media_type, charset, byte_length,
-          character_length, storage_class, inline_content, privacy_class)
-        VALUES (?, ?, 'text/plain', 'utf-8', ?, ?, ?, ?, ?)
+          id, content_digest, byte_length,
+          character_length, inline_content, privacy_class)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           byte_length=excluded.byte_length,
           character_length=excluded.character_length,
           inline_content=COALESCE(content_objects.inline_content, excluded.inline_content),
           privacy_class=COALESCE(content_objects.privacy_class, excluded.privacy_class)
         """,
-        (
-            content_id, digest, len(encoded), len(value), storage_class,
-            value if storage_class in {"inline", "derived"} else None,
-            privacy_class,
-        ),
+        (content_id, digest, len(encoded), len(value), value, privacy_class),
     )
     return content_id
 
@@ -960,8 +986,8 @@ def _record_source_and_content(
         conn.execute(
             """
             INSERT OR REPLACE INTO event_content(
-              event_id, content_id, relation_kind, sequence_no, integrity_state)
-            VALUES (?, ?, ?, 1, 'verified')
+              event_id, content_id, relation_kind)
+            VALUES (?, ?, ?)
             """,
             (row_id, content_id, relation_kind),
         )
@@ -969,9 +995,8 @@ def _record_source_and_content(
             conn.execute(
                 """
                 INSERT OR REPLACE INTO source_record_content(
-                  source_record_id, content_id, relation_kind, sequence_no,
-                  integrity_state)
-                VALUES (?, ?, ?, 1, 'verified')
+                  source_record_id, content_id, relation_kind)
+                VALUES (?, ?, ?)
                 """,
                 (source_record_id, content_id, relation_kind),
             )
@@ -1036,9 +1061,8 @@ def _link_specialized_content(conn: sqlite3.Connection, row_id: int) -> None:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO tool_result_content(
-                  tool_result_id, content_id, relation_kind, sequence_no,
-                  integrity_state)
-                VALUES (?, ?, 'output', 1, 'verified')
+                  tool_result_id, content_id, relation_kind)
+                VALUES (?, ?, 'output')
                 """,
                 (result[0], output[0]),
             )
@@ -1058,9 +1082,8 @@ def _link_specialized_content(conn: sqlite3.Connection, row_id: int) -> None:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO artifact_content(
-                  artifact_id, content_id, relation_kind, sequence_no,
-                  integrity_state)
-                VALUES (?, ?, 'operation.parameters', 1, 'verified')
+                  artifact_id, content_id, relation_kind)
+                VALUES (?, ?, 'operation.parameters')
                 """,
                 (artifact[0], parameters[0]),
             )
@@ -1133,7 +1156,7 @@ def _record_diagnostic(
     source_field: str | None = None,
     source_value: Any = None,
     detail: str | None = None,
-    level: str = "field",
+    granularity: str = "field",
     severity: str = "warn",
 ) -> None:
     mapping_rule = event.get("mapping_rule")
@@ -1145,12 +1168,12 @@ def _record_diagnostic(
     conn.execute(
         """
         INSERT INTO mapping_diagnostics(
-          source_id, session_id, event_id, level, severity, reason_code, source_field,
+          source_id, session_id, event_id, granularity, severity, reason_code, source_field,
           source_value, mapping_rule, detail, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            event.get("source_id"), event.get("session_id"), row_id, level,
+            event.get("source_id"), event.get("session_id"), row_id, granularity,
             severity,
             reason_code, source_field,
             None if source_value is None else str(source_value),
@@ -1169,8 +1192,8 @@ def record_source_diagnostics(
 ) -> int:
     """Persist record- and source-level diagnostics collected during decode.
 
-    `mapping_diagnostics.level` declares `source`, `record`, and `field`, and
-    only `field` had ever been written -- so the coverage report's
+    `mapping_diagnostics.granularity` declares `source`, `record`, and `field`,
+    and only `field` had ever been written -- so the coverage report's
     record-level loss was structurally zero, and that zero was unfalsifiable
     rather than measured (CoPlan W47). Adapters collect these while decoding,
     holding the locator they would otherwise discard into a counter; this is
@@ -1196,13 +1219,13 @@ def record_source_diagnostics(
         conn.execute(
             """
             INSERT INTO mapping_diagnostics(
-              source_id, session_id, event_id, level, severity, reason_code,
+              source_id, session_id, event_id, granularity, severity, reason_code,
               source_field, source_value, mapping_rule, detail, created_at)
             VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?)
             """,
             (
                 source_id, session_id,
-                str(item.get("level") or "record"),
+                str(item.get("granularity") or "record"),
                 str(item.get("severity") or "warn"),
                 str(item["reason_code"]),
                 item.get("source_record_type"),
@@ -1236,9 +1259,9 @@ def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -
                 """
                 INSERT INTO tool_results(
                   invocation_id, result_event_id, sequence_no,
-                  producing_actor_kind, output_text, output_json, is_error,
+                  output_text, output_json, is_error,
                   source_status, normalized_status)
-                VALUES (NULL, ?, 1, 'tool', ?, ?, ?, ?, ?)
+                VALUES (NULL, ?, 1, ?, ?, ?, ?, ?)
                 """,
                 (
                     row_id, event.get("tool_output") or event.get("content"),
@@ -1302,9 +1325,9 @@ def _record_tool(conn: sqlite3.Connection, event: dict[str, Any], row_id: int) -
         conn.execute(
             """
             INSERT OR REPLACE INTO tool_results(
-              invocation_id, result_event_id, sequence_no, producing_actor_kind,
+              invocation_id, result_event_id, sequence_no,
               output_text, output_json, is_error, source_status, normalized_status)
-            VALUES (?, ?, ?, 'tool', ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 invocation_id, row_id, next_seq, event.get("tool_output") or event.get("content"),
@@ -1391,8 +1414,8 @@ def _record_artifact(conn: sqlite3.Connection, event: dict[str, Any], row_id: in
     conn.execute(
         """
         INSERT OR IGNORE INTO event_artifacts(
-          event_id, artifact_id, operation, evidence_source, confidence)
-        VALUES (?, ?, ?, 'tool_input', 1.0)
+          event_id, artifact_id, operation)
+        VALUES (?, ?, ?)
         """,
         (row_id, artifact_id, operation),
     )
@@ -1657,8 +1680,8 @@ def replace_session_events(
                 source_field=diagnostic.get("source_field"),
                 source_value=diagnostic.get("source_value"),
                 detail=diagnostic.get("detail"),
-                level=str(diagnostic.get("diagnostic_level") or "field"),
-                severity=str(diagnostic.get("level") or "warn"),
+                granularity=str(diagnostic.get("granularity") or "field"),
+                severity=str(diagnostic.get("severity") or "warn"),
             )
         if _event_classification(event)["event_kind"] == "unknown":
             _record_diagnostic(

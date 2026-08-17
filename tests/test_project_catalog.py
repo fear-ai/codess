@@ -188,6 +188,90 @@ def test_store_catalog_sync_does_not_rewrite_identical_projection(tmp_path):
         assert not sync_project_catalog(conn, entry)
 
 
+def test_a_relocated_location_identity_does_not_abort_the_ingest(tmp_path):
+    """One directory, two derived identities, one row.
+
+    `location_id` is derived from `(machine_id, path)`, so changing the
+    derivation -- as the format-5 identity change did, moving every value from
+    `sha256:` to `id1:` -- produces a second identity for a directory already
+    recorded. `project_locations` declares `UNIQUE(machine_id, observed_path)`,
+    and an insert handling only the `id` conflict raised `IntegrityError`
+    mid-ingest, aborting the Project. Every affected Project was unrebuildable
+    until this was fixed, which is exactly when a rebuild was required.
+    """
+    registry = tmp_path / "registry"
+    project = tmp_path / "project"
+    project.mkdir()
+    binding = ensure_project_binding(registry, project)
+    entry = get_project_entry(registry, binding["project_id"])
+    store = project / ".codess" / "sessions_codex.db"
+    init_db(store)
+
+    # A registry written across an identity change: the same place twice.
+    observed = dict(entry["locations"][0])
+    stale = dict(observed)
+    stale["location_id"] = "codess:location:sha256:" + "0" * 40
+    stale["observed_at"] = "2020-01-01T00:00:00+00:00"
+    entry = {**entry, "locations": [stale, observed]}
+
+    with connect(store) as conn:
+        sync_project_catalog(conn, entry)
+        conn.commit()
+        rows = conn.execute(
+            "SELECT id, observed_path FROM project_locations"
+        ).fetchall()
+    assert len(rows) == 1, "one directory must not occupy two location rows"
+    assert rows[0]["id"] == observed["location_id"], "the current derivation wins"
+
+
+def test_the_catalog_keeps_one_entry_per_place():
+    """Deduplication happens in the catalog, not on the way into SQL.
+
+    The catalog is the operator-visible record, so filtering a duplicate at the
+    insert would leave two documents disagreeing about how many locations a
+    Project has. Keyed on `(machine_id, path)` because the physical place is the
+    identity and `location_id` is derived from it.
+    """
+    from codess.project_catalog import _merged_locations
+
+    stale = {
+        "location_id": "codess:location:sha256:" + "1" * 40,
+        "machine_id": "machine:m1",
+        "path": "/w/p",
+        "state": "active",
+        "observed_at": "2020-01-01T00:00:00+00:00",
+    }
+    current = "codess:location:id1:" + "2" * 40
+    merged = _merged_locations(
+        {"locations": [stale]}, current,
+        machine_id="machine:m1", resolved_path="/w/p",
+        observed_at="2026-01-01T00:00:00+00:00",
+    )
+    assert len(merged) == 1, f"one place, one entry: {merged}"
+    assert merged[0]["location_id"] == current, "the current derivation wins"
+
+
+def test_a_genuinely_different_location_is_retained():
+    """The deduplication must not collapse two real directories into one."""
+    from codess.project_catalog import _merged_locations
+
+    other = {
+        "location_id": "codess:location:id1:" + "3" * 40,
+        "machine_id": "machine:m1",
+        "path": "/w/other",
+        "state": "retired",
+        "observed_at": "2020-01-01T00:00:00+00:00",
+    }
+    merged = _merged_locations(
+        {"locations": [other]}, "codess:location:id1:" + "4" * 40,
+        machine_id="machine:m1", resolved_path="/w/p",
+        observed_at="2026-01-01T00:00:00+00:00",
+    )
+    assert {item["path"] for item in merged} == {"/w/other", "/w/p"}
+    retired = next(item for item in merged if item["path"] == "/w/other")
+    assert retired["state"] == "retired", "a retained location keeps its state"
+
+
 def test_vendor_obsolete_path_is_marked_without_replacing_project_root(
     tmp_path,
 ):

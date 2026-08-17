@@ -28,17 +28,29 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from codess.artifact_correlation import correlate_external_artifacts
-from codess.config import STORE_DIR, get_state_path, get_store_path
+from codess.config import (
+    ADAPTER_KEYS,
+    STORE_DIR,
+    VENDOR_KEY_BY_ADAPTER,
+    VENDOR_KEYS,
+    VENDORS,
+    get_state_path,
+    get_store_path,
+)
 from codess.project_catalog import load_catalog
 from codess.snapshot import create_snapshot, current_snapshot, read_manifest
 from codess.store import connect, record_processing_run
 
 log = logging.getLogger(__name__)
 
-VENDOR_DISPLAY_NAMES = {"cc": "Claude", "codex": "Codex", "cursor": "Cursor"}
+# Projections of `config.VENDORS`, kept as names because both directions are
+# used at call sites that read better with a mapping than with a lookup (W24).
+VENDOR_DISPLAY_NAMES = {
+    key: description["adapter_key"] for key, description in VENDORS.items()
+}
 """Vendor key to the name used in catalogs, reports, and store filenames."""
 
-VENDOR_SOURCE_KEYS = {display: key for key, display in VENDOR_DISPLAY_NAMES.items()}
+VENDOR_SOURCE_KEYS = VENDOR_KEY_BY_ADAPTER
 
 
 class StoreLocator(Protocol):
@@ -238,7 +250,7 @@ def promote_rebuilt_stores(
     if retain_prior:
         return []
     promoted: list[str] = []
-    for source_key in ("cc", "codex", "cursor"):
+    for source_key in VENDOR_KEYS:
         if source_key not in sources:
             continue
         vendor = VENDOR_DISPLAY_NAMES[source_key]
@@ -293,8 +305,7 @@ def publish_snapshot(
         return snapshot_id, None
 
     working_stores = [
-        get_store_path(project_path, vendor)
-        for vendor in ("Claude", "Codex", "Cursor")
+        get_store_path(project_path, adapter_key) for adapter_key in ADAPTER_KEYS
     ]
     present = [path for path in working_stores if path.exists()]
     sealing = config["raw_mode"] == "seal"

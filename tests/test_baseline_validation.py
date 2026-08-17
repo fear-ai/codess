@@ -406,7 +406,7 @@ class TestDigestCoversTheSchema:
         source = Path(__file__).resolve().parents[1] / "src/codess/baseline_validation.py"
         text = source.read_text(encoding="utf-8")
         body = text[text.index("def canonical_rows"):text.index("def semantic_digest")]
-        return set(re.findall(r'^\s{8}"(\w+)":', body, re.M))
+        return set(re.findall(r'^\s{8}"(\w+)":', body, re.MULTILINE))
 
     def _declared(self):
         import re

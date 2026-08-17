@@ -236,8 +236,8 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
         """,
         "sessions": """
             SELECT id, session_entity_id, observation_id, source_system_id, vendor_session_id, vendor_name,
-                   product_name, harness_name, storage_format, surface_kind,
-                   session_purpose, harness_version, source_cwd,
+                   harness_name, storage_format, surface_kind,
+                   harness_version, source_cwd,
                    path_obsolete, started_at,
                    ended_at, source_mtime, time_basis, parent_session_id,
                    session_relation_kind, archive_state, archive_source,
@@ -288,35 +288,34 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             ORDER BY s.source_entity_id, r.source_sequence, r.source_locator
         """,
         "content_objects": """
-            SELECT id, content_digest, media_type, charset, byte_length,
-                   character_length, storage_class, inline_content,
+            SELECT id, content_digest, byte_length,
+                   character_length, inline_content,
                    raw_object_id, privacy_class, metadata
             FROM content_objects ORDER BY id
         """,
         "event_content": """
-            SELECT e.event_entity_id, ec.content_id, ec.relation_kind, ec.sequence_no,
-                   ec.start_offset, ec.end_offset, ec.integrity_state
+            SELECT e.event_entity_id, ec.content_id, ec.relation_kind,
+                   ec.start_offset, ec.end_offset
             FROM event_content ec JOIN events e ON e.id=ec.event_id
-            ORDER BY e.event_entity_id, ec.relation_kind, ec.sequence_no
+            ORDER BY e.event_entity_id, ec.relation_kind
         """,
         "source_record_content": """
-            SELECT source_record_id, content_id, relation_kind, sequence_no,
-                   integrity_state
+            SELECT source_record_id, content_id, relation_kind
             FROM source_record_content
-            ORDER BY source_record_id, relation_kind, sequence_no
+            ORDER BY source_record_id, relation_kind
         """,
         "tool_result_content": """
             SELECT r.invocation_id, r.sequence_no, c.content_id,
-                   c.relation_kind, c.sequence_no, c.integrity_state
+                   c.relation_kind
             FROM tool_result_content c JOIN tool_results r ON r.id=c.tool_result_id
-            ORDER BY r.invocation_id, r.sequence_no, c.relation_kind, c.sequence_no
+            ORDER BY r.invocation_id, r.sequence_no, c.relation_kind
         """,
         "artifact_content": """
             SELECT a.project_id, a.artifact_kind, a.relative_path, a.uri,
-                   c.content_id, c.relation_kind, c.sequence_no, c.integrity_state
+                   c.content_id, c.relation_kind
             FROM artifact_content c JOIN artifacts a ON a.id=c.artifact_id
             ORDER BY a.project_id, a.artifact_kind, a.relative_path, a.uri,
-                     c.relation_kind, c.sequence_no
+                     c.relation_kind
         """,
         "processing_runs": """
             SELECT id, project_id, policy_digest, processor_name,
@@ -336,7 +335,7 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
         """,
         "tool_results": """
             SELECT COALESCE(invocation_id, ''), sequence_no,
-                   producing_actor_kind, output_text, output_json, is_error,
+                   output_text, output_json, is_error,
                    source_status, normalized_status
             FROM tool_results
             ORDER BY COALESCE(invocation_id, ''), sequence_no, id
@@ -352,8 +351,7 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
         "event_artifacts": """
             SELECT e.session_id, e.event_id, a.project_id, a.artifact_kind,
                    a.relative_path, a.uri, a.repository_object_id,
-                   a.content_digest, ea.operation, ea.evidence_source,
-                   ea.confidence
+                   a.content_digest, ea.operation
             FROM event_artifacts ea
             JOIN events e ON e.id=ea.event_id
             JOIN artifacts a ON a.id=ea.artifact_id
@@ -361,11 +359,11 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
                      a.relative_path, a.uri, ea.operation
         """,
         "mapping_diagnostics": """
-            SELECT d.session_id, e.event_id, d.level, d.severity, d.reason_code,
+            SELECT d.session_id, e.event_id, d.granularity, d.severity, d.reason_code,
                    d.source_field, d.source_value, d.mapping_rule, d.detail
             FROM mapping_diagnostics d
             LEFT JOIN events e ON e.id=d.event_id
-            ORDER BY d.session_id, e.event_id, d.level, d.reason_code,
+            ORDER BY d.session_id, e.event_id, d.granularity, d.reason_code,
                      d.source_field
         """,
         "correlation_assertions": """

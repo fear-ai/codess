@@ -31,6 +31,7 @@ from codess.config import (
     MAX_RECORD_BYTES,
     RAW_MODE_CHOICES,
     REGISTRY,
+    SOURCE_CHOICES,
     canonical_raw_mode,
     catalog_root,
 )
@@ -83,6 +84,21 @@ def _candidate_parser(subparsers) -> None:
     parser.add_argument("--since")
     parser.add_argument("--discover-git", action="store_true")
     parser.add_argument("--max-depth", type=int, default=2)
+    parser.add_argument(
+        "--max-directories", type=int, default=None,
+        help="stop the scan after this many directories, reporting a partial "
+             "result [CODESS_MAX_SCAN_DIRECTORIES]; 0 disables",
+    )
+    parser.add_argument(
+        "--scan-deadline-seconds", type=int, default=None,
+        help="stop the scan after this long [CODESS_SCAN_DEADLINE_SECONDS]; "
+             "0 disables",
+    )
+    parser.add_argument(
+        "--same-filesystem", action="store_true",
+        help="do not descend past a filesystem boundary; by default a crossing "
+             "is reported and traversed",
+    )
     parser.add_argument("--check-remotes", action="store_true")
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--selection")
@@ -153,7 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--registry", type=Path, default=REGISTRY
     )
     refresh.add_argument(
-        "--source", choices=("all", "cc", "codex", "cursor"), default="all"
+        "--source", choices=SOURCE_CHOICES, default="all"
     )
     refresh.add_argument(
         "--raw-mode",
@@ -240,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument("--catalog", type=Path, required=True)
     onboard.add_argument("--registry", type=Path, default=REGISTRY)
     onboard.add_argument("--review-decision", default="approved")
-    onboard.add_argument("--source", choices=("cc", "codex", "cursor", "all"), default="all")
+    onboard.add_argument("--source", choices=SOURCE_CHOICES, default="all")
     onboard.add_argument(
         "--raw-mode", type=canonical_raw_mode, choices=RAW_MODE_CHOICES,
         default="reference",
@@ -441,7 +457,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _apply_arguments(parser) -> None:
     parser.add_argument("--project", type=Path, required=True)
-    parser.add_argument("--source", choices=("cc", "codex", "cursor", "all"), default="all")
+    parser.add_argument("--source", choices=SOURCE_CHOICES, default="all")
     parser.add_argument(
         "--raw-mode", type=canonical_raw_mode, choices=RAW_MODE_CHOICES,
         default="reference",
@@ -482,6 +498,9 @@ def _catalog_candidates(args) -> int:
         recent_days=args.days, candidate_csv=args.candidate_csv,
         catalog_path=args.catalog, include_git=args.git == "local",
         discover_git=args.discover_git, max_depth=args.max_depth,
+        max_directories=args.max_directories,
+        deadline_seconds=args.scan_deadline_seconds,
+        same_filesystem=args.same_filesystem,
         check_remotes=args.check_remotes, since=args.since, policy=policy,
     )
     if args.update_catalog:

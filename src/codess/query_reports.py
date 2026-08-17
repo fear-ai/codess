@@ -121,7 +121,7 @@ def mapping_diagnostics(
         where, params = scope.diagnostics_predicate()
         for row in conn.execute(
             f"""
-            SELECT d.level, {severity_projection}, d.reason_code,
+            SELECT d.granularity, {severity_projection}, d.reason_code,
                    d.source_field, d.source_value,
                    d.mapping_rule, d.detail, d.created_at, d.session_id,
                    e.event_id

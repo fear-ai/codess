@@ -13,10 +13,16 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from codess import reporting
 from codess.codex_source import build_session_index as build_codex_session_index
 from codess.config import (
+    CC_PROJECTS,
+    CODEX_SESSIONS,
+    CURSOR_DATA,
     LAST_INGEST_REPORT_FILE,
+    SOURCE_CHOICES,
     STORE_DIR,
+    VENDOR_KEYS,
     get_state_path,
     get_store_path,
     validate_config,
@@ -588,10 +594,10 @@ def _resolve_ingest_request(
         )
         return 1
     source = raw_src.strip().lower()
-    if source not in ("cc", "codex", "cursor", "all"):
+    if source not in SOURCE_CHOICES:
         print(f"codess: invalid ingest --source: {raw_src!r}", file=sys.stderr)
         return 1
-    sources = ["cc", "codex", "cursor"] if source == "all" else [source]
+    sources = list(VENDOR_KEYS) if source == "all" else [source]
 
     try:
         settings = build_ingest_run_options(args)
@@ -1361,7 +1367,7 @@ def _ingest_project(
             evidence_summary_reused = False
             if not settings["validate_only"]:
                 _save_stats(project_path, registry_root, project.store_totals)
-                evidence_paths = [config.store_path(project_path, key) for key in ("cc", "codex", "cursor")]
+                evidence_paths = [config.store_path(project_path, key) for key in VENDOR_KEYS]
                 previous_report = _load_runtime_report(project_path)
                 previous_summary = previous_report.get("evidence_summary")
                 if (
@@ -1523,6 +1529,21 @@ def run(args) -> int:
         "content_failure_reviews": [],
         "claude_session_kinds": {"main": 0, "subagent": 0},
     }
+    # Configure the process-wide facility before the first event, and register
+    # the roots a `located` field is rendered against. `ProgressTrace` owns its
+    # own sink during the transition, so this governs the call sites that already
+    # emit through `reporting` -- and the privacy profile either way.
+    reporting.configure(
+        settings.get("report_profile"),
+        privacy=settings.get("report_privacy"),
+        roots={
+            "home": Path.home(),
+            "registry": registry_root,
+            "cc-projects": CC_PROJECTS,
+            "codex-sessions": CODEX_SESSIONS,
+            "cursor-data": CURSOR_DATA,
+        },
+    )
     progress_trace = ProgressTrace(enabled=settings["live_progress"])
     opts["progress"] = progress_trace
     opts["registry_root"] = str(registry_root)

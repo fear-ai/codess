@@ -41,11 +41,11 @@ def test_vacant_umbrella():
     assert fs.MALFORMED not in fs.VACANT_STATES
 
 
-def test_diagnostic_levels():
-    assert fs.diagnostic_level(fs.PRESENT) is None
-    assert fs.diagnostic_level(fs.ABSENT) == "info"
-    assert fs.diagnostic_level(fs.SENTINEL) == "info"
-    assert fs.diagnostic_level(fs.MALFORMED) == "warn"
+def test_severity_by_state():
+    assert fs.severity(fs.PRESENT) is None
+    assert fs.severity(fs.ABSENT) == "info"
+    assert fs.severity(fs.SENTINEL) == "info"
+    assert fs.severity(fs.MALFORMED) == "warn"
 
 
 def test_diagnose():
@@ -59,8 +59,8 @@ def test_diagnose():
     assert opts["diagnostics"] == {"field_absent": 1, "field_malformed": 1}
     rows = opts["field_diagnostics"]
     assert len(rows) == 2
-    assert rows[0]["level"] == "info" and rows[0]["reason_code"] == "field_absent"
-    assert rows[1]["level"] == "warn" and rows[1]["detail"] is None  # malformed value not echoed
+    assert rows[0]["severity"] == "info" and rows[0]["reason_code"] == "field_absent"
+    assert rows[1]["severity"] == "warn" and rows[1]["detail"] is None  # malformed value not echoed
 
 
 def test_criticality():

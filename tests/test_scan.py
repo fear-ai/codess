@@ -676,8 +676,14 @@ def test_scan_cc_subagent(subagent_flag, env_val, expected_sess):
         assert int(parts[2]) == expected_sess
 
 
-def test_scan_debug_dir_label():
-    """Scan --debug prints [dir] for directory visits when projects found."""
+def test_scan_debug_reports_discovery_events():
+    """`--debug` emits the discovery diagnostics as structured events.
+
+    These were `[dir]` and `[scan]` prefixed prints. They are now
+    `scan.source.mapped` and `scan.project.metrics` through the reporting
+    contract, so the assertion is on the event names rather than on a prefix that
+    only the print statements had (CoPlan W21).
+    """
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         work = tmp / "work"
@@ -700,8 +706,10 @@ def test_scan_debug_dir_label():
         )
         r = _run(["scan", "--dir", str(work), "--debug", "--days", "0", "--out", "-"], env=env)
         assert r.returncode == 0
-        assert "[dir]" in r.stderr
-        assert "[scan]" in r.stderr
+        assert "scan.source.mapped" in r.stderr, r.stderr
+        assert "scan.project.metrics" in r.stderr, r.stderr
+        # Still stderr, never stdout: stdout carries the requested result (R9).
+        assert "scan.source.mapped" not in r.stdout
 
 
 def test_scan_cursor_central_db():

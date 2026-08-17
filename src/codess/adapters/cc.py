@@ -562,7 +562,7 @@ def _record_refused(
     if pending is None:
         return
     pending.append({
-        "level": "record",
+        "granularity": "record",
         "reason_code": reason_code,
         "source_locator": f"line:{line_num}" if line_num is not None else None,
         "source_file": source_file,

@@ -1,9 +1,9 @@
--- codess.coschema format 5
+-- codess.coschema format 6
 -- Functional meanings live in schema/coschema/contract.json and Schemas.md.
 -- This file contains only the SQLite layout, constraints, and access paths.
 
 PRAGMA application_id = 1129268293; -- 0x434F4445, "CODE"
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE store_meta (
@@ -96,11 +96,9 @@ CREATE TABLE sessions (
   source_system_id TEXT NOT NULL DEFAULT 'legacy.unknown',
   vendor_session_id TEXT,
   vendor_name TEXT,
-  product_name TEXT,
   harness_name TEXT,
   storage_format TEXT,
   surface_kind TEXT CHECK (surface_kind IN ('cli','ide','desktop','api','agent','unknown') OR surface_kind IS NULL),
-  session_purpose TEXT,
   harness_version TEXT,
   source_id INTEGER REFERENCES sources(id),
   project_id TEXT REFERENCES projects(id),
@@ -214,57 +212,59 @@ CREATE TABLE source_records (
   UNIQUE(source_id, source_locator)
 );
 
+-- Content is UTF-8 text stored inline. `media_type`, `charset`, and
+-- `storage_class` were removed in format 6: each was written from a literal
+-- ('text/plain', 'utf-8', 'inline') on all 236,535 measured rows and read by
+-- nothing but the fixed-point digest. Reintroducing any of them is a real
+-- change -- a non-text or externally stored object -- and should arrive with
+-- the capability rather than ahead of it.
 CREATE TABLE content_objects (
   id TEXT PRIMARY KEY,
   content_digest TEXT NOT NULL,
-  media_type TEXT,
-  charset TEXT,
   byte_length INTEGER CHECK (byte_length IS NULL OR byte_length >= 0),
   character_length INTEGER CHECK (character_length IS NULL OR character_length >= 0),
-  storage_class TEXT NOT NULL CHECK (storage_class IN ('inline','raw_object','derived','not_retained')),
   inline_content TEXT,
   raw_object_id TEXT,
   privacy_class TEXT,
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
-  UNIQUE(content_digest, storage_class, raw_object_id)
+  UNIQUE(content_digest, raw_object_id)
 );
 
+-- The four link tables below dropped `sequence_no` and `integrity_state` in
+-- format 6. Both were constant on every measured row -- 494,384 in
+-- `event_content` alone, all `sequence_no=1` and `integrity_state='verified'`
+-- -- and no (owner, relation_kind) pair ever repeated, so the sequence
+-- distinguished nothing. Ordered multi-part content is a real capability and
+-- would restore the column as part of the key; verification state belongs with
+-- a verifier that can report a state other than 'verified'.
 CREATE TABLE event_content (
   event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   content_id TEXT NOT NULL REFERENCES content_objects(id) ON DELETE CASCADE,
   relation_kind TEXT NOT NULL,
-  sequence_no INTEGER NOT NULL DEFAULT 1 CHECK (sequence_no > 0),
   start_offset INTEGER CHECK (start_offset IS NULL OR start_offset >= 0),
   end_offset INTEGER CHECK (end_offset IS NULL OR end_offset >= 0),
-  integrity_state TEXT NOT NULL DEFAULT 'verified',
-  PRIMARY KEY(event_id, relation_kind, sequence_no)
+  PRIMARY KEY(event_id, relation_kind)
 ) WITHOUT ROWID;
 
 CREATE TABLE source_record_content (
   source_record_id TEXT NOT NULL REFERENCES source_records(id) ON DELETE CASCADE,
   content_id TEXT NOT NULL REFERENCES content_objects(id) ON DELETE CASCADE,
   relation_kind TEXT NOT NULL,
-  sequence_no INTEGER NOT NULL DEFAULT 1 CHECK (sequence_no > 0),
-  integrity_state TEXT NOT NULL DEFAULT 'verified',
-  PRIMARY KEY(source_record_id, relation_kind, sequence_no)
+  PRIMARY KEY(source_record_id, relation_kind)
 ) WITHOUT ROWID;
 
 CREATE TABLE tool_result_content (
   tool_result_id INTEGER NOT NULL REFERENCES tool_results(id) ON DELETE CASCADE,
   content_id TEXT NOT NULL REFERENCES content_objects(id) ON DELETE CASCADE,
   relation_kind TEXT NOT NULL,
-  sequence_no INTEGER NOT NULL DEFAULT 1 CHECK (sequence_no > 0),
-  integrity_state TEXT NOT NULL DEFAULT 'verified',
-  PRIMARY KEY(tool_result_id, relation_kind, sequence_no)
+  PRIMARY KEY(tool_result_id, relation_kind)
 ) WITHOUT ROWID;
 
 CREATE TABLE artifact_content (
   artifact_id INTEGER NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
   content_id TEXT NOT NULL REFERENCES content_objects(id) ON DELETE CASCADE,
   relation_kind TEXT NOT NULL,
-  sequence_no INTEGER NOT NULL DEFAULT 1 CHECK (sequence_no > 0),
-  integrity_state TEXT NOT NULL DEFAULT 'verified',
-  PRIMARY KEY(artifact_id, relation_kind, sequence_no)
+  PRIMARY KEY(artifact_id, relation_kind)
 ) WITHOUT ROWID;
 
 CREATE TABLE processing_runs (
@@ -314,7 +314,6 @@ CREATE TABLE tool_results (
   invocation_id TEXT REFERENCES tool_invocations(id) ON DELETE CASCADE,
   result_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
   sequence_no INTEGER NOT NULL DEFAULT 1 CHECK (sequence_no > 0),
-  producing_actor_kind TEXT,
   output_text TEXT,
   output_json TEXT CHECK (output_json IS NULL OR json_valid(output_json)),
   is_error INTEGER CHECK (is_error IN (0,1) OR is_error IS NULL),
@@ -340,8 +339,6 @@ CREATE TABLE event_artifacts (
   event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   artifact_id INTEGER NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
   operation TEXT NOT NULL CHECK (operation IN ('read','create','modify','delete','execute','mention','unknown')),
-  evidence_source TEXT,
-  confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
   PRIMARY KEY(event_id, artifact_id, operation)
 ) WITHOUT ROWID;
 
@@ -350,7 +347,11 @@ CREATE TABLE mapping_diagnostics (
   source_id INTEGER REFERENCES sources(id),
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
   event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
-  level TEXT NOT NULL CHECK (level IN ('source','record','field')),
+  -- Granularity, not severity: which *part* of the input a diagnostic is
+  -- about. `severity` beside it carries how much it matters. The column was
+  -- named `level` through format 5, which reads as an ordering and made
+  -- summing its values look meaningful when it overstates loss.
+  granularity TEXT NOT NULL CHECK (granularity IN ('source','record','field')),
   severity TEXT NOT NULL DEFAULT 'info'
     CHECK (severity IN ('info','warn','error')),
   reason_code TEXT NOT NULL,

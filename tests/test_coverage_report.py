@@ -128,7 +128,7 @@ class TestLoss:
     def _diagnostic(self, conn, *, level, reason):
         conn.execute(
             "INSERT INTO mapping_diagnostics"
-            "(session_id, event_id, level, reason_code, created_at) "
+            "(session_id, event_id, granularity, reason_code, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
             ("s1", None, level, reason, "2026-01-01T00:00:00Z"),
         )
@@ -146,7 +146,7 @@ class TestLoss:
         store.commit()
         report = loss(store)
         assert report["unmapped_records"] == {"source": 0, "record": 1}
-        assert report["by_level"]["field"] == 2
+        assert report["by_granularity"]["field"] == 2
         assert report["record_level_reasons"] == {"unsupported_shape": 1}
 
     def test_reasons_are_reported_for_both_levels(self, store):
@@ -157,7 +157,7 @@ class TestLoss:
         assert report["unmapped_records"]["source"] == 1
 
     def test_no_diagnostics(self, store):
-        assert loss(store)["by_level"] == {}
+        assert loss(store)["by_granularity"] == {}
 
     def test_zero_record_loss_is_distinguished_from_unmeasured(self, store):
         """A zero must not read as evidence when nothing writes the level.
@@ -176,15 +176,86 @@ class TestLoss:
         assert loss(store)["record_loss_recorded"] is True
 
 
-def test_store_coverage_reports_all_three(store):
-    """The three sections travel together: a count, its shapes, and its loss."""
+def test_store_coverage_reports_every_section(store):
+    """The sections travel together: a count, its shapes, its loss, and the
+    evidence no decoder admits at all."""
     add_event(store, "e1", event_kind="tool.call", source_record_type="assistant")
     store.commit()
     report = store_coverage(store)
-    assert set(report) == {"coverage", "shapes", "loss"}
+    assert set(report) == {"coverage", "shapes", "loss", "undecoded"}
     assert report["coverage"]["admitted_events"] == 1
     assert report["shapes"]["by_source_record_type"] == {"assistant": 1}
     assert report["loss"]["available"] is True
+
+
+class TestUndecodedEvidence:
+    """Loss has two shapes and the report used to carry one.
+
+    `loss()` measures what a decoder read and could not fully map. This measures
+    evidence a vendor retained that no adapter admits -- which a store cannot
+    report, because nothing was written, so a store-derived report states zero by
+    construction (CoPlan W63).
+    """
+
+    def test_a_vendor_with_no_measured_container_says_so(self):
+        from codess.coverage_report import undecoded_evidence
+
+        result = undecoded_evidence("anthropic.claude-code")
+        assert result["available"] is False
+        assert result["reason"]
+
+    def test_an_unknown_vendor_is_not_silently_reported_as_clean(self):
+        """`available: False` with a reason, never an absent key: a reader must
+        be able to tell "measured, none" from "not measured"."""
+        from codess.coverage_report import undecoded_evidence
+
+        assert undecoded_evidence(None)["available"] is False
+
+    def test_codex_history_is_reported_not_admitted(self, tmp_path, monkeypatch):
+        """A history-only Session is counted, never turned into a Session.
+
+        Admitting one would mean a Session with prompts and no Model Turns,
+        which changes what a Session is and is a mapping decision under 6.5.
+        """
+        import codess.coverage_report as coverage_module
+
+        measured = {
+            "available": True, "history_path": "/h/history.jsonl",
+            "history_sessions": 19, "with_rollout": 18, "without_rollout": 1,
+            "unrolled_prompt_counts": {"0000bbbbbbbbbbbb": 2},
+        }
+        monkeypatch.setattr(
+            "codess.codex_source.unrolled_history_sessions", lambda **_: measured,
+        )
+        result = coverage_module.undecoded_evidence("openai.codex")
+        assert result["available"] is True
+        assert result["sessions"] == 19
+        assert result["with_rollout"] == 18
+        assert result["undecodable_sessions"] == 1
+        assert result["undecodable_prompts"] == 2
+        assert result["disposition"] == "reported, not admitted"
+
+    def test_an_absent_history_container_is_not_an_error(self, monkeypatch):
+        monkeypatch.setattr(
+            "codess.codex_source.unrolled_history_sessions",
+            lambda **_: {"available": False, "history_path": "/nope"},
+        )
+        import codess.coverage_report as coverage_module
+
+        assert coverage_module.undecoded_evidence("openai.codex")["available"] is False
+
+    def test_the_measurement_carries_no_prompt_text(self):
+        """A coverage figure must be publishable beside a store."""
+        from codess.codex_source import unrolled_history_sessions
+
+        measured = unrolled_history_sessions()
+        serialized = repr(measured)
+        assert "unrolled_prompt_counts" in measured or not measured["available"]
+        # Only identifiers and counts; no free text field exists to leak.
+        assert set(measured) <= {
+            "available", "history_path", "history_sessions", "with_rollout",
+            "without_rollout", "unrolled_prompt_counts",
+        }, serialized
 
 
 class TestEventAtBasis:
@@ -241,6 +312,6 @@ def test_a_column_the_store_lacks_fails_naming_it(tmp_path):
     try:
         with pytest.raises(SchemaContractError, match="no column 'severity_level'"):
             _counts_by(conn, "severity_level")
-        assert _counts_by(conn, "level") == {}
+        assert _counts_by(conn, "granularity") == {}
     finally:
         conn.close()

@@ -9,7 +9,12 @@ from typing import ClassVar
 import pytest
 
 from codess.fileio import open_readonly
-from codess.schema_contract import column_names, store_metadata, table_names
+from codess.schema_contract import (
+    FORMAT_VERSION,
+    column_names,
+    store_metadata,
+    table_names,
+)
 from codess.store import (
     connect,
     drop_sessions_absent_from_source,
@@ -890,7 +895,7 @@ class TestBoundedOutputJson:
         assert _bounded_output_json({"x": "y" * (MAX_OUTPUT_JSON_BYTES + 10)}) is None
 
 
-class TestFormatFiveWireChanges:
+class TestWireFormatChanges:
     """Columns and metadata keys that CoSchema format 5 added or removed.
 
     Asserted against a store the writer actually produced, not a fixture: the
@@ -961,13 +966,13 @@ class TestFormatFiveWireChanges:
         finally:
             conn.close()
 
-    def test_a_written_store_declares_format_five(self, tmp_path):
+    def test_a_written_store_declares_the_current_format(self, tmp_path):
         db = tmp_path / "version.db"
         init_db(db)
         conn = connect(db)
         try:
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
-            assert store_metadata(conn)["format_version"] == "5"
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == FORMAT_VERSION
+            assert store_metadata(conn)["format_version"] == str(FORMAT_VERSION)
         finally:
             conn.close()
 
@@ -1034,6 +1039,186 @@ class TestConnectionEnforcesConstraints:
             assert conn.execute("PRAGMA foreign_key_list(store_meta)").fetchall() == []
         finally:
             conn.close()
+
+
+class TestFormatSixRemovals:
+    """Columns removed in format 6, and why each removal is safe.
+
+    Every one held a single value on every measured row across 90 real stores,
+    was written by `store` from a literal, and was read by nothing but the
+    fixed-point digest that enumerates all columns by construction. A test per
+    group so that reintroducing one is a deliberate change with a name, rather
+    than a column that quietly reappears (CoPlan W40, W48).
+    """
+
+    def test_content_is_text_stored_inline_without_declaring_it(self, tmp_path):
+        """`media_type`, `charset`, `storage_class` were one literal each."""
+        db = tmp_path / "content.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            columns = column_names(conn, "content_objects")
+            assert {"media_type", "charset", "storage_class"} & columns == set()
+            assert {"content_digest", "inline_content"} <= columns
+        finally:
+            conn.close()
+
+    def test_the_content_link_tables_key_on_owner_and_relation(self, tmp_path):
+        """`sequence_no` distinguished nothing: no owner/relation pair repeated."""
+        db = tmp_path / "links.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            for table in (
+                "event_content", "source_record_content",
+                "tool_result_content", "artifact_content",
+            ):
+                columns = column_names(conn, table)
+                assert "sequence_no" not in columns, table
+                assert "integrity_state" not in columns, table
+                assert "relation_kind" in columns, table
+        finally:
+            conn.close()
+
+    def test_sequence_no_is_retained_where_it_varies(self, tmp_path):
+        """The removal was per column, not per name.
+
+        `sequence_no` genuinely orders rows in these tables -- measured maxima of
+        19,661 for events and 5,564 for model turns -- so dropping the name
+        everywhere would have destroyed real ordering.
+        """
+        db = tmp_path / "seq.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            for table in ("events", "interactions", "model_turns", "tool_results"):
+                assert "sequence_no" in column_names(conn, table), table
+        finally:
+            conn.close()
+
+    def test_a_session_does_not_store_what_its_source_system_implies(self, tmp_path):
+        """`product_name` was a pure function of `source_system_id` (W40)."""
+        db = tmp_path / "sessions.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            columns = column_names(conn, "sessions")
+            assert "product_name" not in columns
+            assert "session_purpose" not in columns
+            assert "source_system_id" in columns
+        finally:
+            conn.close()
+
+    def test_a_tool_result_does_not_restate_that_a_tool_produced_it(self, tmp_path):
+        db = tmp_path / "tools.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            assert "producing_actor_kind" not in column_names(conn, "tool_results")
+        finally:
+            conn.close()
+
+    def test_artifact_evidence_drops_its_two_constants(self, tmp_path):
+        db = tmp_path / "artifacts.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            columns = column_names(conn, "event_artifacts")
+            assert {"evidence_source", "confidence"} & columns == set()
+        finally:
+            conn.close()
+
+
+class TestDiagnosticGranularity:
+    """`level` became `granularity`, because that is what it holds (W50).
+
+    The column carries `source`/`record`/`field` -- which part of the input a
+    diagnostic is about -- while `severity` sits beside it holding how much it
+    matters. Named `level` it read as an ordering, which made summing its values
+    look meaningful when doing so overstates loss.
+    """
+
+    def test_the_column_names_the_granularity(self, tmp_path):
+        db = tmp_path / "diag.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            columns = column_names(conn, "mapping_diagnostics")
+            assert "granularity" in columns
+            assert "level" not in columns
+            assert "severity" in columns
+        finally:
+            conn.close()
+
+    def test_field_state_emits_both_keys_under_their_own_names(self):
+        """The collision: one dict carried `level` (severity) and
+        `diagnostic_level` (granularity), and the store read the second into the
+        column named after the first."""
+        from codess.field_state import MALFORMED, diagnostic
+
+        row = diagnostic(field="f", state=MALFORMED, source_field="src")
+        assert row["severity"] == "warn"
+        assert row["granularity"] == "field"
+        assert "level" not in row
+        assert "diagnostic_level" not in row
+
+
+class TestOneVendorDescription:
+    """Every vendor view derives from `config.VENDORS` (W24).
+
+    Discovery, ingest, publication, refresh, review, and the command layer each
+    re-derived a partial view from a bare key -- three separate encodings of the
+    same three vendors, plus the key tuple written out at a dozen call sites.
+    """
+
+    def test_the_store_profiles_derive_from_the_vendor_table(self):
+        from codess.config import VENDORS
+        from codess.store import SOURCE_PROFILES
+
+        assert set(SOURCE_PROFILES) == {
+            v["adapter_key"] for v in VENDORS.values()
+        }
+        for description in VENDORS.values():
+            profile = SOURCE_PROFILES[description["adapter_key"]]
+            assert profile["source_system_id"] == description["source_system_id"]
+            assert profile["storage_format"] == description["storage_format"]
+
+    def test_both_key_spellings_resolve_to_one_description(self):
+        """`cc` and `Claude` name the same vendor; a caller need not convert."""
+        from codess.config import VENDOR_KEYS, vendor
+
+        for key in VENDOR_KEYS:
+            assert vendor(key) is vendor(vendor(key)["adapter_key"])
+
+    def test_an_unknown_vendor_is_refused_rather_than_defaulted(self):
+        from codess.config import vendor
+
+        with pytest.raises(KeyError):
+            vendor("notavendor")
+
+    def test_the_store_filename_comes_from_the_table(self, tmp_path):
+        from codess.config import VENDORS, get_store_path
+
+        for key, description in VENDORS.items():
+            assert get_store_path(tmp_path, key).name == description["store_db"]
+            expected = description["store_db"]
+            assert get_store_path(tmp_path, description["adapter_key"]).name == expected
+
+    def test_no_module_writes_the_vendor_key_set_out_longhand(self):
+        """The duplication this item removed must not come back."""
+        from pathlib import Path
+
+        import codess.config as config_module
+
+        root = Path(config_module.__file__).resolve().parent.parent
+        offenders = []
+        for path in sorted(root.rglob("*.py")):
+            if path.name == "config.py":
+                continue
+            text = path.read_text(encoding="utf-8")
+            if '"codex", "cursor"' in text or "'codex', 'cursor'" in text:
+                offenders.append(path.name)
+        assert offenders == []
 
 
 class TestBothOpenersYieldNamedRows:
@@ -1216,7 +1401,7 @@ class TestRecordLevelDiagnostics:
             written = record_source_diagnostics(
                 conn, None,
                 [{
-                    "level": "record",
+                    "granularity": "record",
                     "reason_code": "unsupported_records",
                     "source_locator": "line:7",
                     "source_file": "/s/session.jsonl",
@@ -1227,10 +1412,10 @@ class TestRecordLevelDiagnostics:
             conn.commit()
             assert written == 1
             row = conn.execute(
-                "SELECT level, reason_code, source_field, source_value, detail, event_id "
+                "SELECT granularity, reason_code, source_field, source_value, detail, event_id "
                 "FROM mapping_diagnostics"
             ).fetchone()
-            assert row["level"] == "record"
+            assert row["granularity"] == "record"
             assert row["reason_code"] == "unsupported_records"
             assert row["source_field"] == "user"
             assert row["source_value"] == "/s/session.jsonl"
@@ -1271,14 +1456,14 @@ class TestRecordLevelDiagnostics:
         try:
             record_source_diagnostics(
                 conn, None,
-                [{"level": "source", "reason_code": "failed_sources",
+                [{"granularity": "source", "reason_code": "failed_sources",
                   "source_file": "/s/broken.jsonl"}],
             )
             conn.commit()
             row = conn.execute(
-                "SELECT level, session_id FROM mapping_diagnostics"
+                "SELECT granularity, session_id FROM mapping_diagnostics"
             ).fetchone()
-            assert (row["level"], row["session_id"]) == ("source", None)
+            assert (row["granularity"], row["session_id"]) == ("source", None)
         finally:
             conn.close()
 
@@ -1314,7 +1499,7 @@ class TestRecordLevelDiagnostics:
         conn = connect(db, read_only=True)
         try:
             levels = dict(
-                conn.execute("SELECT level, COUNT(*) FROM mapping_diagnostics GROUP BY 1")
+                conn.execute("SELECT granularity, COUNT(*) FROM mapping_diagnostics GROUP BY 1")
             )
             assert levels.get("record") == 1
         finally:

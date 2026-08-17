@@ -11,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from codess.config import MAPPING_NAMES
 from codess.fileio import hash_file, quote_identifier
 from codess.hashing import codess_digest
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
@@ -23,10 +24,20 @@ DDL_PATH = PACKAGE_ROOT / "sqlite" / "schema.sql"
 MAPPINGS_ROOT = REPO_ROOT / "schema" / "mappings"
 
 FORMAT_ID = "codess.coschema"
-FORMAT_VERSION = 5
+FORMAT_VERSION = 6
 APPLICATION_ID = 0x434F4445
-SUPPORTED_READ_FORMATS = frozenset({5})
-SUPPORTED_WRITE_FORMATS = frozenset({5})
+# Derived from FORMAT_VERSION rather than restated. Codess never migrates a
+# store: a format change is a rebuild from the vendor Sources, because the store
+# is a projection and the way to change a projection is to recompute it. So the
+# only supported format is the current one, for reading as well as writing, and
+# these were a second place to forget when the version moved.
+#
+# Widening the read set is a real decision, not a convenience: it asserts that a
+# store written under the older format still answers queries correctly, which is
+# only true if no column a reader depends on changed meaning. Add the version
+# explicitly here when that has been checked, rather than by default.
+SUPPORTED_READ_FORMATS = frozenset({FORMAT_VERSION})
+SUPPORTED_WRITE_FORMATS = frozenset({FORMAT_VERSION})
 
 
 class SchemaContractError(RuntimeError):
@@ -194,7 +205,7 @@ def load_ddl() -> str:
 
 def load_mapping(name: str) -> dict[str, Any]:
     contract_digest()
-    if name not in {"claude", "codex", "cursor"}:
+    if name not in MAPPING_NAMES:
         raise SchemaContractError(f"unknown mapping profile: {name}")
     mapping = json.loads(
         (MAPPINGS_ROOT / f"{name}.json").read_text(encoding="utf-8")

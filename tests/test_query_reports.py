@@ -160,7 +160,7 @@ def test_diagnostics_are_ordered_by_when_they_were_recorded(store):
         conn.execute(
             """
             INSERT INTO mapping_diagnostics(
-              level, severity, reason_code, created_at, session_id
+              granularity, severity, reason_code, created_at, session_id
             ) VALUES ('record', 'warn', ?, ?, 's1')
             """,
             (reason, created_at),
@@ -174,7 +174,7 @@ def test_diagnostics_are_ordered_by_when_they_were_recorded(store):
 def test_diagnostics_carry_their_project_and_store(store):
     conn, scope = store
     conn.execute(
-        "INSERT INTO mapping_diagnostics(level, severity, reason_code, created_at)"
+        "INSERT INTO mapping_diagnostics(granularity, severity, reason_code, created_at)"
         " VALUES ('source', 'error', 'unsupported', '2026-01-01')"
     )
     conn.commit()

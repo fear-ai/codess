@@ -1,6 +1,6 @@
 {
   "format_id": "codess.coschema",
-  "format_version": 5,
+  "format_version": 6,
   "application_id": 1129268293,
   "compatibility_policy": {
     "unknown_change": "manual_review",
@@ -263,10 +263,6 @@
           "type": "text",
           "nullable": true
         },
-        "product_name": {
-          "type": "text",
-          "nullable": true
-        },
         "harness_name": {
           "type": "text",
           "nullable": true
@@ -279,10 +275,6 @@
           "type": "taxonomy",
           "nullable": true,
           "vocabulary": "surface_kind"
-        },
-        "session_purpose": {
-          "type": "open_vocabulary",
-          "nullable": true
         },
         "harness_version": {
           "type": "text",
@@ -630,14 +622,6 @@
           "type": "sha256",
           "nullable": false
         },
-        "media_type": {
-          "type": "text",
-          "nullable": true
-        },
-        "charset": {
-          "type": "text",
-          "nullable": true
-        },
         "byte_length": {
           "type": "integer",
           "nullable": true,
@@ -647,11 +631,6 @@
           "type": "integer",
           "nullable": true,
           "minimum": 0
-        },
-        "storage_class": {
-          "type": "taxonomy",
-          "nullable": false,
-          "vocabulary": "content_storage_class"
         },
         "inline_content": {
           "type": "text",
@@ -674,12 +653,11 @@
     "event_content": {
       "identity": [
         "event_id",
-        "relation_kind",
-        "sequence_no"
+        "relation_kind"
       ],
       "order": [
         "event_id",
-        "sequence_no"
+        "relation_kind"
       ],
       "fields": {
         "event_id": {
@@ -696,11 +674,6 @@
           "type": "open_vocabulary",
           "nullable": false
         },
-        "sequence_no": {
-          "type": "integer",
-          "nullable": false,
-          "minimum": 1
-        },
         "start_offset": {
           "type": "integer",
           "nullable": true,
@@ -710,22 +683,17 @@
           "type": "integer",
           "nullable": true,
           "minimum": 0
-        },
-        "integrity_state": {
-          "type": "open_vocabulary",
-          "nullable": false
         }
       }
     },
     "source_record_content": {
       "identity": [
         "source_record_id",
-        "relation_kind",
-        "sequence_no"
+        "relation_kind"
       ],
       "order": [
         "source_record_id",
-        "sequence_no"
+        "relation_kind"
       ],
       "fields": {
         "source_record_id": {
@@ -739,15 +707,6 @@
           "target": "content_objects"
         },
         "relation_kind": {
-          "type": "open_vocabulary",
-          "nullable": false
-        },
-        "sequence_no": {
-          "type": "integer",
-          "nullable": false,
-          "minimum": 1
-        },
-        "integrity_state": {
           "type": "open_vocabulary",
           "nullable": false
         }
@@ -830,8 +789,7 @@
     "tool_result_content": {
       "identity": [
         "tool_result_id",
-        "relation_kind",
-        "sequence_no"
+        "relation_kind"
       ],
       "fields": {
         "tool_result_id": {
@@ -847,23 +805,13 @@
         "relation_kind": {
           "type": "open_vocabulary",
           "nullable": false
-        },
-        "sequence_no": {
-          "type": "integer",
-          "nullable": false,
-          "minimum": 1
-        },
-        "integrity_state": {
-          "type": "open_vocabulary",
-          "nullable": false
         }
       }
     },
     "artifact_content": {
       "identity": [
         "artifact_id",
-        "relation_kind",
-        "sequence_no"
+        "relation_kind"
       ],
       "fields": {
         "artifact_id": {
@@ -877,15 +825,6 @@
           "target": "content_objects"
         },
         "relation_kind": {
-          "type": "open_vocabulary",
-          "nullable": false
-        },
-        "sequence_no": {
-          "type": "integer",
-          "nullable": false,
-          "minimum": 1
-        },
-        "integrity_state": {
           "type": "open_vocabulary",
           "nullable": false
         }
@@ -979,10 +918,6 @@
           "nullable": false,
           "minimum": 1
         },
-        "producing_actor_kind": {
-          "type": "open_vocabulary",
-          "nullable": true
-        },
         "output_text": {
           "type": "text",
           "nullable": true
@@ -1072,16 +1007,6 @@
           "type": "taxonomy",
           "nullable": false,
           "vocabulary": "artifact_operation"
-        },
-        "evidence_source": {
-          "type": "text",
-          "nullable": true
-        },
-        "confidence": {
-          "type": "number",
-          "nullable": true,
-          "minimum": 0,
-          "maximum": 1
         }
       }
     },
@@ -1105,7 +1030,7 @@
           "nullable": true,
           "target": "events"
         },
-        "level": {
+        "granularity": {
           "type": "taxonomy",
           "nullable": false,
           "vocabulary": "diagnostic_level"
@@ -1362,12 +1287,6 @@
       "retired",
       "missing",
       "unknown"
-    ],
-    "content_storage_class": [
-      "inline",
-      "raw_object",
-      "derived",
-      "not_retained"
     ]
   }
 }

@@ -851,7 +851,7 @@ def test_get_timestamp_reports_field_state():
     assert _get_timestamp({"timestamp": 1700000000000.0}, opts) == 1700000000000.0
 
     assert opts["diagnostics"] == {"field_malformed": 1, "field_absent": 1}
-    levels = [(r["level"], r["reason_code"]) for r in opts["field_diagnostics"]]
+    levels = [(r["severity"], r["reason_code"]) for r in opts["field_diagnostics"]]
     assert ("warn", "field_malformed") in levels
     assert ("info", "field_absent") in levels
 
@@ -876,7 +876,7 @@ def test_hostile_assistant_fields_are_diagnosed_without_losing_record(tmp_path):
     ))
     assert len(events) == 2
     reasons = {
-        (row["source_field"], row["reason_code"], row["level"])
+        (row["source_field"], row["reason_code"], row["severity"])
         for event in events for row in event.get("field_diagnostics", [])
     }
     assert ("timestamp", "field_malformed", "warn") in reasons
@@ -1246,9 +1246,8 @@ class TestProductStatePartition:
         failure the split could introduce, and it would surface only when a
         conformance check ran over a store rather than here.
         """
-        from codess.schema_contract import load_mapping
-
         from codess.adapters.cc import _PRODUCT_STATE_RULES
+        from codess.schema_contract import load_mapping
 
         declared = {rule["id"] for rule in load_mapping("claude")["rules"]}
         assert set(_PRODUCT_STATE_RULES.values()) <= declared

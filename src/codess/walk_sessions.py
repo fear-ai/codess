@@ -9,7 +9,7 @@ from pathlib import Path
 
 from codess.codex_source import build_session_index as build_codex_session_index
 from codess.codex_source import get_session_files as get_codex_session_files
-from codess.config import AGGREGATORS, BMB, CC_PROJECTS, CURSOR_WS
+from codess.config import AGGREGATORS, BMB, CC_PROJECTS, CURSOR_WS, VENDOR_KEYS
 from codess.cursor_source import (
     get_db_metrics,
     get_project_composer_headers,
@@ -24,6 +24,35 @@ from codess.cursor_source import (
     get_workspace_ids as get_cursor_workspace_ids,
 )
 from codess.helpers import is_excluded, local_path_from_uri, slug_to_path
+from codess.reporting import code as _code
+from codess.reporting import event
+
+# Resolved once at import: a code lookup is a dict hit, and doing it per call in
+# a loop over every candidate directory is the cost the integer code exists to
+# avoid (Report 5).
+LINKED = _code("scan.source.linked")
+MAPPED = _code("scan.source.mapped")
+METRICS = _code("scan.project.metrics")
+
+
+def _report_metrics(vendor_key: str, project_path: str, metrics: dict) -> None:
+    """One event per vendor with metrics, rather than a formatted block.
+
+    These were four `print` statements composing a labelled line per vendor
+    (W21). As events each field is a field, so a jsonl sink emits them
+    structurally and the privacy profile can classify `project` as a path rather
+    than having to find one inside rendered text.
+    """
+    event(
+        METRICS, kind=vendor_key, project=project_path,
+        sessions=metrics.get("count"),
+        events=metrics.get("events", 0),
+        size_mb=metrics.get("size_mb"),
+        span_weeks=metrics.get("span_weeks"),
+        days_ago=metrics.get("days_ago"),
+        header_count=metrics.get("header_count"),
+        timed_header_count=metrics.get("timed_header_count"),
+    )
 from codess.project import get_cc_session_dir
 
 log = logging.getLogger(__name__)
@@ -359,7 +388,7 @@ def walk_sessions(
     work_root: Path,
     vendor_filter: list[str] | None = None,
     recent_days: int | None = None,
-    debug: bool = False,
+    debug: bool = False,  # noqa: ARG001 - see the docstring
     subagent: bool = False,
     diagnostics: dict | None = None,
     include_cursor_global: bool = True,
@@ -367,10 +396,13 @@ def walk_sessions(
 ) -> list[dict]:
     """Discover projects with session data. Return list of dicts: path, vendor, sess, mb, span_weeks.
     recent_days: if set, only include sessions from last N days (CODESS_DAYS).
-    debug: print each dir visited with findings; include all projects regardless of filters."""
-    import sys
+    `debug` is retained for the call signature and no longer gates output. The
+    discovery diagnostics are debug-*level* events now, so whether they are
+    emitted is the reporting profile's decision rather than an argument threaded
+    through this function -- which is what W21 removed. `scan_cmd` selects the
+    `debug` profile when `--debug` is passed."""
     work_root = work_root.resolve()
-    vendors = frozenset(vendor_filter or ["cc", "codex", "cursor"])
+    vendors = frozenset(vendor_filter or VENDOR_KEYS)
     cc_paths, codex_paths, cursor_paths = set(), set(), set()
 
     if "cc" in vendors and CC_PROJECTS.exists():
@@ -379,8 +411,7 @@ def walk_sessions(
         linked_cc_dir = get_cc_session_dir(work_root)
         if linked_cc_dir is not None:
             cc_paths.add(work_root)
-            if debug:
-                print(f"[dir] CC source link: {linked_cc_dir} -> {work_root}", file=sys.stderr)
+            event(LINKED, kind="cc", source=str(linked_cc_dir), target=str(work_root))
         for d in CC_PROJECTS.iterdir():
             if not d.is_dir():
                 continue
@@ -399,8 +430,7 @@ def walk_sessions(
                             r = Path(pp).resolve()
                             if r not in cc_paths:
                                 cc_paths.add(r)
-                                if debug:
-                                    print(f"[dir] CC dir: {d} -> {r}", file=sys.stderr)
+                                event(MAPPED, kind="cc", source=str(d), target=str(r))
                 except (json.JSONDecodeError, KeyError, TypeError) as exc:
                     _record_diagnostic(
                         diagnostics, "malformed_sources", idx, str(exc)
@@ -414,8 +444,7 @@ def walk_sessions(
                 r = p.resolve()
                 if r not in cc_paths:
                     cc_paths.add(r)
-                    if debug:
-                        print(f"[dir] CC dir: {d} -> {r}", file=sys.stderr)
+                    event(MAPPED, kind="cc", source=str(d), target=str(r))
     if "codex" in vendors:
         if codex_index is None:
             codex_index = build_codex_session_index(include_record_counts=True)
@@ -425,8 +454,7 @@ def walk_sessions(
                 r = Path(cwd).resolve()
                 if r not in codex_paths:
                     codex_paths.add(r)
-                    if debug:
-                        print(f"[dir] Codex file: {item.get('path')} -> {r}", file=sys.stderr)
+                    event(MAPPED, kind="codex", source=str(item.get("path")), target=str(r))
     if "cursor" in vendors and CURSOR_WS.exists():
         # Exact-root scans must honor the same reviewed source links as
         # ingestion.  A remote or historical Cursor workspace can remain a
@@ -435,12 +463,11 @@ def walk_sessions(
         linked_workspace_ids = get_cursor_workspace_ids(work_root)
         if linked_workspace_ids:
             cursor_paths.add(work_root)
-            if debug:
-                print(
-                    "[dir] Cursor source link: "
-                    f"{','.join(linked_workspace_ids)} -> {work_root}",
-                    file=sys.stderr,
-                )
+            event(
+                LINKED, kind="cursor",
+                workspace=",".join(linked_workspace_ids),
+                target=str(work_root),
+            )
         for ws in CURSOR_WS.iterdir():
             wj = ws / "workspace.json"
             if wj.exists():
@@ -451,8 +478,7 @@ def walk_sessions(
                         r = local_folder
                         if r not in cursor_paths:
                             cursor_paths.add(r)
-                            if debug:
-                                print(f"[dir] Cursor workspace: {ws} -> {r}", file=sys.stderr)
+                            event(MAPPED, kind="cursor", workspace=str(ws), target=str(r))
                 except (json.JSONDecodeError, TypeError) as exc:
                     _record_diagnostic(
                         diagnostics, "malformed_sources", wj, str(exc)
@@ -476,8 +502,7 @@ def walk_sessions(
                 )
             if m["count"] or m["events"]:
                 cursor_global_has_data = True
-                if debug:
-                    print(f"[dir] Cursor central: {gdb}", file=sys.stderr)
+                event(MAPPED, kind="cursor-central", container=str(gdb))
     all_paths = set()
     if "cc" in vendors:
         all_paths |= cc_paths
@@ -609,14 +634,11 @@ def walk_sessions(
                 }} if m_cursor else {}),
             },
         }
-        if debug:
-            print(f"[scan] project {p} path={rel}", file=sys.stderr)
-            if m_cc:
-                print(f"  CC: sess={m_cc.get('count')} events={m_cc.get('events', 0)} mb={m_cc.get('size_mb')} span_weeks={m_cc.get('span_weeks')} days_ago={m_cc.get('days_ago')}", file=sys.stderr)
-            if m_codex:
-                print(f"  Codex: sess={m_codex.get('count')} events={m_codex.get('events', 0)} mb={m_codex.get('size_mb')} span_weeks={m_codex.get('span_weeks')} days_ago={m_codex.get('days_ago')}", file=sys.stderr)
-            if m_cursor:
-                print(f"  Cursor: sess={m_cursor.get('count')} events={m_cursor.get('events', 0)} mb={m_cursor.get('size_mb')} span_weeks={m_cursor.get('span_weeks')} days_ago={m_cursor.get('days_ago')} headers={m_cursor.get('header_count', 0)} timed_headers={m_cursor.get('timed_header_count', 0)}", file=sys.stderr)
+        for vendor_key, metrics in (
+            ("cc", m_cc), ("codex", m_codex), ("cursor", m_cursor),
+        ):
+            if metrics:
+                _report_metrics(vendor_key, str(p), metrics)
         rows.append(row)
 
     if include_cursor_global and cursor_global_has_data and "cursor" in vendors:
@@ -631,9 +653,7 @@ def walk_sessions(
                 "mb": m_global["size_mb"],
                 "span_weeks": m_global["span_weeks"],
             })
-            if debug:
-                print("[scan] project (global) path=(global)", file=sys.stderr)
-                print(f"  Cursor central: sess={m_global.get('count')} events={m_global.get('events', 0)} mb={m_global.get('size_mb')} span_weeks={m_global.get('span_weeks')} days_ago={m_global.get('days_ago')} headers={m_global.get('header_count', 0)} timed_headers={m_global.get('timed_header_count', 0)}", file=sys.stderr)
+            _report_metrics("cursor-central", "(global)", m_global)
     if excluded_by_recency:
         _record_count(diagnostics, "projects_outside_recency_window", excluded_by_recency)
     return rows

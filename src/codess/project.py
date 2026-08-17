@@ -19,6 +19,7 @@ from codess.config import (
     SOURCE_LINKS_FILE,
     SOURCE_LINKS_FORMAT,
     STORE_DIR,
+    VENDOR_KEYS,
     VERBOSE,
     canonical_raw_mode,
 )
@@ -29,6 +30,8 @@ from codess.config import (
 # hyphen -- a hyphenated directory decoded to a non-existent nested path (3.5.4).
 from codess.helpers import path_to_slug as path_to_slug
 from codess.helpers import slug_to_path as slug_to_path
+from codess.reporting.levels import PRIVACY_PROFILES as REPORTING_PRIVACY
+from codess.reporting.levels import PROFILES as REPORTING_PROFILES
 
 log = logging.getLogger(__name__)
 
@@ -204,7 +207,7 @@ def resolve_registry_directory(args: Any) -> Path:
     return Path(str(raw).strip()).expanduser()
 
 
-SCAN_SOURCE_TOKENS = frozenset({"cc", "codex", "cursor"})
+SCAN_SOURCE_TOKENS = frozenset(VENDOR_KEYS)
 
 
 def validate_scan_source_for_cli(source: str | None) -> str | None:
@@ -353,6 +356,8 @@ def build_ingest_run_options(args: Any) -> dict[str, Any]:
         "max_events_per_session": maximums["events_per_session"],
         "max_context_content_chars": maximums["context_content_chars"],
         "live_progress": not bool(getattr(args, "no_progress", False)),
+        "report_profile": getattr(args, "report_profile", None),
+        "report_privacy": getattr(args, "report_privacy", None),
         "candidate_snapshot": bool(getattr(args, "candidate_snapshot", False)),
     }
 
@@ -582,6 +587,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--no-progress", action="store_true",
         help="ingest: suppress live progress on stderr; retain structured trace",
+    )
+    p.add_argument(
+        "--report-profile", choices=tuple(sorted(REPORTING_PROFILES)),
+        default=None,
+        help="operational reporting volume and destination [CODESS_REPORT_PROFILE]",
+    )
+    p.add_argument(
+        "--report-privacy", choices=REPORTING_PRIVACY,
+        default=None,
+        help="how much a reported field reveals: local verbatim, shared "
+             "root-relative, strict root token only [CODESS_REPORT_PRIVACY]",
     )
 
     p.add_argument(

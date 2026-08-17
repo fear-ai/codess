@@ -16,6 +16,7 @@ from codess.config import (
     LARGE_STORE_BYTES,
     LAST_INGEST_REPORT_FILE,
     RAW_MODES,
+    SOURCE_CHOICES,
     STORE_DIR,
     canonical_raw_mode,
     raw_mode_error,
@@ -179,7 +180,7 @@ def resolve_refresh_selection(
             "unsupported refresh designator; expected one of: "
             + ", ".join(sorted(REFRESH_DESIGNATORS))
         )
-    if source not in {"all", "cc", "codex", "cursor"}:
+    if source not in set(SOURCE_CHOICES):
         raise ValueError("source must be all, cc, codex, or cursor")
     # `auto` is refresh's own value: it means "keep whatever the current
     # snapshot was built under", which only a refresh can resolve.
