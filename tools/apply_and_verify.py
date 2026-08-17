@@ -12,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from codess.baseline_operations import apply_project
+from codess.config import RAW_MODE_CHOICES, canonical_raw_mode  # noqa: E402
 from codess.fileio import write_json_atomic
 
 
@@ -19,7 +20,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--source", choices=("cc", "codex", "cursor", "all"), default="all")
-    parser.add_argument("--raw-mode", choices=("none", "reference", "capture", "seal"), default="reference")
+    parser.add_argument(
+        "--raw-mode", type=canonical_raw_mode, choices=RAW_MODE_CHOICES,
+        default="reference",
+    )
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--report", type=Path)

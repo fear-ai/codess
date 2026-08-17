@@ -1,4 +1,9 @@
-"""Versioned CoSchema v4 SQLite store and incremental ingest state."""
+"""Versioned CoSchema SQLite store and incremental ingest state.
+
+The format this module writes is `schema_contract.FORMAT_VERSION`, which is not
+repeated here: a version named in prose goes stale at the next rebuild, and this
+docstring still said v4 two formats later.
+"""
 
 from __future__ import annotations
 
@@ -160,8 +165,24 @@ def _path_is_obsolete(
     return True
 
 
+class StoreError(RuntimeError):
+    """A store could not be opened or read as a database.
+
+    The store layer's own error, so a caller does not catch `sqlite3.Error`
+    across the layer boundary (CoPlan W56). It is distinct from
+    `SchemaContractError`, which means the file *is* readable and states a
+    contract this software does not accept: this one means the database itself
+    could not be opened, is truncated, or is not a database at all.
+
+    Every other Codess layer already owns one -- `RawCaptureError`,
+    `SnapshotError`, `QueryContractError` -- and the store layer was the gap,
+    which is why the CLI had to name the driver's exception type to report a
+    store it could not open.
+    """
+
+
 def init_db(db_path: Path) -> None:
-    """Create a new CoSchema v4 store, refusing any database that is not one."""
+    """Create a new CoSchema store, refusing any database that is not one."""
     contract_digest()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = open_writable(db_path)
@@ -200,12 +221,27 @@ def init_db(db_path: Path) -> None:
 
 
 def connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
-    """Open and validate a CoSchema store."""
-    conn = open_readonly(db_path) if read_only else open_writable(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+    """Open and validate a CoSchema store.
+
+    The connection contract belongs to the opener: `open_readonly` sets
+    `query_only` and `open_writable` sets `foreign_keys`, both per connection,
+    so this function does not re-apply them. Setting `foreign_keys = ON` here
+    unconditionally was also wrong for the read path, where `query_only` makes
+    constraint enforcement moot and the pragma merely asserted a guarantee the
+    opener had already made.
+
+    A driver failure is translated to `StoreError`, so a caller of a store
+    operation catches a Codess error rather than `sqlite3.Error` (W56 step 4).
+    """
+    try:
+        conn = open_readonly(db_path) if read_only else open_writable(db_path)
+    except sqlite3.Error as exc:
+        raise StoreError(f"cannot open store {db_path}: {exc}") from exc
     try:
         require_store(conn, write=not read_only)
+    except sqlite3.Error as exc:
+        conn.close()
+        raise StoreError(f"cannot read store {db_path}: {exc}") from exc
     except Exception:
         conn.close()
         raise

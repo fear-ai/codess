@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from codess.config import RAW_CAPTURE_CHUNK_BYTES
+from codess.config import RAW_CAPTURE_CHUNK_BYTES, canonical_raw_mode
 from codess.config import RAW_MODES as RAW_MODE_VALUES
 from codess.fileio import hash_file, open_readonly, read_source_revision, stat_consistency
 from codess.hashing import codess_digest, codess_text_hash
@@ -252,6 +252,7 @@ class RawStore:
         working_target: Path | None = None,
         progress: Callable[..., Any] | None = None,
     ) -> dict[str, Any]:
+        mode = canonical_raw_mode(mode)
         if mode not in RAW_MODES:
             raise RawCaptureError(f"invalid raw mode: {mode}")
         try:
@@ -267,12 +268,12 @@ class RawStore:
             "observed_at": datetime.now(UTC).isoformat(),
             "source_mtime_ns": stat.st_mtime_ns,
             "source_size": stat.st_size,
-            "availability": "not_retained" if mode == "none" else "reference",
+            "availability": "not_retained" if mode == "observe" else "reference",
             "capture_method": "stat",
             "consistency": "observed",
             "redaction": "none",
         }
-        if mode in {"none", "reference"}:
+        if mode in {"observe", "reference"}:
             revision, _mtime, size, method, consistency = read_source_revision(path)
             record.update({
                 "source_revision_id": revision,

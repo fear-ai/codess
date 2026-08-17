@@ -312,8 +312,13 @@ external rather than searchable content.
 ## 9. Raw Evidence
 
 The ordinary `reference` mode records the Source locator and bounded update
-evidence without retaining another complete copy. `capture` and `seal` are for
+evidence without retaining another complete copy. `observe` retains even less,
+recording the fingerprint and update evidence with no reference, which states
+that Codess read the Source and kept nothing. `capture` and `seal` are for
 investigations requiring exact retained Source bytes.
+
+`--raw-mode none` was the previous spelling of `observe` and still parses, so
+existing operator scripts do not need editing.
 
 ```bash
 codess ingest --dir "$PROJECT" --raw-mode reference

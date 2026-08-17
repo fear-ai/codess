@@ -69,6 +69,7 @@ from codess.snapshot import (
     snapshot_store_paths_from_base,
 )
 from codess.source_verification import verify_event_source
+from codess.store import StoreError
 from codess.store import connect as connect_store
 
 log = logging.getLogger(__name__)
@@ -164,6 +165,12 @@ def _open_readable_store(path):
     try:
         conn.execute("SELECT 1 FROM sessions LIMIT 1")
         conn.execute("SELECT 1 FROM events LIMIT 1")
+    except sqlite3.Error as exc:
+        # The probe reads core tables, so a driver failure here means the same
+        # thing `connect_store` would have reported and is raised as the store
+        # layer's error rather than the driver's (W56 step 4).
+        conn.close()
+        raise StoreError(f"cannot read store {path}: {exc}") from exc
     except Exception:
         conn.close()
         raise
@@ -490,7 +497,7 @@ def run(args) -> int:
                 allow_contract_mismatch=contract_policy == "read-compatible",
                 source_tokens=source_tokens,
             )
-    except (sqlite3.Error, SchemaContractError, SnapshotError) as exc:
+    except (StoreError, SchemaContractError, SnapshotError) as exc:
         print(f"codess: cannot open query stores: {exc}", file=sys.stderr)
         return 1
     if not scope.stores:

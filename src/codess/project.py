@@ -20,6 +20,7 @@ from codess.config import (
     SOURCE_LINKS_FORMAT,
     STORE_DIR,
     VERBOSE,
+    canonical_raw_mode,
 )
 
 # Re-exported: the Claude slug encoding is `helpers`'. `project` carried a
@@ -337,7 +338,11 @@ def build_ingest_run_options(args: Any) -> dict[str, Any]:
         "min_size": min_size,
         "debug": flag_or_env(args, "debug", DEBUG),
         "redact": flag_or_env(args, "redact", INGEST_REDACT),
-        "raw_mode": str(getattr(args, "raw_mode", None) or RAW_MODE).lower(),
+        # Canonicalized here as well as by the argparse `type`, because settings
+        # resolution is reachable from a library caller that never built a parser.
+        "raw_mode": canonical_raw_mode(
+            str(getattr(args, "raw_mode", None) or RAW_MODE).lower()
+        ),
         "strict_mapping": flag_or_env(args, "strict_mapping", STRICT_MAPPING),
         "content_policy": getattr(args, "content_policy", None) or CONTENT_POLICY,
         "resource_policy": policy.report(),
@@ -507,6 +512,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--raw-mode",
+        type=canonical_raw_mode,
         choices=RAW_MODE_CHOICES,
         default=None,
         help="ingest: raw evidence mode [CODESS_RAW_MODE] (default reference)",

@@ -203,7 +203,9 @@ def build_project_annotations(
                     f"{facts['normalized_store_bytes']} normalized-store bytes"
                 ),
             )
-        if facts["raw_mode"] in {"none", "reference"}:
+        # `none` is the previous spelling of `observe` and appears in manifests
+        # retained before the rename, so both classify as limited retention.
+        if facts["raw_mode"] in {"observe", "none", "reference"}:
             add(
                 "limited",
                 f"raw evidence mode is {facts['raw_mode']}",

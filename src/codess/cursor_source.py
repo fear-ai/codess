@@ -664,7 +664,16 @@ def get_selection_markers(
     *,
     supplemental_headers: dict[str, dict[str, dict]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Fingerprint several Project selections in one SQLite read snapshot."""
+    """Fingerprint several Project selections in one SQLite read snapshot.
+
+    The explicit transaction is one of the two places Codess needs more than the
+    deferred default stated in `fileio`. Cursor's database is written by its own
+    running application, and a read transaction's snapshot ends with the
+    transaction, so fingerprinting several selections across separate
+    transactions could read each against a different state of the container and
+    produce markers that never described one moment. One `BEGIN` holds one
+    snapshot across all of them; the `rollback` ends it without writing.
+    """
     if not selections:
         return {}
     with closing(connect_readonly(db_path)) as conn:

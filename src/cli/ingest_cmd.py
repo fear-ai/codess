@@ -1561,7 +1561,7 @@ def run(args) -> int:
     # change, `totals` is what the run has produced and changes constantly.
     totals = RunTotals(outcome=outcome, diagnostics=diagnostics, opts=opts)
     if settings["validate_only"]:
-        opts["raw_mode"] = "none"
+        opts["raw_mode"] = "observe"
     if "codex" in sources:
         index_started = time.monotonic()
         progress_trace("codex.index.start")

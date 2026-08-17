@@ -33,11 +33,11 @@ in exactly one of these:
 
 | Category | Meaning | Items |
 |---|---|---|
-| **A. Fixed now** | Landed in the working tree, with tests. Carries no work item. | **The fixed-point digest covers the released schema** (W57): `model_params` is in it, selected by its natural columns rather than a surrogate id, `DIGEST_EXCLUDED_TABLES` states why `store_meta` is out, and a test fails when a DDL table is neither covered nor excluded. **Discovery configuration has a command** (W59): `codess config discovery` reports what the process resolved and proposes containers, sharing its implementation with `tools/setup_discovery.py`. **`walk_sessions` canonicalization is testable** (W19, design A): `in_work_root`, `project_boundary`, `is_aggregator`, and `canonicalize` are module-level with explicit parameters, 19 new cases cover rules that previously needed a populated vendor filesystem, and real discovery output is byte-identical. **Operator selections live beside the registry** (W58): `config.catalog_root()` resolves an explicit argument, then `CODESS_CATALOG`, then `<registry>/catalog`, replacing fourteen defaults that pointed into the checkout. A relative `policy` field now anchors to *the selection document's own directory* rather than a global root, so a selection and its policies are portable as a pair -- verified by resolving the same document from two locations. **No tracked file names the development machine.** Documentation, source, and tests carry no account name, host name, home layout, or private repository name; `catalog/` keeps only the one portable template, with the six regenerable audits and every operator selection untracked but left on disk. The rule is CLAUDE.md's Environment Separation section, stated with generic descriptions rather than the names it excludes. **The discovery prune set is external and editable** (W60): `schema/discovery-policy.json` names what is never traversed, in six groups, plus the names deliberately traversed with the reason for each; `CODESS_DISCOVERY_POLICY` replaces it, and a malformed file warns and falls back rather than refusing to scan. It also covers Windows conventions (`obj`, `bin`, `packages`, `x64`, `.vs`) that a POSIX-shaped set walked into. **Worktrees are one Project** (W49): identity resolves through `--git-common-dir`, so two linked worktrees share a `project_id` and the multi-location path in `project_locations` is reachable from discovery for the first time. **Refused records are queryable** (W47): adapters collect a refusal with its locator and `store` persists it, so record-level loss is measured rather than structurally zero. **The registry has a retention policy** (W28): `storage registry-prune` reports by default and removes under `--apply`; an observed registry went from 1,455 entries to 31, all live. **Snapshot recovery has a route** (W41): `baseline recover-pointer` and `recover-manifest`, with Operations 10.5 corrected to name them. **The adapters share one bound-process-check helper** (W42): `_bounded_content` replaced the repeated five-step pattern, verified byte-identical over 29,143 real Codex events. **Decode is complete for what the three vendors state.** Every stated field is decoded, the model name is decomposed into line, generation, version, and gradation, Claude's structured tool results and per-Event parent links are retained, and Codex's output header supplies six fields plus the exit code on 14,795 results where 79 were reachable before. **Names are settled** in [CoNames](CoNames.md), which is authoritative: `entity_id` is qualified per table, `model_params` replaced `model_configurations`, `source_path` replaced a `source_uri` that held no URI. **Hashing was evaluated** at every call site; five were removed as unnecessary and the rest are identity, integrity, content addressing, or change detection. What each change established is recorded where it is checkable -- `schema/field-coverage-baseline.json` for accepted gaps, `schema/model-aliases.json` for the model vocabulary, `config.py` beside each bound -- rather than retold here. Two bounds were made configurable and named for what they govern: `SOURCE_READ_MAX` (`CODESS_SOURCE_READ_MAX`, was `SOURCE_FULL_HASH_MAX`) and `CODESS_QUERY_BYTE_LIMIT`; `MAX_TOKEN_LINE_BYTES` moved to 4 MB, still 3x the largest line in 58,106 real records. |
+| **A. Fixed now** | Landed in the working tree, with tests. Carries no work item. | **The least-retaining raw mode says what it does** (W15): `none` became `observe`, keeping the manifest observation that makes a Source's absence checkable, with the previous spelling resolved at one boundary so operator scripts and retained manifests still parse; the work found that refresh would otherwise have silently promoted such a Project to `reference` (13.4.4). **The SQLite connection and driver boundary is owned** (W56): both openers apply the same contract, the deferred isolation model is stated where the openers live, and `store.StoreError` means a caller no longer catches `sqlite3.Error` across a layer boundary -- which was one handler of fourteen rather than the fifteen an unclassified count suggested (13.4.11). **The fixed-point digest covers the released schema** (W57): `model_params` is in it, selected by its natural columns rather than a surrogate id, `DIGEST_EXCLUDED_TABLES` states why `store_meta` is out, and a test fails when a DDL table is neither covered nor excluded. **Discovery configuration has a command** (W59): `codess config discovery` reports what the process resolved and proposes containers, sharing its implementation with `tools/setup_discovery.py`. **`walk_sessions` canonicalization is testable** (W19, design A): `in_work_root`, `project_boundary`, `is_aggregator`, and `canonicalize` are module-level with explicit parameters, 19 new cases cover rules that previously needed a populated vendor filesystem, and real discovery output is byte-identical. **Operator selections live beside the registry** (W58): `config.catalog_root()` resolves an explicit argument, then `CODESS_CATALOG`, then `<registry>/catalog`, replacing fourteen defaults that pointed into the checkout. A relative `policy` field now anchors to *the selection document's own directory* rather than a global root, so a selection and its policies are portable as a pair -- verified by resolving the same document from two locations. **No tracked file names the development machine.** Documentation, source, and tests carry no account name, host name, home layout, or private repository name; `catalog/` keeps only the one portable template, with the six regenerable audits and every operator selection untracked but left on disk. The rule is CLAUDE.md's Environment Separation section, stated with generic descriptions rather than the names it excludes. **The discovery prune set is external and editable** (W60): `schema/discovery-policy.json` names what is never traversed, in six groups, plus the names deliberately traversed with the reason for each; `CODESS_DISCOVERY_POLICY` replaces it, and a malformed file warns and falls back rather than refusing to scan. It also covers Windows conventions (`obj`, `bin`, `packages`, `x64`, `.vs`) that a POSIX-shaped set walked into. **Worktrees are one Project** (W49): identity resolves through `--git-common-dir`, so two linked worktrees share a `project_id` and the multi-location path in `project_locations` is reachable from discovery for the first time. **Refused records are queryable** (W47): adapters collect a refusal with its locator and `store` persists it, so record-level loss is measured rather than structurally zero. **The registry has a retention policy** (W28): `storage registry-prune` reports by default and removes under `--apply`; an observed registry went from 1,455 entries to 31, all live. **Snapshot recovery has a route** (W41): `baseline recover-pointer` and `recover-manifest`, with Operations 10.5 corrected to name them. **The adapters share one bound-process-check helper** (W42): `_bounded_content` replaced the repeated five-step pattern, verified byte-identical over 29,143 real Codex events. **Decode is complete for what the three vendors state.** Every stated field is decoded, the model name is decomposed into line, generation, version, and gradation, Claude's structured tool results and per-Event parent links are retained, and Codex's output header supplies six fields plus the exit code on 14,795 results where 79 were reachable before. **Names are settled** in [CoNames](CoNames.md), which is authoritative: `entity_id` is qualified per table, `model_params` replaced `model_configurations`, `source_path` replaced a `source_uri` that held no URI. **Hashing was evaluated** at every call site; five were removed as unnecessary and the rest are identity, integrity, content addressing, or change detection. What each change established is recorded where it is checkable -- `schema/field-coverage-baseline.json` for accepted gaps, `schema/model-aliases.json` for the model vocabulary, `config.py` beside each bound -- rather than retold here. Two bounds were made configurable and named for what they govern: `SOURCE_READ_MAX` (`CODESS_SOURCE_READ_MAX`, was `SOURCE_FULL_HASH_MAX`) and `CODESS_QUERY_BYTE_LIMIT`; `MAX_TOKEN_LINE_BYTES` moved to 4 MB, still 3x the largest line in 58,106 real records. |
 | **B. Fix as WIP** | Actively in progress; the remaining work is named. | **Empty.** W45, W46, and W52 all closed: `ProjectScope` names the per-Project lifetime as a type, the Cursor selection-marker decision moved to `cursor_cohort` which owns Cursor caching, and SQL construction has one identifier-quoting helper plus a DDL check that found every site the format-5 batch broke. W09 is the next item that would enter this category. |
-| **C. Fix later** | Accepted, unblocked, not started. Grouped and ordered below. | W04, W07, W08, W09, W13, W48, W50, W51, W55, W56, W61, W62, W63, W14, W15, W18, W19, W21, W24, W38 |
+| **C. Fix later** | Accepted, unblocked, not started. Grouped and ordered below. | W04, W07, W08, W09, W13, W48, W50, W51, W55, W61, W62, W63, W14, W18, W21, W24, W38 |
 | **D. Postponed** | Deliberately deferred; the reason is recorded on the item. | W43 (validation table: withdrawn on inspection -- `validate_request` already groups 30 fields into 10 branches), W16 (external interfaces: no requester), W35 (fixture inventory: no longer gates anything after W03), task 28 (manual image-only review, deferred by request) |
-| **E. Needs decision** | Blocked on a judgment nobody has made, not on effort. Doing the work first would encode the wrong answer. | **W05** — the one open question, stated below. W17 left E: cross-Project search is accepted work deferred to a stable baseline, which is a schedule rather than an unmade decision. W15 left E with a recommendation on the evidence. Four wire-format items were decided this pass and moved to F; the identity-vocabulary item was answered by looking at the sources and became a decode gap, since fixed. |
+| **E. Needs decision** | Blocked on a judgment nobody has made, not on effort. Doing the work first would encode the wrong answer. | **W05** — the one open question, stated below. W17 left E: cross-Project search is accepted work deferred to a stable baseline, which is a schedule rather than an unmade decision. W15 left E with a recommendation on the evidence, and has since landed: the observation was kept and the mode renamed to `observe` (13.4.4). Four wire-format items were decided this pass and moved to F; the identity-vocabulary item was answered by looking at the sources and became a decode gap, since fixed. |
 | **F. Decided, awaiting regeneration** | **Complete.** W25, W31, W32, W33, W34, and W36 landed together as one format change: `FORMAT_VERSION` is 5, and a store written under 4 is refused with the rebuild command named. Verified by rebuilding real Projects rather than by the suite alone -- 14,267 Events over 347 Claude Sessions and 2,172 over 2 Cursor Sessions, `tools/decode_audit.py` exiting zero on the result. What each item changed is recorded on it below. |
 
 ##### What Regeneration Meant, and What It Cost
@@ -99,16 +99,16 @@ moment that question is answered.
 
 ##### C Grouped and Ordered
 
-Twenty-three items is a list, not a plan. They fall into five groups, and
+Seventeen items is a list, not a plan. They fall into five groups, and
 within each the order is a real dependency rather than a preference:
 
 | Group | Order | Why this order |
 |---|---|---|
 | **1. Decode correctness** -- what the stores say is true | **Complete** | Gaps validated against real sources, the coverage sweep worked, and coverage reported last, since a report built earlier describes an incomplete decoder. |
 | **2. Contract enforcement** -- what the code is held to | W04 → W13 → W14 | W04 puts the candidate contract at the decode boundary; W13 enforces the architecture paths mechanically, which needs the boundary to exist; W14 is the narrow Project-identity case within it. |
-| **3. Identity and naming** -- what a value means | W15 → W24 | W31 and W32 are **complete**: `IDENTITY_FORMAT` is observable as `id1` and derivation routes through `hashing`. W15 and W24 are the independent naming resolutions that remain. |
+| **3. Identity and naming** -- what a value means | W24 | W31, W32, and W15 are **complete**: `IDENTITY_FORMAT` is observable as `id1`, derivation routes through `hashing`, and raw mode `none` became `observe`. W24 is the naming resolution that remains. |
 | **4. Reporting and interface** -- how results leave the system | W18 → W38 → W21 | W18 defines the reporting contract; W38's row emitter is where a row becomes output, so it attaches to W18; W21 routes `walk_sessions`'s debug prints through the same contract; The worked examples that were W11 now belong to W05. |
-| **5. Scale and structure** -- what happens under load | W07 → W08 → W09 → W19 | W07 bounds ancillary reads, W08 establishes the workloads that measure them, W09 confirms Cursor selectivity under those workloads, W19 decomposes `walk_sessions` so the Project logic is testable apart from vendor scanning. |
+| **5. Scale and structure** -- what happens under load | W07 → W08 → W09 | W07 bounds ancillary reads, W08 establishes the workloads that measure them, W09 confirms Cursor selectivity under those workloads. W19 is **complete**: `walk_sessions`'s canonicalization rules are module-level and testable apart from vendor scanning. |
 
 Groups 1 and 2 are Baseline 2's content and run first. Group 4 depends on
 W18, which is also Baseline 2. Groups 3 and 5 are independent of both.
@@ -149,10 +149,10 @@ wait on this**, and **what does it cost to be wrong for another month.**
 | 3 | **2. Contract enforcement** (W04 → W13 → W14) | Baseline 2's substance, and coverage reporting in group 1 reports against the profiles W04 enforces. Ranked below group 1 only because a coverage gap you can see beats a conformance check you have not written. |
 | 4 | **4. Reporting and interface** (W18 → W38 → W21) | The first group whose absence a user feels rather than a maintainer. Held below contract enforcement because W18's contract should describe a decode that is already correct and enforced. |
 | 5 | **7. Recovery and hygiene** (W41, W42) | Independent of everything, small, and W41 fixes a real operational hole -- Operations 10.6 directs an operator to a command that cannot do the job. Ranked here rather than lower because it can be done in any gap between larger items. |
-| 6 | **3. Identity and naming** (W15 → W24) | W31/W32 landed with the format-5 regeneration. What remains is correctness-neutral: no reader gets a wrong answer today. |
-| 7 | **5. Scale and structure** (W07 → W08 → W09 → W19) | Deferred deliberately. No measured workload is failing, and W08 exists to establish what "too slow" means -- until that is defined, optimizing is guesswork. W19 is the exception and may be pulled forward with group 6, since both restructure the same ingest path. |
+| 6 | **3. Identity and naming** (W24) | W31/W32 landed with the format-5 regeneration and W15 with the `observe` rename. What remains is correctness-neutral: no reader gets a wrong answer today. |
+| 7 | **5. Scale and structure** (W07 → W08 → W09) | Deferred deliberately. No measured workload is failing, and W08 exists to establish what "too slow" means -- until that is defined, optimizing is guesswork. W19 was the exception and has landed. |
 
-**The one cross-group constraint worth stating:** W19 (group 7) and W45/W46
+**The one cross-group constraint, now discharged:** W19 (group 7) and W45/W46
 (group 6) restructure the same code, and three of the six remaining
 duplicate blocks live at exactly that seam. Whichever runs first should
 take the duplicates with it.
@@ -208,7 +208,7 @@ recorded as CLI. Dropping `product_name` remains pending with W51.
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. |
 | W09 | High | Planned | Confirm selective Cursor work remains independent of unrelated shared-database content. **Not in progress despite an earlier WIP label**: nothing is part-done, and the question is unanswerable until W08 establishes what "bounded" means for a measured workload. Sequence after W08. |
 | W35 | Low | **Postponed** | Decide whether the eight manifest fixtures no test reads should be wired into tests or removed from the released set. Not an integrity question: W03 took them out of the write gate, so they now affect only `codess package verify`. |
-| W38 | Normal | Planned | Give `query_cmd` one row emitter. 105 `print` calls and 27 hand-assembled rows each re-decide separator, column order, and which fields to sanitize. Pairs with W18's reporting contract. |
+| W38 | Normal | Planned | Give `query_cmd` one row emitter. 110 `print` calls and 20 hand-assembled rows each re-decide separator, column order, and which fields to sanitize. Pairs with W18's reporting contract. |
 **A value survey extends the coverage sweep from absence to constancy.**
 `tools/field_coverage.py` asks which columns are *empty*; asking which hold
 one *constant* value finds a larger and differently-shaped class. Over 241
@@ -272,7 +272,6 @@ output does not repeat the error this survey found.
 | W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES`. |
 | W13 | Normal | TODO | Mechanically enforce architecture/contract paths; observe child-process coverage. Query-request validation-library adoption is Postponed (13.4.2). |
 | W14 | Normal | TODO | Require or explicitly mark Project identity for direct library writes. |
-| W15 | Normal | **Recommended: keep the observation, rename the mode** | Resolve the meaning and name of raw mode `none`. **Measured, not argued**: `none` and `reference` run the identical code path in `raw_store.observe` -- both compute a source-revision fingerprint, both record locator, mtime, size, and consistency, and neither stores a byte. The records differ in exactly one key, `availability`, which reads `not_retained` against `reference`. So the mode does not currently choose whether to observe; it chooses what the observation is *called*. **The recommendation is to keep the observation and rename the mode**, for three reasons. (1) The observation is what makes a Source's absence checkable: a raw manifest recording `not_retained` for a Source states that Codess saw it and deliberately kept nothing, which is different from a manifest that never mentions it -- and only the first can be audited later. Dropping the record would make "no bytes retained" indistinguishable from "never read". (2) Normalized Source provenance is required either way (13.4.4), so removing the raw record would not remove the Source row; it would only remove the raw-side evidence that agrees with it. (3) The name is what actually misleads: `none` promises nothing is recorded, and something is. **`observe` states what the mode does** -- it observes the Source and retains no bytes -- against `reference`, which additionally records a resolvable reference, and `capture`/`seal`, which retain bytes. Renaming touches a CLI choice, `RAW_MODES`, the manifest values, and the documentation; the old spelling should remain a hidden alias, as `--snapshot-package-policy` did, since `--raw-mode none` appears in operator scripts. Wire-adjacent but not wire-breaking: `availability` already reads `not_retained` and does not change. | The mode name states what the mode does; a reader can distinguish "observed, nothing retained" from "never read"; the manifest, documentation, and tests agree; the previous spelling still parses. |
 | W16 | Normal | TODO | Evaluate/plan external investigation interfaces (9.7); does not authorize implementation. |
 | W17 | Normal | **Deferred to a stable baseline** | Expand cross-Project analysis inputs. Cross-Project search is accepted as an advanced feature set, so this is no longer waiting for a requester -- it waits for the baseline it would be specified against. |
 | W18 | Normal | Planned | Structured operational-reporting subsystem (9.6.1), covering counters, timings, and summaries and separating immediate from durable sinks (9.6.2). |
@@ -2931,7 +2930,7 @@ fail the check until they are closed or explained.
 | Mapping and classification | Partially compliant | Mapping profiles, traces, field diagnostics, and representative adapter fixtures exist. Common runtime conformance and strict behavior are not yet enforced uniformly across vendors. |
 | CoSchema persistence | Compliant in the principal path | The released package is hash-checked, the DDL is centralized, logical and physical contracts are compared, foreign keys are enabled, and source replacement commits or rolls back atomically. |
 | Query | Partially compliant | The typed executor provides bounded, deterministic, multi-store results with provenance and stable identities. The fixed reports are in `query_reports` rather than the command renderer, but remain outside the request contract, so query-contract parity is still incomplete. |
-| Publication and evidence | Largely compliant | SQLite backup, manifest hashes, atomic pointer replacement, content-addressed raw objects, and read-time verification implement reproducible publication. Raw-mode semantics remain unresolved under W15. |
+| Publication and evidence | Largely compliant | SQLite backup, manifest hashes, atomic pointer replacement, content-addressed raw objects, and read-time verification implement reproducible publication. Raw-mode semantics are resolved: the least-retaining mode is named `observe` and keeps its manifest observation (13.4.4). |
 | Derived values | Compliant | Every digest routes through `codess/hashing.py`, which fixes the algorithm, the canonical JSON form, and the supported widths; a contract test fails if a `hashlib` call or an undeclared width appears elsewhere. Each value's lifetime and resilience requirement is stated in 13.4.8. Where an algorithm name may appear in a stored value remains W34's question. |
 | Configuration | Compliant | Scan, ingest, and query validate resolved configuration before source work; built-ins, environment, command arguments, and JSON policies have explicit ownership. |
 | Operational reporting | Partially compliant | `ProgressTrace` supplies bounded timed ingest events, but ordinary logging, direct stderr messages, error conversion, and result-channel rules are not implemented through one structured facility. |
@@ -2946,13 +2945,13 @@ fail the check until they are closed or explained.
 | Query path fragmentation | Query-contract parity is incomplete; the fixed reports now have a domain home but remain outside the typed executor by design (13.4.1) | W05, W13 |
 | Ancillary unbounded reads | Tool output and worktree identity can materialize large bodies | W07 |
 | Project identity fallback | Direct library writes can create unrelated provisional Project IDs | W14 |
-| Raw mode ambiguity | `none` has no bytes but still creates a raw-manifest observation | W15 |
 | Test observability | Child-process scan and ingest paths are not attributed by ordinary coverage | W13 |
 | Operational reporting fragmentation | Status, progress, logger calls, exceptions, and exit results lack one event and rendering contract | W18 |
 | Discovery scoping | Aggregator and exclusion directory sets are hardcoded to one layout, and the recency window silently omitted Projects until it was reported | W27 |
 | Registry retention | The central registry accumulates an entry per Project ever scanned and prunes none | W28 |
-| Session discovery coupling | Project canonicalization is reachable only through vendor filesystem discovery, so its rules cannot be tested directly | W19 |
+| Session discovery coupling | Resolved: `in_work_root`, `project_boundary`, `is_aggregator`, and `canonicalize` are module-level with explicit parameters, so the rules are testable without a populated vendor filesystem | Closed |
 | Canonical serialization divergence | Resolved: every digest over a structure routes through one canonical encoder, so equal content cannot hash differently | Closed |
+| SQLite connection and driver boundary | Resolved: both openers own the same contract, the isolation model is stated, and the store layer raises its own error (13.4.11) | Closed |
 
 ### 13.4 Deviations and Defects
 
@@ -3539,12 +3538,30 @@ identities to separate vendor stores for one repository. Current-format writes
 should require Project identity, or mark the generated identity explicitly
 provisional and reconcile it before publication.
 
-Raw mode `none` is tracked by **W15**. It retains no raw bytes but writes
-a `not_retained` source-revision observation into the snapshot raw manifest.
-The design can be read as promising no raw-manifest record. The decision must
-state whether `none` means no bytes or no raw observation and then align the
-mode name, manifest, documentation, and tests. Normalized Source provenance is
-required either way.
+Raw mode `none` was tracked by **W15**, now closed. The mode retained no bytes
+but wrote a `not_retained` source-revision observation, so the name promised
+something the implementation did not do. **The observation was kept and the mode
+renamed to `observe`**, because that record is what makes a Source's absence
+checkable: `availability=not_retained` states that Codess read the Source and
+deliberately kept nothing, which a manifest that never mentions the Source
+cannot state, and only the first can be audited later.
+
+The rename resolved at one boundary rather than at each comparison.
+`config.canonical_raw_mode` maps the previous spelling to the stored name and
+doubles as an argparse `type`, which runs before `choices` -- so `--help` lists
+one name per mode while `--raw-mode none` in an operator script still parses.
+`RAW_MODE_ALIASES` is deliberately outside `RAW_MODE_CHOICES`, since argparse
+would otherwise offer both spellings as equals.
+
+**Writing it found a defect the rename would have introduced.**
+`refresh_operations._automatic_raw_mode` reads the mode a snapshot was built
+under out of its retained manifest and falls back to `reference` on any value it
+does not recognize. Without canonicalization a Project built under `none` would
+have silently started recording resolvable references on its next refresh --
+the failure mode being that a Project which deliberately retained nothing begins
+retaining something, with no error. Two further readers compare across
+spellings and now canonicalize both sides: the validation policy check
+(`policy.raw_mode`) and the annotation that classifies limited retention.
 
 Package identity separation was tracked by **W03**, now closed; the decision
 and what implementing it revealed are recorded at the end of this section.
@@ -5173,6 +5190,64 @@ suite gates its exit status: lint and types have nonzero baselines being
 reduced against named items, and failing on them would make the report
 unusable exactly while it is most useful.
 
+#### 13.4.11 The SQLite Connection and Driver Boundary
+
+Where SQL may live is 13.4.10's subject; this is how Codess *talks to* SQLite.
+The distinction matters because the properties a caller depends on --
+`query_only`, `foreign_keys`, `busy_timeout`, `row_factory` -- are applied by
+SQLite **per connection and never per file**, so opening the same store two ways
+gives two different guarantees. Tracked as **W56**, now closed in four parts.
+
+**One opener owns each contract.** `fileio.open_readonly` owned the read side
+already; `fileio.open_writable` now owns the write side, and `store.init_db`,
+`store.connect`, and `snapshot._backup_store` adopt it, the last with
+`foreign_keys=False` stated at the call site because `backup()` copies pages and
+row-level constraints never apply. Two raw `sqlite3.connect` calls remain, both
+inside `fileio`'s own openers, plus one in `raw_store` that states why it differs.
+A test fails if a third appears.
+
+**Removing a redundant assignment exposed a real asymmetry.** `store.connect`
+re-set `row_factory` and `foreign_keys` after the opener had already applied
+them, which read as belt-and-braces. It was not: `open_writable` set
+`row_factory` and `open_readonly` did not, so `store.connect` was silently
+compensating for the read path -- and a caller opening the same store through
+`open_readonly` directly received positional tuples where one going through
+`store.connect` received named rows. Deleting the compensation turned that into
+52 failing tests, which is how the gap became visible. The fix is that both
+openers own `row_factory`. Setting `foreign_keys = ON` unconditionally was also
+wrong for the read path, where `query_only` makes constraint enforcement moot.
+
+**The isolation model is stated rather than defaulted silently.** Codess uses
+deferred transactions throughout -- SQLite's default, with no `isolation_level`
+set, no `BEGIN IMMEDIATE`, and `read_uncommitted` never enabled -- across 16
+commit and rollback sites in 7 modules. Deferred is correct for a single-writer
+local tool, but the point of writing it down is that a reader could not
+previously distinguish the decision from an omission. It is recorded on the
+openers, where a reader looks, with the two sites that need more than the
+default naming their reason locally: `cursor_source.get_selection_markers`
+brackets its reads in one explicit transaction because a vendor database is
+written by its own live application and a read snapshot ends with the
+transaction, and the `backup()` sites take their own page-level snapshot and are
+not governed by the model at all.
+
+**The driver boundary was one handler, not fifteen.** The original inventory
+counted `except sqlite3.Error` handlers and read all of them as catching a
+driver exception across a layer boundary. Classifying them by *who opened the
+connection* gives a different answer: of 14 handlers in 10 modules, 13 are in a
+module that opened the connection itself, so the exception originates locally and
+catching it there is correct. Exactly one crossed a boundary -- `query_cmd`
+opens no connection and caught `sqlite3.Error` raised inside the store layer,
+because the store layer had no error of its own while every peer
+(`RawCaptureError`, `SnapshotError`, `QueryContractError`) did. `store.StoreError`
+closes that: `connect` translates a driver failure, the CLI catches the Codess
+error, and a test asserts `StoreError` is not a `sqlite3.Error` subclass so the
+boundary is real rather than nominal.
+
+The general lesson is the one 15.7 records in another form: a count is not a
+classification. "Fifteen handlers catch the driver" and "one handler catches the
+driver across a boundary" were derived from the same grep, and only the second
+described work worth doing.
+
 ### 13.5 Mechanical Enforcement
 
 **Status: Postponed.** The test layout matches the intended validation
@@ -5213,15 +5288,15 @@ work intentionally outside the current phase.
 
 ### 14.1 Grouping and Sequence
 
-Twenty-five open items is too many to act on as a list. They fall into six
+Twenty-two open items is too many to act on as a list. They fall into six
 groups by what they change, which is also roughly their risk order. Within a
 group the items are largely independent; between groups the order matters.
 
 | Group | Items | Impact if wrong | Risk of doing it |
 |---|---|---|---|
 | Decode correctness | W01, W02 | Stored evidence is wrong or missing, and nothing downstream can detect it | Low: additive, verified against real Sources |
-| Store identity and integrity | W14, W15, W35 | A store cannot be written, or an identity means two things | Low now: the rebuild-forcing items (W25, W31-W34, W36) landed together in format 5 |
-| Structure and boundaries | W19, W21, W24, W56 | Nothing breaks; the code stays hard to change | Medium: behavior-preserving, but wide diffs |
+| Store identity and integrity | W14, W35 | A store cannot be written, or an identity means two things | Low now: the rebuild-forcing items (W25, W31-W34, W36) landed together in format 5 |
+| Structure and boundaries | W21, W24 | Nothing breaks; the code stays hard to change | Medium: behavior-preserving, but wide diffs |
 | Query and contract surface | W04, W05, W13, W17 | Results are unclear or unverifiable | Low to medium |
 | Operations and reporting | W16, W18, W28 | Operators cannot see what happened or scope what runs | Low: mostly additive |
 | Performance and bounding | W07, W08, W09 | Large inputs are slow or unbounded; Cursor work may depend on unrelated shared content | Low |
@@ -5254,7 +5329,7 @@ deeper one over the families W01 would flag.
 
 #### 14.1.2 Store Identity and Integrity
 
-**W14, W15, W35. The group is now small**, because the six items that forced
+**W14, W35. The group is now small**, because the six items that forced
 a rebuild landed together as CoSchema format 5: W25 (time columns), W31 and
 W32 (identity derivation and its emitted tag), W33 (`contract_digest`), W34
 (`sha256` out of column and value names), and W36 (the `state.product`
@@ -5262,12 +5337,12 @@ split). What each changed is recorded on the F category above and in
 CoSchema 5.1.1; the outcome is that a store written under format 4 is refused
 with the rebuild command named.
 
-**W15 now carries a recommendation** rather than an open argument: `none`
-and `reference` were measured to run one code path differing in a single
-label, so the mode never chose whether to observe -- only what the
-observation is called. Keep the observation, rename the mode to `observe`.
-W35 is Postponed by decision rather than blocked. W14 is small and
-independent.
+**W15 landed.** `none` and `reference` were measured to run one code path
+differing in a single label, so the mode never chose whether to observe -- only
+what the observation is called. The observation was kept and the mode renamed to
+`observe`, with the previous spelling accepted at one boundary; the outcome and
+the refresh defect the work found are recorded in 13.4.4. W35 is Postponed by
+decision rather than blocked. W14 is small and independent.
 
 **What the batch established for the next one.** The guard has to precede the
 rename, not follow it: W52 step 4 landed first and then located every site
@@ -5288,7 +5363,7 @@ workloads W08 establishes.
 
 #### 14.1.3 Structure and Boundaries
 
-**W19, W21, W24, W56. Nearly closed.** W06, W23, and W26 completed, which
+**W21, W24. Nearly closed.** W06, W23, and W26 completed, which
 discharged W24's stated dependency: the Cursor split is settled (6.4) and the
 command modules no longer hold the workflows W24's vendor table was competing
 with (13.4.1).
@@ -5299,16 +5374,14 @@ inventory shifted: `ingest_publication` and `query_reports` each carry their
 own vendor mapping, which are new instances of exactly what W24
 consolidates, created by moving code rather than by adding knowledge.
 
-W19 is independent and can proceed whenever. W21 waits on two things, not
-one: W19's extraction, and W18's reporting contract to route the statements
-into. It cannot start before both.
+W19 has landed, so W21 no longer waits on the extraction -- only on W18's
+reporting contract to route the statements into.
 
-W56 is independent of all three. It follows W52 naturally -- that item
-consolidated how a statement is *built*, and this one asks about the
-connection the statement runs on -- but nothing waits on it. Its
-`foreign_keys` half is worth reading before scheduling: the capability gap is
-real and measured, while no current path reaches it, so the work is closing a
-hole before something falls in rather than repairing one.
+**W56 has landed** and left the group. It followed W52 naturally -- that item
+consolidated how a statement is *built*, and this one settled the connection the
+statement runs on. Its `foreign_keys` half was written as closing a hole before
+something fell in, which held; what it also found was an asymmetry already in
+effect, since only the write opener set `row_factory`. The outcome is 13.4.11.
 
 Nothing in this group changes behavior, which is what makes it safe to defer
 and expensive to interleave with identity work -- a wide behavior-preserving
@@ -5383,7 +5456,7 @@ active list, where they read as work someone intends to start.
 | W08 | High | Planned | Establish repeatable query and ingest performance workloads. | Small correctness and representative scale cases report timing, query plans, rows, memory, and stable result identities. |
 | W09 | High | Planned | Confirm selective Cursor work remains independent of unrelated shared-database content. **Not in progress despite an earlier WIP label**: nothing is part-done, and the question is unanswerable until W08 establishes what "bounded" means for a measured workload. Sequence after W08. | Selection, fingerprinting, decode, and query remain bounded as unrelated Cursor content grows. |
 | W24 | Normal | Planned | Bundle the three-vendor description into one shared vendor table, generalizing `store.SOURCE_PROFILES` so discovery, refresh, review, Project handling, and the command modules stop re-deriving partial vendor views from bare keys (3.5.5). The vendor table describes vendors; adapters interpret them, and decode behavior must not migrate into it. Do not name it a registry -- that term already denotes the central `~/.codess` store. | One vendor description supplies keys, display names, identity fields, paths, and store filenames; no module repeats the vendor key set or a key-to-name mapping; adding a vendor touches the vendor table and its adapter, not the command layer. |
-| W38 | Normal | Planned | Give `query_cmd` one tabular row emitter. The module has **105 `print` calls** and **27 sites that assemble a row by hand**, each joining sanitized fields with tabs or interpolating several into an f-string, so every site independently re-decides the separator, the column order, and which fields need sanitizing. Adding a field to one report reaches the others only if someone edits each. This surfaced from a call-count review: `sanitize_tabular` is called 43 times in this one file against 1 elsewhere, and the concentration measures the repetition *around* the helper rather than the helper itself, which is correct at five lines. A single emitter taking fields and a format would own the joining and reduce the count to one call inside it, without removing a capability. Pairs with **W18**: the reporting contract needs one place where a row becomes output, and building the emitter first gives W18 something to attach a format to. | One function emits a tabular row; separator and sanitizing are decided once; a new output format is added in one place; `query_cmd` prints through it rather than around it. |
+| W38 | Normal | Planned | Give `query_cmd` one tabular row emitter. The module has **110 `print` calls** and **20 sites that assemble a row by hand**, each joining sanitized fields with tabs or interpolating several into an f-string, so every site independently re-decides the separator, the column order, and which fields need sanitizing. Adding a field to one report reaches the others only if someone edits each. **Counts remeasured**: the print calls rose from 105 to 110 while the hand-assembled rows fell from 27 to 20. The rise is drift of exactly the kind the item describes -- a field added to one report reaches the others only if someone edits each. The fall is a measurement correction: 27 came from counting *lines* carrying a tab, which double-counts one multi-line f-string as several rows, where 20 counts `print` statements that emit a tab-separated row. The second is the number of sites an emitter would replace. This surfaced from a call-count review: `sanitize_tabular` is called 44 times in this one file against 1 elsewhere, and the concentration measures the repetition *around* the helper rather than the helper itself, which is correct at five lines. A single emitter taking fields and a format would own the joining and reduce the count to one call inside it, without removing a capability. Pairs with **W18**: the reporting contract needs one place where a row becomes output, and building the emitter first gives W18 something to attach a format to. | One function emits a tabular row; separator and sanitizing are decided once; a new output format is added in one place; `query_cmd` prints through it rather than around it. |
 | W35 | Low | Postponed | Resolve the validation-fixture inventory. Ten of the sixteen released manifest entries are fixtures; two are read by tests, by direct path rather than through the manifest, and the remaining eight are referenced by nothing but the manifest itself. They therefore cannot fail a test, because no test reads them. W03 removed them from the write gate, so they no longer gate anything a store does, which is why this is Low rather than Critical: it is now a question about what the released set should contain, not about whether stores can be written. Either wire each fixture into a test that reads it through the manifest, or remove it from the released set; carrying a released file no consumer reads is a claim the repository cannot check. | Every entry in the released manifest has a named consumer, or is removed; a test fails if an entry acquires none. |
 
 ### 14.3 Next Functional Work
@@ -5392,12 +5465,10 @@ active list, where they read as work someone intends to start.
 |---|---|---|---|---|
 | W13 | Normal | TODO | Mechanically enforce architecture and contract paths and make coverage observe child-process execution. Adopting a validation library for query requests is Postponed under 13.4.2, which also records the retained schema files' status in one place. | Import and SQL ownership checks enforce declared layers; scan and ingest execution contributes usable coverage evidence. |
 | W14 | Normal | TODO | Require or explicitly mark Project identity for direct library writes. | Separate vendor stores cannot silently create unrelated Project identities for one repository. |
-| W15 | Normal | **Recommended: keep the observation, rename the mode** | Resolve the meaning and name of raw mode `none`. **Measured, not argued**: `none` and `reference` run the identical code path in `raw_store.observe` -- both compute a source-revision fingerprint, both record locator, mtime, size, and consistency, and neither stores a byte. The records differ in exactly one key, `availability`, which reads `not_retained` against `reference`. So the mode does not currently choose whether to observe; it chooses what the observation is *called*. **The recommendation is to keep the observation and rename the mode**, for three reasons. (1) The observation is what makes a Source's absence checkable: a raw manifest recording `not_retained` for a Source states that Codess saw it and deliberately kept nothing, which is different from a manifest that never mentions it -- and only the first can be audited later. Dropping the record would make "no bytes retained" indistinguishable from "never read". (2) Normalized Source provenance is required either way (13.4.4), so removing the raw record would not remove the Source row; it would only remove the raw-side evidence that agrees with it. (3) The name is what actually misleads: `none` promises nothing is recorded, and something is. **`observe` states what the mode does** -- it observes the Source and retains no bytes -- against `reference`, which additionally records a resolvable reference, and `capture`/`seal`, which retain bytes. Renaming touches a CLI choice, `RAW_MODES`, the manifest values, and the documentation; the old spelling should remain a hidden alias, as `--snapshot-package-policy` did, since `--raw-mode none` appears in operator scripts. Wire-adjacent but not wire-breaking: `availability` already reads `not_retained` and does not change. | The mode name states what the mode does; a reader can distinguish "observed, nothing retained" from "never read"; the manifest, documentation, and tests agree; the previous spelling still parses. |
 | W16 | Normal | TODO | Evaluate, design, and plan the external investigation interfaces described in Section 9.7; this backlog item does not authorize implementation. | A written decision maps existing capabilities and gaps, selects or rejects data and code integration paths, specifies any proposed contracts, and defines staged work with licensing, privacy, security, and validation criteria. |
 | W17 | Normal | **Deferred to a stable baseline** | Expand cross-Project analysis inputs. Cross-Project search is an accepted advanced feature set rather than a hypothetical, so this is no longer waiting for a requester -- it is waiting for the baseline it would be specified against. Reopen when Baseline 2 is met, so the entities, fields, and grain are chosen against a decode that is enforced (W04) and results that state what they missed, rather than against a surface still changing underneath them. | Baseline 2 is met; a consumer then identifies entities, fields, selection, transformation, and output checks. |
 | W18 | Normal | Planned | Implement and transition to the structured operational-reporting subsystem defined in Section 9.6.1, with the counter, benchmark, summary, and permanence/immediacy scope in 9.6.2. | One event contract and its renderers govern status, progress, warnings, counters, timings, summaries, and command-boundary errors; a tight call site pays an integer add rather than a constructed event; immediate and durable sinks are separate and `mapping_diagnostics` stays outside the facility; stdout results remain clean, retained events remain bounded, and all command families pass channel, privacy, and failure-path tests. |
 | W21 | Normal | Planned | Route the `walk_sessions` inline `debug` print statements through the reporting contract W18 defines, rather than the module-local diagnostics dictionary. Starts after W19's extraction and W18's contract; excluded from W19 so the extraction stays behavior-preserving (13.4.7). | The statements emit through the shared contract with tests asserting channel and content; no direct `print` for operational status remains in the module. |
-| W56 | Normal | **Steps 1 and 3 landed** | **Own the SQLite interface: isolation, transactions, and the driver boundary.** **Step 1 is done**: `fileio.open_writable` owns the write-side contract -- `row_factory`, `foreign_keys`, `busy_timeout` -- and `store.init_db`, `store.connect`, and `snapshot._backup_store` adopt it, the last with `foreign_keys=False` stated because `backup()` copies pages. `snapshot._logical_counts` moved to `open_readonly`, being a read. One raw `sqlite3.connect` remains, in `raw_store`, and states at the call site why it differs. **Step 3 is done**: `baseline_validation`, `evidence`, `storage_report`, and `token_usage` each record why they read core tables directly. **Remaining: steps 2 and 4** -- state the isolation model across 16 commit sites, and stop 15 `except sqlite3.Error` handlers catching a driver exception across a layer boundary, which overlaps W18's error boundary and should land with it. Original statement follows. This is the item for how Codess *talks to* SQLite. Where SQL may live is W52 (complete) and W13's ownership check; what columns are called is W50/W51. Those are cited here rather than restated. **Terminology, fixed once for this subject.** A *connection contract* is the set of per-connection properties a caller depends on -- SQLite applies `query_only`, `busy_timeout`, `foreign_keys`, and `row_factory` per connection, never per file, so opening the same store two ways gives two different guarantees. An *opener* is a function owning one such contract. A *direct read* is a core-table `SELECT` from outside the query and store layers. **Measured surface**: 18 modules import `sqlite3`, but 51 of those uses are the `sqlite3.Connection` type annotation -- a signature, not an access path. What matters is 3 openers, 6 raw `sqlite3.connect` calls, 14 distinct pragmas, and 15 `except sqlite3.Error` handlers. **(1) The read contract has an owner; the write contract has none.** `fileio.open_readonly` owns URI, `query_only`, and `busy_timeout` for every reader, and 3.5.4 records why it had to: only some sites had set `query_only`, so the guarantee varied by site rather than by intent. Writing never got that pass. `store.connect` sets `row_factory` and `foreign_keys=ON`; the four raw write connections -- `store.init_db`, `snapshot._backup_store`, `snapshot._logical_counts`, `raw_store._sqlite_backup` -- set neither. **Measured: 18 of 24 tables carry foreign keys, and a raw connection accepts an orphan Event that `store.connect` refuses.** No current path reaches it, because all four write only `store_meta` (no foreign keys) or use `backup()`, which copies pages and bypasses constraints by design. So this closes a hole rather than repairs one, and `tests/test_store.py::TestConnectionEnforcesConstraints` already pins the present behavior including that `store_meta` carries no foreign key. **Decide per site, not wholesale**: `init_db` should adopt a shared `open_writable` since it creates the store every later writer depends on; the two `backup()` sites arguably should not, and 3.5.3's warning against false consolidation applies to connections as much as to constants. **(2) Isolation is at its default and undocumented.** Codess uses deferred transactions throughout -- no `BEGIN IMMEDIATE`, no `read_uncommitted` -- across 16 commit/rollback sites in 8 modules. That is defensible for a local single-writer tool, but it is nowhere stated, so a reader cannot tell a decision from an omission. The one place isolation *is* reasoned about is Cursor's live WAL, where `cursor_cohort.resolve_selection_markers` brackets a read with container observations because a read transaction's snapshot ends with the transaction (W46, now tested). State the isolation model, and say which of the 16 sites need more than the default. **(3) Direct reads are named for three modules and unnamed for the largest.** W52 step 3 recorded why `orientation_audit`, `configuration_audit`, and `mcp_audit` read core tables directly. **`baseline_validation` was never in that list and holds 38 statements across 18 tables -- more than those three combined.** Its reason is as good or better: `canonical_rows` enumerates every table deliberately to compute the semantic digest that fixed-point validation compares, so routing it through the query layer would make the check depend on the code it exists to check. It is unrecorded rather than unjustified, which is the gap. `evidence`, `storage_report`, `token_usage`, and `coverage_report` hold 2 to 5 each and want the same one-line treatment. **(4) The driver boundary leaks.** 15 `except sqlite3.Error` handlers catch a driver exception across a layer boundary; a caller of a store operation should catch a Codess error. **Sequence.** (1) then (3) are independent and safe -- one adds an opener, the other adds documentation. (2) should follow (1), since stating the isolation model is easier once one function owns the connection. (4) is last and largest, and it overlaps W18's error-boundary work, so it should land with or after that rather than twice. | One opener owns each of the read and write connection contracts, or each exception states why it differs; the isolation model is stated and each site that needs more than the default says so; every module reading core tables from outside the query and store layers records why, `baseline_validation` included; a caller does not catch a driver exception across a layer boundary; a test fails if a new raw `sqlite3.connect` appears outside the openers. |
 | W63 | Normal | **Survey landed; reporting remains** | **Assess the vendor container directories for evidence Codess does not read.** **Done**: the survey is recorded below and `codex_source.unrolled_history_sessions` measures the one gap, returning counts and identifiers with no prompt text. **Remaining**: route that measurement into the coverage report, so the figure appears beside the other loss counts rather than only from a function call. Codess reads one subtree per vendor -- `~/.claude/projects`, `~/.codex/sessions` (plus `archived_sessions`, already covered), and Cursor's `globalStorage` and `workspaceStorage`. Each container holds more, and a survey of what else is there found one real gap and several correct exclusions. **The gap, and it is smaller than first measured**: `~/.codex/history.jsonl` records human prompts keyed by `session_id`, 2,671 prompts across 19 Sessions on the development machine. **Eighteen have a rollout and one does not**, carrying 2 prompts. A first count said three, having read only the active tree; two of those had archived rollouts, which is the measurement error worth recording -- the archive is a rollout location, not a different Session identity (6.3). **Decided: report, do not admit.** `codex_source.unrolled_history_sessions` measures it and returns counts and identifiers with no prompt text. Admitting a history-only Session would mean a Session with prompts and no Model Turns, which changes what a Session is and is a mapping decision under 6.5; stating that evidence exists which Codess cannot decode is a coverage statement, and is what W47's record-level diagnostics are for. **Remaining**: route the measurement into the coverage report, so the count appears beside the other loss figures rather than only from a function call. **Correctly not read, and worth recording so the question is not reopened**: Cursor's `History/` (36 MB) is VS Code's file-undo feature, storing editor snapshots of file contents rather than Session records; `~/.codex/logs_2.sqlite` (85 MB) and `log/` are client diagnostics; `plugins/`, `cache/`, `computer-use/`, and `vendor_imports/` are program state. None is a Session record, and reading any would be the alternate-decode-path 3.3 forbids. **Bound the assessment**: this is a survey of what a vendor retains, not a licence to read a container. Any addition needs the evidence audit 6.5 requires -- shape, field presence, and a mapping decision -- before an adapter touches it. | Each vendor container is surveyed once and the result recorded; a retained file that is not a Session record is listed with what it is, so the question is settled rather than re-asked; a history-only Session is either admitted or diagnosed, not silently absent. |
 | W61 | Normal | Planned | **Discovery crosses filesystem boundaries without saying so.** `walk_sessions` never inspects `st_dev`, so a network mount, an external volume, or a container bind-mount inside the work root is walked like any other directory. That is usually wanted -- a Project on an external disk is still a Project -- and is badly behaved when the mount is remote: a stat-per-directory traversal over NFS or SMB turns a seconds-long scan into a minutes-long one, and an unreachable mount blocks on I/O with no timeout (W62). It is also a disclosure surface, since a scan of a shared mount reads paths belonging to other users. **Proposal**: record the device of the work root, and on crossing to a different one emit a diagnostic naming the path and continue by default; `--same-filesystem` refuses instead. Reporting first rather than refusing first, because the common case -- an external disk holding real Projects -- is one a refusal would break. | A scan states when it left the work root's filesystem; an operator can bound it to one device; a remote mount is a reported cost rather than an unexplained delay. |
 | W62 | Normal | Planned | **Traversal has no time or size budget.** `walk_sessions` takes a work root and a recency window and no bound on the work itself: no maximum directory count, no deadline, no progress-based abort. On a large or slow tree -- a network mount (W61), a home directory with many nested checkouts -- a scan runs until it finishes, and the operator's only signal is that it has not returned. Operations 10.5.2 recommends a quick probe before a full scan precisely because the full scan is unbounded, which is a documentation workaround for a missing control. **Proposal**: a directory-count budget and a wall-clock deadline, both configurable, with the partial result returned and marked incomplete rather than discarded -- a scan that examined 90% of a tree has found 90% of the Projects, and throwing that away to report nothing is the worse failure. Pairs with W18: "examined N directories, stopped at the budget" is an operational event, and the budget is the kind of resource bound 10.2 already requires elsewhere. | A scan states its budget and whether it was reached; a partial scan reports what it found and that it is partial; no traversal runs unbounded. |
@@ -5601,8 +5672,8 @@ active list, where they read as work someone intends to start.
   time only for recorded timestamps, since monotonic time cannot move
   backwards across a clock adjustment. Codess already follows this in
   `ProgressTrace` and ingest timing but has never written it down.
-- Decompose `walk_sessions()`. Tracked as **W19**; the review, candidate
-  designs, and validation approach are in 13.4.7.
+- Decompose `walk_sessions()`. **Complete** as W19, design A; the review,
+  candidate designs, and what the extraction established are in 13.4.7.
 
 ### 14.5 Deferred Directions
 
@@ -5625,7 +5696,7 @@ limitation justifies reopening them:
 
 ### 14.6 Current Sequence
 
-Nineteen open items in four batches. A batch is work that should land as one
+Seventeen open items in four batches. A batch is work that should land as one
 change because its parts share a cost, a rebuild, or a call site -- not merely
 because it is similar.
 
@@ -5666,10 +5737,13 @@ boundary, and privacy classes. Report 13.3 states six entry gates, and **G1 to
 G3 add a facility without removing one**, so the first three steps land
 independently of any decision.
 
-**Pull W56 steps 2 and 4 into this batch.** Step 4 stops 15
-`except sqlite3.Error` handlers catching a driver exception across a layer
-boundary, which is the same work as W18's error boundary at the same call
-sites. Doing them separately means editing those sites twice.
+**W56 no longer feeds this batch.** Its step 4 was scheduled here on the
+expectation that 15 `except sqlite3.Error` handlers needed moving to W18's error
+boundary at the same call sites. Classifying the handlers by who opened the
+connection reduced that to one, which landed with the rest of W56 rather than
+waiting for the reporting contract (13.4.11). W18's error boundary is therefore
+narrower than planned: the store layer now raises `StoreError`, so W18 inherits a
+boundary rather than creating one.
 
 #### 14.6.3 Batch C -- Measurement, then bounding
 
@@ -5684,11 +5758,13 @@ slow filesystem exposes; the reverse order reports a problem it cannot limit.
 
 #### 14.6.4 Batch D -- Independent, any order
 
+**W15 has landed** and left the batch: the recommendation was accepted, the mode
+is `observe`, and the previous spelling still parses (13.4.4).
+
 | Item | Priority | Note |
 |---|---|---|
 | **W05** | High | Needs three to five named investigations and a reader, not code. Cheapest of the four and the only one that validates the query surface against questions it was not built against |
 | **W04** | High | Precedes coverage reporting: a report against unenforced profiles attests to nothing. Baseline 2's substance |
-| **W15** | Normal | Carries a recommendation on measured evidence; needs an accept or reject, then it is mechanical |
 | **W63** remainder | Normal | Route the history measurement into the coverage report |
 | **W14** | Normal | Small; require or mark Project identity for direct library writes |
 

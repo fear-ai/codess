@@ -50,7 +50,11 @@ def env_path(key: str, default: str) -> Path:
 
 
 def env_raw_mode(key: str, default: str) -> str:
-    """Read CODESS_RAW_MODE, normalized like the hand-written form it replaces."""
+    """Read CODESS_RAW_MODE, normalized like the hand-written form it replaces.
+
+    Case and surrounding space only. The alias resolution is applied where the
+    value is bound, since `RAW_MODE_ALIASES` is declared below this parser.
+    """
     return os.environ.get(key, default).strip().lower()
 
 
@@ -262,7 +266,7 @@ SUBAGENT = _IS_ENV_VALUES["CODESS_SUBAGENT"]
 
 # --- Ingest redaction default (CLI --redact ORs on top) ---
 INGEST_REDACT = _IS_ENV_VALUES["CODESS_REDACT"]
-RAW_MODES = ("none", "reference", "capture", "seal")
+RAW_MODES = ("observe", "reference", "capture", "seal")
 """How much of a Source's exact bytes a run retains, in increasing degree.
 
 A closed vocabulary: unlike `actor_kind`, `content_role`, and `origin_kind` --
@@ -275,10 +279,44 @@ Ordered from least to most retained, which is the order every message that
 lists them uses. `config` owns it because config is a leaf module: the
 validators that consult it live above, and `raw_store` re-exports it as a
 set for membership tests.
+
+`observe` is the least-retaining mode and it does observe: it fingerprints the
+Source and records locator, mtime, size, and consistency, retaining no bytes.
+The name states that, where the previous spelling `none` promised nothing was
+recorded while a manifest entry was written -- and that entry is what makes a
+Source's absence checkable, since `availability=not_retained` says Codess read
+the Source and deliberately kept nothing, which a manifest that never mentions
+it cannot say. `reference` additionally records a resolvable reference;
+`capture` and `seal` retain bytes.
 """
 
 RAW_MODE_CHOICES = RAW_MODES
 """Alias for argparse `choices`, where the plural reads as the parameter."""
+
+RAW_MODE_ALIASES = {"none": "observe"}
+"""Accepted spellings that are not the stored name, mapped to it.
+
+`--raw-mode none` appears in operator scripts and in retained manifests, so the
+spelling keeps parsing rather than failing a run that worked yesterday. It is
+deliberately absent from `RAW_MODE_CHOICES`: argparse would list it as an equal
+option, and there is one name for the mode.
+"""
+
+
+def canonical_raw_mode(value: str) -> str:
+    """Resolve one raw-mode spelling to the stored name.
+
+    Every boundary that accepts a mode calls this before comparing or storing
+    it, so an alias is resolved once at the edge rather than carried inward and
+    tested for at each use. An unrecognized value is returned unchanged for the
+    caller's own validator to reject, which keeps the rejection message and its
+    valid list in the one place that owns them.
+
+    Suitable as an argparse `type`, which runs before `choices`: the alias
+    becomes the stored name and then passes the membership test, so `--help`
+    lists one name per mode while the previous spelling still parses.
+    """
+    return RAW_MODE_ALIASES.get(value, value)
 
 
 def raw_mode_error(name: str, value: object, *, extra: tuple[str, ...] = ()) -> str:
@@ -288,13 +326,18 @@ def raw_mode_error(name: str, value: object, *, extra: tuple[str, ...] = ()) -> 
     own message, so adding a mode meant editing prose in five files and the
     vocabulary in six. `extra` carries the values a particular site accepts
     beyond the stored ones, which is `auto` for refresh.
+
+    Aliases are deliberately unlisted: the message names what a mode should be
+    called, and offering two spellings for one mode is what this item removed.
     """
     allowed = tuple(extra) + RAW_MODES
     listed = ", ".join(allowed[:-1]) + f", or {allowed[-1]}"
     return f"{name}={value!r} must be {listed}"
 
 
-RAW_MODE = _IS_ENV_VALUES["CODESS_RAW_MODE"]
+# Canonicalized here rather than at each reader, so `config.RAW_MODE` is always
+# the stored name and no downstream comparison has to know the alias exists.
+RAW_MODE = canonical_raw_mode(_IS_ENV_VALUES["CODESS_RAW_MODE"])
 STRICT_MAPPING = _IS_ENV_VALUES["CODESS_STRICT_MAPPING"]
 CONTENT_POLICY = _IS_ENV_VALUES["CODESS_CONTENT_POLICY"]
 RESOURCE_POLICY = _IS_ENV_VALUES["CODESS_RESOURCE_POLICY"]

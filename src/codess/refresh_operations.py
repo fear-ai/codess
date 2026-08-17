@@ -17,6 +17,7 @@ from codess.config import (
     LAST_INGEST_REPORT_FILE,
     RAW_MODES,
     STORE_DIR,
+    canonical_raw_mode,
     raw_mode_error,
 )
 from codess.fileio import hash_file, read_json, write_json_atomic
@@ -138,9 +139,14 @@ def _automatic_raw_mode(registry: Path, project_id: str) -> str:
             return "reference"
         snapshot, _pointer = resolved
         manifest = read_manifest(snapshot)
-        mode = manifest.get("build_policy", {}).get("raw_mode")
+        # A retained manifest may record the previous spelling of the
+        # least-retaining mode, so the stored value is canonicalized before it is
+        # matched: a snapshot built under `none` refreshes under `observe`
+        # rather than falling through to the `reference` default and silently
+        # starting to record references.
+        mode = canonical_raw_mode(str(manifest.get("build_policy", {}).get("raw_mode")))
         if mode in RAW_MODES:
-            return str(mode)
+            return mode
     except (SnapshotError, OSError, KeyError, TypeError, json.JSONDecodeError):
         pass
     return "reference"
@@ -177,6 +183,7 @@ def resolve_refresh_selection(
         raise ValueError("source must be all, cc, codex, or cursor")
     # `auto` is refresh's own value: it means "keep whatever the current
     # snapshot was built under", which only a refresh can resolve.
+    raw_mode = canonical_raw_mode(raw_mode)
     if raw_mode not in ("auto", *RAW_MODES):
         raise ValueError(raw_mode_error("raw_mode", raw_mode, extra=("auto",)))
 

@@ -27,6 +27,35 @@ class HashMismatchError(RuntimeError):
     """A file's content did not match the hash a caller expected."""
 
 
+# --- Isolation model ---------------------------------------------------------
+#
+# Codess uses SQLite's *deferred* transactions throughout, which is the driver's
+# default and is stated here because a reader cannot otherwise distinguish a
+# decision from an omission. No opener sets `isolation_level`, no site issues
+# `BEGIN IMMEDIATE`, and `read_uncommitted` is never enabled.
+#
+# Deferred is correct for this workload because Codess is a single-writer local
+# tool: one ingest process writes one Project store set, and a write lock is
+# acquired at the first write statement rather than at `BEGIN`. The failure
+# deferred transactions invite -- two writers both starting a read, then both
+# upgrading, one losing with `SQLITE_BUSY` -- needs a second writer to reach,
+# and the only concurrency Codess has is several readers, which SQLite serves
+# without conflict. `busy_timeout` covers the remaining case, a reader waiting
+# on an unrelated process holding the lock.
+#
+# Two sites need more than the default and say so at the call site rather than
+# here. `cursor_source.get_selection_markers` brackets its reads in an explicit
+# `BEGIN`/`rollback`, because a vendor database is written by its own live
+# application and a read transaction's snapshot ends with the transaction, so
+# several reads that must agree have to share one. `raw_store` and `snapshot`
+# use SQLite's `backup()`, which takes its own consistent page-level snapshot
+# and is not governed by this model at all.
+#
+# A write path that acquires the lock late and must not lose it -- a second
+# writer, or a long read-then-write sequence -- would need `BEGIN IMMEDIATE`.
+# None exists today; adding one is the point at which this comment changes.
+
+
 
 def quote_identifier(name: str) -> str:
     """Render `name` as one SQLite identifier, safe to interpolate.
@@ -75,6 +104,9 @@ def open_writable(
     `foreign_keys=False` is available for the one legitimate case -- a copy
     being populated by `backup()`, where row-by-row constraints do not apply
     -- and stating it at the call site is the point.
+
+    `row_factory` is set here and in `open_readonly`, so a store yields named
+    rows however it was opened.
     """
     conn = sqlite3.connect(db_path, timeout=timeout)
     conn.row_factory = sqlite3.Row
@@ -114,6 +146,12 @@ def open_readonly(
     conn = sqlite3.connect(
         db_path.resolve().as_uri() + parameters, uri=True, timeout=timeout,
     )
+    # `row_factory` is part of both connection contracts, not just the write
+    # one. It was set only by `open_writable`, so `store.connect` re-set it for
+    # every reader -- which meant a caller opening a store through this function
+    # directly got positional tuples while one going through `store.connect` got
+    # named rows, from the same file. Owning it here makes the two agree.
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA query_only = ON")
     conn.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
     return conn

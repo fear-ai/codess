@@ -23,6 +23,7 @@ from codess.config import (
 )
 from codess.fileio import open_readonly, write_json_atomic
 from codess.resources import allocated_bytes, file_usage, storage_usage, tree_usage
+from codess.schema_contract import FORMAT_VERSION
 from codess.store import table_counts, table_names
 from codess.token_usage import collect_token_usage
 
@@ -111,7 +112,12 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
                 }
             result["tokens"] = {
                 "availability": "not_normalized",
-                "reason": "CoSchema v4 does not yet persist vendor token observations",
+                # The format is read rather than spelled: this reason said v4
+                # two formats after the store stopped being one.
+                "reason": (
+                    f"CoSchema format {FORMAT_VERSION} does not persist vendor "
+                    "token observations"
+                ),
             }
         finally:
             conn.close()

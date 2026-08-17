@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -1033,6 +1034,166 @@ class TestConnectionEnforcesConstraints:
             assert conn.execute("PRAGMA foreign_key_list(store_meta)").fetchall() == []
         finally:
             conn.close()
+
+
+class TestBothOpenersYieldNamedRows:
+    """`row_factory` belongs to both connection contracts, not just the write one.
+
+    It was set only by `open_writable`, and `store.connect` re-set it for every
+    reader -- so a caller opening the same store through `open_readonly`
+    directly got positional tuples while one going through `store.connect` got
+    named rows. Removing the redundant assignment exposed that, and the fix was
+    to give the read opener the same contract.
+    """
+
+    def test_the_read_opener_yields_named_rows(self, tmp_path):
+        db = tmp_path / "read.db"
+        init_db(db)
+        conn = open_readonly(db)
+        try:
+            row = conn.execute("SELECT key, value FROM store_meta LIMIT 1").fetchone()
+            assert row["key"]
+        finally:
+            conn.close()
+
+    def test_the_write_opener_yields_named_rows(self, tmp_path):
+        from codess.fileio import open_writable
+
+        db = tmp_path / "write.db"
+        init_db(db)
+        conn = open_writable(db)
+        try:
+            row = conn.execute("SELECT key, value FROM store_meta LIMIT 1").fetchone()
+            assert row["key"]
+        finally:
+            conn.close()
+
+    def test_a_managed_store_yields_named_rows_read_only_and_writable(self, tmp_path):
+        """The two routes to one store must agree on how a row is addressed."""
+        db = tmp_path / "both.db"
+        init_db(db)
+        for read_only in (True, False):
+            conn = connect(db, read_only=read_only)
+            try:
+                row = conn.execute(
+                    "SELECT key, value FROM store_meta LIMIT 1"
+                ).fetchone()
+                assert row["key"], f"positional rows with read_only={read_only}"
+            finally:
+                conn.close()
+
+
+class TestIsolationModelIsDeferred:
+    """The isolation model is stated in `fileio` and this pins it (W56 step 2).
+
+    Deferred is SQLite's default, which is exactly why it needs a test: an
+    opener that later sets `isolation_level` or issues `BEGIN IMMEDIATE` would
+    change the model without any existing assertion noticing.
+    """
+
+    def test_no_opener_sets_an_explicit_isolation_level(self, tmp_path):
+        from codess.fileio import open_writable
+
+        db = tmp_path / "iso.db"
+        init_db(db)
+        for opener, kwargs in ((open_writable, {}), (open_readonly, {})):
+            conn = opener(db, **kwargs)
+            try:
+                assert conn.isolation_level == ""
+            finally:
+                conn.close()
+
+    def test_read_uncommitted_is_never_enabled(self, tmp_path):
+        """A reader seeing another connection's uncommitted write would make a
+        query result depend on an in-flight ingest."""
+        db = tmp_path / "dirty.db"
+        init_db(db)
+        conn = open_readonly(db)
+        try:
+            assert conn.execute("PRAGMA read_uncommitted").fetchone()[0] == 0
+        finally:
+            conn.close()
+
+    def test_the_isolation_model_is_stated_where_the_openers_live(self):
+        """A model nobody wrote down cannot be distinguished from an omission."""
+        import codess.fileio as fileio_module
+
+        text = Path(fileio_module.__file__).read_text(encoding="utf-8")
+        assert "Isolation model" in text
+        assert "deferred" in text
+
+
+class TestStoreErrorsDoNotLeakTheDriver:
+    """A caller of a store operation catches a Codess error (W56 step 4).
+
+    The store layer had no error type of its own, so the CLI named
+    `sqlite3.Error` to report a store it could not open -- the one handler of
+    the fourteen that caught a driver exception across a layer boundary. The
+    other thirteen are in modules that opened the connection themselves, where
+    the exception originates locally.
+    """
+
+    def test_opening_a_file_that_is_not_a_database_raises_store_error(self, tmp_path):
+        from codess.store import StoreError
+
+        not_a_db = tmp_path / "not.db"
+        not_a_db.write_bytes(b"this is not a SQLite file, it is a text file\n" * 64)
+        with pytest.raises(StoreError):
+            connect(not_a_db, read_only=True)
+
+    def test_store_error_is_not_a_driver_exception(self):
+        """It must not be catchable as `sqlite3.Error`, or the boundary is
+        nominal rather than real."""
+        from codess.store import StoreError
+
+        assert not issubclass(StoreError, sqlite3.Error)
+
+    def test_the_message_names_the_store(self, tmp_path):
+        from codess.store import StoreError
+
+        not_a_db = tmp_path / "broken.db"
+        not_a_db.write_bytes(b"garbage" * 256)
+        with pytest.raises(StoreError, match=str(not_a_db.name)):
+            connect(not_a_db, read_only=True)
+
+
+class TestTheOpenersOwnTheConnectionContracts:
+    """A new raw `sqlite3.connect` outside the openers must fail a test.
+
+    The contract properties SQLite applies per connection -- `query_only`,
+    `foreign_keys`, `busy_timeout`, `row_factory` -- are guarantees of how a
+    file was opened, not of the file. A site that connects directly gets none
+    of them, silently, which is what made the read guarantee vary by call site
+    before `open_readonly` existed (CoPlan 3.5.4, W56 step 1).
+
+    The two permitted exceptions each state their reason at the call site: the
+    openers themselves, and `raw_store`'s pure `backup()` target.
+    """
+
+    ALLOWED: ClassVar[dict[str, int]] = {"fileio.py": 2, "raw_store.py": 1}
+
+    def test_no_new_raw_connect_appears_outside_the_openers(self):
+        import codess.store as store_module
+
+        src = Path(store_module.__file__).resolve().parent.parent
+        found: dict[str, int] = {}
+        for path in sorted(src.rglob("*.py")):
+            count = path.read_text(encoding="utf-8").count("sqlite3.connect(")
+            if count:
+                found[path.name] = count
+        assert found == self.ALLOWED, (
+            "a raw sqlite3.connect appeared outside the openers, or one was "
+            "removed; each must state at its call site why it does not use "
+            f"open_readonly/open_writable. Found: {found}"
+        )
+
+    def test_the_permitted_raw_connect_states_its_reason(self):
+        """`backup()` copies pages, so row-level constraints never apply."""
+        import codess.raw_store as raw_store_module
+
+        text = Path(raw_store_module.__file__).read_text(encoding="utf-8")
+        assert "backup()" in text
+        assert "open_writable" in text
 
 
 class TestRecordLevelDiagnostics:

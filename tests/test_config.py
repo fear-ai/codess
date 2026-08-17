@@ -180,7 +180,101 @@ def test_raw_modes_are_ordered_by_how_much_is_retained():
     """Every message that lists them uses this order."""
     from codess.config import RAW_MODES
 
-    assert RAW_MODES == ("none", "reference", "capture", "seal")
+    assert RAW_MODES == ("observe", "reference", "capture", "seal")
+
+
+def test_the_least_retaining_mode_is_not_named_for_retaining_nothing():
+    """`observe` states what the mode does; `none` promised it did nothing."""
+    from codess.config import RAW_MODES
+
+    assert "none" not in RAW_MODES
+
+
+def test_the_previous_spelling_still_parses():
+    """`--raw-mode none` appears in operator scripts and in retained manifests."""
+    from codess.config import canonical_raw_mode
+
+    assert canonical_raw_mode("none") == "observe"
+
+
+def test_a_stored_mode_canonicalizes_to_itself():
+    """Canonicalization must be safe to apply at every boundary, including twice."""
+    from codess.config import RAW_MODES, canonical_raw_mode
+
+    for mode in RAW_MODES:
+        assert canonical_raw_mode(mode) == mode
+        assert canonical_raw_mode(canonical_raw_mode(mode)) == mode
+
+
+def test_an_unknown_mode_passes_through_for_its_own_validator_to_reject():
+    """The rejection message and its valid list stay with the site that owns them."""
+    from codess.config import canonical_raw_mode
+
+    assert canonical_raw_mode("archive") == "archive"
+
+
+def test_the_alias_is_not_offered_as_an_equal_choice():
+    """argparse would list it beside the stored name; there is one name per mode."""
+    from codess.config import RAW_MODE_ALIASES, RAW_MODE_CHOICES
+
+    assert set(RAW_MODE_ALIASES) & set(RAW_MODE_CHOICES) == set()
+
+
+def test_every_alias_resolves_to_a_stored_mode():
+    """An alias pointing at a mode that does not exist would fail at the boundary."""
+    from codess.config import RAW_MODE_ALIASES, RAW_MODES
+
+    assert set(RAW_MODE_ALIASES.values()) <= set(RAW_MODES)
+
+
+def test_the_previous_spelling_is_accepted_by_the_raw_store():
+    """An operator script passing `none` must still observe rather than fail."""
+    import tempfile
+    from pathlib import Path
+
+    from codess.raw_store import RawStore
+
+    store = RawStore(Path(tempfile.mkdtemp()))
+    record = store.observe(
+        Path(__file__), source_system_id="x", storage_format="y", mode="none",
+    )
+    assert record["availability"] == "not_retained"
+
+
+def test_observe_retains_no_bytes_but_records_the_observation():
+    """The record is what makes a Source's absence checkable (CoPlan W15)."""
+    import tempfile
+    from pathlib import Path
+
+    from codess.raw_store import RawStore
+
+    store = RawStore(Path(tempfile.mkdtemp()))
+    record = store.observe(
+        Path(__file__), source_system_id="x", storage_format="y", mode="observe",
+    )
+    assert record["availability"] == "not_retained"
+    assert record["source_revision_id"]
+    assert record["source_size"] > 0
+
+
+def test_observe_and_reference_differ_only_in_availability():
+    """The measurement W15 rests on: one code path, one differing key."""
+    import tempfile
+    from pathlib import Path
+
+    from codess.raw_store import RawStore
+
+    store = RawStore(Path(tempfile.mkdtemp()))
+    kwargs = {"source_system_id": "x", "storage_format": "y"}
+    observed = store.observe(Path(__file__), mode="observe", **kwargs)
+    referenced = store.observe(Path(__file__), mode="reference", **kwargs)
+    differing = {
+        key for key in set(observed) | set(referenced)
+        if observed.get(key) != referenced.get(key)
+    }
+    assert differing == {"availability", "observed_at"}
+    assert observed["availability"] == "not_retained"
+    assert referenced["availability"] == "reference"
 
 
 def test_the_raw_store_set_matches_the_vocabulary():
@@ -261,6 +355,60 @@ def test_a_validation_policy_may_state_no_raw_mode(tmp_path):
     path = tmp_path / "policy.json"
     path.write_text(json.dumps({"policy_format": POLICY_FORMAT}), encoding="utf-8")
     assert load_policy(path)["policy_format"] == POLICY_FORMAT
+
+
+def test_a_validation_policy_may_use_the_previous_spelling(tmp_path):
+    """An operator policy written before the rename must still load."""
+    import json
+
+    from codess.baseline_validation import POLICY_FORMAT, load_policy
+
+    path = tmp_path / "policy.json"
+    path.write_text(
+        json.dumps({"policy_format": POLICY_FORMAT, "raw_mode": "none"}),
+        encoding="utf-8",
+    )
+    assert load_policy(path)["raw_mode"] == "none"
+
+
+def test_refresh_keeps_a_snapshot_built_under_the_previous_spelling(tmp_path):
+    """A manifest recording `none` refreshes under `observe`, not `reference`.
+
+    The failure this prevents is silent: an unrecognized stored mode falls
+    through to the `reference` default, so a Project that deliberately retained
+    nothing would quietly start recording resolvable references.
+    """
+    import json
+
+    from codess.config import CURRENT_POINTER_FILE, MANIFEST_FILE
+    from codess.fileio import hash_file
+    from codess.project_catalog import durable_project_root
+    from codess.refresh_operations import _automatic_raw_mode
+
+    registry = tmp_path / "registry"
+    project_id = "p1"
+    base = durable_project_root(registry, project_id)
+    snapshot = base / "snapshots" / "20260101T000000.000000Z-test"
+    snapshot.mkdir(parents=True)
+    manifest = snapshot / MANIFEST_FILE
+    manifest.write_text(
+        json.dumps({"build_policy": {"raw_mode": "none"}}), encoding="utf-8",
+    )
+    (base / CURRENT_POINTER_FILE).write_text(
+        json.dumps({
+            "path": str(snapshot),
+            "manifest_sha256": hash_file(manifest),
+        }),
+        encoding="utf-8",
+    )
+    assert _automatic_raw_mode(registry, project_id) == "observe"
+
+
+def test_refresh_accepts_the_previous_spelling():
+    """`--raw-mode none` in an operator script must not become an error."""
+    from codess.config import canonical_raw_mode
+
+    assert canonical_raw_mode("none") == "observe"
 
 
 def test_the_rejection_message_lists_every_valid_mode():

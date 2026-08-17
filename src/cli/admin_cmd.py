@@ -31,6 +31,7 @@ from codess.config import (
     MAX_RECORD_BYTES,
     RAW_MODE_CHOICES,
     REGISTRY,
+    canonical_raw_mode,
     catalog_root,
 )
 from codess.cursor_feature_audit import audit_cursor_features
@@ -156,6 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     refresh.add_argument(
         "--raw-mode",
+        type=canonical_raw_mode,
         choices=("auto", *RAW_MODE_CHOICES),
         default="auto",
     )
@@ -239,7 +241,10 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument("--registry", type=Path, default=REGISTRY)
     onboard.add_argument("--review-decision", default="approved")
     onboard.add_argument("--source", choices=("cc", "codex", "cursor", "all"), default="all")
-    onboard.add_argument("--raw-mode", choices=RAW_MODE_CHOICES, default="reference")
+    onboard.add_argument(
+        "--raw-mode", type=canonical_raw_mode, choices=RAW_MODE_CHOICES,
+        default="reference",
+    )
     onboard_mode = onboard.add_mutually_exclusive_group()
     onboard_mode.add_argument("--validate-only", action="store_true")
     onboard_mode.add_argument("--apply", action="store_true")
@@ -437,7 +442,10 @@ def build_parser() -> argparse.ArgumentParser:
 def _apply_arguments(parser) -> None:
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--source", choices=("cc", "codex", "cursor", "all"), default="all")
-    parser.add_argument("--raw-mode", choices=RAW_MODE_CHOICES, default="reference")
+    parser.add_argument(
+        "--raw-mode", type=canonical_raw_mode, choices=RAW_MODE_CHOICES,
+        default="reference",
+    )
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--report", type=Path)

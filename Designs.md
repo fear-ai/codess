@@ -351,12 +351,20 @@ disappear, or an investigation requires record-level inspection. It also
 copies private content and can consume substantial storage, especially for a
 shared Cursor database.
 
-`reference` is the normal mode: it records the locator and update evidence
-without copying source bytes. `capture` stores one content-addressed exact
-revision. `seal` binds selected captured revisions to a published Project store
-set. The precise meaning of `none` remains under review because the current
-implementation retains a `not_retained` raw-manifest observation while storing
-no raw bytes.
+The four modes are ordered by how much they retain. `observe` is the least
+retaining and still observes: it fingerprints the Source and records its
+locator, modification time, size, and consistency, keeping no bytes.
+`reference` is the normal mode, adding a resolvable reference to the same
+observation. `capture` stores one content-addressed exact revision. `seal`
+binds selected captured revisions to a published Project store set.
+
+`observe` retains its manifest entry deliberately, because that entry is what
+makes a Source's absence checkable: `availability=not_retained` states that
+Codess read the Source and kept nothing, which a manifest that never mentions
+the Source cannot state, and only the first can be audited later. The mode was
+previously spelled `none`, which promised nothing was recorded while the
+observation was written; the previous spelling is still accepted so retained
+manifests and operator scripts keep working.
 
 Raw objects remain outside Session content and are not an alternate search
 surface. JSONL capture streams input, while Cursor capture uses a consistent

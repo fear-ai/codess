@@ -33,6 +33,7 @@ from codess.config import (
     RAW_MANIFEST_FILE,
     RAW_MODES,
     STORE_DIR,
+    canonical_raw_mode,
 )
 from codess.fileio import (
     check_policy_format,
@@ -142,7 +143,8 @@ def load_policy(path: Path | None) -> dict[str, Any]:
             raise ValueError(f"validation policy {field} must map sources to nonnegative integers")
     # None is accepted here and nowhere else: a validation policy that states
     # no mode validates whatever the snapshot was built under.
-    if policy.get("raw_mode") not in (None, *RAW_MODES):
+    stated_mode = policy.get("raw_mode")
+    if stated_mode is not None and canonical_raw_mode(str(stated_mode)) not in RAW_MODES:
         raise ValueError("validation policy raw_mode is invalid")
     diagnostics = policy.get("allowed_diagnostics", {})
     if not isinstance(diagnostics, dict):
@@ -650,7 +652,15 @@ def _validate_policy(
         _add_check(report, f"policy.minimum_events.{source}", actual >= int(minimum), actual)
     expected_raw = policy.get("raw_mode")
     if expected_raw:
-        _add_check(report, "policy.raw_mode", raw_mode == expected_raw, raw_mode)
+        # Both sides are canonicalized: the policy is operator-written and the
+        # observed mode comes from a manifest that may predate the rename, so
+        # comparing the raw strings would fail a store that is in fact
+        # compliant.
+        _add_check(
+            report, "policy.raw_mode",
+            canonical_raw_mode(str(raw_mode)) == canonical_raw_mode(str(expected_raw)),
+            raw_mode,
+        )
     if "expected_raw_records" in policy:
         _add_check(
             report, "policy.raw_records",
