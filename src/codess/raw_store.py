@@ -141,6 +141,10 @@ def _sqlite_backup(
 ) -> os.stat_result:
     """Write one transactionally consistent backup without loading it."""
     source = open_readonly(path)
+    # A pure `backup()` target: SQLite copies pages, so row-level constraints
+    # never apply and nothing is written through this connection afterwards.
+    # It therefore does not use `open_writable`, and says so rather than
+    # leaving the difference to be inferred (W56).
     target = sqlite3.connect(backup_path)
     backup_start_tick = last_progress_tick = time.monotonic()
 

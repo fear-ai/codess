@@ -1,4 +1,18 @@
-"""Read-only verification and semantic validation for CoSchema snapshots."""
+"""Read-only verification and semantic validation for CoSchema snapshots.
+
+**Reads core tables directly, and must.** `canonical_rows` enumerates every
+released table to compute the semantic digest that fixed-point validation
+compares -- 38 statements over 18 tables, more than the audit modules W52
+documented combined. Routing them through the query layer would make the
+check depend on the code it exists to check, so the direct read *is* the
+verification (CoPlan W56 step 3).
+
+The enumeration is bound to the released schema rather than maintained by
+hand: `DIGEST_EXCLUDED_TABLES` names what is deliberately left out, and a test
+fails when a DDL table is neither covered nor excluded. That check exists
+because the digest silently ignores what it does not list, which is how
+`model_params` went missing (W57).
+"""
 
 from __future__ import annotations
 
@@ -179,6 +193,20 @@ def load_policy(path: Path | None) -> dict[str, Any]:
     return policy
 
 
+# Released tables deliberately absent from the semantic digest, with the
+# reason. Stated as data rather than by omission because the digest silently
+# ignores whatever it does not list: `model_params` was missing for that
+# reason, so model evidence could differ between two stores and a fixed-point
+# check called them identical (CoPlan W57).
+DIGEST_EXCLUDED_TABLES = {
+    "store_meta": (
+        "build metadata -- format version, contract digest, and creation "
+        "stamps. The digest exists to compare what was decoded, not which "
+        "build decoded it, so including it would make every rebuild differ."
+    ),
+}
+
+
 def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sqlite3.Row]]]:
     """Yield stable logical rows; exclude build timestamps and surrogate keys."""
     queries = {
@@ -223,6 +251,21 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             SELECT id, session_id, interaction_id, sequence_no, source_turn_id,
                    boundary_source
             FROM model_turns ORDER BY session_id, sequence_no
+        """,
+        # Selected by its natural columns, never by `id`: the row id is a
+        # surrogate assigned in insertion order, so two stores holding the
+        # same model evidence would differ on it and agree on nothing else.
+        # Ordering is by the same columns for the same reason.
+        "model_params": """
+            SELECT provider, model_line, model_generation, model_version,
+                   model_gradation, model_variant, model_name_exact,
+                   model_revision, reasoning_effort, speed_tier, service_tier,
+                   request_tier, mode, source_params
+            FROM model_params
+            ORDER BY provider, model_line, model_generation, model_version,
+                     model_gradation, model_variant, model_name_exact,
+                     model_revision, reasoning_effort, speed_tier,
+                     service_tier, request_tier, mode
         """,
         "events": """
             SELECT event_entity_id, session_id, event_id, sequence_no, source_record_locator,

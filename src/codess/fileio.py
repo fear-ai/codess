@@ -54,6 +54,36 @@ def quote_identifier(name: str) -> str:
     escaped = name.replace('"', '""')
     return f'"{escaped}"'
 
+def open_writable(
+    db_path: Path, *, timeout: float = 5.0, foreign_keys: bool = True,
+) -> sqlite3.Connection:
+    """Open a SQLite file for writing with the constraints its writes assume.
+
+    The write-side counterpart to `open_readonly`. SQLite applies
+    `foreign_keys` **per connection and defaults it off**, so enforcement is a
+    property of how a file was opened rather than of the file: measured on a
+    real store, 18 of 24 tables carry foreign keys, and a raw connection
+    accepts an orphan Event that `store.connect` refuses (CoPlan W56).
+
+    No current path reaches that -- the raw write sites write only
+    `store_meta`, which has no foreign keys, or use SQLite's `backup()`, which
+    copies pages and bypasses constraints by design. This exists so the next
+    write added to one of them is checked rather than silently unconstrained,
+    which is the failure mode a missing constraint has: an orphan row is
+    accepted, not reported.
+
+    `foreign_keys=False` is available for the one legitimate case -- a copy
+    being populated by `backup()`, where row-by-row constraints do not apply
+    -- and stating it at the call site is the point.
+    """
+    conn = sqlite3.connect(db_path, timeout=timeout)
+    conn.row_factory = sqlite3.Row
+    if foreign_keys:
+        conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
+    return conn
+
+
 def open_readonly(
     db_path: Path, *, timeout: float = 5.0, immutable: bool = False,
 ) -> sqlite3.Connection:

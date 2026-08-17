@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from codess import __version__
-from codess.fileio import open_readonly, quote_identifier, read_source_revision
+from codess.fileio import (
+    open_readonly,
+    open_writable,
+    quote_identifier,
+    read_source_revision,
+)
 from codess.hashing import (
     codess_bytes_hash,
     codess_canonical_hash,
@@ -159,7 +164,7 @@ def init_db(db_path: Path) -> None:
     """Create a new CoSchema v4 store, refusing any database that is not one."""
     contract_digest()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = open_writable(db_path)
     try:
         has_tables = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
@@ -196,7 +201,7 @@ def init_db(db_path: Path) -> None:
 
 def connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
     """Open and validate a CoSchema store."""
-    conn = open_readonly(db_path) if read_only else sqlite3.connect(db_path)
+    conn = open_readonly(db_path) if read_only else open_writable(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:

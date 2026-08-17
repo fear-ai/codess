@@ -753,8 +753,8 @@ def parse_and_run(argv: list[str] | None = None) -> int:
     """
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     if raw_argv and raw_argv[0] in {
-        "refresh", "catalog", "baseline", "evidence", "package", "schema",
-        "session", "storage",
+        "refresh", "catalog", "baseline", "config", "evidence", "package",
+        "schema", "session", "storage",
     }:
         from cli.admin_cmd import run as run_admin
         return run_admin(raw_argv)

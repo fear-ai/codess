@@ -272,6 +272,89 @@ def _has_any_sessions(
     return bool(project in cursor_paths and _session_metrics_cursor(project)["count"])
 
 
+# --- Path canonicalization -------------------------------------------------
+#
+# These four decide *which directory is the Project*, which is the logic most
+# likely to be wrong and, until they were lifted, the logic hardest to test:
+# they were nested inside `walk_sessions` and reachable only by running vendor
+# discovery over a populated filesystem (CoPlan 13.4.7, W19). None captured
+# accumulating state -- only `work_root` and the set of live paths -- so each
+# becomes a module-level function by naming what it already read.
+
+
+def in_work_root(raw_path: str, work_root: Path) -> bool:
+    """Whether a vendor-reported path lies inside the scanned tree.
+
+    Resolved before comparing, so a symbolic link pointing outside the root is
+    refused rather than followed -- otherwise a link would attribute another
+    tree's Sessions to this one.
+    """
+    try:
+        Path(raw_path).resolve().relative_to(work_root)
+        return True
+    except ValueError:
+        return False
+
+
+def project_boundary(path: Path, work_root: Path, live_paths: set[Path]) -> Path:
+    """The repository a reported path belongs to.
+
+    Walks upward to the nearest ancestor holding `.git`, stopping at the work
+    root. Where no ancestor qualifies -- a path below a repository that was not
+    itself reported -- the deepest live path containing it is used, since a
+    Session recorded inside a subdirectory belongs to the repository around it
+    rather than to the subdirectory.
+    """
+    candidate = path
+    while candidate == work_root or candidate.is_relative_to(work_root):
+        if (candidate / ".git").exists():
+            return candidate
+        if candidate == work_root:
+            break
+        candidate = candidate.parent
+    parents = [
+        contender for contender in live_paths
+        if contender != path
+        and (contender / ".git").exists()
+        and path.is_relative_to(contender)
+    ]
+    return max(parents, key=lambda item: len(item.parts)) if parents else path
+
+
+def is_aggregator(path: Path, work_root: Path) -> bool:
+    """Whether `path` is a configured grouping directory rather than a Project.
+
+    Only a direct child of the work root can be one: an aggregator groups
+    Projects, and a directory deeper than that is inside one.
+    """
+    try:
+        relative = path.relative_to(work_root)
+    except ValueError:
+        return False
+    return len(relative.parts) == 1 and relative.parts[0] in AGGREGATORS
+
+
+def canonicalize(paths: set[Path], work_root: Path) -> set[Path]:
+    """Keep the most specific paths; drop a parent when a child is present.
+
+    Longest-first, so a nested repository is seen before the repository around
+    it and the outer one is dropped. Aggregators and excluded trees are removed
+    here rather than by the caller, because both are questions about which
+    directory is a Project.
+    """
+    keep: set[Path] = set()
+    for candidate in sorted(paths, key=lambda item: -len(item.parts)):
+        if is_aggregator(candidate, work_root) or is_excluded(candidate, work_root):
+            continue
+        if any(
+            kept != candidate and str(kept).startswith(str(candidate) + "/")
+            for kept in keep
+        ):
+            continue
+        keep.add(candidate)
+    return keep
+
+
 def walk_sessions(
     work_root: Path,
     vendor_filter: list[str] | None = None,
@@ -289,13 +372,6 @@ def walk_sessions(
     work_root = work_root.resolve()
     vendors = frozenset(vendor_filter or ["cc", "codex", "cursor"])
     cc_paths, codex_paths, cursor_paths = set(), set(), set()
-
-    def in_work_root(raw_path: str) -> bool:
-        try:
-            Path(raw_path).resolve().relative_to(work_root)
-            return True
-        except ValueError:
-            return False
 
     if "cc" in vendors and CC_PROJECTS.exists():
         # An exact root may link to its historical Claude storage slug after
@@ -319,7 +395,7 @@ def walk_sessions(
                         if not isinstance(e, dict):
                             continue
                         pp = e.get("projectPath")
-                        if pp and in_work_root(str(pp)):
+                        if pp and in_work_root(str(pp), work_root):
                             r = Path(pp).resolve()
                             if r not in cc_paths:
                                 cc_paths.add(r)
@@ -334,7 +410,7 @@ def walk_sessions(
                         diagnostics, "failed_sources", idx, str(exc)
                     )
             p = Path(str(slug_to_path(d.name)))
-            if in_work_root(str(p)):
+            if in_work_root(str(p), work_root):
                 r = p.resolve()
                 if r not in cc_paths:
                     cc_paths.add(r)
@@ -345,7 +421,7 @@ def walk_sessions(
             codex_index = build_codex_session_index(include_record_counts=True)
         for item in codex_index:
             cwd = str(item.get("cwd") or "")
-            if cwd and in_work_root(cwd):
+            if cwd and in_work_root(cwd, work_root):
                 r = Path(cwd).resolve()
                 if r not in codex_paths:
                     codex_paths.add(r)
@@ -371,7 +447,7 @@ def walk_sessions(
                 try:
                     data = json.loads(wj.read_text())
                     local_folder = local_path_from_uri(data.get("folder"))
-                    if local_folder and in_work_root(str(local_folder)):
+                    if local_folder and in_work_root(str(local_folder), work_root):
                         r = local_folder
                         if r not in cursor_paths:
                             cursor_paths.add(r)
@@ -415,44 +491,10 @@ def walk_sessions(
     # granularity from hiding the repository-level Claude/Codex evidence.
     live_paths = {path for path in all_paths if path.exists()}
 
-    def project_boundary(path: Path) -> Path:
-        candidate = path
-        while candidate == work_root or candidate.is_relative_to(work_root):
-            if (candidate / ".git").exists():
-                return candidate
-            if candidate == work_root:
-                break
-            candidate = candidate.parent
-        parents = [
-            candidate for candidate in live_paths
-            if candidate != path
-            and (candidate / ".git").exists()
-            and path.is_relative_to(candidate)
-        ]
-        return max(parents, key=lambda item: len(item.parts)) if parents else path
-
-    cc_paths = {project_boundary(path) for path in cc_paths}
-    codex_paths = {project_boundary(path) for path in codex_paths}
-    cursor_paths = {project_boundary(path) for path in cursor_paths}
+    cc_paths = {project_boundary(path, work_root, live_paths) for path in cc_paths}
+    codex_paths = {project_boundary(path, work_root, live_paths) for path in codex_paths}
+    cursor_paths = {project_boundary(path, work_root, live_paths) for path in cursor_paths}
     all_paths = cc_paths | codex_paths | cursor_paths
-
-    def _is_agg(p: Path) -> bool:
-        try:
-            rel = p.relative_to(work_root)
-            return len(rel.parts) == 1 and rel.parts[0] in AGGREGATORS
-        except ValueError:
-            return False
-
-    def canonicalize(paths):
-        """Keep most specific (leaf) paths; drop parent when child exists."""
-        keep = set()
-        for p in sorted(paths, key=lambda x: -len(x.parts)):
-            if _is_agg(p) or is_excluded(p, work_root):
-                continue
-            skip = any(q != p and str(q).startswith(str(p) + "/") for q in keep)
-            if not skip:
-                keep.add(p)
-        return keep
 
     # Recency is a selection, not a diagnostic: `debug` must not change which
     # Projects are reported, or a reader cannot trust a scan they did not run
@@ -463,7 +505,9 @@ def walk_sessions(
         cutoff_ms = (time.time() - recent_days * 86400) * 1000
     excluded_by_recency = 0
 
-    projects = sorted(canonicalize({p for p in all_paths if p.exists()}), key=str)
+    projects = sorted(
+        canonicalize({p for p in all_paths if p.exists()}, work_root), key=str
+    )
     rows = []
     for p in projects:
         try:

@@ -1139,3 +1139,116 @@ class TestBoundedContent:
                 "text", {"redact": False}, record_type="r",
                 event_kind="message.response", limit=100,
             ) is None, f"a drop at the {dropped_phase} phase must skip the record"
+
+
+class TestUnrolledHistorySessions:
+    """Codex retains a human side beside the rollouts, and they can disagree.
+
+    `history.jsonl` and the rollout tree are written independently, so a
+    Session can appear in one and not the other. Reporting that is a coverage
+    statement; admitting it as a Session with no Model Turns would be a
+    mapping decision under CoPlan 6.5 (W63).
+    """
+
+    def _history(self, path, entries):
+        import json as _json
+
+        path.write_text(
+            "".join(_json.dumps(e) + "\n" for e in entries), encoding="utf-8"
+        )
+        return path
+
+    def test_a_session_with_a_rollout_is_not_reported(self, tmp_path, monkeypatch):
+        from codess import codex_source
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        (sessions / "rollout-2026-01-01-abcdef123456.jsonl").write_text("", encoding="utf-8")
+        history = self._history(
+            tmp_path / "history.jsonl",
+            [{"session_id": "0199aaaa-abcdef123456", "text": "x"}],
+        )
+        monkeypatch.setattr(codex_source, "CODEX_SESSIONS", sessions)
+        monkeypatch.setattr(codex_source, "CODEX_ARCHIVED_SESSIONS", None)
+
+        result = codex_source.unrolled_history_sessions(history_path=history)
+
+        assert (result["history_sessions"], result["without_rollout"]) == (1, 0)
+
+    def test_a_session_without_a_rollout_is_reported_with_its_count(
+        self, tmp_path, monkeypatch
+    ):
+        from codess import codex_source
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        history = self._history(
+            tmp_path / "history.jsonl",
+            [
+                {"session_id": "0199bbbb-ffffff000000", "text": "one"},
+                {"session_id": "0199bbbb-ffffff000000", "text": "two"},
+            ],
+        )
+        monkeypatch.setattr(codex_source, "CODEX_SESSIONS", sessions)
+        monkeypatch.setattr(codex_source, "CODEX_ARCHIVED_SESSIONS", None)
+
+        result = codex_source.unrolled_history_sessions(history_path=history)
+
+        assert result["without_rollout"] == 1
+        assert result["unrolled_prompt_counts"] == {"0199bbbb-ffffff000000": 2}
+
+    def test_an_archived_rollout_counts_as_rolled(self, tmp_path, monkeypatch):
+        """The measurement error worth pinning.
+
+        A first count reported three unrolled Sessions by reading only the
+        active tree; two had archived rollouts. The archive is a rollout
+        location, not a different Session identity (CoPlan 6.3).
+        """
+        from codess import codex_source
+
+        sessions = tmp_path / "sessions"
+        archived = tmp_path / "archived_sessions"
+        sessions.mkdir()
+        archived.mkdir()
+        (archived / "rollout-2026-01-01-cccccc999999.jsonl").write_text("", encoding="utf-8")
+        history = self._history(
+            tmp_path / "history.jsonl",
+            [{"session_id": "0199cccc-cccccc999999", "text": "x"}],
+        )
+        monkeypatch.setattr(codex_source, "CODEX_SESSIONS", sessions)
+        monkeypatch.setattr(codex_source, "CODEX_ARCHIVED_SESSIONS", archived)
+
+        result = codex_source.unrolled_history_sessions(history_path=history)
+
+        assert result["without_rollout"] == 0
+
+    def test_no_prompt_text_reaches_the_result(self, tmp_path, monkeypatch):
+        """The report may be published beside a store, so it carries no content."""
+        from codess import codex_source
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        history = self._history(
+            tmp_path / "history.jsonl",
+            [{"session_id": "0199dddd-dddddd111111", "text": "a secret prompt"}],
+        )
+        monkeypatch.setattr(codex_source, "CODEX_SESSIONS", sessions)
+        monkeypatch.setattr(codex_source, "CODEX_ARCHIVED_SESSIONS", None)
+
+        result = codex_source.unrolled_history_sessions(history_path=history)
+
+        assert "secret" not in json.dumps(result)
+
+    def test_a_missing_history_file_is_not_an_error(self, tmp_path, monkeypatch):
+        from codess import codex_source
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        monkeypatch.setattr(codex_source, "CODEX_SESSIONS", sessions)
+        monkeypatch.setattr(codex_source, "CODEX_ARCHIVED_SESSIONS", None)
+
+        result = codex_source.unrolled_history_sessions(
+            history_path=tmp_path / "absent.jsonl"
+        )
+
+        assert result["available"] is False

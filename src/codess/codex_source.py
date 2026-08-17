@@ -20,6 +20,71 @@ def get_session_roots() -> list[Path]:
     return list(dict.fromkeys(path.resolve() for path in roots))
 
 
+def unrolled_history_sessions(
+    *, history_path: Path | None = None, sample: int | None = None,
+) -> dict[str, Any]:
+    """Sessions Codex retained a human side for and no rollout.
+
+    `~/.codex/history.jsonl` records human prompts keyed by `session_id`,
+    beside the rollout tree. It is usually redundant -- a Session with a
+    rollout has its prompts there too -- but the two are written
+    independently, so a Session can appear in history with no rollout at all.
+    Measured on one machine: 19 Sessions in history, 18 with rollouts, and
+    one without, carrying 2 prompts (CoPlan W63). An earlier count of three
+    read only the active tree; two of those had archived rollouts, which is
+    why this consults `get_session_roots()` rather than one directory.
+
+    **This reports; it does not decode.** Admitting a history-only Session
+    would mean a Session with prompts and no Model Turns, which changes what
+    a Session is and is a mapping decision under 6.5. Reporting that evidence
+    exists which Codess cannot decode is a coverage statement, and is what the
+    record-level diagnostics W47 added are for -- the cheap, honest middle
+    path between silence and a new mapping.
+
+    Returns counts and Session identifiers only. No prompt text is read into
+    the result, so the report can be published beside a store.
+    """
+    history = history_path or (CODEX_SESSIONS.parent / "history.jsonl")
+    observed: dict[str, int] = {}
+    if history.is_file():
+        try:
+            with history.open(encoding="utf-8", errors="replace") as stream:
+                for index, line in enumerate(stream):
+                    if sample is not None and index >= sample:
+                        break
+                    try:
+                        record = json.loads(line)
+                    except ValueError:
+                        continue
+                    identifier = record.get("session_id")
+                    if isinstance(identifier, str) and identifier:
+                        observed[identifier] = observed.get(identifier, 0) + 1
+        except OSError:
+            return {"available": False, "history_path": str(history)}
+
+    rolled: set[str] = set()
+    for root in get_session_roots():
+        if not root.is_dir():
+            continue
+        for rollout in root.rglob("*.jsonl"):
+            rolled.add(rollout.stem.split("-")[-1])
+
+    # Rollout filenames carry a suffix of the identifier rather than the whole
+    # of it, so membership is tested on that suffix rather than on equality.
+    unrolled = {
+        identifier: count for identifier, count in observed.items()
+        if identifier[-12:] not in rolled
+    }
+    return {
+        "available": history.is_file(),
+        "history_path": str(history),
+        "history_sessions": len(observed),
+        "with_rollout": len(observed) - len(unrolled),
+        "without_rollout": len(unrolled),
+        "unrolled_prompt_counts": dict(sorted(unrolled.items())),
+    }
+
+
 def session_archive_evidence(path: Path) -> tuple[str, str]:
     """Classify archive state solely from the configured source root."""
     resolved = path.resolve()

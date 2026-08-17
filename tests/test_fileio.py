@@ -438,3 +438,70 @@ class TestQuoteIdentifierRaiseReachesACaller:
             assert table_counts(conn, ["events"]) == {"events": 0}
         finally:
             conn.close()
+
+
+class TestOpenWritable:
+    """The write-side connection contract (CoPlan W56).
+
+    SQLite applies `foreign_keys` per connection and defaults it off, so
+    enforcement is a property of how a file was opened rather than of the
+    file. `open_readonly` has owned the read side since 3.5.4; this is its
+    counterpart.
+    """
+
+    def _store(self, tmp_path):
+        from codess.store import init_db
+
+        db = tmp_path / "sessions_cc.db"
+        init_db(db)
+        return db
+
+    def test_constraints_are_enforced_by_default(self, tmp_path):
+        from codess.fileio import open_writable
+
+        conn = open_writable(self._store(tmp_path))
+        try:
+            assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO events(event_entity_id, session_id, event_id) "
+                    "VALUES ('x', 'no-such-session', 'e1')"
+                )
+        finally:
+            conn.close()
+
+    def test_rows_are_addressable_by_name(self, tmp_path):
+        """`row_factory` belongs with the opener, not with each caller."""
+        from codess.fileio import open_writable
+
+        conn = open_writable(self._store(tmp_path))
+        try:
+            row = conn.execute("SELECT key, value FROM store_meta LIMIT 1").fetchone()
+            assert row["key"]
+        finally:
+            conn.close()
+
+    def test_constraints_can_be_waived_explicitly(self, tmp_path):
+        """The one legitimate case: a copy populated by `backup()`.
+
+        Row constraints do not apply while SQLite copies pages, and stating
+        that at the call site is the point -- the previous shape left every
+        raw connection silently unconstrained.
+        """
+        from codess.fileio import open_writable
+
+        conn = open_writable(self._store(tmp_path), foreign_keys=False)
+        try:
+            assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 0
+        finally:
+            conn.close()
+
+    def test_a_created_store_enforces_constraints(self, tmp_path):
+        """`init_db` builds the store every later writer depends on."""
+        from codess.store import connect
+
+        conn = connect(self._store(tmp_path))
+        try:
+            assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        finally:
+            conn.close()

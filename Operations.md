@@ -504,10 +504,10 @@ operator before committing to it:
 ```bash
 # 1. What will happen, before anything is read: resolved roots, which lists
 #    are empty, what is pruned, and what is deliberately traversed.
-python tools/setup_discovery.py --no-propose
+codess config discovery --no-propose
 
 # 1b. The same, plus candidate containers read from your own tree.
-python tools/setup_discovery.py
+codess config discovery
 
 # 2. A quick probe: recent work only, so it finishes in seconds.
 codess scan --dir ~ --days 30 --out -

@@ -26,6 +26,7 @@ from codess.config import (
 from codess.fileio import (
     HashMismatchError,
     hash_file,
+    open_writable,
     quote_identifier,
     open_readonly,
     read_hash,
@@ -192,7 +193,10 @@ def _backup_store(
     `snapshot_store_paths_from_base` verifies.
     """
     source = open_readonly(source_path)
-    target = sqlite3.connect(target_path)
+    # `backup()` copies pages, so row constraints do not apply during the copy
+    # -- but the `store_meta` stamp written below is an ordinary write, and the
+    # result is a store other code opens. Stated rather than defaulted (W56).
+    target = open_writable(target_path, foreign_keys=False)
     try:
         require_store(source, write=False)
         source.backup(target)
@@ -220,7 +224,9 @@ def _backup_store(
 def _logical_counts(
     path: Path, only: Iterable[str] | None = None
 ) -> dict[str, int]:
-    conn = sqlite3.connect(path)
+    # Counting rows is a read, and a read that opens a file it does not own
+    # must not be able to write to it even by mistake (W56).
+    conn = open_readonly(path)
     try:
         available = table_names(conn)
         requested = tuple(only) if only is not None else (

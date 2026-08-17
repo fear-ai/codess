@@ -388,3 +388,69 @@ def test_reference_validation_keeps_sha256_mismatch_fatal(tmp_path):
     )
 
     assert any("current_reference" in error for error in report["errors"])
+
+
+class TestDigestCoversTheSchema:
+    """Every released table is in the semantic digest, or excluded with a reason.
+
+    The digest silently ignores whatever `canonical_rows` does not list, so an
+    omission is invisible: `model_params` was missing, and model evidence could
+    differ between two stores while a fixed-point check called them identical
+    (CoPlan W57). A hand-written table list has nothing to be checked against,
+    which is the same failure 3.5.4 found in the table-to-count map.
+    """
+
+    def _listed(self):
+        import re
+
+        source = Path(__file__).resolve().parents[1] / "src/codess/baseline_validation.py"
+        text = source.read_text(encoding="utf-8")
+        body = text[text.index("def canonical_rows"):text.index("def semantic_digest")]
+        return set(re.findall(r'^\s{8}"(\w+)":', body, re.M))
+
+    def _declared(self):
+        import re
+
+        from codess.schema_contract import load_ddl
+
+        return set(re.findall(r"CREATE TABLE (\w+)", load_ddl()))
+
+    def test_every_released_table_is_covered_or_excluded(self):
+        from codess.baseline_validation import DIGEST_EXCLUDED_TABLES
+
+        missing = self._declared() - self._listed() - set(DIGEST_EXCLUDED_TABLES)
+        assert not missing, (
+            f"tables neither in the digest nor excluded with a reason: {sorted(missing)}"
+        )
+
+    def test_each_exclusion_states_why(self):
+        from codess.baseline_validation import DIGEST_EXCLUDED_TABLES
+
+        assert DIGEST_EXCLUDED_TABLES, "an empty exclusion set hides the decision"
+        for table, reason in DIGEST_EXCLUDED_TABLES.items():
+            assert len(reason) > 40, f"{table}'s exclusion needs a stated reason"
+
+    def test_an_exclusion_names_a_real_table(self):
+        from codess.baseline_validation import DIGEST_EXCLUDED_TABLES
+
+        unknown = set(DIGEST_EXCLUDED_TABLES) - self._declared()
+        assert not unknown, f"excluded tables absent from the DDL: {sorted(unknown)}"
+
+    def test_model_evidence_changes_the_digest(self, tmp_path):
+        """The defect, pinned: a differing model row must not compare equal."""
+        from codess.baseline_validation import semantic_digest
+        from codess.store import connect, init_db
+
+        store = tmp_path / "sessions_cc.db"
+        init_db(store)
+        before = semantic_digest([store])
+        conn = connect(store)
+        conn.execute(
+            "INSERT INTO model_params(provider, model_name_exact) VALUES (?, ?)",
+            ("openai", "gpt-test"),
+        )
+        conn.commit()
+        conn.close()
+        assert semantic_digest([store]) != before, (
+            "model evidence must be visible to a fixed-point comparison"
+        )

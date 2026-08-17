@@ -357,6 +357,15 @@ def build_parser() -> argparse.ArgumentParser:
     orientation.add_argument("--output", type=Path)
     orientation.set_defaults(handler=_audit_orientation)
 
+    config_family = families.add_parser("config")
+    config_commands = config_family.add_subparsers(dest="config_command", required=True)
+    discovery = config_commands.add_parser("discovery")
+    discovery.add_argument("--work-root", type=Path)
+    discovery.add_argument(
+        "--no-propose", action="store_true",
+        help="report the resolved configuration without reading the work root",
+    )
+    discovery.set_defaults(handler=_config_discovery)
     schema = families.add_parser("schema")
     schema_commands = schema.add_subparsers(dest="schema_command", required=True)
     compare_parser = schema_commands.add_parser("compare")
@@ -759,6 +768,32 @@ def _audit_orientation(args) -> int:
     )
     _write_optional(args.output, report)
     return 1 if report["summary"]["projects_failed"] else 0
+
+
+def _config_discovery(args) -> int:
+    """Report the resolved discovery configuration, and propose exclusions.
+
+    The first step of the setup sequence in Operations 10.5.2. It exists as a
+    command because the values that matter are what *this process* resolved:
+    an operator reading `env` sees what one shell exports, which disagrees
+    with the running scan the moment a variable is set elsewhere (W59).
+
+    The logic lives in `tools/setup_discovery.py`, which is separately
+    runnable from a checkout without an install. This routes to it rather than
+    restating it, so the two cannot diverge.
+    """
+    sys.path.insert(0, str(REPO_ROOT / "tools"))
+    from setup_discovery import propose, report_configuration
+
+    from codess.config import DEFAULT_WORK
+
+    configuration = report_configuration()
+    proposal = (
+        None if args.no_propose
+        else propose(args.work_root or DEFAULT_WORK)
+    )
+    _json({"configuration": configuration, "proposal": proposal})
+    return 0
 
 
 def _schema_compare(args) -> int:

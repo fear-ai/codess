@@ -1695,3 +1695,23 @@ def test_query_pipeline_close_has_no_broken_pipe_traceback():
         proc.wait(timeout=10)
         assert "BrokenPipeError" not in stderr
         assert "Traceback" not in stderr
+
+
+def test_config_discovery_reports_the_resolved_configuration():
+    """`codess config discovery` states what this process resolved.
+
+    An operator reading `env` sees what one shell exports, which disagrees
+    with the running scan the moment a variable is set elsewhere (W59). The
+    command shares its implementation with `tools/setup_discovery.py` rather
+    than restating it, so the two cannot diverge.
+    """
+    result = _run(["config", "discovery", "--no-propose"])
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)["configuration"]
+    assert payload["work_root"]["value"]
+    assert payload["pruned_names"], "the prune set must be reported"
+    assert "lib" in payload["traversed_on_purpose"], (
+        "names deliberately traversed are what an operator needs in order to "
+        "decide what to exclude for their own tree"
+    )
+    assert payload["aggregators"]["source"].startswith(("default", "CODESS_"))

@@ -1,4 +1,9 @@
-"""Derived monthly token observations from current local vendor sources."""
+"""Derived monthly token observations from current local vendor sources.
+
+**Reads core tables directly** because its subject is recorded usage
+observations rather than a Session selection, and it must read stores the
+query layer would refuse on contract grounds (CoPlan W56 step 3).
+"""
 
 from __future__ import annotations
 
