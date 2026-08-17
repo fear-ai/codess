@@ -9,9 +9,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from codess.config import env_path_list
 from codess.hashing import codess_hash
 
-REFERENCE_SEGMENTS = frozenset({"sOSS", "Claws", "ZKs", "CodingTools"})
+REFERENCE_SEGMENTS: frozenset[str] = frozenset(
+    env_path_list("CODESS_REFERENCE_SEGMENTS", ())
+)
+"""Directory names marking a tree of other people's code rather than one's own.
+
+Empty by default and supplied by the operator, for the same reason as
+`config.DEFAULT_AGGREGATORS`: a directory that holds vendored or reference
+checkouts is named differently on every machine, and shipping one developer's
+names would label unrelated directories as reference work elsewhere.
+
+A path under one of these is labelled `reference`/`dormant`/`deferred`, which
+is a curation starting point for review rather than a decision.
+"""
 
 
 def classify_project_path(path: Path, *, work_root: Path | None = None) -> dict[str, str]:

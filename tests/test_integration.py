@@ -17,9 +17,9 @@ from codess.snapshot import current_raw_records
 def test_path_to_slug_roundtrip():
     """Slug encode/decode round-trip. Note: slug format uses - as separator, so paths with hyphens are lossy."""
 
-    path = Path("/Users/walter/Work/Spank/spankpy")
+    path = Path("/home/user/work/Group/proj")
     slug = path_to_slug(path)
-    assert slug == "-Users-walter-Work-Spank-spankpy"
+    assert slug == "-home-user-work-Group-proj"
     back = slug_to_path(slug)
     assert back == path
 

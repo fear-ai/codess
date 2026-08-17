@@ -458,12 +458,12 @@ def test_freeze_revalidates_verifies_and_rolls_back_reviewed_baseline(
     result = freeze_reviewed_catalogs(
         {"projects": [{"path": str(project), "policy": str(policy_path)}]},
         approved_path=approved, reviewed_path=reviewed,
-        repo_root=Path(__file__).parents[1],
+        catalog_base=Path(__file__).parents[1],
     )
     assert result["verification"]["status"] == "verified"
     assert read_json(approved)["projects"][0]["project_id"] == project_id
     assert verify_reviewed_catalog(
-        reviewed, repo_root=Path(__file__).parents[1]
+        reviewed
     )["status"] == "verified"
     prior_approved, prior_reviewed = approved.read_bytes(), reviewed.read_bytes()
     monkeypatch.setattr(
@@ -474,7 +474,7 @@ def test_freeze_revalidates_verifies_and_rolls_back_reviewed_baseline(
         freeze_reviewed_catalogs(
             {"projects": [{"path": str(project), "policy": str(policy_path)}]},
             approved_path=approved, reviewed_path=reviewed,
-            repo_root=Path(__file__).parents[1],
+            catalog_base=Path(__file__).parents[1],
         )
     assert approved.read_bytes() == prior_approved
     assert reviewed.read_bytes() == prior_reviewed
@@ -509,7 +509,7 @@ def test_freeze_preserves_explicit_accepted_with_limitations_state(
         {"projects": [{"path": str(project), "policy": str(policy_path)}]},
         approved_path=approved,
         reviewed_path=reviewed,
-        repo_root=Path(__file__).parents[1],
+        catalog_base=Path(__file__).parents[1],
     )
     assert result["verification"]["status"] == "verified"
     assert read_json(approved)["projects"][0]["validation_state"] == (
@@ -538,7 +538,7 @@ def test_reviewed_baseline_verifies_its_exact_retained_snapshot_after_current_ad
     freeze_reviewed_catalogs(
         {"projects": [{"path": str(project), "policy": str(policy_path)}]},
         approved_path=approved, reviewed_path=reviewed,
-        repo_root=Path(__file__).parents[1],
+        catalog_base=Path(__file__).parents[1],
     )
     reviewed_snapshot = read_json(reviewed)["projects"][0]["snapshot_id"]
 
@@ -560,7 +560,7 @@ def test_reviewed_baseline_verifies_its_exact_retained_snapshot_after_current_ad
     )
 
     result = verify_reviewed_catalog(
-        reviewed, repo_root=Path(__file__).parents[1]
+        reviewed
     )
     assert result["projects"][0]["snapshot_id"] == reviewed_snapshot
     assert result["projects"][0]["project_id"] == project_id

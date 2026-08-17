@@ -1,6 +1,6 @@
 # CoPlan.md Controlled-Vocabulary Ambiguity Audit
 
-Scope: `/Users/walter/Work/Code/CodeSess/CoPlan.md`, cross-checked against
+Scope: `CoPlan.md`, cross-checked against
 CoSchema.md, Designs.md, Codess.md, Operations.md, CCSchema.md, CodexSchema.md,
 CursorSchema.md. Findings only — no proposed rewrites of CoPlan.md itself.
 Ordered most severe/confusing first.

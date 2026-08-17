@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
             approve_catalog=args.approve_catalog,
             min_size=args.min_size,
             query_smoke=not args.no_query_smoke,
-            repo_root=REPO_ROOT,
+            catalog_base=args.selection.parent,
             report_path=args.report,
         )
         final = result["final_validation"]

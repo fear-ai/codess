@@ -50,6 +50,41 @@ duplicating its content elsewhere.
   do not wrap narrower than 80
 - A comment restating the line below it is noise; delete it
 
+## Environment Separation
+
+The repository must not disclose the machine it was developed on. Nothing in
+released documentation, source, or tests may carry an operator's account name,
+host name, home directory layout, or the names of their repositories,
+employers, clients, or private projects.
+
+- **Ship empty, discover at runtime.** Any list describing one machine's tree
+  -- grouping directories, review or vendored trees, excluded locations --
+  defaults to empty and is supplied by an environment variable. A shipped
+  default derived from one tree silently misclassifies directories on every
+  other machine, and the operator cannot see why.
+- **Documentation states the rule, never the instance.** Where a real path
+  motivated a decision, describe the shape that caused it: a directory name
+  containing the separator character, a container holding many repositories.
+  A reader on another machine can check a rule and cannot check a path.
+- **Examples are synthetic and obviously so.** Use placeholder segments
+  (`<user>`, `<project>`, `/home/user/work`) rather than plausible real names,
+  so a reader cannot mistake an example for a required value.
+- **Measurements may keep their shape and lose their identity.** A corpus
+  table establishes vendor coverage and scale; label rows by shape or with
+  stable anonymous identifiers. The name adds nothing a reader can verify.
+- **Tests assert the mechanism, not a layout.** A test naming a real
+  directory tests that machine. Configure the input explicitly and assert the
+  rule -- which segment matched, whether position mattered.
+- **Operator state stays out of version control.** Reviewed selections,
+  policies, and catalogs that name real locations are local data. If a
+  workflow needs them committed, the location is a placeholder resolved from
+  configuration at load.
+- **Third-party projects are citable; private ones are not.** A published
+  tool evaluated as an integration candidate is verifiable by any reader. A
+  private repository is not, so its role belongs in developer notes under
+  `experiments/`, with the released text carrying the requirement and the
+  evidence.
+
 ## Security
 
 - Identify security issues in system operation, code or documentation

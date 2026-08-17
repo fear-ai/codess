@@ -25,7 +25,7 @@ from codess.config import (
 # Re-exported: the Claude slug encoding is `helpers`'. `project` carried a
 # second copy whose `slug_to_path` lacked the filesystem fallback for
 # hyphenated directory names, so the two disagreed on any path containing a
-# hyphen -- `spank-py` decoded to the non-existent `spank/py` here (3.5.4).
+# hyphen -- a hyphenated directory decoded to a non-existent nested path (3.5.4).
 from codess.helpers import path_to_slug as path_to_slug
 from codess.helpers import slug_to_path as slug_to_path
 

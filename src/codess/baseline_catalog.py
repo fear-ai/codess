@@ -94,8 +94,17 @@ def load_baseline_selection(path: Path) -> dict[str, Any]:
 
 
 def _accepted_from_reports(
-    projects: Iterable[dict[str, Any]], *, repo_root: Path,
+    projects: Iterable[dict[str, Any]], *, catalog_base: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    """Accept the reported Projects, resolving each one's policy path.
+
+    `catalog_base` is the directory a relative `policy` field resolves
+    against, and is the *selection document's own directory* rather than a
+    global root. That is what makes a selection portable: a policy named
+    `policies/x.json` beside its selection resolves wherever the pair is
+    placed, so moving the catalog out of the checkout (W58) does not rewrite
+    every stored path. An absolute path is used as given, unchanged.
+    """
     current_digest = contract_digest()
     approved: list[dict[str, Any]] = []
     reviewed: list[dict[str, Any]] = []
@@ -104,7 +113,7 @@ def _accepted_from_reports(
         project = Path(specification["path"]).expanduser().resolve()
         policy = Path(specification["policy"])
         if not policy.is_absolute():
-            policy = repo_root / policy
+            policy = catalog_base / policy
         report = read_json(project / ".codess/validation-report.json")
         final = report.get("final_validation") or {}
         if (
@@ -143,14 +152,17 @@ def _accepted_from_reports(
             "snapshot_id": final["snapshot_id"],
             "semantic_digest": final["semantic_digest"],
             "validation_state": final["status"],
-            "policy": str(policy.relative_to(repo_root)) if policy.is_relative_to(repo_root) else str(policy),
+            "policy": (
+                str(policy.relative_to(catalog_base))
+                if policy.is_relative_to(catalog_base) else str(policy)
+            ),
         })
     if len(registries) != 1:
         raise RuntimeError(f"reviewed projects use different registries: {registries}")
     return approved, reviewed, registries.pop()
 
 
-def verify_reviewed_catalog(path: Path, *, repo_root: Path) -> dict[str, Any]:
+def verify_reviewed_catalog(path: Path, *, catalog_base: Path | None = None) -> dict[str, Any]:
     catalog = read_json(path)
     if catalog.get("catalog_format") != REVIEWED_FORMAT:
         raise ValueError("unsupported reviewed-baseline catalog format")
@@ -172,7 +184,7 @@ def verify_reviewed_catalog(path: Path, *, repo_root: Path) -> dict[str, Any]:
         )
         policy_path = Path(item["policy"])
         if not policy_path.is_absolute():
-            policy_path = repo_root / policy_path
+            policy_path = (catalog_base or path.parent) / policy_path
         report = validate_project(
             project,
             policy=load_policy(policy_path),
@@ -197,10 +209,17 @@ def freeze_reviewed_catalogs(
     *,
     approved_path: Path,
     reviewed_path: Path,
-    repo_root: Path,
+    catalog_base: Path,
 ) -> dict[str, Any]:
+    """Freeze the accepted Projects into the approved and reviewed catalogs.
+
+    `catalog_base` anchors relative policy paths, and is normally the
+    directory holding the selection document. Passing it explicitly rather
+    than deriving it keeps the caller in control of where a portable
+    selection is rooted (W58).
+    """
     approved_projects, reviewed_projects, registry = _accepted_from_reports(
-        selection["projects"], repo_root=repo_root
+        selection["projects"], catalog_base=catalog_base
     )
     current_digest = contract_digest()
     approved = {
@@ -226,7 +245,9 @@ def freeze_reviewed_catalogs(
     try:
         write_json_atomic(approved_path, approved)
         write_json_atomic(reviewed_path, reviewed)
-        verification = verify_reviewed_catalog(reviewed_path, repo_root=repo_root)
+        verification = verify_reviewed_catalog(
+            reviewed_path, catalog_base=catalog_base
+        )
     except Exception:
         for path, content in previous.items():
             if content is None:

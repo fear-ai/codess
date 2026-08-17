@@ -31,6 +31,7 @@ from codess.config import (
     MAX_RECORD_BYTES,
     RAW_MODE_CHOICES,
     REGISTRY,
+    catalog_root,
 )
 from codess.cursor_feature_audit import audit_cursor_features
 from codess.evidence import build_evidence_inventory
@@ -160,11 +161,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     refresh.add_argument(
         "--baseline-selection", type=Path,
-        default=REPO_ROOT / "catalog/baseline-selection.json",
+        default=catalog_root() / "baseline-selection.json",
     )
     refresh.add_argument(
         "--reviewed", type=Path,
-        default=REPO_ROOT / "catalog/reviewed-baselines.json",
+        default=catalog_root() / "reviewed-baselines.json",
     )
     refresh.add_argument("--large-events", type=int, default=LARGE_EVENT_COUNT)
     refresh.add_argument(
@@ -194,11 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     annotations.add_argument(
         "--baseline-selection", type=Path,
-        default=REPO_ROOT / "catalog/baseline-selection.json",
+        default=catalog_root() / "baseline-selection.json",
     )
     annotations.add_argument(
         "--reviewed", type=Path,
-        default=REPO_ROOT / "catalog/reviewed-baselines.json",
+        default=catalog_root() / "reviewed-baselines.json",
     )
     annotations.add_argument(
         "--large-events", type=int, default=LARGE_EVENT_COUNT
@@ -278,9 +279,9 @@ def build_parser() -> argparse.ArgumentParser:
     _apply_arguments(apply_parser)
     apply_parser.set_defaults(handler=_baseline_apply)
     freeze = baseline_commands.add_parser("freeze")
-    freeze.add_argument("--selection", type=Path, default=REPO_ROOT / "catalog/baseline-selection.json")
-    freeze.add_argument("--approved", type=Path, default=REPO_ROOT / "catalog/approved-baselines.json")
-    freeze.add_argument("--reviewed", type=Path, default=REPO_ROOT / "catalog/reviewed-baselines.json")
+    freeze.add_argument("--selection", type=Path, default=catalog_root() / "baseline-selection.json")
+    freeze.add_argument("--approved", type=Path, default=catalog_root() / "approved-baselines.json")
+    freeze.add_argument("--reviewed", type=Path, default=catalog_root() / "reviewed-baselines.json")
     freeze.set_defaults(handler=_baseline_freeze)
     recover_pointer = baseline_commands.add_parser("recover-pointer")
     recover_pointer.add_argument("--project", type=Path, required=True)
@@ -295,7 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     recover_manifest.set_defaults(handler=_baseline_recover_manifest)
     verify = baseline_commands.add_parser("verify")
-    verify.add_argument("--catalog", type=Path, default=REPO_ROOT / "catalog/reviewed-baselines.json")
+    verify.add_argument("--catalog", type=Path, default=catalog_root() / "reviewed-baselines.json")
     verify.set_defaults(handler=_baseline_verify)
 
     package = families.add_parser("package")
@@ -658,7 +659,7 @@ def _baseline_freeze(args) -> int:
 
 
 def _baseline_verify(args) -> int:
-    _json(verify_reviewed_catalog(args.catalog, repo_root=REPO_ROOT))
+    _json(verify_reviewed_catalog(args.catalog))
     return 0
 
 
@@ -884,8 +885,8 @@ def _registry_prune(args) -> int:
 
 def _storage_prune(args) -> int:
     catalogs = args.reference_catalog or [
-        REPO_ROOT / "catalog/approved-baselines.json",
-        REPO_ROOT / "catalog/reviewed-baselines.json",
+        catalog_root() / "approved-baselines.json",
+        catalog_root() / "reviewed-baselines.json",
     ]
     result = (
         apply_retention_plan(

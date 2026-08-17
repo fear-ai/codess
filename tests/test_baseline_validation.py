@@ -172,15 +172,24 @@ def test_load_policy_rejects_unknown_fields(tmp_path):
 
 
 def test_repository_acceptance_policies_are_valid():
+    """Every acceptance policy present parses and requires a fixed point.
+
+    The set is not enumerated. It was, naming one machine's Projects, which
+    tied the suite to that machine and disclosed it -- and asserted the wrong
+    thing besides: what matters is that each policy is loadable and demands a
+    fixed point, not which Projects an operator happens to have accepted.
+    `ci-fixture.json` is the one policy the repository ships, because it
+    validates a fixture the repository contains and is therefore true on
+    every machine (W58).
+    """
     root = Path(__file__).resolve().parents[1]
     policies = sorted((root / "catalog/policies").glob("*.json"))
-    assert {path.name for path in policies} == {
-        "ci-fixture.json", "harduw.json", "insight.json", "misses.json", "setpack.json", "spank-logs.json",
-            "spank-py.json", "spank-rs.json", "swemore.json", "wp.json",
-            "wpages.json", "wisw.json", "zero400.json", "zeroperf.json",
-            "zerowalletmac.json",
-        }
-    assert all(load_policy(path)["require_fixed_point"] for path in policies)
+    names = {path.name for path in policies}
+    assert "ci-fixture.json" in names, "the shipped template policy is missing"
+    assert policies, "no acceptance policies found"
+    for path in policies:
+        policy = load_policy(path)
+        assert policy["require_fixed_point"], f"{path.name} does not require a fixed point"
 
 
 def test_ci_fixture_policy_covers_three_vendors_without_home_data(tmp_path):

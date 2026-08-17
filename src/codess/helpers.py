@@ -1,7 +1,9 @@
 """Shared helpers: path, slug, exclude, CSV, dir list."""
 
 import csv
+import json
 import logging
+import os
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -14,16 +16,75 @@ log = logging.getLogger(__name__)
 # Exact directory names that are implementation artifacts, dependency stores,
 # caches, environments, or VCS internals rather than candidate Projects. The
 # caller's explicit root remains eligible; these names prune only descendants.
-TRAVERSAL_PRUNE_DIRS = frozenset({
-    ".build", ".cache", ".ccache", ".codess", ".direnv", ".eggs", ".git",
-    ".gradle", ".hg", ".idea", ".mypy_cache", ".next", ".nox", ".npm",
-    ".nuxt", ".parcel-cache", ".pnpm-store", ".pyenv", ".pytest_cache",
-    ".ruff_cache", ".svn", ".terraform", ".tox", ".turbo", ".venv",
-    ".vscode", ".yarn", "__pycache__", "bazel-bin", "bazel-out",
-    "bazel-testlogs", "build", "coverage", "debug", "deriveddata", "dist",
-    "env", "node_modules", "out", "pods", "release", "site-packages",
-    "target", "venv",
-})
+DISCOVERY_POLICY_PATH = Path(__file__).resolve().parents[2] / "schema/discovery-policy.json"
+"""The released discovery policy: which directory names are never traversed.
+
+Externalized rather than hardcoded because the set is editable data, not a
+rule: a tree that versions its `dist/` output, a monorepo with a package named
+`build`, or a Go module vendoring dependencies it audits each needs a
+different set, and a frozen tuple made those cases undiscoverable with no way
+to say so (CoPlan W60).
+
+`CODESS_DISCOVERY_POLICY` names a replacement file. A malformed or missing
+file falls back to the released one and warns rather than raising: discovery
+degrading to the shipped defaults is recoverable, while a scan that refuses to
+start because a policy has a trailing comma is not.
+"""
+
+
+def _load_discovery_policy() -> tuple[frozenset[str], tuple[str, ...], dict[str, str]]:
+    """Read the pruned names, pruned prefixes, and documented exceptions."""
+    configured = os.environ.get("CODESS_DISCOVERY_POLICY")
+    path = Path(configured).expanduser() if configured else DISCOVERY_POLICY_PATH
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if document.get("policy_format") != "codess.discovery-policy/1":
+            raise ValueError(f"unsupported discovery policy format in {path}")
+        names = {
+            str(name).casefold()
+            for group in document.get("pruned", {}).values()
+            for name in group
+        }
+        prefixes = tuple(str(p).casefold() for p in document.get("pruned_prefixes", ()))
+        traversed = {
+            str(k): str(v) for k, v in document.get("traversed_on_purpose", {}).items()
+        }
+        return frozenset(names), prefixes, traversed
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        log.warning(
+            "cannot load discovery policy from %s (%s); using the released set", path, exc
+        )
+        if configured:
+            try:
+                document = json.loads(DISCOVERY_POLICY_PATH.read_text(encoding="utf-8"))
+                return (
+                    frozenset(
+                        str(n).casefold()
+                        for g in document.get("pruned", {}).values() for n in g
+                    ),
+                    tuple(str(p).casefold() for p in document.get("pruned_prefixes", ())),
+                    {str(k): str(v) for k, v in document.get("traversed_on_purpose", {}).items()},
+                )
+            except (OSError, ValueError):
+                pass
+        return frozenset(), (), {}
+
+
+TRAVERSAL_PRUNE_DIRS, TRAVERSAL_PRUNE_PREFIXES, TRAVERSED_ON_PURPOSE = (
+    _load_discovery_policy()
+)
+"""Directory names never traversed, matched case-folded against each segment.
+
+Names rather than paths, so the set is portable: `obj` under a .NET solution
+and `obj` under a Makefile are both build output, and neither is anchored to
+one tree. This is the opposite of `EXCLUDE_REVIEW_DIRS`, which names *where*
+on one machine and therefore ships empty.
+
+`TRAVERSED_ON_PURPOSE` records the names that look skippable and are not,
+each with the reason -- `lib`, `data`, `etc`, and `secrets` among them. It is
+data rather than a comment so `tools/setup_discovery.py` can report it to an
+operator deciding what to exclude for their own tree.
+"""
 
 _BROAD_TRAVERSAL_ROOTS = frozenset(
     Path(value).resolve()
@@ -49,7 +110,7 @@ _EPHEMERAL_LOCATION_PREFIXES = tuple(
 def should_prune_directory(name: str) -> bool:
     """Return whether a descendant directory is routine traversal noise."""
     folded = name.casefold()
-    return folded in TRAVERSAL_PRUNE_DIRS or folded.startswith("cmake-build-")
+    return folded in TRAVERSAL_PRUNE_DIRS or folded.startswith(TRAVERSAL_PRUNE_PREFIXES)
 
 
 def is_under_pruned_directory(path: Path, root: Path) -> bool:
@@ -109,11 +170,12 @@ def resolve_slug(slug: str, root: Path | None = None) -> Path | None:
     """Decode a Claude storage slug against the filesystem, or return None.
 
     The encoding is Claude's and is lossy: `/` and `-` both become `-`, so
-    `spank-py` and `spank/py` produce the same slug and the string alone
+    `<name>-<suffix>` and `<name>/<suffix>` produce the same slug, and the string alone
     cannot say which was meant. The only authority that can decide is the
     filesystem, so this matches slug tokens against directories that exist,
-    preferring the longest name at each step -- `spank-py` is tried before
-    `spank/py`, because a literal directory name is better evidence than a
+    preferring the longest name at each step -- the hyphenated directory is
+    tried before the nested split, because a literal directory name is better
+    evidence than a
     split that happens to parse.
 
     Returns None when no directory matches. That is the honest answer for a
@@ -198,8 +260,9 @@ def is_excluded(p: Path, work_root: Path | None = None) -> bool:
     if "/Save" in rel or rel.startswith("Save"):
         return True
     # Match on path segments rather than a root-relative prefix: the same
-    # directory must be excluded whether it is reached as `ZK/ZKs` from
-    # ~/Work or `Work/ZK/ZKs` from the home directory. Anchoring to one root
+    # directory must be excluded whether it is reached as `<group>/<tree>`
+    # from a work root or `Work/<group>/<tree>` from the home directory above
+    # it. Anchoring to one root
     # made exclusion depend on where the scan started.
     parts = p.parts
     for entry in EXCLUDE_REVIEW_DIRS:

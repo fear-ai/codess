@@ -170,33 +170,26 @@ CURSOR_WS = CURSOR_DATA / "workspaceStorage"
 
 # --- Discovery ---
 # Top-level folder names under a work root treated as “aggregator” parents (skip as leaf projects in scan canonicalize).
-DEFAULT_AGGREGATORS = (
-    "WP", "ZK", "Claw", "Claude", "Cursor", "Github", "CodingTools",
-)
+DEFAULT_AGGREGATORS: tuple[str, ...] = ()
 """Directory names that group Projects rather than being one.
 
-A default rather than a rule: these are one developer's grouping
-directories, and another operator's tree will have different ones -- or
-none. `CODESS_AGGREGATORS` replaces the list, and setting it empty says
-that every directory is a candidate Project, which is a statement the
-frozen set could not make.
+Empty by default, because there is no portable answer: a grouping directory
+is a property of one operator's tree, and shipping one developer's names
+would exclude directories on every other machine for no reason the operator
+could see. `CODESS_AGGREGATORS` supplies them -- for example
+`Clients,Research,Sandbox` -- and an empty value states that every directory
+is a candidate Project, which a frozen set could not say.
 """
 
-DEFAULT_EXCLUDE_REVIEW_DIRS = (
-    "CodingTools",
-    "Code/CodingTools",
-    "MCP/MCPs",
-    "Claw/Claws",
-    "ZK/ZKs",
-    "Spank/sOSS",
-    "Claude/Claudes",
-)
+DEFAULT_EXCLUDE_REVIEW_DIRS: tuple[str, ...] = ()
 """Path prefixes, relative to a work root, excluded as review or backup trees.
 
-Same reasoning as the aggregators: a default derived from one tree, replaced
-wholesale by `CODESS_EXCLUDE_REVIEW_DIRS`. Matching is on the prefix
-relative to the work root, so a directory is excluded by where it sits
-rather than by where a scan happened to start.
+Empty for the same reason as the aggregators: which trees hold copies of
+other repositories rather than work of their own is specific to one machine.
+`CODESS_EXCLUDE_REVIEW_DIRS` supplies them -- for example
+`Tools,Vendor/Bundled` -- and matching is on path segments relative to the
+work root, so a directory is excluded by where it sits rather than by where
+a scan happened to start.
 """
 
 AGGREGATORS = frozenset(
@@ -230,6 +223,26 @@ RAW_MANIFEST_FILE = "raw-manifest.jsonl"
 
 # --- Registry (central ingested_projects.json, default ~/.codess) ---
 REGISTRY = _IS_ENV_VALUES["CODESS_REGISTRY"]
+
+
+def catalog_root() -> Path:
+    """Where reviewed selections and acceptance policies are read and written.
+
+    Operator state, not source: which Projects were accepted as validation
+    baselines, and under which policy, is a decision about one machine's data.
+    It defaults beside the registry -- where `ingested_projects.json`,
+    snapshots, raw objects, and receipts already live -- rather than inside the
+    checkout, which previously made a fresh clone write operator state into its
+    own source tree (CoPlan W58).
+
+    `CODESS_CATALOG` overrides it. Every command still accepts an explicit
+    path, so pointing at a checked-in selection remains possible when that is
+    what a reviewer wants.
+    """
+    configured = os.environ.get("CODESS_CATALOG")
+    if configured:
+        return Path(configured).expanduser()
+    return REGISTRY / "catalog"
 
 # --- CLI / logging ---
 VERBOSE = _IS_ENV_VALUES["CODESS_VERBOSE"]

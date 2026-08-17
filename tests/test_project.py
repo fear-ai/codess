@@ -99,7 +99,7 @@ class TestSlugToPath:
         assert slug_to_path("a-b-c") == Path("a/b/c")
 
     def test_roundtrip_absolute(self):
-        p = Path("/Users/walter/Work/proj")
+        p = Path("/home/user/work/proj")
         assert slug_to_path(path_to_slug(p)) == p
 
     def test_roundtrip_relative(self):

@@ -67,10 +67,10 @@ lists default to one set of names and are replaced wholesale:
 
 ```bash
 # Directories that group Projects rather than being one.
-export CODESS_AGGREGATORS='WP,ZK,Claw,Claude,Cursor,Github,CodingTools'
+export CODESS_AGGREGATORS='Clients,Research,Tools,Github,Sandbox'
 
 # Path prefixes, relative to the work root, skipped as review/backup trees.
-export CODESS_EXCLUDE_REVIEW_DIRS='CodingTools,MCP/MCPs,ZK/ZKs'
+export CODESS_EXCLUDE_REVIEW_DIRS='Tools,Vendor/Bundled,Research/Archive'
 ```
 
 Entries are comma-separated and relative to the work root; an absolute entry
@@ -385,7 +385,173 @@ SQLite connections. Confirm that the selected workspace mapping is narrow and
 that the live database is not continuously changing. Do not copy, vacuum,
 rewrite, or fully decode the Cursor database merely to diagnose one Project.
 
-### 10.5 Current Snapshot Manifest Hash Mismatch
+### 10.5 First Discovery on a New Machine
+
+Codess ships with empty grouping and exclusion lists, so a fresh install
+classifies nothing by name. Discovery is a three-step process rather than a
+configuration exercise: scan broadly, review what was found, then narrow.
+
+```text
+  1. scan            ~/Work or ~, all-time window, empty lists
+        │
+        ▼
+  2. review          which rows are Projects, which are containers,
+        │            which are review or vendored trees
+        ▼
+  3. configure       CODESS_AGGREGATORS   -- containers, reported as children
+        │            CODESS_EXCLUDE_REVIEW_DIRS -- trees holding others' code
+        ▼
+  4. rescan          confirm the same Projects, minus the excluded trees
+```
+
+```bash
+# 1. Discover with nothing configured.
+codess scan --dir ~/Work --days 0 --out -
+
+# 3. Narrow, using names from your own tree.
+export CODESS_AGGREGATORS='Clients,Research,Sandbox'
+export CODESS_EXCLUDE_REVIEW_DIRS='Tools,Vendor/Bundled,Research/Archive'
+
+# 4. Confirm the narrowing removed only what you intended.
+codess scan --dir ~/Work --days 0 --out -
+```
+
+**What discovery does without configuration**, verified on a tree of 21
+Projects across three vendors:
+
+| Property | Behavior |
+|---|---|
+| Coverage | Scanning `~` and `~/Work` find the same Projects; `~` additionally finds tool working directories outside the work root |
+| System locations | Never reported. `/`, `/var`, and similar roots are refused: *broad system traversal root is not allowed* |
+| Depth | A container holding 68 nested repositories reports as **one** row, not 68. Scan is index-led and does not walk into candidates |
+| Backup trees | `OLD` and `Save` segments are excluded without configuration, being conventions rather than one tree's names |
+| Matching | On path segments, so `OSS` excludes `group/OSS/proj` and not `OSSproject/x`, and a directory is excluded by where it sits rather than by where the scan started |
+
+**Why the lists ship empty.** A default derived from one machine's tree
+misclassifies directories on every other machine, and the operator cannot see
+why: a Project silently absent from a scan looks like a discovery failure. An
+empty value is also a statement -- *this tree has no grouping directories* --
+which a frozen default could not make.
+
+`~/Work` remains the default work root when no `--dir` is given, since it is
+home-relative and costs nothing when absent.
+
+#### 10.5.1 What Is Excluded Without Configuration
+
+Two exclusion mechanisms exist, and they differ in what they name:
+
+| | Discovery policy | `CODESS_EXCLUDE_REVIEW_DIRS` |
+|---|---|---|
+| Where | `schema/discovery-policy.json`, replaced by `CODESS_DISCOVERY_POLICY` | Environment variable |
+| Names | Directory **names**, matched case-folded on any segment | **Paths** relative to the work root |
+| Ships | Populated | Empty |
+| Portable | Yes -- `obj` is build output everywhere | No -- names one machine's layout |
+| Examples | `build`, `dist`, `obj`, `bin`, `x64`, `.vs`, `packages`, `node_modules`, `vendor`, `tmp`, `temp`, `.git`, `__pycache__`, `.venv` | whatever the operator configures |
+
+The policy file also records **names that look skippable and are deliberately
+traversed**, each with its reason -- `lib`, `etc`, `conf`, `data`, `web`,
+`windows`, `private`, `secrets`, and others. They are data rather than a
+comment so `tools/setup_discovery.py` can report them to an operator deciding
+what to exclude for their own tree. Each is a source directory in a common
+layout, so pruning it by name would hide the Project rather than the noise.
+
+**`secrets` and `credentials` are traversed deliberately.** Pruning stops
+traversal, which changes what is discovered rather than what is protected: a
+Session that already read a credential file records it whether or not Codess
+later walks that directory. Content exclusion is the content policy's
+subject, and a name-based skip that looked like protection would be worse
+than none.
+
+A malformed or unreadable policy warns and falls back to the released set: a
+scan that will not start because a policy has a trailing comma is a worse
+failure than one that uses the shipped names.
+
+The built-in set covers four kinds: version-control and editor state, caches,
+build output on POSIX **and Windows** conventions, and scratch directories.
+Matching is case-folded, so `TMP`, `Tmp`, and `tmp` are one entry. Ordinary
+source directories -- `src`, `lib`, `docs`, `tests` -- are never pruned.
+
+`OLD` and `Save` segments are additionally excluded as backup conventions.
+
+**Links, mounts, and other filesystems.** Every path is resolved before it is
+compared to a root, so a symbolic link pointing outside the work root is
+detected as outside it and not followed -- otherwise a link would attribute
+another tree's Sessions to this one. A link to its own parent resolves rather
+than recursing. Codess does not stop at a filesystem boundary: a network
+mount or external volume inside the work root is scanned like any other
+directory, which is usually wanted and is slow when the mount is remote. Use
+an explicit `--dir` or an exclusion entry if a mounted tree should be skipped.
+
+#### 10.5.2 Recommended Setup Sequence
+
+A first scan over an unfamiliar tree can be long. This order informs the
+operator before committing to it:
+
+```text
+  1. show defaults      what is pruned, what is empty, where the work root is
+        │
+  2. quick probe        ~ with a short recency window -- seconds, not minutes
+        │               "here is what a full scan would look at"
+        ▼
+  3. choose roots       inclusion: which trees to scan at all
+        │               exclusion: which to skip within them
+        ▼
+  4. full scan          the long pass, over a scope the operator chose
+        │
+  5. review and ingest  sort the discovered Projects, ingest the wanted ones
+```
+
+```bash
+# 1. What will happen, before anything is read: resolved roots, which lists
+#    are empty, what is pruned, and what is deliberately traversed.
+python tools/setup_discovery.py --no-propose
+
+# 1b. The same, plus candidate containers read from your own tree.
+python tools/setup_discovery.py
+
+# 2. A quick probe: recent work only, so it finishes in seconds.
+codess scan --dir ~ --days 30 --out -
+
+# 3. Configure from what the probe showed.
+export CODESS_AGGREGATORS='<containers>'
+export CODESS_EXCLUDE_REVIEW_DIRS='<review trees>'
+
+# 4. The long pass, now bounded.
+codess scan --dir ~/work --days 0 --out -
+
+# 5. Ingest what review selected.
+codess ingest --dir <project>
+```
+
+**Why a probe before a full scan.** A recency-windowed scan reads the same
+vendor indexes as a full one but stops at the cutoff, so it costs a fraction
+of the time and answers the question that decides the configuration: which
+containers hold work, and which trees are someone else's code. Configuring
+first and scanning once is faster than scanning, discovering the tree is
+wrong, and scanning again.
+
+**Exclusions matter less than they appear, because discovery is index-led.**
+Measured against a tree holding five vendored directories with 145 nested
+third-party repositories between them: only **one** appeared in a scan with
+no exclusions configured, and it appeared because coding work had actually
+happened there. The other four have no vendor sessions, so an index-led scan
+never reaches them however many repositories they contain.
+
+Configure exclusions for trees where you *have* worked and do not want
+reported -- a reference checkout you opened an assistant in, an archive you
+edited. A directory full of code nobody has run an assistant against needs no
+exclusion, and adding one is a rule that silently stops matching when the
+directory is renamed.
+
+**Findings outside the work root are expected.** Scanning `~` rather than a
+work root additionally reports tool working directories such as `~/.codex`,
+where work happened while the current directory was one of them. These are
+correctly discovered: a Project boundary tested only against clean
+repositories is not being tested. Cursor's shared store appears as
+`(global)`, which is an observation rather than a Project and is never
+written to the registry.
+
+### 10.6 Current Snapshot Manifest Hash Mismatch
 
 `scan`, `ingest`, and `query` verify the current snapshot's `manifest.json`
 against the hash recorded in its `current.json` pointer before trusting it.
@@ -420,10 +586,10 @@ what is recoverable before overwriting what is there. The reconstructed
 document carries `"reconstructed": true`.
 
 `--no-hash` skips this verification; see
-[Integrity Check Overrides](#106-integrity-check-overrides) for its behavior
+[Integrity Check Overrides](#107-integrity-check-overrides) for its behavior
 and the conditions under which it is appropriate.
 
-### 10.6 Integrity Check Overrides
+### 10.7 Integrity Check Overrides
 
 Two checks guard reads and writes, and each has one escape. Both are recovery
 and test options rather than routine flags. Each accepts a command-line flag
@@ -472,7 +638,7 @@ one:
 Outside those, identify and fix the cause. For a contract mismatch, [Schema
 Maintenance](#11-schema-maintenance) covers comparing the two contracts; for a
 hash mismatch, the investigation steps are in
-[10.5](#105-current-snapshot-manifest-hash-mismatch).
+[10.6](#106-current-snapshot-manifest-hash-mismatch).
 
 ## 11. Schema Maintenance
 

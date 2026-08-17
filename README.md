@@ -224,6 +224,7 @@ capture. Storage deletion remains a reviewed maintenance operation.
 | [Codess](Codess.md) | Problem, solution, product capabilities, terminology, boundaries, and longer-term vision |
 | [Operations](Operations.md) | Installation, source locations, normal execution, diagnosis, and maintenance commands |
 | [Functional Design](Designs.md) | Decided functional behavior, rationale, invariants, and explicitly optional directions |
+| [Reporting Design](Report.md) | Operational reporting: measured costs, event structure, capability gates, time sources, buffering, backends, and use profiles |
 | [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, current state, code review, and task list |
 | [CoSchema](CoSchema.md) | Common entities, relationships, fields, vocabularies, and query/store contracts |
 | [CoNames](CoNames.md) | **Authoritative** for every designator: vendor, harness, surface, provider, and the model name parts, in the database, the code, and the CLI |

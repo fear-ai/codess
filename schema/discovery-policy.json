@@ -1,0 +1,50 @@
+{
+  "policy_format": "codess.discovery-policy/1",
+  "description": "Directory names never traversed during discovery, and the names deliberately traversed despite looking skippable. Names, not paths: a name is portable across machines, a path is not. Replace or extend with CODESS_DISCOVERY_POLICY.",
+  "pruned": {
+    "version_control": [".bzr", ".git", ".hg", ".svn", ".codess"],
+    "editor_state": [".fleet", ".idea", ".metadata", ".settings", ".vs", ".vscode"],
+    "caches": [
+      ".cache", ".ccache", ".direnv", ".eggs", ".gradle", ".m2",
+      ".mypy_cache", ".npm", ".nox", ".nuget", ".parcel-cache",
+      ".pnpm-store", ".pyenv", ".pytest_cache", ".ruff_cache",
+      ".sass-cache", ".stack-work", ".terraform", ".tox", ".turbo",
+      ".yarn", "__pycache__", "cache"
+    ],
+    "build_output": [
+      ".build", ".next", ".nuxt", ".output", ".parcel", "bazel-bin",
+      "bazel-out", "bazel-testlogs", "bin", "build", "coverage", "debug",
+      "deriveddata", "dist", "obj", "out", "output", "packages", "release",
+      "target", "x64", "x86"
+    ],
+    "dependencies": [
+      "bower_components", "jspm_packages", "node_modules", "pods",
+      "site-packages", "vendor", "web_modules"
+    ],
+    "virtual_environments": [".env", ".venv", ".virtualenv", "env", "venv", "virtualenv"],
+    "transient": ["downloads", "logs", "temp", "tmp", "uploads"]
+  },
+  "pruned_prefixes": ["cmake-build-"],
+  "traversed_on_purpose": {
+    "assets": "checked-in images, fonts, and fixtures",
+    "conf": "checked-in configuration, under a second spelling",
+    "config": "checked-in configuration",
+    "credentials": "pruning is not a security control; see security_note",
+    "data": "fixtures, migrations, and seed files are versioned source",
+    "docs": "documentation is source",
+    "etc": "checked-in configuration in many server projects",
+    "fixtures": "test data is source",
+    "lib": "a library's own source in C, Ruby, and Node layouts",
+    "migrations": "database migrations are source",
+    "private": "access intent, not content kind: private source is still source",
+    "public": "the served root of a web project, usually versioned",
+    "resources": "JVM and .NET projects version this",
+    "scripts": "operational scripts are source",
+    "secrets": "pruning is not a security control; see security_note",
+    "static": "the served root, under a second spelling",
+    "web": "the front-end half of a full-stack repository",
+    "windows": "a platform port directory, not build output"
+  },
+  "security_note": "Pruning stops traversal, which changes what is discovered rather than what is protected. A Session that already read a credential file records it whether or not Codess later walks that directory. Content exclusion is the content policy's subject. A name-based skip that looked like protection would be worse than none, because it invites trusting it.",
+  "editing_note": "Add a name to a pruned group when your tree has a directory of that kind that is generated or transient. Move a name out of traversed_on_purpose only for your own tree: each is a source directory in a common layout, so pruning it hides the Project rather than the noise."
+}

@@ -191,11 +191,11 @@ class TestSlugEncodingHasOneImplementation:
     def test_hyphenated_leaf(self):
         """The fallback rejoins the last two parts, and only those.
 
-        A slug is lossy -- `spank-py` and `spank/py` encode identically -- so
+        A slug is lossy -- `name-suffix` and `name/suffix` encode identically -- so
         decoding consults the filesystem. The fallback tries one rejoining,
         of the final two segments, which covers a hyphenated project
         directory under an unhyphenated parent. That is the observed real
-        case: `~/Work/Spank/spank-py`.
+        case: `~/Work/Group/name-suffix`.
         """
         import tempfile
 
@@ -204,7 +204,7 @@ class TestSlugEncodingHasOneImplementation:
         parent = Path(tempfile.mkdtemp()).resolve()
         if "-" in str(parent):
             pytest.skip("temporary root itself contains a hyphen")
-        target = parent / "spank-py"
+        target = parent / "name-suffix"
         target.mkdir()
         assert slug_to_path(path_to_slug(target)) == target
 
@@ -220,7 +220,7 @@ class TestSlugEncodingHasOneImplementation:
         """
         from codess.helpers import path_to_slug, slug_to_path
 
-        target = tmp_path / "pytest-of-walter" / "a-b" / "c-d"
+        target = tmp_path / "pytest-of-user" / "a-b" / "c-d"
         target.mkdir(parents=True)
         assert slug_to_path(path_to_slug(target)) == target
 
@@ -325,16 +325,16 @@ class TestResolveSlug:
     """
 
     def test_hyphenated_vs_split(self, tmp_path):
-        """`spank-py` is preferred over `spank/py` when both could exist."""
-        both = tmp_path / "spank-py"
+        """`name-suffix` is preferred over `name/suffix` when both could exist."""
+        both = tmp_path / "name-suffix"
         both.mkdir()
-        (tmp_path / "spank" / "py").mkdir(parents=True)
+        (tmp_path / "name" / "suffix").mkdir(parents=True)
         assert resolve_slug(path_to_slug(both), root=tmp_path.resolve()) == both
 
     def test_split_only(self, tmp_path):
-        target = tmp_path / "spank" / "py"
+        target = tmp_path / "name" / "suffix"
         target.mkdir(parents=True)
-        slug = path_to_slug(tmp_path.resolve() / "spank-py")
+        slug = path_to_slug(tmp_path.resolve() / "name-suffix")
         assert resolve_slug(slug, root=tmp_path.resolve()) == target
 
     def test_hyphens_nested(self, tmp_path):
@@ -427,3 +427,219 @@ class TestRejectionReasons:
 
     def test_durable(self, tmp_path):
         assert ephemeral_project_location_reason(Path.home() / "Work" / "p") is None
+
+
+class TestTraversalPruning:
+    """Directory names never traversed, and why the set is names not paths.
+
+    `TRAVERSAL_PRUNE_DIRS` is portable: `obj` under a .NET solution and `obj`
+    under a Makefile are both build output. This is the opposite of
+    `EXCLUDE_REVIEW_DIRS`, which names *where* on one machine and therefore
+    ships empty.
+    """
+
+    def _pruned(self, name):
+        from codess.helpers import TRAVERSAL_PRUNE_DIRS
+
+        folded = name.casefold()
+        return folded in TRAVERSAL_PRUNE_DIRS or folded.startswith("cmake-build-")
+
+    @pytest.mark.parametrize("name", ["tmp", "TMP", "Temp", "temp"])
+    def test_scratch_directories_are_pruned_case_folded(self, name):
+        """A directory named for temporary content holds work not meant to be kept.
+
+        Matching is case-folded, so the lowercase entry covers the `TMP` and
+        `Temp` spellings that Windows and macOS produce.
+        """
+        assert self._pruned(name)
+
+    @pytest.mark.parametrize("name", ["obj", "bin", "x64", "x86", "packages", ".vs"])
+    def test_windows_build_output_is_pruned(self, name):
+        """`obj`/`bin` are the .NET convention and `packages` the NuGet one.
+
+        Codess runs on whichever platform the operator uses, so a prune set
+        covering only POSIX build names would traverse a Visual Studio tree.
+        """
+        assert self._pruned(name)
+
+    @pytest.mark.parametrize("name", ["build", "dist", "target", "out", "node_modules"])
+    def test_common_build_and_dependency_output_is_pruned(self, name):
+        assert self._pruned(name)
+
+    @pytest.mark.parametrize("name", ["src", "lib", "docs", "app", "tests"])
+    def test_ordinary_source_directories_are_not_pruned(self, name):
+        """The set must not swallow the directories a Project is made of."""
+        assert not self._pruned(name)
+
+    def test_a_generated_prefix_is_pruned(self):
+        assert self._pruned("cmake-build-debug")
+        assert not self._pruned("cmake-configuration")
+
+
+class TestSymlinkContainment:
+    """A link must not carry discovery outside the root it was given."""
+
+    def test_a_symlink_escaping_the_root_resolves_outside_it(self, tmp_path):
+        """`resolve()` before comparing is what detects the escape.
+
+        `walk_sessions.in_work_root` compares resolved paths, so a directory
+        linked from inside the root to a target outside it is refused rather
+        than followed -- otherwise a link would attribute another tree's
+        Sessions to this one.
+        """
+        root = tmp_path / "root"
+        outside = tmp_path / "outside"
+        (root / "inside").mkdir(parents=True)
+        outside.mkdir()
+        (root / "escape").symlink_to(outside)
+
+        assert (root / "inside").resolve().is_relative_to(root.resolve())
+        assert not (root / "escape").resolve().is_relative_to(root.resolve())
+
+    def test_a_self_referential_link_resolves_rather_than_looping(self, tmp_path):
+        """A link to its own parent terminates instead of recursing."""
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "loop").symlink_to(root)
+        assert (root / "loop").resolve() == root.resolve()
+
+
+class TestPruneSetBoundaries:
+    """Names deliberately absent from the prune set, and why.
+
+    Each was proposed and rejected on evidence: pruning it would hide a
+    Project rather than noise. Pinned because the reasoning is not visible
+    from the name alone, and a later edit adding one would be silent -- a
+    Project simply stops being discovered.
+    """
+
+    def _pruned(self, name):
+        from codess.helpers import TRAVERSAL_PRUNE_DIRS
+
+        folded = name.casefold()
+        return folded in TRAVERSAL_PRUNE_DIRS or folded.startswith("cmake-build-")
+
+    @pytest.mark.parametrize("name", ["lib", "etc", "conf", "data", "web"])
+    def test_source_directories_stay_traversed(self, name):
+        """Each is a source directory in a common project layout.
+
+        `lib` holds a library's own source in C, Ruby, and Node projects;
+        `etc` and `conf` hold checked-in configuration; `data` holds fixtures
+        and migrations; `web` is the front-end half of a full-stack tree.
+        """
+        assert not self._pruned(name)
+
+    @pytest.mark.parametrize("name", ["private", "secrets", "credentials"])
+    def test_access_intent_does_not_prune(self, name):
+        """Pruning is not a security control.
+
+        It stops traversal, which changes what is discovered rather than what
+        is protected: a Session that already read a credential records it
+        whether or not Codess later walks the directory. Content exclusion is
+        the content policy's subject, and a name-based skip that looked like
+        protection would be worse than none.
+        """
+        assert not self._pruned(name)
+
+    def test_a_platform_source_directory_stays_traversed(self):
+        """`windows` names a port, not build output, in cross-platform trees."""
+        assert not self._pruned("windows")
+
+    @pytest.mark.parametrize("name", [
+        "bin", "obj", "debug", "release", "out", "output", "dist",
+        "logs", "downloads", "uploads", "cache", "web_modules",
+        "bower_components", "jspm_packages", "vendor", "venv", "env",
+    ])
+    def test_generated_and_transient_directories_are_pruned(self, name):
+        assert self._pruned(name)
+
+
+class TestDiscoveryPolicyIsExternal:
+    """The prune set is editable data, not a frozen rule (CoPlan W60).
+
+    A tree that versions its `dist/` output, a monorepo with a package named
+    `build`, or a Go module vendoring dependencies it audits each needs a
+    different set. Hardcoding one made those cases undiscoverable with no way
+    to say so.
+    """
+
+    def _policy(self, tmp_path, document):
+        import json as _json
+
+        path = tmp_path / "policy.json"
+        path.write_text(_json.dumps(document), encoding="utf-8")
+        return path
+
+    def test_the_released_policy_loads(self):
+        from codess.helpers import (
+            DISCOVERY_POLICY_PATH,
+            TRAVERSAL_PRUNE_DIRS,
+            TRAVERSED_ON_PURPOSE,
+        )
+
+        assert DISCOVERY_POLICY_PATH.is_file()
+        assert "node_modules" in TRAVERSAL_PRUNE_DIRS
+        assert "lib" in TRAVERSED_ON_PURPOSE, (
+            "the documented exceptions must travel with the policy, so a setup "
+            "tool can report them"
+        )
+
+    def test_a_configured_policy_replaces_the_set(self, tmp_path, monkeypatch):
+        policy = self._policy(tmp_path, {
+            "policy_format": "codess.discovery-policy/1",
+            "pruned": {"mine": ["scratchwork"]},
+            "pruned_prefixes": ["gen-"],
+        })
+        monkeypatch.setenv("CODESS_DISCOVERY_POLICY", str(policy))
+        import importlib
+
+        import codess.helpers as helpers
+
+        importlib.reload(helpers)
+        try:
+            assert helpers.should_prune_directory("scratchwork")
+            assert helpers.should_prune_directory("gen-api")
+            assert not helpers.should_prune_directory("node_modules"), (
+                "a replacement policy replaces rather than extends"
+            )
+        finally:
+            monkeypatch.delenv("CODESS_DISCOVERY_POLICY")
+            importlib.reload(helpers)
+
+    def test_a_broken_policy_falls_back_rather_than_raising(self, tmp_path, monkeypatch):
+        """Discovery degrading to the shipped set is recoverable; refusing is not.
+
+        A scan that will not start because a policy has a trailing comma is a
+        worse failure than one that warns and uses the released names.
+        """
+        broken = tmp_path / "broken.json"
+        broken.write_text("not json", encoding="utf-8")
+        monkeypatch.setenv("CODESS_DISCOVERY_POLICY", str(broken))
+        import importlib
+
+        import codess.helpers as helpers
+
+        importlib.reload(helpers)
+        try:
+            assert helpers.should_prune_directory("node_modules")
+        finally:
+            monkeypatch.delenv("CODESS_DISCOVERY_POLICY")
+            importlib.reload(helpers)
+
+    def test_an_unsupported_format_is_refused(self, tmp_path, monkeypatch):
+        policy = self._policy(tmp_path, {
+            "policy_format": "codess.discovery-policy/99",
+            "pruned": {"mine": ["anything"]},
+        })
+        monkeypatch.setenv("CODESS_DISCOVERY_POLICY", str(policy))
+        import importlib
+
+        import codess.helpers as helpers
+
+        importlib.reload(helpers)
+        try:
+            assert not helpers.should_prune_directory("anything")
+            assert helpers.should_prune_directory("node_modules")
+        finally:
+            monkeypatch.delenv("CODESS_DISCOVERY_POLICY")
+            importlib.reload(helpers)

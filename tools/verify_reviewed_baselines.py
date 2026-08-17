@@ -12,15 +12,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from codess.baseline_catalog import verify_reviewed_catalog
+from codess.config import catalog_root
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--catalog", type=Path, default=REPO_ROOT / "catalog/reviewed-baselines.json")
+    parser.add_argument("--catalog", type=Path, default=catalog_root() / "reviewed-baselines.json")
     args = parser.parse_args(argv)
     try:
         print(json.dumps(
-            verify_reviewed_catalog(args.catalog, repo_root=REPO_ROOT), sort_keys=True
+            verify_reviewed_catalog(args.catalog), sort_keys=True
         ))
         return 0
     except (OSError, KeyError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
