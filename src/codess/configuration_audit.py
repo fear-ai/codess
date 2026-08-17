@@ -5,7 +5,7 @@ model evidence rather than a query result: it walks `model_params`,
 `model_turns`, and the Events that carry occurrence provenance, and reports
 which settings were observed against which source field. The typed executor
 answers selection questions, not "which provenance does each stored setting
-carry", so there is no report to route this through (CoPlan W52 step 3).
+carry", so there is no report to route this through.
 """
 
 from __future__ import annotations

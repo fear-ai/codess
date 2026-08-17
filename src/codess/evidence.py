@@ -2,8 +2,8 @@
 
 **Reads core tables directly** to inventory what a store holds across
 vendors, which is a measurement of the stored evidence rather than a
-selection over it; the typed request contract expresses selections
-(CoPlan W56 step 3).
+selection over it; the typed request contract expresses selections. Reading
+core tables directly is deliberate and recorded here for that reason.
 """
 
 from __future__ import annotations

@@ -28,7 +28,7 @@ def test_merge_preserves_scan_when_ingest(tmp_path):
 
 
 class TestRegistryRetention:
-    """The registry drops entries whose Project is gone (W28).
+    """The registry drops entries whose Project is gone.
 
     It gained one per Project ever scanned and pruned none, so a suite run
     that scans temporary directories enlarged a developer's registry

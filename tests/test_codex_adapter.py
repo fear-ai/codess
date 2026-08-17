@@ -1083,7 +1083,7 @@ class TestDecodedOutput:
 
 
 class TestBoundedContent:
-    """One helper for the process/bound/process sequence (W42).
+    """One helper for the process/bound/process sequence.
 
     Every content-bearing branch repeated five steps, and twenty of
     `process_file`'s branches were the two `None` guards rather than record
@@ -1147,7 +1147,7 @@ class TestUnrolledHistorySessions:
     `history.jsonl` and the rollout tree are written independently, so a
     Session can appear in one and not the other. Reporting that is a coverage
     statement; admitting it as a Session with no Model Turns would be a
-    mapping decision under CoPlan 6.5 (W63).
+    mapping decision under CoPlan 6.5.
     """
 
     def _history(self, path, entries):

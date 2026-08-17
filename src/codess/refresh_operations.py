@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import subprocess
-import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
+from codess.child_invocation import ChildInvocation
 from codess.config import (
     LARGE_STORE_BYTES,
     LAST_INGEST_REPORT_FILE,
@@ -61,13 +60,13 @@ def _load_project_references(path: Path) -> list[str]:
             if isinstance(item, str):
                 references.append(item)
             elif isinstance(item, dict):
-                reference = (
+                project_ref = (
                     item.get("project_id")
                     or item.get("name")
                     or item.get("path")
                 )
-                if reference:
-                    references.append(str(reference))
+                if project_ref:
+                    references.append(str(project_ref))
         return references
     lines = [
         line for line in text.splitlines()
@@ -82,14 +81,14 @@ def _load_project_references(path: Path) -> list[str]:
         if supported:
             references = []
             for row in reader:
-                reference = (
+                project_ref = (
                     row.get("project_id")
                     or row.get("name")
                     or row.get("path")
                     or row.get("directory_path")
                 )
-                if reference and reference.strip():
-                    references.append(reference.strip())
+                if project_ref and project_ref.strip():
+                    references.append(project_ref.strip())
             return references
     except csv.Error:
         pass
@@ -109,27 +108,63 @@ def _entry_paths(entry: dict[str, Any]) -> list[Path]:
 
 
 def _resolve_reference(
-    reference: str,
+    project_ref: str,
     *,
     by_id: dict[str, dict[str, Any]],
     by_name: dict[str, list[dict[str, Any]]],
     by_path: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, Any], Path | None]:
-    if reference in by_id:
-        return by_id[reference], None
-    name_matches = by_name.get(reference.casefold(), [])
+    if project_ref in by_id:
+        return by_id[project_ref], None
+    name_matches = by_name.get(project_ref.casefold(), [])
     if len(name_matches) == 1:
         return name_matches[0], None
     if len(name_matches) > 1:
-        raise ValueError(f"Project name is ambiguous: {reference!r}")
-    path = Path(reference).expanduser().resolve()
+        raise ValueError(f"Project name is ambiguous: {project_ref!r}")
+    path = Path(project_ref).expanduser().resolve()
     entry = by_path.get(str(path))
     if entry is not None:
         return entry, path
     raise ValueError(
         "Project reference is not a known ID, unique name, or catalog path: "
-        f"{reference!r}"
+        f"{project_ref!r}"
     )
+
+
+class _ResolveArgs(TypedDict):
+    """The arguments `resolve_refresh_selection` takes beyond the registry.
+
+    Splatting an untyped `dict[str, Any]` into a typed signature erases every
+    argument's type at the boundary, which reported five errors per call site --
+    ten in total for two calls that pass the same well-known nine values. Naming
+    the shape restores the check without repeating the arguments.
+    """
+
+    project_references: list[str] | None
+    project_list: Path | None
+    designator: str | None
+    source: str
+    raw_mode: str
+    baseline_selection: Path | None
+    reviewed_catalog: Path | None
+    large_event_count: int
+    large_store_bytes: int
+
+
+def _as_text(value: bytes | str | None) -> str:
+    """Child-process output as text, whatever the child was opened as.
+
+    A timeout reports `bytes` when the child was not opened in text mode and
+    `str` when it was, so a caller that wants to report the output has to accept
+    both. Replacement rather than strict decoding: this text goes into a receipt
+    a human reads, and failing a refresh receipt over one undecodable byte in a
+    subprocess's stderr would lose the report that explains the timeout.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 def _automatic_raw_mode(registry: Path, project_id: str) -> str:
@@ -358,29 +393,24 @@ def _run_project_ingest(
     resource_policy: Path | None,
     timeout_seconds: int,
 ) -> dict[str, Any]:
-    command = [
-        sys.executable, "-m", "main", "ingest",
-        "--dir", project["path"],
-        "--source", project["source"],
-        "--raw-mode", project["raw_mode"],
-        "--registry", str(registry),
-        "--min-size", str(min_size),
-        "--no-progress",
-    ]
-    if validate:
-        command.append("--validate")
-    if force:
-        command.append("--force")
-    if resource_policy is not None:
-        command.extend(["--resource-policy", str(resource_policy)])
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(repo_root / "src")
+    # The command and environment come from `ChildInvocation`; the call stays here
+    # because refresh wraps it in timing and timeout handling that the other two
+    # callers do not want.
+    invocation = ChildInvocation(
+        projects=(Path(project["path"]),),
+        vendor_selector=project["source"], raw_mode=project["raw_mode"],
+        registry=registry, repo_root=repo_root, min_size=min_size,
+        resource_policy=resource_policy, validate=validate, force=force,
+        live_progress=False, timeout_seconds=timeout_seconds,
+    )
+    command = invocation.command()
     started_at = datetime.now(UTC).isoformat()
     start_tick = time.monotonic()
     try:
         result = subprocess.run(
-            command, cwd=repo_root, env=env, capture_output=True,
-            text=True, timeout=timeout_seconds,
+            command, cwd=repo_root, env=invocation.environment(),
+            capture_output=True, text=True, timeout=timeout_seconds,
+            check=False,
         )
         returncode = result.returncode
         stdout = result.stdout or ""
@@ -388,14 +418,16 @@ def _run_project_ingest(
         error_type = None
     except subprocess.TimeoutExpired as error:
         returncode = None
-        stdout = error.stdout or ""
-        stderr = error.stderr or ""
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8", errors="replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
+        # `TimeoutExpired` carries `bytes | str | None` where `CompletedProcess`
+        # carries `str`, because the timeout path does not know whether the child
+        # was opened in text mode. Decoded into fresh names rather than rebound:
+        # the success branch above already fixed `stdout` and `stderr` as `str`,
+        # and reassigning a decoded value to them makes the declared type of each
+        # depend on which branch a reader is looking at.
+        stdout = _as_text(error.stdout)
         stderr = (
-            f"{stderr}\nrefresh timed out after {timeout_seconds} seconds"
+            f"{_as_text(error.stderr)}\n"
+            f"refresh timed out after {timeout_seconds} seconds"
         ).strip()
         error_type = "timeout"
     except OSError as error:
@@ -451,7 +483,12 @@ def refresh_projects(
         raise ValueError("timeout_seconds must be positive")
     registry = registry.expanduser().resolve()
     repo_root = repo_root.resolve()
-    resolve_args = {
+    # A `TypedDict` annotation, not a `TypedDict(...)` construction. Measured:
+    # an annotated literal is a plain dict at 47 ns, while the constructor form
+    # costs 120 ns -- so typing this bag is free at run time, and `type()` returns
+    # `dict` either way. The alternative of repeating nine arguments at both call
+    # sites is what the bag exists to avoid.
+    resolve_args: _ResolveArgs = {
         "project_references": project_references,
         "project_list": project_list,
         "designator": designator,

@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from codess.baseline_validation import validate_project
+from codess.child_invocation import ChildInvocation
 from codess.config import CURRENT_POINTER_FILE, RAW_MANIFEST_FILE, SNAPSHOTS_DIR
 from codess.fileio import read_json, write_json_atomic
 from codess.hashing import codess_bytes_hash, codess_canonical_hash
@@ -64,23 +62,14 @@ def _run_ingest_stage(
     repo_root: Path,
     resource_policy: Path | None = None,
 ) -> dict[str, Any]:
-    command = [sys.executable, "-m", "main", "ingest"]
-    for project in plan["projects"]:
-        command.extend(["--dir", project["path"]])
-    command.extend([
-        "--source", source, "--raw-mode", raw_mode,
-        "--registry", str(registry), "--min-size", "0",
-    ])
-    if resource_policy is not None:
-        command.extend(["--resource-policy", str(resource_policy)])
-    if validate:
-        command.append("--validate")
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(repo_root / "src")
-    result = subprocess.run(
-        command, cwd=repo_root, env=env, capture_output=True,
-        text=True, timeout=3600,
+    invocation = ChildInvocation(
+        projects=tuple(Path(item["path"]) for item in plan["projects"]),
+        vendor_selector=source, raw_mode=raw_mode, registry=registry,
+        repo_root=repo_root, resource_policy=resource_policy,
+        validate=validate,
     )
+    command = invocation.command()
+    result = invocation.run()
     parsed = None
     if validate and result.stdout.strip():
         try:

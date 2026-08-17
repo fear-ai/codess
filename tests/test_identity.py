@@ -38,7 +38,7 @@ def test_identity_names_its_derivation_not_its_algorithm():
     Identities are compared across stores, so a reader holding one must be
     able to tell which derivation produced it; a digest alone cannot say. The
     algorithm is deliberately absent -- `hashing` owns that choice, and naming
-    it here would make changing it a wire-format change (CoPlan W31, W32).
+    it here would make changing it a wire-format change.
     """
     value = session_entity_id("openai.codex", "s1")
     _, kind, fmt, digest = value.split(":")
@@ -82,7 +82,7 @@ def test_source_revision_identity_survives_a_different_machine_root():
     `entity_id` means a value derived from vendor-stated facts, so it must not
     depend on the machine a file was read on. Deriving it from the absolute
     path gave every machine its own identity for the same Source, which made
-    cross-store deduplication on `sources.entity_id` fail silently (W31).
+    cross-store deduplication on `sources.entity_id` fail silently.
     """
     assert source_revision_entity_id(
         "anthropic.claude-code",
@@ -115,7 +115,7 @@ class TestSourceKey:
     """The portable part of a Source location.
 
     `source_revision_entity_id` derives from this rather than the absolute
-    path, so what it keeps and what it discards is the whole of W31's
+    path, so what it keeps and what it discards is the whole of the format's
     portability claim.
     """
 

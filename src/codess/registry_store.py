@@ -68,7 +68,7 @@ def stale_entries(registry_root: Path) -> list[dict[str, Any]]:
     The registry gains an entry for every Project ever scanned and drops none,
     so a test run that scans a temporary directory leaves a permanent record:
     an observed registry held 1,455 entries of which 1,424 were vanished
-    temporary paths and 31 were live (CoPlan W28).
+    temporary paths and 31 were live.
 
     A missing path is the only condition reported. It is deliberately not
     "old" or "unused": a Project on removable media or an unmounted volume is

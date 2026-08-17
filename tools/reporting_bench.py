@@ -172,12 +172,37 @@ def flushing(number: int) -> list[tuple[str, float]]:
 
 
 def current_facility(number: int) -> list[tuple[str, float]]:
-    """What `ProgressTrace` costs today, with output disabled."""
-    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src"))
-    from codess.progress import ProgressTrace
+    """What a progress call costs through the implemented facility.
 
-    trace = ProgressTrace(enabled=False)
-    return [("ProgressTrace(enabled=False)", _ns(lambda: trace("decode.record", n=1), number))]
+    This measured `ProgressTrace(enabled=False)` at 1,245 ns, which was the
+    baseline the design argued against. That class is gone -- it bypassed the
+    level gate and emitted through its own sink -- so the section now measures
+    what replaced it: the same call through `codess.progress.emit`, with no sink
+    attached and with a collector attached.
+
+    The 1,245 ns figure is retained in Report 2.1 as the measurement that
+    motivated the design. It is not re-measured here because the code that
+    produced it no longer exists.
+    """
+    sys.path.insert(
+        0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src")
+    )
+    from codess import reporting
+    from codess.reporting import emit_named as emit
+    from codess.reporting.sinks import CollectorSink
+
+    reporting.reset()
+    rows = [(
+        "emit, no sink attached",
+        _ns(lambda: emit("source.done", path="/x", events=1), number),
+    )]
+    reporting.configure("debug", sinks=(CollectorSink(max_records=number + 10),))
+    rows.append((
+        "emit, collector attached",
+        _ns(lambda: emit("source.done", path="/x", events=1), number),
+    ))
+    reporting.reset()
+    return rows
 
 
 SECTIONS = {

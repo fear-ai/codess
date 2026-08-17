@@ -102,7 +102,7 @@ def _accepted_from_reports(
     against, and is the *selection document's own directory* rather than a
     global root. That is what makes a selection portable: a policy named
     `policies/x.json` beside its selection resolves wherever the pair is
-    placed, so moving the catalog out of the checkout (W58) does not rewrite
+    placed, so moving the catalog out of the checkout does not rewrite
     every stored path. An absolute path is used as given, unchanged.
     """
     current_digest = contract_digest()
@@ -216,7 +216,7 @@ def freeze_reviewed_catalogs(
     `catalog_base` anchors relative policy paths, and is normally the
     directory holding the selection document. Passing it explicitly rather
     than deriving it keeps the caller in control of where a portable
-    selection is rooted (W58).
+    selection is rooted.
     """
     approved_projects, reviewed_projects, registry = _accepted_from_reports(
         selection["projects"], catalog_base=catalog_base

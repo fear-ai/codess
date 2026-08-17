@@ -262,7 +262,7 @@ class TestProjectRootIdentifiesTheRepository:
     reported two roots and became two Projects with one location each --
     which is why every registered Project had exactly one, and why the
     multi-location path `project_locations` exists for could not arise from
-    discovery at all (W49).
+    discovery at all.
     """
 
     def _repo(self, path, *, commit=True):

@@ -2,7 +2,7 @@
 
 **Reads core tables directly** because its subject is recorded usage
 observations rather than a Session selection, and it must read stores the
-query layer would refuse on contract grounds (CoPlan W56 step 3).
+query layer would refuse on contract grounds.
 """
 
 from __future__ import annotations

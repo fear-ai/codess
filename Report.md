@@ -5,13 +5,17 @@ errors and warnings, counters, benchmarks, and summaries. It states the
 problems, the measurements that constrain any solution, the requirements
 those imply, and a partitioned set of designs that satisfy them.
 
-CoPlan [9.6.1](CoPlan.md#961-future-logging-task) states the event contract,
-[9.6.2](CoPlan.md#962-what-w18-must-cover-beyond-status-and-errors) the scope
-beyond status and errors, and
-[9.6.3](CoPlan.md#963-reporting-architecture) the primitives. This document
-is the engineering design under those, and is the authority for structure,
-cost, and lifecycle. Where it disagrees with a sketch in CoPlan, this is
-current and CoPlan should be corrected to match.
+This document is authoritative for the facility's structure, cost, and
+lifecycle. [CoPlan 9.6](CoPlan.md#96-operational-reporting) owns the boundary
+around it -- the channel separation, which is a CLI contract, and the rule that
+`mapping_diagnostics` stays in CoSchema. The design sketch CoPlan once carried
+beside this one is removed: two specifications of one subsystem is how a reader
+ends up implementing the older.
+
+**Implemented.** `src/codess/reporting/` realizes this design. What the
+implementation established, including one cost figure predicted here that the
+measurement did not support, is recorded in
+[CoReview 4.12](CoReview.md#412-the-reporting-facility).
 
 ## Table of Contents
 
@@ -46,7 +50,7 @@ Operational output leaves Codess four ways, and none of them agree:
 ```
 
 A reader cannot subscribe to one stream, a script cannot parse one format,
-and a counter cannot be compared between runs. W47 established the cost
+and a counter cannot be compared between runs. Record-level diagnostics established the cost
 concretely: the diagnostic counters were the only record of refused records,
 so record-level loss read as zero and that zero was unfalsifiable.
 
@@ -188,9 +192,9 @@ Derived from 1 and 2, each traceable to a measurement:
 | R6 | Immediacy and permanence are selected independently | 1.4 |
 | R7 | A call site cannot know which sinks exist | 1.1 |
 | R8 | Profiles configure volume, destination, and overhead together | 1.5 |
-| R9 | stdout carries only the requested result | CoPlan 9.6.1 |
-| R10 | A reporting call never raises into the operation it reports on | CoPlan 9.6.1 |
-| R11 | `mapping_diagnostics` stays in CoSchema, outside this facility | CoPlan 13.4.6 |
+| R9 | stdout carries only the requested result | CoPlan 9.6 |
+| R10 | A reporting call never raises into the operation it reports on | CoPlan 9.6 |
+| R11 | `mapping_diagnostics` stays in CoSchema, outside this facility | CoPlan 9.6 |
 
 ## 4. Design Partition
 
@@ -258,7 +262,7 @@ irrelevant:
 CODE, TICK, LEVEL, SCOPE, FIELDS = range(5)
 ```
 
-This is the same trade CoPlan 3.5.5 makes for CoSchema field names: the
+This is the same trade CoNotes 1.5 makes for CoSchema field names: the
 literal position is the documentation, and an indirection that costs a lookup
 on the hot path buys nothing.
 
@@ -314,7 +318,7 @@ defect is that it follows it.
 | `FLUSH_SECONDS` | latency ceiling | 0.5 s |
 
 Exceeding a limit is recorded as a dropped-event count, never a raise (R10),
-which is what CoPlan 9.6.1 already requires of the collector.
+which is what CoPlan 9.6 already requires of the collector.
 
 ## 7. Time Sources
 
@@ -458,13 +462,13 @@ Validated against uses that already exist, not fixtures:
 | Use | Exercises | Compared against |
 |---|---|---|
 | Ingest of a real Project | `span` per source, `count` per record, phase summary | The 11 counters ingest prints today, which must still agree |
-| Cursor cohort preflight | `span` nesting, three cache statuses | W46's statuses, unit tested |
-| Record refusals | `count` beside the durable half | W47's `mapping_diagnostics` rows, which must not move (R11) |
+| Cursor cohort preflight | `span` nesting, three cache statuses | the three cache statuses, unit tested |
+| Record refusals | `count` beside the durable half | the `mapping_diagnostics` rows, which must not move (R11) |
 | `query --output-format jsonl` | Channel separation under load | **stdout byte-identical before and after** |
 | W08 workload under `benchmark` | Zero instrumentation overhead | Timing with the facility compiled out |
 
 The fourth is the acceptance test for the whole item, and is the comparison
-that verified W06 step 6 and W42.
+that verified the ingest-phase extraction and the shared bound-check helper.
 
 ### 12.3 Order
 
@@ -670,7 +674,7 @@ Three properties this gives that the current shape cannot:
   `store.contract.mismatch`; a human reads the sentence. Today the only
   machine-readable signal is the message text, which is why
   `project_catalog` matched on a substring and my rewording broke it -- the
-  defect W56 step 4 records.
+  defect the driver-boundary review records.
 - **The traceback is a debug-mode field, not a channel.** Ordinary mode emits
   a bounded message; `--debug` adds bounded exception detail as an event
   field, so it is subject to the same limits as any other field.
@@ -697,11 +701,11 @@ is what lets it precede the routing work rather than block on it.
 ### 14.5 What This Does Not Do
 
 It does not introduce a deep hierarchy: three families is the whole of it, and
-CoPlan 9.6.1 explicitly does not require more. It does not change which
+CoPlan 9.6 explicitly does not require more. It does not change which
 exceptions are raised where -- the existing thirteen keep their names and
 their raise sites, and only their bases and a `code` attribute change. And it
 does not catch `OSError` or `sqlite3.Error` at the boundary: those are wrapped
-at the layer that knows what the operation was, which is W56 step 4's subject.
+at the layer that knows what the operation was, which is the driver boundary's subject.
 
 ## 15. Privacy
 
@@ -792,7 +796,7 @@ call site distributes a policy decision across 183 places.
 1. **An allowlist, not a denylist.** A field name absent from the registry is
    rendered as `<unregistered>` under any non-local profile. A denylist fails
    open -- the field nobody classified is the one that leaks -- and this is
-   the same argument CoPlan 13.1.1 makes for accepting a coverage gap only
+   the same argument CoReview 1.1 makes for accepting a coverage gap only
    with evidence.
 2. **Type restriction.** A field value must be a scalar: `int`, `float`,
    `str`, `bool`, or `None`. A dict or a list is where a transcript body
@@ -817,7 +821,7 @@ home, the three vendor storage roots, the registry, the Project root -- and a
 
 The remaining slug still encodes the original path, because Claude's directory
 naming does -- so under `shared` a `located` field keeps only its final two
-segments, which is exactly `identity.source_key`'s existing rule (W31).
+segments, which is exactly `identity.source_key`'s existing rule.
 
 ### 15.5 Profiles
 
@@ -839,7 +843,7 @@ exists so that *sharing* is a choice with a mechanism, rather than a hope.
 ### 15.6 What Stays Out
 
 `mapping_diagnostics` is not covered by any of this. It is evidence about
-decoded data, stored in CoSchema and queried beside it (CoPlan 13.4.6), and it
+decoded data, stored in CoSchema and queried beside it (CoPlan 9.6), and it
 is subject to the content policy that already governs stored content. Applying
 an operational redaction profile to it would redact the evidence a reader
 opened the store to see.

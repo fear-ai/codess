@@ -242,7 +242,7 @@ def test_the_previous_spelling_is_accepted_by_the_raw_store():
 
 
 def test_observe_retains_no_bytes_but_records_the_observation():
-    """The record is what makes a Source's absence checkable (CoPlan W15)."""
+    """The record is what makes a Source's absence checkable."""
     import tempfile
     from pathlib import Path
 
@@ -258,7 +258,7 @@ def test_observe_retains_no_bytes_but_records_the_observation():
 
 
 def test_observe_and_reference_differ_only_in_availability():
-    """The measurement W15 rests on: one code path, one differing key."""
+    """The measurement the rename rests on: one code path, one differing key."""
     import tempfile
     from pathlib import Path
 

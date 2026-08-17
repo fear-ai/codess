@@ -170,7 +170,7 @@ def resolve_selection_markers(
     not, is a freshly read one safe to keep? It ran inside the ingest command,
     where a 247-line phase decided Cursor read strategy on the wrong side of
     the layering: a command adapts arguments and renders results (5.2), and
-    `cursor_cohort` already declares that it owns caching (W46).
+    `cursor_cohort` already declares that it owns caching.
 
     **The container bracket is the correctness argument, not an optimization.**
     `read_markers` holds one read transaction, so the markers it returns are

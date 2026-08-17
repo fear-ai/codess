@@ -726,7 +726,7 @@ class TestProcessFile:
         One kind spanning every subtype made a query for Session titles return
         permission settings and file diffs too, because titles, harness
         settings, attached material, and a position marker were one kind
-        (CoPlan W36). The rule id tracks the kind, so the released profile and
+       . The rule id tracks the kind, so the released profile and
         the decoder cannot disagree about which is which.
         """
         records = [
@@ -1200,7 +1200,7 @@ class TestModelFallback:
 
 
 class TestProductStatePartition:
-    """The four Event kinds that replaced `state.product` (W36).
+    """The four Event kinds that replaced `state.product`.
 
     The table and the rule map are one decision expressed twice, so they are
     checked against each other rather than each against a copy of itself: a

@@ -83,13 +83,23 @@ class TestGatesInCostOrder:
         reporting.event(reporting.code("ingest.start"), projects=1)
         assert reporting.counters() == {}
 
-    def test_an_event_below_the_level_threshold_is_dropped(self):
-        collector = CollectorSink()
+    def test_an_event_below_a_sinks_threshold_is_dropped(self):
+        """Per sink, not process-wide. The gate constructs an event if any sink
+        accepts it, so suppression is asserted on a sink that filters (R6)."""
+        collector = CollectorSink(min_level=codes.WARNING)
         # deployment starts at warning; `source.done` is debug.
         reporting.configure("deployment", sinks=(collector,))
         reporting.event(reporting.code("source.done"), path="/x")
         reporting.flush()
         assert collector.records == []
+
+    def test_a_durable_sink_retains_what_a_quiet_profile_does_not_print(self):
+        """Report R6: immediacy and permanence are selected independently."""
+        collector = CollectorSink()
+        reporting.configure("deployment", sinks=(collector,))
+        reporting.event(reporting.code("source.done"), path="/x")
+        reporting.flush()
+        assert [r["event"] for r in collector.records] == ["source.done"]
 
     def test_an_event_at_the_threshold_is_emitted(self):
         collector = CollectorSink()
@@ -173,7 +183,11 @@ class TestEventStructure:
         reporting.event(reporting.code("scan.done"), **fields)
         reporting.flush()
         assert reporting.counters().get("fields_rejected") == 1
-        assert len(collector.records[0]) <= MAX_FIELDS + 4
+        # The bound is on the caller's fields, not on the envelope, so count the
+        # `f*` keys rather than the whole record: the envelope's own keys are
+        # fixed and asserting a total conflates the two.
+        caller_fields = [k for k in collector.records[0] if k.startswith("f")]
+        assert len(caller_fields) == MAX_FIELDS
 
 
 class TestCounters:
@@ -292,6 +306,123 @@ class TestSinksRoundTripAnEvent:
         for path in sorted(REPORTING_ROOT.rglob("*.py")):
             text = path.read_text(encoding="utf-8")
             assert "sys.stdout" not in text, path.name
+
+
+class TestDurableAndBridgeSinks:
+    """The two sinks Report 10 specifies and step 7 added.
+
+    `file` is durable where `jsonl` is immediate: stderr disappears with the
+    terminal, and a scale workload or an overnight refresh needs its evidence
+    afterwards. `bridge` is for a library call site whose caller configured
+    stdlib logging and never called `configure`.
+    """
+
+    def test_the_file_sink_writes_one_object_per_line(self, tmp_path):
+        from codess.reporting.sinks import FileSink
+
+        out = tmp_path / "events.jsonl"
+        reporting.configure("debug", sinks=(FileSink(out),))
+        reporting.event(reporting.code("ingest.start"), projects=3)
+        reporting.flush()
+        reporting.reset()
+        record = json.loads(out.read_text(encoding="utf-8").strip())
+        assert record["event"] == "ingest.start"
+        assert record["projects"] == 3
+
+    def test_the_file_sink_creates_its_parent_directory(self, tmp_path):
+        from codess.reporting.sinks import FileSink
+
+        out = tmp_path / "nested" / "deeper" / "events.jsonl"
+        reporting.configure("debug", sinks=(FileSink(out),))
+        reporting.event(reporting.code("ingest.start"))
+        reporting.flush()
+        reporting.reset()
+        assert out.exists()
+
+    def test_the_file_sink_appends_rather_than_erasing(self, tmp_path):
+        """A second run must not silently erase the first run's evidence."""
+        from codess.reporting.sinks import FileSink
+
+        out = tmp_path / "events.jsonl"
+        for code in ("ingest.start", "ingest.done"):
+            reporting.configure("debug", sinks=(FileSink(out),))
+            reporting.event(reporting.code(code))
+            reporting.flush()
+            reporting.reset()
+        assert len(out.read_text(encoding="utf-8").strip().splitlines()) == 2
+
+    def test_the_file_sink_leaves_no_file_when_nothing_is_emitted(self, tmp_path):
+        """Opened lazily: a profile that attaches it and emits nothing should not
+        leave an empty file to be mistaken for a run that produced none."""
+        from codess.reporting.sinks import FileSink
+
+        out = tmp_path / "events.jsonl"
+        reporting.configure("debug", sinks=(FileSink(out),))
+        reporting.flush()
+        reporting.reset()
+        assert not out.exists()
+
+    def test_an_unwritable_file_does_not_abort_the_operation(self, tmp_path):
+        """R10. A reporting sink that cannot open its destination loses the
+        events; it must not fail the ingest it was reporting on."""
+        from codess.reporting.sinks import FileSink
+
+        blocked = tmp_path / "file"
+        blocked.write_text("not a directory", encoding="utf-8")
+        reporting.configure("debug", sinks=(FileSink(blocked / "events.jsonl"),))
+        reporting.event(reporting.code("ingest.start"))
+        reporting.flush()  # must not raise
+        reporting.reset()
+
+    def test_the_bridge_sink_maps_the_event_level_onto_logging(self):
+        """A handler filtering at WARNING must see warnings and nothing else,
+        which is what the caller who configured it asked for."""
+        import logging
+
+        captured: list[logging.LogRecord] = []
+
+        class Capture(logging.Handler):
+            def emit(self, record):
+                captured.append(record)
+
+        from codess.reporting.sinks import BridgeSink
+
+        logger = logging.getLogger("codess.reporting.test")
+        logger.setLevel(logging.DEBUG)
+        handler = Capture()
+        logger.addHandler(handler)
+        try:
+            reporting.configure(
+                "debug", sinks=(BridgeSink("codess.reporting.test"),),
+            )
+            reporting.event(reporting.code("project.failed"), error_type="OSError")
+            reporting.flush()
+        finally:
+            logger.removeHandler(handler)
+            reporting.reset()
+        assert len(captured) == 1
+        assert captured[0].levelno == logging.ERROR
+        assert captured[0].codess_event == "project.failed"
+        assert captured[0].codess_fields == {"error_type": "OSError"}
+
+    def test_both_machine_readable_sinks_share_one_envelope(self, tmp_path):
+        """A reader parsing either must not have to handle two shapes."""
+        import io
+
+        from codess.reporting.sinks import FileSink, JsonlSink
+
+        out = tmp_path / "events.jsonl"
+        stream = io.StringIO()
+        reporting.configure(
+            "debug", sinks=(FileSink(out), JsonlSink(stream)),
+        )
+        reporting.event(reporting.code("vendor.done"), vendor="Codex", events=7)
+        reporting.flush()
+        reporting.reset()
+        from_file = json.loads(out.read_text(encoding="utf-8").strip())
+        from_stderr = json.loads(stream.getvalue().strip())
+        assert set(from_file) == set(from_stderr)
+        assert from_file["event"] == from_stderr["event"]
 
 
 class TestBufferingAndFlush:

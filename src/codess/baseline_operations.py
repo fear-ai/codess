@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +14,7 @@ from codess.baseline_validation import (
     run_query_smoke,
     validate_project,
 )
+from codess.child_invocation import ChildInvocation
 from codess.config import (
     CURRENT_POINTER_FILE,
     LAST_INGEST_REPORT_FILE,
@@ -121,32 +119,26 @@ def reset_rebuildable_working_stores(project: Path) -> list[str]:
     return removed
 
 
-def run_ingest(
-    project: Path,
-    *,
-    source: str,
-    raw_mode: str,
-    registry: Path,
-    min_size: int,
-    repo_root: Path,
-    resource_policy: Path | None = None,
-    candidate_snapshot: bool = False,
-) -> dict[str, Any]:
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(repo_root / "src")
-    command = [
-        sys.executable, "-m", "main", "ingest", "--dir", str(project),
-        "--source", source, "--force", "--min-size", str(min_size),
-        "--raw-mode", raw_mode, "--registry", str(registry),
-    ]
-    if candidate_snapshot:
-        command.append("--candidate-snapshot")
-    if resource_policy is not None:
-        command.extend(["--resource-policy", str(resource_policy)])
-    result = subprocess.run(
-        command, cwd=repo_root, env=env, capture_output=True,
-        text=True, timeout=3600,
-    )
+def run_ingest(invocation: ChildInvocation) -> dict[str, Any]:
+    """Run one ingest child and report what it produced.
+
+    Takes the invocation rather than its eight fields. The fields were a pure
+    relay -- every one existed only to reach `ChildInvocation` -- so passing them
+    individually meant a caller could mis-order four same-typed values silently,
+    and every added flag changed this signature and both call sites.
+
+    Reads the runtime report the child wrote, which is why this exists rather than
+    callers using `invocation.run()` directly: the report's location follows from
+    the Project, and finding it is this function's whole remaining subject.
+    """
+    if len(invocation.projects) != 1:
+        raise ValueError(
+            "run_ingest reports one Project's runtime report; "
+            f"got {len(invocation.projects)} projects"
+        )
+    project = invocation.projects[0]
+    command = invocation.command()
+    result = invocation.run()
     runtime_report = {}
     runtime_path = project / STORE_DIR / LAST_INGEST_REPORT_FILE
     if result.returncode == 0 and runtime_path.exists():
@@ -183,12 +175,15 @@ def apply_project(
         raise RuntimeError("policy requires --repeat")
     working_archive = archive_stale_working_stores(project)
     first_reset = reset_rebuildable_working_stores(project)
-    first_ingest = run_ingest(
-        project, source=source, raw_mode=raw_mode, registry=registry,
-        min_size=min_size, repo_root=repo_root,
-        resource_policy=resource_policy,
-        candidate_snapshot=True,
+    # Built once and reused for the repeat run below. The two were identical
+    # eight-argument calls, and the second existing only to prove the first is
+    # reproducible means they must not be able to differ.
+    invocation = ChildInvocation(
+        projects=(project,), vendor_selector=source, raw_mode=raw_mode,
+        registry=registry, repo_root=repo_root, min_size=min_size,
+        resource_policy=resource_policy, force=True, candidate_snapshot=True,
     )
+    first_ingest = run_ingest(invocation)
     if first_ingest["returncode"] != 0:
         raise RuntimeError("ingest failed: " + first_ingest["stderr"].strip())
     first_candidate = first_ingest.get("candidate_snapshot_path")
@@ -213,12 +208,7 @@ def apply_project(
     fixed_point = None
     if repeat:
         repeat_reset = reset_rebuildable_working_stores(project)
-        second_ingest = run_ingest(
-            project, source=source, raw_mode=raw_mode, registry=registry,
-            min_size=min_size, repo_root=repo_root,
-            resource_policy=resource_policy,
-            candidate_snapshot=True,
-        )
+        second_ingest = run_ingest(invocation)
         if second_ingest["returncode"] != 0:
             raise RuntimeError("repeat ingest failed: " + second_ingest["stderr"].strip())
         second_candidate = second_ingest.get("candidate_snapshot_path")

@@ -7,6 +7,7 @@ from collections import Counter
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from codess import field_state
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
@@ -151,7 +152,7 @@ def get_session_metadata(path: Path) -> dict:
     return {}
 
 
-def _parse_timestamp(value) -> float | None:
+def _parse_timestamp(value: Any) -> float | None:
     """Normalize Unix seconds/ms or ISO-8601 to Unix milliseconds."""
     if value is None or isinstance(value, bool):
         return None
@@ -182,7 +183,7 @@ def _extract_text_from_content(content: list) -> str:
     return "\n".join(parts)
 
 
-def _extract_reasoning_summary(summary) -> str:
+def _extract_reasoning_summary(summary: Any) -> str:
     """Extract vendor-exposed summary text, never encrypted reasoning state."""
     if not isinstance(summary, list):
         return ""
@@ -342,7 +343,7 @@ def _configuration_values(
     values = {}
     provenance = {}
 
-    def keep(common: str, source_field: str, value) -> None:
+    def keep(common: str, source_field: str, value: Any) -> None:
         if value is None or isinstance(value, (dict, list)):
             return
         text = str(value).strip()
@@ -1561,7 +1562,7 @@ def _bounded_content(
     bounding, check for a drop, truncate, process after bounding, check again.
     Twenty of `process_file`'s branches were those two `None` guards rather
     than record dispatch, so the shape of the function said "many kinds of
-    record" when it mostly said "one policy applied many times" (CoPlan W42).
+    record" when it mostly said "one policy applied many times".
 
     Both phases are kept because they answer different questions: the pre
     phase sees the whole value and can reject it on content, while the post

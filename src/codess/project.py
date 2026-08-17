@@ -12,7 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from codess import __version__
+from codess import __version__, reporting
 from codess.config import (
     CC_PROJECTS,
     RAW_MODE_CHOICES,
@@ -69,7 +69,7 @@ def get_project_root(cwd: Path | None = None) -> Path:
     location each. Codess.md 7 states that one repository is one Project and
     that worktrees are observations of it, and `project_locations` exists to
     hold them -- but discovery could not produce the multi-location case at
-    all, which is why every registered Project had exactly one (W49).
+    all, which is why every registered Project had exactly one.
 
     `--git-common-dir` names the shared `.git` directory: identical for every
     worktree of a repository, distinct across repositories. Its parent is the
@@ -809,11 +809,26 @@ def parse_and_run(argv: list[str] | None = None) -> int:
     from cli.query_cmd import run as run_query
     from cli.scan_cmd import run as run_scan
 
-    if args.command == "scan":
-        return run_scan(args)
-    if args.command == "ingest":
-        return run_ingest(args)
-    return run_query(args)
+    handlers = {"scan": run_scan, "ingest": run_ingest}
+    handler = handlers.get(args.command, run_query)
+
+    # One command boundary for every family, rather than a flush before each of
+    # the query command's 105 return points. `query` is configured here too:
+    # scan and ingest configure their own profiles because they register vendor
+    # roots for path redaction, and a second `configure` would discard those.
+    if args.command not in handlers:
+        reporting.configure(
+            getattr(args, "report_profile", None),
+            privacy=getattr(args, "report_privacy", None),
+            redaction_roots={"home": Path.home()},
+        )
+    try:
+        return handler(args)
+    finally:
+        # A batch below the flush threshold must still reach the sink before the
+        # process ends (Report 8). In `finally` so an error path reports what it
+        # had recorded rather than losing it with the exception.
+        reporting.flush()
 
 
 def main() -> int:

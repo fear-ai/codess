@@ -28,7 +28,7 @@ weaker than another -- but it must be fixed, because a value that changes end
 changes every key already derived from it.
 
 This module does not decide what a value means: naming a result `_id`, `_key`,
-or `_hash` is the caller's decision and is documented in CoPlan 13.4.8.
+or `_hash` is the caller's decision and is documented in CoReview 4.8.
 """
 
 from __future__ import annotations

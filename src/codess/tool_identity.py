@@ -12,7 +12,7 @@ _SUFFIX_PREFIX = "~digest:"
 
 Neutral rather than naming the algorithm: this is a stored column value, so
 naming SHA-256 here would make changing the digest a wire-format change,
-which is the rule `hashing` exists to keep in one place (CoPlan W34).
+which is the rule `hashing` exists to keep in one place.
 """
 
 

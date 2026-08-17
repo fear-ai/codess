@@ -1,4 +1,4 @@
-"""Byte-size conversion, as one symmetric set.
+"""Byte-size and duration conversion, as symmetric sets.
 
 Six converters in three pairs: `KB`/`MB`/`GB` render a human quantity as
 bytes, and `BKB`/`BMB`/`BGB` render bytes back. They live here rather than in
@@ -49,3 +49,41 @@ def BMB(count: float) -> float:
 def BGB(count: float) -> float:
     """`count` bytes as gibibytes (`count / 1024**3`); inverse of `GB`."""
     return count / 1024**3
+
+
+# --- Durations ---------------------------------------------------------------
+#
+# Named because the alternative was unlabeled arithmetic whose unit could only
+# be inferred from the expression around it. `walk_sessions` alone mixed three
+# conventions: days as `/(24 * 3600 * 1000)`, weeks as `/(7 * 24 * 3600 * 1000)`
+# repeated at every span calculation, and a cutoff computed in seconds via
+# `* 86400` before a separate conversion to milliseconds. A
+# milliseconds-versus-seconds error reads as plausible code in that form.
+#
+# These live beside the byte converters because both are representation rather
+# than configuration, and for the same reason the byte set is kept complete: an
+# incomplete set invites the next caller to write the arithmetic inline, which is
+# how a conversion acquires several spellings.
+#
+# Vendor timestamps are milliseconds, so the millisecond forms are the ones the
+# call sites need and the boundary where the current code was most confusing.
+MINUTE_SECONDS = 60
+HOUR_SECONDS = 60 * MINUTE_SECONDS
+DAY_SECONDS = 24 * HOUR_SECONDS
+WEEK_SECONDS = 7 * DAY_SECONDS
+
+SECOND_MS = 1_000
+MINUTE_MS = MINUTE_SECONDS * SECOND_MS
+HOUR_MS = HOUR_SECONDS * SECOND_MS
+DAY_MS = DAY_SECONDS * SECOND_MS
+WEEK_MS = WEEK_SECONDS * SECOND_MS
+
+
+def seconds_to_ms(seconds: float) -> float:
+    """Seconds as milliseconds, for comparison against a vendor timestamp."""
+    return seconds * SECOND_MS
+
+
+def ms_to_seconds(milliseconds: float) -> float:
+    """Milliseconds as seconds, the inverse of `seconds_to_ms`."""
+    return milliseconds / SECOND_MS

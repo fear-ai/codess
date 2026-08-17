@@ -104,7 +104,7 @@ def _merged_rules(policy: ContentPolicy, context: ContentContext) -> dict[str, A
 class ContentProcessor:
     """Apply explicit, scoped transformations at pre/post-normalization hooks."""
 
-    def __init__(self, policy: ContentPolicy):
+    def __init__(self, policy: ContentPolicy) -> None:
         self.policy = policy
 
     def decode(self, value: bytes, context: ContentContext) -> ContentResult:

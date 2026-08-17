@@ -236,7 +236,7 @@ class TestResolveSelectionMarkers:
     """The cache decision, now testable without a live Cursor store.
 
     It ran inside a 247-line ingest phase, so its three outcomes could only be
-    exercised by running an ingest against a real Cursor database (W46). The
+    exercised by running an ingest against a real Cursor database. The
     unstable branch in particular could not be reached deliberately at all.
     """
 

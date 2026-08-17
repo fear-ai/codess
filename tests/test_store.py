@@ -907,7 +907,7 @@ class TestWireFormatChanges:
         """`package_digest` named the Python distribution, not what it covers.
 
         The value gates every write, so the name a reader sees in `store_meta`
-        has to be the one the code and the documentation use (W33).
+        has to be the one the code and the documentation use.
         """
         from codess.schema_contract import contract_digest
 
@@ -920,7 +920,7 @@ class TestWireFormatChanges:
         assert "package_digest" not in meta
 
     def test_removed_time_columns_are_absent(self, tmp_path):
-        """Each was measured redundant or unwritten before removal (W25)."""
+        """Each was measured redundant or unwritten before removal."""
         db = tmp_path / "columns.db"
         init_db(db)
         conn = connect(db)
@@ -952,7 +952,7 @@ class TestWireFormatChanges:
             conn.close()
 
     def test_digest_columns_do_not_name_the_algorithm(self, tmp_path):
-        """`hashing` owns the algorithm, so no column may pin it (W34)."""
+        """`hashing` owns the algorithm, so no column may pin it."""
         db = tmp_path / "digest.db"
         init_db(db)
         conn = connect(db)
@@ -982,7 +982,7 @@ class TestConnectionEnforcesConstraints:
 
     SQLite defaults `foreign_keys` to off *per connection*, so enforcement is
     a property of how a store was opened rather than of the file. These pin
-    the current contract, and are the regression guard for W56: if the write
+    the current contract, and are the regression guard: if the write
     path is later unified, the managed behavior below must not change.
     """
 
@@ -1048,7 +1048,7 @@ class TestFormatSixRemovals:
     was written by `store` from a literal, and was read by nothing but the
     fixed-point digest that enumerates all columns by construction. A test per
     group so that reintroducing one is a deliberate change with a name, rather
-    than a column that quietly reappears (CoPlan W40, W48).
+    than a column that quietly reappears.
     """
 
     def test_content_is_text_stored_inline_without_declaring_it(self, tmp_path):
@@ -1097,7 +1097,7 @@ class TestFormatSixRemovals:
             conn.close()
 
     def test_a_session_does_not_store_what_its_source_system_implies(self, tmp_path):
-        """`product_name` was a pure function of `source_system_id` (W40)."""
+        """`product_name` was a pure function of `source_system_id`."""
         db = tmp_path / "sessions.db"
         init_db(db)
         conn = connect(db)
@@ -1164,7 +1164,7 @@ class TestDiagnosticGranularity:
 
 
 class TestOneVendorDescription:
-    """Every vendor view derives from `config.VENDORS` (W24).
+    """Every vendor view derives from `config.VENDORS`.
 
     Discovery, ingest, publication, refresh, review, and the command layer each
     re-derived a partial view from a bare key -- three separate encodings of the
@@ -1269,7 +1269,7 @@ class TestBothOpenersYieldNamedRows:
 
 
 class TestIsolationModelIsDeferred:
-    """The isolation model is stated in `fileio` and this pins it (W56 step 2).
+    """The isolation model is stated in `fileio` and this pins it.
 
     Deferred is SQLite's default, which is exactly why it needs a test: an
     opener that later sets `isolation_level` or issues `BEGIN IMMEDIATE` would
@@ -1309,7 +1309,7 @@ class TestIsolationModelIsDeferred:
 
 
 class TestStoreErrorsDoNotLeakTheDriver:
-    """A caller of a store operation catches a Codess error (W56 step 4).
+    """A caller of a store operation catches a Codess error.
 
     The store layer had no error type of its own, so the CLI named
     `sqlite3.Error` to report a store it could not open -- the one handler of
@@ -1349,7 +1349,7 @@ class TestTheOpenersOwnTheConnectionContracts:
     `foreign_keys`, `busy_timeout`, `row_factory` -- are guarantees of how a
     file was opened, not of the file. A site that connects directly gets none
     of them, silently, which is what made the read guarantee vary by call site
-    before `open_readonly` existed (CoPlan 3.5.4, W56 step 1).
+    before `open_readonly` existed (CoNotes 1.4).
 
     The two permitted exceptions each state their reason at the call site: the
     openers themselves, and `raw_store`'s pure `backup()` target.
@@ -1388,7 +1388,7 @@ class TestRecordLevelDiagnostics:
     only `field` had ever been written -- 13,432 rows across real stores, none
     at the other two. So the coverage report stated zero record-level loss and
     that zero was unfalsifiable rather than measured: a reader could not tell
-    "nothing was refused" from "refusals are not recorded" (CoPlan W47).
+    "nothing was refused" from "refusals are not recorded".
     """
 
     def test_a_refusal_is_written_against_its_source(self, tmp_path):

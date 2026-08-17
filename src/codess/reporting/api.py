@@ -43,13 +43,15 @@ R2 already covers.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Protocol
 
 from codess.reporting.buffer import EventRing, flush_when
 from codess.reporting.clock import duration_seconds, tick
 from codess.reporting.codes import (
+    CODE_BY_NAME,
     COUNTER_COUNT,
     COUNTER_NAMES,
     EVENT_LEVELS,
@@ -63,10 +65,13 @@ from codess.reporting.privacy import Roots
 from codess.reporting.sinks import build
 
 __all__ = [
+    "ProgressEmitter",
     "code",
+    "collector",
     "configure",
     "count",
     "counters",
+    "emit_named",
     "event",
     "profile",
     "reset",
@@ -88,13 +93,18 @@ _MIN_LEVEL: int = WARNING
 _PROFILE: Profile | None = None
 _ROOTS: Roots = Roots()
 
+# Bound at import: `CODE_BY_NAME.get` resolves a global and an attribute on
+# every call otherwise, which is ~10% of this function's cost.
+_CODE_BY_NAME_GET = CODE_BY_NAME.get
+
 
 def configure(
-    profile: str | None = None,
+    profile_name: str | None = None,
     *,
     privacy: str | None = None,
-    roots: dict[str, Any] | None = None,
+    redaction_roots: dict[str, Any] | None = None,
     sinks: tuple[Any, ...] | None = None,
+    file_path: str | None = None,
 ) -> Profile:
     """Resolve a profile and attach its sinks. Call once per process.
 
@@ -103,14 +113,34 @@ def configure(
     or choose its destination (R7).
     """
     global _SINKS, _RING, _MIN_LEVEL, _PROFILE, _ROOTS
-    resolved = resolve(profile, privacy)
+    # `profile_name` and `redaction_roots` rather than `profile` and `roots`:
+    # both of those are module-level accessors in this file, and a parameter
+    # reusing the name of a function it sits beside is the shadowing CLAUDE.md's
+    # naming rule forbids.
+    resolved = resolve(profile_name, privacy)
     _PROFILE = resolved
     _MIN_LEVEL = resolved.min_level
-    _ROOTS = Roots(roots) if roots else Roots()
+    _ROOTS = Roots(redaction_roots) if redaction_roots else Roots()
     _SINKS = (
         sinks if sinks is not None
-        else build(resolved.sinks, privacy=resolved.privacy, roots=_ROOTS)
+        else build(
+            resolved.sinks, privacy=resolved.privacy, roots=_ROOTS,
+            file_path=file_path or os.environ.get("CODESS_REPORT_FILE"),
+        )
     )
+    # The gate is the *minimum* across attached sinks, not the profile's level.
+    # A profile sets what an operator sees; a durable sink retains more, because a
+    # report is read after the fact by someone diagnosing and the event they need
+    # is usually the one the interactive run suppressed. One threshold for both is
+    # the conflation Report 1.4 names, and it emptied the durable ingest report of
+    # every debug event when it was tried.
+    #
+    # Each sink then drops what it does not want, so a lower floor here widens
+    # what is *constructed* without widening what is printed.
+    floors = [
+        getattr(sink, "min_level", resolved.min_level) for sink in _SINKS
+    ]
+    _MIN_LEVEL = min([resolved.min_level, *floors]) if floors else resolved.min_level
     _RING = EventRing(flush_events=resolved.flush_events) if _SINKS else None
     return resolved
 
@@ -136,6 +166,25 @@ def profile() -> Profile | None:
 def roots() -> Roots:
     """The registered filesystem roots a `located` field renders against."""
     return _ROOTS
+
+
+def collector() -> Any | None:
+    """The attached collector sink, if a durable report needs its records.
+
+    The facility owns this rather than a caller threading it, because the
+    alternative measured worse: the two consumers of the ingest report sit in
+    functions that already take a `progress_trace` parameter, so reaching the
+    collector meant a second parameter down two call chains whose only purpose
+    was carrying a sink the facility already holds.
+
+    Returns None when no collector is attached, which a caller must handle -- a
+    profile without one is legitimate, and a report should say it has no events
+    rather than fail.
+    """
+    for sink in _SINKS:
+        if hasattr(sink, "records_for"):
+            return sink
+    return None
 
 
 # --- count -------------------------------------------------------------------
@@ -220,6 +269,71 @@ def _emit(events: list[tuple]) -> None:
 
 
 # --- span --------------------------------------------------------------------
+
+
+class ProgressEmitter(Protocol):
+    """What a library module needs from a progress reporter.
+
+    A protocol rather than a concrete type, because the point of passing the
+    emitter as an argument is that the callee does not depend on the facility --
+    CoPlan 3.3 forbids a library module depending on the command layer, and
+    `reporting.api` holds process-wide mutable state. A caller can pass
+    `emit_named`, a test double, or nothing.
+
+    Named and exported so the six functions that thread it can say what they
+    take. They previously declared a bare `progress_trace`, which told a reader
+    only that something was threaded and let a `str` be passed where a callable
+    was meant.
+    """
+
+    def __call__(self, name: str, **fields: Any) -> None: ...
+
+
+def emit_named(name: str, **fields: Any) -> None:
+    """Report one event by its dotted name, dropping absent fields.
+
+    The name-taking form of `event`, for a call site that reads better with a
+    name than with a resolved code -- which is every progress point in ingest,
+    where the name is the whole content of the line an operator reads.
+
+    Two conveniences over `event`, and they are why this exists rather than
+    callers doing it themselves: the name is resolved to a code, and a field whose
+    value is None is dropped rather than rendered. Sixty-odd call sites pass
+    optional fields, and each one testing for None before calling would be the
+    same conditional written sixty times.
+
+    An unknown name raises rather than degrading. The previous facility rendered
+    an unregistered name anyway, without a level or a scope, which is how 23 of
+    the 38 names actually emitted went unregistered without anyone noticing --
+    so the quiet path is removed deliberately. Adding a progress point is a
+    two-line change, and the second line is what makes the event filterable.
+
+    Lives here rather than in its own module because it is one lookup and one
+    call over `event`, and a module holding a single three-statement function is
+    a file a reader has to open to learn nothing.
+    """
+    # `name`, not `event`: the parameter would otherwise shadow the module
+    # function this calls, which is the exact defect that made a `dict` rebind a
+    # `list[Path]` in ingest -- reintroduced here, in the function written to
+    # replace it, and caught by the suite rather than by reading.
+    resolved = _CODE_BY_NAME_GET(name)
+    if resolved is None:
+        raise KeyError(
+            f"unknown progress event {name!r}; add it to reporting.codes"
+        )
+    # Rebuild only when a None is actually present. Measured over the call sites,
+    # 28 of 222 keyword arguments can be None, so the common path pays a
+    # membership test rather than a dict comprehension: 338 ns to 262 ns.
+    #
+    # The filter is not removable. `HumanSink` and `BridgeSink` drop None when
+    # they render, but `JsonlSink` and `CollectorSink` do not -- without it a
+    # durable report carries `"events": null`, a field stating nothing. Dropping
+    # here rather than in each sink keeps one rule for every destination.
+    if None in fields.values():
+        fields = {
+            key: value for key, value in fields.items() if value is not None
+        }
+    event(resolved, **fields)
 
 
 @contextmanager

@@ -2,7 +2,7 @@
 
 These rules were nested inside `walk_sessions` and reachable only by running
 vendor discovery over a populated filesystem, so the logic most likely to be
-wrong was the logic hardest to test (CoPlan 13.4.7, W19). Lifting them made
+wrong was the logic hardest to test (CoReview 4.7). Lifting them made
 these cases expressible; every one below is new coverage rather than relocated
 coverage.
 

@@ -4,7 +4,7 @@ import os
 import platform
 import re
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from codess.resource_policy import BUILTIN_MAXIMUMS
 
@@ -129,7 +129,7 @@ _IS_ENV_TABLE = (
     ("CODESS_RESOURCE_POLICY", env_str, None),
     ("CODESS_REGISTRY", env_expanded_path, str(Path.home() / ".codess")),
     ("CODESS_STOP", env_bool, "0"),
-    # --- Discovery traversal bounds (W62) ---
+    # --- Discovery traversal bounds ---
     # A scan of an unknown tree has to be able to stop. 200,000 directories
     # is far above any real work root -- the development machine's is under
     # 30,000 -- so the budget bounds a pathological input rather than
@@ -138,7 +138,20 @@ _IS_ENV_TABLE = (
     ("CODESS_SCAN_DEADLINE_SECONDS", env_int, 900),
     ("CODESS_NO_HASH", env_bool, "0"),
 )
-_IS_ENV_VALUES = {key: reader(key, default) for key, reader, default in _IS_ENV_TABLE}
+# `Any`, deliberately and explicitly. The table is heterogeneous by design -- one
+# row per variable, each with its own reader returning `int`, `bool`, `str`,
+# `Path`, or a tuple -- so a comprehension over it has no single value type. Left
+# implicit, the inferred `int | str | None` produced 30 spurious errors here: a
+# `Path` division reported as "unsupported operand for str", an `int` bound
+# rejected as possibly-None.
+#
+# The alternative is a `TypedDict` or one binding per variable, which would
+# reintroduce the per-variable call sites the table replaced. Each constant below
+# states its own type where that matters, so the `Any` is contained at this one
+# boundary rather than propagated.
+_IS_ENV_VALUES: dict[str, Any] = {
+    key: reader(key, default) for key, reader, default in _IS_ENV_TABLE
+}
 
 
 # --- Paths (env overrides) ---
@@ -226,7 +239,7 @@ STORE_DB_CURSOR = "sessions_cursor.db"
 # the same three vendors (an if-chain selecting a store filename, a profile dict
 # keyed by display name, a display-name lookup keyed by CLI token) plus the key
 # tuple `("cc", "codex", "cursor")` written out at a dozen call sites. Adding a
-# vendor meant finding all of them (CoPlan W24).
+# vendor meant finding all of them.
 #
 # Two keys per vendor is not redundancy: `key` is what an operator types and
 # what names a file, `adapter_key` is what the decoder and the store record.
@@ -327,7 +340,7 @@ def catalog_root() -> Path:
     It defaults beside the registry -- where `ingested_projects.json`,
     snapshots, raw objects, and receipts already live -- rather than inside the
     checkout, which previously made a fresh clone write operator state into its
-    own source tree (CoPlan W58).
+    own source tree.
 
     `CODESS_CATALOG` overrides it. Every command still accepts an explicit
     path, so pointing at a checked-in selection remains possible when that is
@@ -452,6 +465,20 @@ LARGE_STORE_BYTES = MB(128)
 # A single-line source record above this size is rejected during bounded
 # JSONL reads (bounded_jsonl) and is the CLI --max-record-bytes default.
 MAX_RECORD_BYTES = MB(2)
+# An external file referenced by a vendor record -- Claude's
+# `persistedOutputPath` -- above this size is refused with a diagnostic rather
+# than read into memory. 8 MB is generous against the observed corpus, where the
+# largest of four persisted outputs is 110 KB, so the bound rejects an outlier
+# rather than truncating ordinary output. It exists because nothing in the vendor
+# contract bounds this file: it is written by whatever tool produced it, so its
+# size is a property of that tool rather than of a Session.
+MAX_EXTERNAL_CONTENT_BYTES = MB(8)
+# An untracked file or an uncommitted diff above this size is fingerprinted by
+# its size and modification time rather than read, when Codess identifies the
+# build that wrote a store. The input is a developer's working tree, so a stray
+# corpus or database left in the checkout is ordinary; 32 MB is above any source
+# file and well below the cost of hashing one of those.
+WORKTREE_DIGEST_MAX_BYTES = MB(32)
 # A distinct captured raw revision at or above this size is flagged in
 # retention planning as worth explicit --keep-comparison-revisions review.
 LARGE_RAW_REVISION_BYTES = GB(1)

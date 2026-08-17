@@ -23,7 +23,7 @@ Externalized rather than hardcoded because the set is editable data, not a
 rule: a tree that versions its `dist/` output, a monorepo with a package named
 `build`, or a Go module vendoring dependencies it audits each needs a
 different set, and a frozen tuple made those cases undiscoverable with no way
-to say so (CoPlan W60).
+to say so.
 
 `CODESS_DISCOVERY_POLICY` names a replacement file. A malformed or missing
 file falls back to the released one and warns rather than raising: discovery

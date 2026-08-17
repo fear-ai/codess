@@ -203,7 +203,7 @@ def observe_git(
 class ScanBudget:
     """What a traversal is allowed to spend, and what it actually spent.
 
-    A scan of an unknown tree needs to be able to stop (CoPlan W62). Before
+    A scan of an unknown tree needs to be able to stop. Before
     this, `discover_git_roots` took a root, a depth limit, and no bound on the
     work itself: on a slow or enormous tree it ran until it finished, and the
     operator's only signal was that it had not returned. Operations 10.5.2
@@ -214,7 +214,7 @@ class ScanBudget:
     examined 90% of a tree has found 90% of the Projects, and throwing that away
     to report nothing is the worse failure.
 
-    The device count is W61: `os.walk` crosses a filesystem boundary without
+    The device count is the second half: `os.walk` crosses a filesystem boundary without
     saying so, so a network mount inside the work root turns a seconds-long scan
     into a minutes-long one with no explanation. Reporting rather than refusing,
     because the common case -- an external disk holding real Projects -- is one a
@@ -491,7 +491,7 @@ def refresh_candidates(
         "diagnostics": {key: value for key, value in diagnostics.items() if not key.startswith("_")},
         # What the traversal spent and whether it finished. Reported
         # unconditionally, so a partial scan says so rather than looking like a
-        # complete one with fewer Projects in it (W62).
+        # complete one with fewer Projects in it.
         "scan": budget.report(),
         "projects": sorted(projects.values(), key=lambda item: item["path"]),
     }

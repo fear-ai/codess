@@ -44,11 +44,44 @@ duplicating its content elsewhere.
 - State the durable fact, not the history: what the code does and why it must, not what
   it used to do, what a rejected approach would have done, or which review found it
 - Do NOT cite work-item identifiers (`W54`, `W12`); completed items are removed from
-  CoPlan, so the reference resolves to nothing for a later reader
+  the task list, so the reference resolves to nothing for a later reader
 - Keep measured evidence that justifies a constant or a mapping; drop the narrative around it
 - Wrap to at least 80 characters, up to 120 where keeping a call on one line needs it;
   do not wrap narrower than 80
 - A comment restating the line below it is noise; delete it
+
+## Code Naming
+
+Applies to Python identifiers. Domain designators -- vendors, columns, keys --
+are [CoNames](CoNames.md); this is how the code spells things.
+
+- A parameter never reuses the name of a module-level function or constant in the
+  same file. Nothing in ruff detects this and mypy does, so run it.
+- A local never rebinds a parameter or an earlier local to a value of a different
+  type. Introduce a second name instead: both stay readable, and the type checker
+  keeps its grip on each.
+- Where a local derives from a multi-word parameter, shorten to the **subject**,
+  which is usually the last word rather than the first: `raw_records` and
+  `raw_store` become `records` and `store`, because `raw` qualifies them and is
+  not what they are. Measured over this codebase, the subject word resolves all 47
+  functions whose parameters would otherwise collide.
+- Scope decides whether a general single word is acceptable. A **local** may be
+  `path`, `file`, or `records` -- it is read within a few lines of its binding, and
+  the qualifier is redundant there. A **field, attribute, or parameter** may not:
+  it is read far from where it was set, so `ChildInvocation.source` became
+  `vendor_selector` because Codess has a Source entity and the field held neither.
+  Measured: 309 of 725 multi-word parameters end in a general word, so this rule
+  is about where the name is read rather than about the word itself.
+- Prefer a qualifier that states the value's **role** over one that states its
+  container or type: `redaction_roots`, not `roots_dict`. Measured across 6,310
+  installed third-party files, role qualifiers outnumber PEP 8's trailing
+  underscore 4,977 to 109, and the standard library agrees (`parser_class`,
+  `action_class`).
+- Reserve the trailing underscore (`type_`) for the case a qualifier cannot
+  express: a parameter that genuinely is the builtin's subject.
+- Do NOT introduce a second case style to separate locals from parameters. PEP 8
+  fixes one style for the language, and the hazard is a name that does not say
+  what the value is for, which a case convention does not address.
 
 ## Environment Separation
 

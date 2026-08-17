@@ -17,11 +17,13 @@ from typing import Any
 from codess import __version__
 from codess.config import (
     CURRENT_POINTER_FILE,
+    HASH_CHUNK_BYTES,
     MANIFEST_BACKUP_FILE,
     MANIFEST_FILE,
     RAW_MANIFEST_FILE,
     SNAPSHOTS_DIR,
     STORE_DIR,
+    WORKTREE_DIGEST_MAX_BYTES,
 )
 from codess.fileio import (
     HashMismatchError,
@@ -153,14 +155,29 @@ def _software_revision() -> str | None:
         ).stdout
         if not status:
             return revision
+        # This fingerprints the *Codess source tree* so a store records which
+        # build wrote it. Two reads here are unbounded by nature and are bounded
+        # explicitly, because the input is a developer's working tree: a diff
+        # against a large uncommitted change, and an untracked file of any size
+        # -- a downloaded corpus or a stray database left in the checkout.
+        #
+        # Exceeding a bound is recorded in the fingerprint rather than skipped.
+        # A dirty tree whose fingerprint silently ignored its largest untracked
+        # file would report two different trees as the same build, which is the
+        # one thing this value must not do.
         digest = codess_digest()
         digest.update(b"git-status\0")
         digest.update(status)
         digest.update(b"git-diff\0")
-        digest.update(subprocess.run(
+        diff = subprocess.run(
             ["git", "diff", "--binary", "HEAD"], cwd=root,
             capture_output=True, check=True, timeout=10,
-        ).stdout)
+        ).stdout
+        if len(diff) > WORKTREE_DIGEST_MAX_BYTES:
+            digest.update(b"diff-oversize\0")
+            digest.update(str(len(diff)).encode("ascii"))
+        else:
+            digest.update(diff)
         for entry in status.split(b"\0"):
             if not entry.startswith(b"?? "):
                 continue
@@ -171,7 +188,19 @@ def _software_revision() -> str | None:
             digest.update(b"untracked\0")
             digest.update(relative.encode("utf-8", errors="surrogateescape"))
             digest.update(b"\0")
-            digest.update(path.read_bytes())
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size > WORKTREE_DIGEST_MAX_BYTES:
+                # Size and mtime rather than content: enough to notice the file
+                # changed, without reading it.
+                digest.update(b"oversize\0")
+                digest.update(f"{size}:{path.stat().st_mtime_ns}".encode("ascii"))
+                continue
+            with path.open("rb") as stream:
+                for chunk in iter(lambda stream=stream: stream.read(HASH_CHUNK_BYTES), b""):
+                    digest.update(chunk)
         return revision + "+worktree.sha256:" + digest.hexdigest()
     except (OSError, subprocess.SubprocessError):
         return None
@@ -195,7 +224,7 @@ def _backup_store(
     source = open_readonly(source_path)
     # `backup()` copies pages, so row constraints do not apply during the copy
     # -- but the `store_meta` stamp written below is an ordinary write, and the
-    # result is a store other code opens. Stated rather than defaulted (W56).
+    # result is a store other code opens. Stated rather than defaulted.
     target = open_writable(target_path, foreign_keys=False)
     try:
         require_store(source, write=False)
@@ -225,7 +254,7 @@ def _logical_counts(
     path: Path, only: Iterable[str] | None = None
 ) -> dict[str, int]:
     # Counting rows is a read, and a read that opens a file it does not own
-    # must not be able to write to it even by mistake (W56).
+    # must not be able to write to it even by mistake.
     conn = open_readonly(path)
     try:
         available = table_names(conn)

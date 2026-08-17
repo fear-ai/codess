@@ -4,7 +4,7 @@
 **Reads core tables directly** for row counts and byte sizes across every
 retained snapshot, including stores whose contract no longer matches -- which
 is precisely when a storage report is wanted and when the query layer would
-refuse (CoPlan W56 step 3).
+refuse.
 """
 
 from __future__ import annotations

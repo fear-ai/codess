@@ -180,7 +180,7 @@ def test_repository_acceptance_policies_are_valid():
     fixed point, not which Projects an operator happens to have accepted.
     `ci-fixture.json` is the one policy the repository ships, because it
     validates a fixture the repository contains and is therefore true on
-    every machine (W58).
+    every machine.
     """
     root = Path(__file__).resolve().parents[1]
     policies = sorted((root / "catalog/policies").glob("*.json"))
@@ -396,7 +396,7 @@ class TestDigestCoversTheSchema:
     The digest silently ignores whatever `canonical_rows` does not list, so an
     omission is invisible: `model_params` was missing, and model evidence could
     differ between two stores while a fixed-point check called them identical
-    (CoPlan W57). A hand-written table list has nothing to be checked against,
+   . A hand-written table list has nothing to be checked against,
     which is the same failure 3.5.4 found in the table-to-count map.
     """
 

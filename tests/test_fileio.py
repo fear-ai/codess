@@ -309,7 +309,7 @@ class TestQuoteIdentifier:
     so a dynamic name must reach the SQL text as a string. Sites variously
     wrote `"{table}"`, a bare `{table}`, and their own `replace('"', '""')`,
     so whether an embedded quote was handled depended on which site a reader
-    was in. This is the one answer (CoPlan W52).
+    was in. This is the one answer.
     """
 
     def test_an_ordinary_name_is_quoted(self):
@@ -441,7 +441,7 @@ class TestQuoteIdentifierRaiseReachesACaller:
 
 
 class TestOpenWritable:
-    """The write-side connection contract (CoPlan W56).
+    """The write-side connection contract.
 
     SQLite applies `foreign_keys` per connection and defaults it off, so
     enforcement is a property of how a file was opened rather than of the

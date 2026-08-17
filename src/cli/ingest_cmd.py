@@ -1,5 +1,6 @@
 """session-ingest CLI command."""
 
+import argparse
 import json
 import logging
 import sys
@@ -71,7 +72,6 @@ from codess.ingest_sources import (
     _ingest_cursor,
 )
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
-from codess.progress import ProgressTrace
 from codess.project import (
     RootsWhenEmpty,
     build_ingest_run_options,
@@ -84,6 +84,11 @@ from codess.project_catalog import (
     read_project_binding,
 )
 from codess.raw_store import RawStore
+from codess.reporting import ProgressEmitter
+from codess.reporting import emit_named as progress_emit
+from codess.reporting.levels import resolve as resolve_profile
+from codess.reporting.privacy import Roots
+from codess.reporting.sinks import CollectorSink, HumanSink
 from codess.resource_policy import ResourcePolicyError
 from codess.resources import (
     peak_rss_bytes,
@@ -102,7 +107,7 @@ from codess.store import (
 log = logging.getLogger(__name__)
 
 
-def _resource_limits_report(settings) -> dict:
+def _resource_limits_report(settings: dict[str, Any]) -> dict:
     """Return effective limits with one compatibility spelling retained."""
     return {
         "max_transcript_bytes": settings["max_source_bytes"],
@@ -187,7 +192,7 @@ class ProjectScope:
     Projects, and these seven, which are replaced on every loop iteration. A
     reader at a call site could not tell which kind a key was, so
     `opts["raw_store"]` read the same whether it was configuration or this
-    iteration's store (W06 step 4, W45).
+    iteration's store.
 
     Naming the per-Project set makes the boundary checkable: `into` is the one
     place these reach `opts`, and a key added here without being added to
@@ -561,8 +566,7 @@ def _begin_project(
     ).into(opts)
 
 
-def _resolve_ingest_request(
-    args,
+def _resolve_ingest_request(args: argparse.Namespace,
 ) -> int | tuple[list[Path], Path, list[str], dict]:
     """Validate configuration and arguments before any source is touched.
 
@@ -618,7 +622,7 @@ def _resolve_ingest_request(
 
 
 def _report_ingest_outcome(
-    progress_trace,
+    progress_trace: ProgressEmitter,
     opts: dict,
     diagnostics: dict[str, int],
     outcome: "IngestOutcome",
@@ -656,13 +660,32 @@ def _report_ingest_outcome(
         )
 
 
+def _progress_events(project: str | None = None) -> list[dict]:
+    """Retained progress events for a durable report, or none.
+
+    Flushes first. Events batch in the ring until the profile's threshold, so a
+    report written mid-run would omit whatever had not yet reached the collector
+    -- and a short ingest finishes well inside a 256-event batch, which made the
+    retained list empty rather than merely incomplete. Writing a durable report is
+    a boundary in the same sense a command exit is.
+
+    A profile with no collector attached is legitimate -- `benchmark` has none by
+    design -- so this reports an empty list rather than raising. The report then
+    says the run produced no retained events, which is true, instead of failing
+    on the accessor.
+    """
+    reporting.flush()
+    sink = reporting.collector()
+    return sink.records_for(project) if sink is not None else []
+
+
 def _print_preflight_report(
     settings: dict,
     roots: list,
     sources: list[str],
     staging_root,
     temporary,
-    progress_trace,
+    progress_trace: ProgressEmitter,
     opts: dict,
     *,
     diagnostics: dict[str, int],
@@ -710,7 +733,7 @@ def _print_preflight_report(
             opts["resource_observations"],
             normalized_store_paths=sorted(staging_root.rglob("*.db")),
         ),
-        "progress_events": progress_trace.records_for(),
+        "progress_events": _progress_events(),
         "session_kinds": (
             {"Claude": opts["claude_session_kinds"]}
             if "Claude" in outcome.source_stats else {}
@@ -736,7 +759,7 @@ def _publish_project(
     force: bool,
     seal_upgrade: bool,
     rebuild_had_existing_store: bool,
-    progress_trace,
+    progress_trace: ProgressEmitter,
 ) -> PublicationOutcome:
     """Sequence the publication phases for one Project and report the result.
 
@@ -826,7 +849,7 @@ def _cursor_preflight(
     cursor: "CursorSelection",
     raw_records_cache: dict,
     force: bool,
-    progress_trace,
+    progress_trace: ProgressEmitter,
 ) -> tuple[int | None, tempfile.TemporaryDirectory | None]:
     """Fingerprint and, when configured, capture the Cursor cohort once.
 
@@ -1062,8 +1085,12 @@ def _ingest_project(
     project_total: int,
     raw_records_cache: dict,
     force: bool,
-    min_size: int | None,
-    progress_trace,
+    # `int`, never None: `project` resolves it as
+    # `int(MIN_SIZE if raw is None else raw)`, so the None was in the
+    # annotation rather than in the value -- and it propagated to three call
+    # sites that each declared `int`.
+    min_size: int,
+    progress_trace: ProgressEmitter,
 ) -> int | None:
     """Ingest one Project. Returns an exit code only when the run must stop.
 
@@ -1399,10 +1426,10 @@ def _ingest_project(
                         ),
                     )
                 raw_object_paths = {
-                    path
+                    resolved_object
                     for record in project_raw_records
-                    if (path := raw_store.resolve(record)) is not None
-                    and path.is_file()
+                    if (resolved_object := raw_store.resolve(record)) is not None
+                    and resolved_object.is_file()
                 }
                 project_resource_summary = summarize_project_resources(
                     opts["resource_observations"][resource_start:],
@@ -1448,9 +1475,7 @@ def _ingest_project(
                     "resource_observations": opts["resource_observations"][resource_start:],
                     "resource_summary": project_resource_summary,
                     "cursor_cohort": opts.get("cursor_cohort"),
-                    "progress_events": progress_trace.records_for(
-                        str(project_path)
-                    ),
+                    "progress_events": _progress_events(str(project_path)),
                     "evidence_summary": evidence_summary,
                     "resource_policy": settings["resource_policy"],
                     "limits": _resource_limits_report(settings),
@@ -1461,9 +1486,13 @@ def _ingest_project(
                 source_stats[k]["sessions"] += v["sessions"]
                 source_stats[k]["events"] += v["events"]
     except Exception:
+        # Bound once: `sys.exc_info()[0]` called twice is two lookups that a
+        # reader must assume agree, and the guard on the first does not narrow the
+        # second for a type checker or for a person.
+        failure_type = sys.exc_info()[0]
         progress_trace(
             "project.failed", project=str(project_path),
-            error_type=sys.exc_info()[0].__name__ if sys.exc_info()[0] else None,
+            error_type=failure_type.__name__ if failure_type else None,
         )
         log.exception("Ingest failed for project root %s", project_path)
         outcome.tally.note_error()
@@ -1471,9 +1500,7 @@ def _ingest_project(
             progress_trace(
                 "ingest.failed", stage="project",
                 project=str(project_path),
-                error_type=(
-                    sys.exc_info()[0].__name__ if sys.exc_info()[0] else None
-                ),
+                error_type=failure_type.__name__ if failure_type else None,
             )
             return 1
     finally:
@@ -1490,7 +1517,7 @@ def _ingest_project(
     return None
 
 
-def run(args) -> int:
+def run(args: argparse.Namespace) -> int:
     """Run session-ingest. Returns exit code."""
     resolved = _resolve_ingest_request(args)
     if isinstance(resolved, int):
@@ -1529,23 +1556,67 @@ def run(args) -> int:
         "content_failure_reviews": [],
         "claude_session_kinds": {"main": 0, "subagent": 0},
     }
-    # Configure the process-wide facility before the first event, and register
-    # the roots a `located` field is rendered against. `ProgressTrace` owns its
-    # own sink during the transition, so this governs the call sites that already
-    # emit through `reporting` -- and the privacy profile either way.
-    reporting.configure(
-        settings.get("report_profile"),
-        privacy=settings.get("report_privacy"),
-        roots={
-            "home": Path.home(),
-            "registry": registry_root,
-            "cc-projects": CC_PROJECTS,
-            "codex-sessions": CODEX_SESSIONS,
-            "cursor-data": CURSOR_DATA,
-        },
+    # Configure the facility before the first event, and register the roots a
+    # `located` field is rendered against.
+    #
+    # The collector is attached explicitly rather than left to the profile,
+    # because the durable ingest report reads it: a run whose profile happened
+    # not to include a collector would publish a report with no progress events
+    # and no indication that any were produced. The human sink is attached beside
+    # it unless `--no-progress` suppressed live output.
+    #
+    # Ingest defaults to `validation`, not to the global `deployment` default.
+    # A long-running command whose progress an operator watches is exactly the
+    # case the profile table calls validation: lifecycle events at info level,
+    # per-source detail withheld until asked for. `deployment` would show
+    # warnings only, which for ingest reads as a hang.
+    #
+    # `--debug` raises it to `debug`, which is what makes the level gate usable
+    # rather than merely present: the per-source events are debug level, so they
+    # appear when diagnosing and not otherwise. The previous facility printed
+    # them unconditionally, which is why `--debug` had nothing to add.
+    profile_name = settings.get("report_profile")
+    if profile_name is None:
+        profile_name = "debug" if settings.get("debug") else "validation"
+    # Named `redaction_roots`, not `roots`: this function's `roots` is the list
+    # of Project roots being ingested, and shadowing it made every Project path a
+    # string, which failed on `.resolve()` several frames later.
+    redaction_roots = {
+        "home": Path.home(),
+        "registry": registry_root,
+        "cc-projects": CC_PROJECTS,
+        "codex-sessions": CODEX_SESSIONS,
+        "cursor-data": CURSOR_DATA,
+    }
+    # `report_profile`, not `resolved`: that name is already bound to the
+    # request tuple in this function, and rebinding it to a `Profile` is the
+    # shadowing the naming rule forbids.
+    report_profile = resolve_profile(
+        profile_name, settings.get("report_privacy"),
     )
-    progress_trace = ProgressTrace(enabled=settings["live_progress"])
-    opts["progress"] = progress_trace
+    report_roots = Roots(redaction_roots)
+    # The collector keeps everything the run produced; the human sink prints at
+    # the profile's level. That split is the point of R6: `--no-progress` and a
+    # quiet profile change what an operator *sees* without changing what the
+    # durable report can later explain.
+    attached: list[object] = [
+        CollectorSink(privacy=report_profile.privacy, roots=report_roots)
+    ]
+    if settings["live_progress"]:
+        attached.append(HumanSink(
+            privacy=report_profile.privacy, roots=report_roots,
+            min_level=report_profile.min_level,
+        ))
+    reporting.configure(
+        profile_name,
+        privacy=settings.get("report_privacy"),
+        redaction_roots=redaction_roots,
+        sinks=tuple(attached),
+    )
+    # One name for the 29 call sites and the parameter they thread onward, so
+    # the emitter is substituted without touching a signature.
+    progress_trace = progress_emit
+    opts["progress"] = progress_emit
     opts["registry_root"] = str(registry_root)
     progress_trace(
         "ingest.start", projects=len(roots), sources=",".join(sources),
@@ -1670,4 +1741,7 @@ def run(args) -> int:
     _report_ingest_outcome(
         progress_trace, opts, diagnostics, outcome,
     )
+    # A command boundary: a batch smaller than the flush threshold must still
+    # reach the sink before the process ends (Report 8).
+    reporting.flush()
     return 1 if outcome.tally.errors else 0

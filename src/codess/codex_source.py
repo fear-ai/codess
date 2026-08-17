@@ -30,7 +30,7 @@ def unrolled_history_sessions(
     rollout has its prompts there too -- but the two are written
     independently, so a Session can appear in history with no rollout at all.
     Measured on one machine: 19 Sessions in history, 18 with rollouts, and
-    one without, carrying 2 prompts (CoPlan W63). An earlier count of three
+    one without, carrying 2 prompts. An earlier count of three
     read only the active tree; two of those had archived rollouts, which is
     why this consults `get_session_roots()` rather than one directory.
 
@@ -38,7 +38,7 @@ def unrolled_history_sessions(
     would mean a Session with prompts and no Model Turns, which changes what
     a Session is and is a mapping decision under 6.5. Reporting that evidence
     exists which Codess cannot decode is a coverage statement, and is what the
-    record-level diagnostics W47 added are for -- the cheap, honest middle
+    record-level diagnostics are for -- the cheap, honest middle
     path between silence and a new mapping.
 
     Returns counts and Session identifiers only. No prompt text is read into

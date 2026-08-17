@@ -57,7 +57,7 @@ from codess.tool_identity import bounded_source_call_id, mcp_namespace
 
 log = logging.getLogger(__name__)
 
-# Derived from `config.VENDORS`, which is the single vendor description (W24).
+# Derived from `config.VENDORS`, which is the single vendor description.
 # Keyed by adapter key here because that is what a stored `sessions.source`
 # holds and what a decoder passes; `config.VENDOR_KEYS` is the CLI spelling.
 #
@@ -158,7 +158,7 @@ class StoreError(RuntimeError):
     """A store could not be opened or read as a database.
 
     The store layer's own error, so a caller does not catch `sqlite3.Error`
-    across the layer boundary (CoPlan W56). It is distinct from
+    across the layer boundary. It is distinct from
     `SchemaContractError`, which means the file *is* readable and states a
     contract this software does not accept: this one means the database itself
     could not be opened, is truncated, or is not a database at all.
@@ -220,7 +220,7 @@ def connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
     opener had already made.
 
     A driver failure is translated to `StoreError`, so a caller of a store
-    operation catches a Codess error rather than `sqlite3.Error` (W56 step 4).
+    operation catches a Codess error rather than `sqlite3.Error`.
     """
     try:
         conn = open_readonly(db_path) if read_only else open_writable(db_path)
@@ -1195,7 +1195,7 @@ def record_source_diagnostics(
     `mapping_diagnostics.granularity` declares `source`, `record`, and `field`,
     and only `field` had ever been written -- so the coverage report's
     record-level loss was structurally zero, and that zero was unfalsifiable
-    rather than measured (CoPlan W47). Adapters collect these while decoding,
+    rather than measured. Adapters collect these while decoding,
     holding the locator they would otherwise discard into a counter; this is
     where they reach the store.
 
@@ -1641,7 +1641,7 @@ def replace_session_events(
     records it read and did not admit. They are written here rather than by
     the adapter because an adapter must not write SQL (3.3), and here rather
     than earlier because a refusal is scoped to the Source, whose row id is
-    only resolved below (W47).
+    only resolved below.
     """
     conn.execute("DELETE FROM events WHERE session_id=?", (session_id,))
     conn.execute("DELETE FROM tool_invocations WHERE session_id=?", (session_id,))

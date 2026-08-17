@@ -1,5 +1,6 @@
 """codess scan CLI command."""
 
+import argparse
 import csv
 import json
 import logging
@@ -87,7 +88,7 @@ def _print_scan_diagnostics(diagnostics: dict) -> None:
         )
 
 
-def run(args) -> int:
+def run(args: argparse.Namespace) -> int:
     """Run codess scan. Returns exit code."""
     from codess.config import validate_config
 
@@ -123,12 +124,12 @@ def run(args) -> int:
     write_root = resolve_registry_directory(args)
     # `--debug` selects the reporting profile rather than a per-call flag: the
     # discovery diagnostics are debug-level events, and the level gate is what
-    # decides whether they are emitted (W21). Roots are registered so a
+    # decides whether they are emitted. Roots are registered so a
     # `located` field renders against them under a sharing profile.
     reporting.configure(
         getattr(args, "report_profile", None) or ("debug" if opts["debug"] else None),
         privacy=getattr(args, "report_privacy", None),
-        roots={
+        redaction_roots={
             "home": Path.home(),
             "registry": write_root,
             "cc-projects": CC_PROJECTS,

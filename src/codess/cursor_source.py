@@ -46,7 +46,7 @@ log = logging.getLogger(__name__)
 CURSOR_SELECTION_EDGE_BYTES = 512
 
 
-def _fingerprint_digest():
+def _fingerprint_digest() -> Any:
     """Return the SHA-256 digest used by new selected-row change markers."""
     return codess_digest()
 
@@ -91,7 +91,7 @@ def quoted_column(columns: dict[str, str], name: str) -> str | None:
     return None if actual is None else quote_identifier(actual)
 
 
-def parse_timestamp(value) -> float | None:
+def parse_timestamp(value: Any) -> float | None:
     """Return a plausible Cursor timestamp as Unix milliseconds."""
     if value is None or isinstance(value, bool):
         return None
@@ -514,7 +514,7 @@ def get_project_composer_headers(
     return fallback
 
 
-def _fingerprint_value(digest, value: Any) -> None:
+def _fingerprint_value(digest: Any, value: Any) -> None:
     """Add one typed, length-delimited SQLite value to a digest."""
     if value is None:
         kind, encoded = b"null", b""

@@ -225,7 +225,10 @@ capture. Storage deletion remains a reviewed maintenance operation.
 | [Operations](Operations.md) | Installation, source locations, normal execution, diagnosis, and maintenance commands |
 | [Functional Design](Designs.md) | Decided functional behavior, rationale, invariants, and explicitly optional directions |
 | [Reporting Design](Report.md) | Operational reporting: measured costs, event structure, capability gates, time sources, buffering, backends, and use profiles |
-| [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, current state, code review, and task list |
+| [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, and current state |
+| [Work Items](CoTasks.md) | Open engineering items and the prioritized queue |
+| [Code Review](CoReview.md) | Findings, the measurements that decided each, and real-Source validation |
+| [Developer Notes](CoNotes.md) | Duplication and constant audits, and observed process misses |
 | [CoSchema](CoSchema.md) | Common entities, relationships, fields, vocabularies, and query/store contracts |
 | [CoNames](CoNames.md) | **Authoritative** for every designator: vendor, harness, surface, provider, and the model name parts, in the database, the code, and the CLI |
 | [Claude Code Source Schema](CCSchema.md) | Claude Code storage, records, selective access, mapping, and limitations |
@@ -397,5 +400,4 @@ structured operational reporting, and repeatable content-free decode auditing
 are available.
 
 Released mapping profiles govern fixtures and contract tests rather than
-every candidate a decoder emits at runtime. Planned work is recorded in the
-[Implementation Plan](CoPlan.md).
+every candidate a decoder emits at runtime. Planned work is recorded in [Work Items](CoTasks.md).

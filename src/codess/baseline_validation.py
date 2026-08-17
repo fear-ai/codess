@@ -2,16 +2,16 @@
 
 **Reads core tables directly, and must.** `canonical_rows` enumerates every
 released table to compute the semantic digest that fixed-point validation
-compares -- 38 statements over 18 tables, more than the audit modules W52
+compares -- 38 statements over 18 tables, more than the audit modules that
 documented combined. Routing them through the query layer would make the
 check depend on the code it exists to check, so the direct read *is* the
-verification (CoPlan W56 step 3).
+verification.
 
 The enumeration is bound to the released schema rather than maintained by
 hand: `DIGEST_EXCLUDED_TABLES` names what is deliberately left out, and a test
 fails when a DDL table is neither covered nor excluded. That check exists
 because the digest silently ignores what it does not list, which is how
-`model_params` went missing (W57).
+`model_params` went missing.
 """
 
 from __future__ import annotations
@@ -199,7 +199,7 @@ def load_policy(path: Path | None) -> dict[str, Any]:
 # reason. Stated as data rather than by omission because the digest silently
 # ignores whatever it does not list: `model_params` was missing for that
 # reason, so model evidence could differ between two stores and a fixed-point
-# check called them identical (CoPlan W57).
+# check called them identical.
 DIGEST_EXCLUDED_TABLES = {
     "store_meta": (
         "build metadata -- format version, contract digest, and creation "
@@ -539,11 +539,21 @@ def _validate_raw(
     records: list[dict[str, Any]] = []
     revisions: list[str] = []
     try:
-        lines = (snapshot / RAW_MANIFEST_FILE).read_text(encoding="utf-8").splitlines()
-        header = json.loads(lines[0])
-        _add_check(report, "raw.header", header.get("raw_format") == RAW_FORMAT, header)
-        records = [json.loads(line) for line in lines[1:] if line.strip()]
-    except (OSError, IndexError, json.JSONDecodeError) as exc:
+        # Streamed rather than read whole. A raw manifest grows with the number
+        # of Sources a Project has -- 212 KB at the largest observed -- and it is
+        # read on every validation, so materializing the text *and* the parsed
+        # records holds two copies of a file that has no stated upper bound. The
+        # records are still collected, because every one is checked below; what
+        # is avoided is the intermediate string.
+        with (snapshot / RAW_MANIFEST_FILE).open(encoding="utf-8") as stream:
+            header = json.loads(next(stream))
+            _add_check(
+                report, "raw.header", header.get("raw_format") == RAW_FORMAT, header,
+            )
+            records = [
+                json.loads(line) for line in stream if line.strip()
+            ]
+    except (OSError, IndexError, StopIteration, json.JSONDecodeError) as exc:
         _add_check(report, "raw.manifest", False, str(exc))
         return records, revisions
 

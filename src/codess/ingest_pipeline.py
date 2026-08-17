@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,13 +27,13 @@ class SourceAdmission:
 
 
 def inspect_sources(
-    paths,
+    paths: Iterable[Path | tuple[Path, Any]],
     *,
     state_path: Path,
     force: bool,
     min_size: int,
     max_source_bytes: int | None,
-):
+) -> Iterator[SourceAdmission]:
     """Yield one explicit admission result; no validation failure is hidden."""
     for value in paths:
         path = value[0] if isinstance(value, tuple) else value

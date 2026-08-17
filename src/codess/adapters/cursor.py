@@ -11,6 +11,7 @@ import logging
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 from codess import field_state
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
@@ -491,7 +492,9 @@ def _bubble_to_events(
     text = data.get("text") or ""
     timestamp = _bubble_timestamp(data)
 
-    def base_ev(etype: str, subtype: str, role: str, content: str, content_len: int):
+    def base_ev(
+        etype: str, subtype: str, role: str, content: str, content_len: int,
+    ) -> dict[str, Any]:
         return {
             "session_id": composer_id,
             "event_id": event_id,

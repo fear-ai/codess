@@ -555,7 +555,7 @@ class TestPruneSetBoundaries:
 
 
 class TestDiscoveryPolicyIsExternal:
-    """The prune set is editable data, not a frozen rule (CoPlan W60).
+    """The prune set is editable data, not a frozen rule.
 
     A tree that versions its `dist/` output, a monorepo with a package named
     `build`, or a Go module vendoring dependencies it audits each needs a

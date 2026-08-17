@@ -194,7 +194,7 @@ class TestUndecodedEvidence:
     `loss()` measures what a decoder read and could not fully map. This measures
     evidence a vendor retained that no adapter admits -- which a store cannot
     report, because nothing was written, so a store-derived report states zero by
-    construction (CoPlan W63).
+    construction.
     """
 
     def test_a_vendor_with_no_measured_container_says_so(self):
@@ -301,7 +301,7 @@ def test_a_column_the_store_lacks_fails_naming_it(tmp_path):
     `_counts_by` interpolates a column name, so a rename that reached the DDL
     but not this report would otherwise produce a query matching no rows --
     an empty coverage section that reads as "no diagnostics" rather than as a
-    broken report (CoPlan W52 step 2).
+    broken report.
     """
     from codess.coverage_report import _counts_by
     from codess.schema_contract import SchemaContractError

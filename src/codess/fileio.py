@@ -92,7 +92,7 @@ def open_writable(
     `foreign_keys` **per connection and defaults it off**, so enforcement is a
     property of how a file was opened rather than of the file: measured on a
     real store, 18 of 24 tables carry foreign keys, and a raw connection
-    accepts an orphan Event that `store.connect` refuses (CoPlan W56).
+    accepts an orphan Event that `store.connect` refuses.
 
     No current path reaches that -- the raw write sites write only
     `store_meta`, which has no foreign keys, or use SQLite's `backup()`, which

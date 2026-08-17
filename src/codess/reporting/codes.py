@@ -4,6 +4,54 @@ Three closed sets, all sized at import so the hot path allocates nothing
 (Report 9). Each answers a different question and they are here together
 because each is a name-to-index table the sinks read and the call sites index.
 
+## Why These Structures
+
+Measured on this platform, 500,000 iterations per case. The event tuple, the
+counter list, and the code table are each the cheapest structure that answers
+their question, and the figures are recorded here because the reasoning is
+otherwise an assertion.
+
+    construction                       ns    vs tuple      field access     ns
+    tuple literal                    16.5       1.00x      tuple[1]        17.2
+    list literal                     32.3       1.95x      dict['k']       20.6
+    dict literal                     63.5       3.84x      NamedTuple.k    20.3
+    TypedDict annotated literal      63.0       3.81x      dataclass.k     15.5
+    TypedDict constructor           149.8       9.05x      __slots__.k     15.3
+    NamedTuple                      144.3       8.72x
+    dataclass                        95.2       5.75x      memory        bytes
+    dataclass frozen+slots          255.9      15.47x      tuple             64
+    __slots__ class                  89.4       5.40x      NamedTuple        64
+    plain class                      97.8       5.91x      frozen+slots      56
+                                                           dict             184
+
+Four decisions follow, and two of them are not what a reader would guess:
+
+- **An event is a tuple** (16.5 ns) rather than a dict (63.5 ns) or a
+  `NamedTuple` (144.3 ns). The `NamedTuple` result is the surprise: it reads
+  best and constructs *slowest of the tuple family*, because it runs `__new__`.
+  Field access is the same 20 ns either way, and the sink is where names are
+  wanted -- so the positional constants in `sinks` buy readability where it is
+  free and the tuple keeps the hot path cheap.
+- **A counter is a list index**, not a dict key. A list slot costs 32 ns to build
+  once at import and nothing per increment; a dict would pay 63 ns to build and a
+  hash per access. This is why `count()` is 50 ns while `event()` is 76 ns even
+  disabled.
+- **A `TypedDict` annotation is free; its constructor is not.** 63.0 ns annotated
+  against 149.8 ns constructed -- identical `dict` at run time. So typing an
+  options bag costs nothing as long as the literal form is used, which is what
+  makes `_ResolveArgs` in `refresh_operations` a pure gain.
+- **`frozen` is what costs, not `slots`.** Isolated over a three-field class:
+  plain 104 ns, slots-only 94 ns, frozen 291 ns, frozen+slots 271 ns -- so `slots`
+  is marginally *cheaper* than plain and `frozen` is 2.8x. A frozen `__init__`
+  cannot use `STORE_ATTR`, since its own `__setattr__` raises, so it emits
+  `object.__setattr__` per field: 28 bytecode instructions against 14, growing with
+  field count. Frozen is right for `Measurement` and `ChildInvocation`, built a few
+  times per run and then read, and wrong for anything per-record.
+
+The general rule: cost scales with how much machinery runs at construction, while
+field access is ~15-20 ns for everything. A structure built per record should be a
+tuple or a list slot; a structure built per phase can be whatever reads best.
+
 **An event code is an integer.** Codes are known at import, so an integer
 compares and dispatches faster than a string and keeps the event tuple uniform
 (Report 5). The dotted name lives here, consulted only when a sink renders.
@@ -74,7 +122,7 @@ _EVENT_SPECS: tuple[tuple[str, int, int], ...] = (
     ("cursor.marker.done", DEBUG, SCOPE_INGEST),
     ("cursor.cohort.start", DEBUG, SCOPE_INGEST),
     ("cursor.cohort.done", DEBUG, SCOPE_INGEST),
-    ("cursor.cohort.unchanged", DEBUG, SCOPE_INGEST),
+    ("cursor.cohort.unchanged", INFO, SCOPE_INGEST),
     ("cursor.cohort.reused", DEBUG, SCOPE_INGEST),
     # Publication.
     ("snapshot.start", INFO, SCOPE_INGEST),
@@ -92,7 +140,7 @@ _EVENT_SPECS: tuple[tuple[str, int, int], ...] = (
     ("scan.filesystem.crossed", INFO, SCOPE_SCAN),
     # Discovery diagnostics. Debug because they are one line per candidate
     # directory: useful when a Project is missing from a scan and noise
-    # otherwise, which is exactly what the level gate is for (W21).
+    # otherwise, which is exactly what the level gate is for.
     ("scan.source.linked", DEBUG, SCOPE_SCAN),
     ("scan.source.mapped", DEBUG, SCOPE_SCAN),
     ("scan.project.metrics", DEBUG, SCOPE_SCAN),
@@ -111,6 +159,62 @@ _EVENT_SPECS: tuple[tuple[str, int, int], ...] = (
     # A command-boundary failure, carrying the exception family rather than a
     # rendered traceback (Report 14).
     ("command.failed", ERROR, SCOPE_NONE),
+
+    # --- Derived from the call sites rather than proposed -----------------
+    #
+    # The table above was seeded from a reading of what ingest emits and was
+    # wrong about it: 23 of the 38 names actually emitted were absent, so every
+    # one of them took the shim's fallback rendering path and lost its level and
+    # scope. Extracting the names from the call sites with `ast` found them; a
+    # test now derives the same set, so an event added to a call site without a
+    # code fails rather than silently degrading.
+    ("ingest.failed", ERROR, SCOPE_INGEST),
+    ("project.identity_changed", WARNING, SCOPE_INGEST),
+    ("fresh_rebuild.promoted", INFO, SCOPE_INGEST),
+    ("snapshot.skip", INFO, SCOPE_INGEST),
+    # Cursor cohort preflight: a shared container is prepared once per run and
+    # restored afterwards, so each half reports separately.
+    ("cursor.cohort.prepare.start", DEBUG, SCOPE_INGEST),
+    ("cursor.cohort.prepare.done", DEBUG, SCOPE_INGEST),
+    ("cursor.cohort.restore.start", DEBUG, SCOPE_INGEST),
+    ("cursor.cohort.restore.done", DEBUG, SCOPE_INGEST),
+    ("cursor.cohort.source_advanced", WARNING, SCOPE_INGEST),
+    ("cursor.cohort.failed", ERROR, SCOPE_INGEST),
+    # Raw capture, which is where the large-file work happens.
+    ("raw.compress.start", DEBUG, SCOPE_INGEST),
+    ("raw.compress.done", DEBUG, SCOPE_INGEST),
+    ("raw.object_promoted", DEBUG, SCOPE_INGEST),
+    ("raw.object_verify.start", DEBUG, SCOPE_INGEST),
+    ("raw.object_verify.done", DEBUG, SCOPE_INGEST),
+    ("raw.sqlite_backup.start", DEBUG, SCOPE_INGEST),
+    ("raw.sqlite_backup.done", DEBUG, SCOPE_INGEST),
+    ("raw.working_file.written", DEBUG, SCOPE_INGEST),
+    # Post-ingest derivations.
+    ("artifact_correlation.start", DEBUG, SCOPE_INGEST),
+    ("artifact_correlation.done", DEBUG, SCOPE_INGEST),
+    ("evidence_summary.start", DEBUG, SCOPE_INGEST),
+    ("evidence_summary.done", DEBUG, SCOPE_INGEST),
+    # Info, not debug: it states that work was *skipped*, which is the question
+    # an operator asks when a re-run finishes suspiciously fast. `start`/`done`
+    # are the trace around work that happened and stay at debug.
+    ("evidence_summary.reused", INFO, SCOPE_INGEST),
+    # Cursor bubble decode, which reports progress because a large composer is
+    # the one read that can take long enough to need it.
+    ("cursor.composer.read.start", DEBUG, SCOPE_INGEST),
+    ("cursor.composer.read.progress", DEBUG, SCOPE_INGEST),
+    ("cursor.composer.read.done", DEBUG, SCOPE_INGEST),
+    # Cursor's own ingest phases. A shared container means selection, decode, and
+    # write are separate steps with separate costs, so each reports.
+    ("cursor.source.start", DEBUG, SCOPE_INGEST),
+    ("cursor.source.done", DEBUG, SCOPE_INGEST),
+    ("cursor.source.failed", WARNING, SCOPE_INGEST),
+    ("cursor.composer.write.start", DEBUG, SCOPE_INGEST),
+    ("cursor.composer.write.done", DEBUG, SCOPE_INGEST),
+    ("cursor.workspace.skip", DEBUG, SCOPE_INGEST),
+    ("cursor.project.done", DEBUG, SCOPE_INGEST),
+    ("cursor.project.unchanged", INFO, SCOPE_INGEST),
+    ("cursor.project.no_composers", INFO, SCOPE_INGEST),
+    ("source.map.progress", DEBUG, SCOPE_INGEST),
 )
 
 EVENT_NAMES: tuple[str, ...] = tuple(name for name, _level, _scope in _EVENT_SPECS)
@@ -199,6 +303,24 @@ FIELD_CLASSES: dict[str, str] = {
     "records": OPEN, "bytes": OPEN, "rows": OPEN, "limit": OPEN,
     "size_mb": OPEN, "span_weeks": OPEN, "days_ago": OPEN,
     "header_count": OPEN, "timed_header_count": OPEN, "kind": OPEN,
+    # Counts, sizes, and flags taken from the call sites. Each carries a
+    # quantity or a state, never a position or an identifier -- which is why
+    # they are `open` and why the classification is checkable rather than a
+    # judgement: a field naming a path or correlating to a record belongs below.
+    "input_bytes": OPEN, "stored_bytes": OPEN, "backup_bytes": OPEN,
+    "working_bytes": OPEN, "raw_records": OPEN, "stores": OPEN,
+    "matched": OPEN, "unmatched": OPEN, "ambiguous": OPEN,
+    "external_artifacts": OPEN, "retained_prior": OPEN, "sealed": OPEN,
+    "stage": OPEN, "publication": OPEN, "evidence_refresh": OPEN,
+    "bubbles": OPEN, "composer_index": OPEN, "composer_total": OPEN,
+    "largest_session_events": OPEN,
+    # A composer id names a Cursor Session and a workspace id names its
+    # container, so both correlate a line to retained records.
+    "composer_id": LINKING, "workspace_ids": LINKING,
+    "state_refresh": OPEN, "was": OPEN, "now": OPEN,
+    # A raw object is addressed by a content digest, so it correlates a report
+    # line to a retained object -- `linking`, not `open`.
+    "object_id": LINKING, "pre_revision": LINKING, "post_revision": LINKING,
     # located -- a path, or something that resolves to one.
     "project": LOCATED, "source": LOCATED, "path": LOCATED,
     "state_path": LOCATED, "store": LOCATED, "snapshot": LOCATED,

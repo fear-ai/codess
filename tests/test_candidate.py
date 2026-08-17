@@ -63,7 +63,7 @@ class TestReviewExclusion:
         assert not is_excluded(Path("/w/Clients/active-project"), Path("/w"))
 
     def test_exclusion_is_independent_of_the_scan_root(self):
-        """The defect W27 fixed: matching was a prefix of the relative path.
+        """The defect this fixed: matching was a prefix of the relative path.
 
         The same directory was excluded or included depending on where the
         scan started, so a Project appeared and disappeared with the argument

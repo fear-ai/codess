@@ -17,8 +17,10 @@ import json
 import logging
 import sqlite3
 import time
+from collections.abc import Iterable
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 from codess.adapters.cc import get_session_lineage as get_cc_session_lineage
 from codess.adapters.cc import get_session_metadata as get_cc_session_metadata
@@ -97,7 +99,8 @@ def _merge_raw_record(records: list[dict], record: dict) -> bool:
 
 
 def _record_raw(
-    opts: dict, path: Path, source: str, conn=None, *,
+    opts: dict, path: Path, source: str,
+    conn: sqlite3.Connection | None = None, *,
     record_override: dict | None = None, source_path: str | None = None,
 ) -> None:
     """Observe/capture one successfully parsed source for the pending snapshot."""
@@ -190,7 +193,7 @@ def _append_bounded_event(
 
 def _collect_bounded_events(
     opts: dict,
-    events,
+    events: Iterable[dict[str, Any]],
     session_id: str,
     *,
     project: str,
@@ -602,7 +605,7 @@ def _ingest_cursor(
         )
 
     def ingest_db_stream(
-        conn,
+        conn: sqlite3.Connection,
         db_path: Path,
         mtime: float,
         *,

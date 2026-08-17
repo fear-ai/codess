@@ -1701,7 +1701,7 @@ def test_config_discovery_reports_the_resolved_configuration():
     """`codess config discovery` states what this process resolved.
 
     An operator reading `env` sees what one shell exports, which disagrees
-    with the running scan the moment a variable is set elsewhere (W59). The
+    with the running scan the moment a variable is set elsewhere. The
     command shares its implementation with `tools/setup_discovery.py` rather
     than restating it, so the two cannot diverge.
     """

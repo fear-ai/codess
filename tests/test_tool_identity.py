@@ -31,7 +31,7 @@ def test_a_limit_too_small_for_the_derived_tail_is_refused():
     """The bound must leave room for the marker and the whole digest.
 
     The threshold is computed from `_SUFFIX_PREFIX`, so it moved when the
-    marker was renamed from `~sha256:` to `~digest:` (W34). A limit at or
+    marker was renamed from `~sha256:` to `~digest:`. A limit at or
     below the tail length would truncate the digest itself, which is what
     makes two distinct identifiers collide.
     """
@@ -52,7 +52,7 @@ def test_the_derived_tail_does_not_name_the_algorithm():
     """`source_call_id` is a stored value, so it must not pin the digest.
 
     Naming SHA-256 here made changing the algorithm a wire-format change,
-    which is the rule `hashing` exists to keep in one module (W34).
+    which is the rule `hashing` exists to keep in one module.
     """
     from codess.tool_identity import bounded_source_call_id
 

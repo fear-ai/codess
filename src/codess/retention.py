@@ -153,13 +153,23 @@ def _large_shared_revisions(
 
 
 def _catalog_references(paths: list[Path], current_ids: set[str], delete_ids: set[str]) -> dict[str, Any]:
-    result = {"catalogs": [], "blocking": [], "historical_only": []}
+    # Annotated because the three lists hold different shapes: `catalogs` holds
+    # per-file counts, the other two hold per-entry references. Left to inference
+    # the value type became `list[<nothing>]`, and every `.append` then reported
+    # against it.
+    result: dict[str, Any] = {
+        "catalogs": [], "blocking": [], "historical_only": [],
+    }
     for path in paths:
         if not path.exists():
             continue
         value = json.loads(path.read_text(encoding="utf-8"))
         entries = value.get("projects", []) if isinstance(value, dict) else []
-        item = {"path": str(path), "current": 0, "stale": 0, "historical": 0}
+        # `str | int` by construction: a path beside three counters. Inference
+        # picks `object` for the union, which then refuses `+= 1`.
+        item: dict[str, Any] = {
+            "path": str(path), "current": 0, "stale": 0, "historical": 0,
+        }
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
@@ -257,10 +267,12 @@ def build_retention_plan(
             errors.append(f"project has no current pointer: {project_path}")
             continue
         try:
-            snapshot, references, records = _validate_current(project_path, raw_root)
+            snapshot, raw_relpaths, records = _validate_current(
+                project_path, raw_root,
+            )
             current.append(snapshot)
             current_by_project[project_path.name] = snapshot.name
-            raw_keep.update(references)
+            raw_keep.update(raw_relpaths)
             current_raw_records.extend((snapshot, record) for record in records)
         except (OSError, ValueError, KeyError, json.JSONDecodeError, sqlite3.Error, RuntimeError) as exc:
             errors.append(str(exc))
@@ -277,15 +289,21 @@ def build_retention_plan(
     ]
     current_ids = {path.name for path in current}
     delete_ids = {path.name for path in delete_snapshots}
-    references = _catalog_references(reference_catalogs or [], current_ids, delete_ids)
-    references["local_pointers"] = _local_pointer_references(
+    # `catalog_references`, not `references`: the loop above binds that name to
+    # a `set[str]` of raw object paths, and rebinding it here to a reference
+    # *report* is the shadowing the naming rule forbids -- it also made every
+    # access below report against the set.
+    catalog_references = _catalog_references(
+        reference_catalogs or [], current_ids, delete_ids,
+    )
+    catalog_references["local_pointers"] = _local_pointer_references(
         registry, current_by_project, delete_ids
     )
     working_archives = _working_archives(registry, current_by_project)
     large_shared_revisions = _large_shared_revisions(current_raw_records)
-    if references["blocking"]:
+    if catalog_references["blocking"]:
         errors.append("a reference catalog selects a superseded snapshot; refreeze or drop that catalog entry before pruning")
-    if references["local_pointers"]["blocking"]:
+    if catalog_references["local_pointers"]["blocking"]:
         errors.append("an active Project location points to a superseded snapshot; rebuild or synchronize that validated current pointer before pruning")
     if large_shared_revisions and not allow_large_comparison_revisions:
         errors.append(
@@ -347,7 +365,7 @@ def build_retention_plan(
             "comparison_retention_explicit": allow_large_comparison_revisions,
             "conflicts": large_shared_revisions,
         },
-        "references": references,
+        "references": catalog_references,
     }
 
 

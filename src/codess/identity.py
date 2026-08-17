@@ -17,7 +17,7 @@ digest alone cannot say which scheme produced it, and identities are compared
 across stores rather than within one. The tag therefore travels in the value:
 a reader holding `codess:session:id1:...` knows how it was derived, and a
 store written under a later scheme is distinguishable rather than merely
-different (CoPlan W31).
+different.
 """
 
 
@@ -27,7 +27,7 @@ def _qualified(kind: str, *components: object) -> str:
     Composition is `codess_hash`'s component mode rather than a hand-rolled
     digest: it already prefixes a format tag and separates components with a
     NUL, which is exactly what this function needs and what it previously
-    duplicated (CoPlan W32). The emitted value names the derivation scheme,
+    duplicated. The emitted value names the derivation scheme,
     not the algorithm -- a reader recomputes through `hashing`, which owns
     that choice, so naming it here would fix a wire format to an
     implementation detail (13.4.8).
@@ -77,7 +77,7 @@ def source_revision_entity_id(
     means "the same thing observed anywhere derives the same value", and an
     absolute path breaks that: the same transcript read on two machines
     produced two identities, so deduplication across stores failed silently
-    for every Source row (CoPlan W31).
+    for every Source row.
 
     The revision alone is insufficient, because it is a content fingerprint and
     two distinct Sources can share one; the vendor-assigned name is what

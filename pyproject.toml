@@ -61,6 +61,7 @@ select = [
   # Added after measuring every family. These eight report zero findings
   # today, which is the argument for selecting them: they cost nothing now
   # and fail the moment the property they check stops holding.
+  "A",      # builtin shadowing -- see the naming rule below
   "DTZ",    # naive datetime construction -- every stamp here is UTC-aware
   "ASYNC",  # blocking calls in async code
   "LOG", "G",  # logging construction and format-string interpolation
@@ -68,6 +69,42 @@ select = [
   "ICN",    # import naming conventions
   "TID",    # banned and relative imports
   "PGH",    # blanket noqa and type-ignore without a code
+  #
+  # **Naming, and the limit of what a linter checks.** `A` catches a parameter or
+  # local shadowing a *builtin*; nothing in ruff catches one shadowing a
+  # module-level name in the same file. Two defects of that second kind reached
+  # the working tree -- a `dict` rebinding a `list[Path]` parameter, and a `str`
+  # parameter shadowing the function it called -- and each was reported precisely
+  # by mypy and by no lint rule. The convention that prevents them is therefore
+  # enforced by the type checker and stated for a reader:
+  #
+  #   1. A parameter never reuses the name of a module-level function or constant
+  #      in the same file. `emit_named(name=...)` rather than `event=...` beside a
+  #      module function called `event`.
+  #   2. A local never rebinds a parameter to a different type. Introduce a second
+  #      name -- `redaction_roots` beside a `roots` parameter -- so both remain
+  #      readable and the type checker keeps its grip on each.
+  #   3. A name states its role rather than its type: `redaction_roots`, not
+  #      `roots_dict`.
+  #
+  # **Rule 3 is measured, not preferred.** PEP 8 offers a trailing underscore for
+  # a clashing name (`type_`) and says nothing about the module-level case.
+  # Surveyed across 6,310 installed third-party files:
+  #
+  #     qualified with a role word   4,977   exc_type, thread_id, output_format
+  #     shadowing the builtin        1,444   file, type, id, input
+  #     trailing underscore            109   type_ (78 of them), filter_, list_
+  #
+  # A 46:1 preference for a role qualifier over the trailing underscore, and the
+  # standard library agrees: `argparse` uses `parser_class` and `action_class`,
+  # and `type_` appears twice across five large stdlib modules. So the convention
+  # is the qualifier, and the underscore is reserved for the case a qualifier
+  # cannot express -- a parameter that genuinely *is* the builtin's subject.
+  #
+  # Rejected: camelCase to distinguish a local from a parameter. It contradicts
+  # PEP 8's single naming style for the language, and the 1,444 outright
+  # shadowings above show the hazard is not one a case convention prevents -- it
+  # is prevented by a name that says what the value is for.
   # Small and actionable rather than clean:
   "PERF",   # 13: manual loops where a comprehension is clearer
   "FURB",   # 13: includes the `fromisoformat(...replace("Z"))` workaround

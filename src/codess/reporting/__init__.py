@@ -21,10 +21,13 @@ reproducible with `tools/reporting_bench.py`.
 from __future__ import annotations
 
 from codess.reporting.api import (
+    ProgressEmitter,
     code,
+    collector,
     configure,
     count,
     counters,
+    emit_named,
     event,
     flush,
     profile,
@@ -35,10 +38,13 @@ from codess.reporting.api import (
 )
 
 __all__ = [
+    "ProgressEmitter",
     "code",
+    "collector",
     "configure",
     "count",
     "counters",
+    "emit_named",
     "event",
     "flush",
     "profile",

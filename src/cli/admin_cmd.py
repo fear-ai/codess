@@ -9,6 +9,7 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from codess.baseline_catalog import (
     freeze_reviewed_catalogs,
@@ -68,11 +69,11 @@ from codess.vendor_audits.codex_features import audit_codex_features
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _json(value) -> None:
+def _json(value: Any) -> None:
     print(json.dumps(value, sort_keys=True))
 
 
-def _candidate_parser(subparsers) -> None:
+def _candidate_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser("candidates")
     parser.add_argument("--dir", action="append", dest="dirs", default=[])
     parser.add_argument("--dirs", dest="dirs_file", type=Path)
@@ -110,7 +111,7 @@ def _candidate_parser(subparsers) -> None:
     parser.set_defaults(handler=_catalog_candidates)
 
 
-def _refresh(args) -> int:
+def _refresh(args: argparse.Namespace) -> int:
     receipt = args.receipt
     if receipt is None and args.stage != "plan":
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
@@ -399,12 +400,15 @@ def build_parser() -> argparse.ArgumentParser:
     session_commands = session.add_subparsers(
         dest="session_command", required=True
     )
-    name = session_commands.add_parser("name")
-    name.add_argument("--registry", type=Path, default=REGISTRY)
-    name.add_argument("--project-id", required=True)
-    name.add_argument("--session-id", required=True)
-    name.add_argument("--name", required=True)
-    name.set_defaults(handler=_session_name)
+    # `set_name`, not `name`: the parser and the `--name` option it declares are
+    # different things, and reusing one word for both made a reader -- and a type
+    # checker -- take the parser for the string.
+    set_name = session_commands.add_parser("name")
+    set_name.add_argument("--registry", type=Path, default=REGISTRY)
+    set_name.add_argument("--project-id", required=True)
+    set_name.add_argument("--session-id", required=True)
+    set_name.add_argument("--name", required=True)
+    set_name.set_defaults(handler=_session_name)
     unname = session_commands.add_parser("unname")
     unname.add_argument("--registry", type=Path, default=REGISTRY)
     unname.add_argument("--project-id", required=True)
@@ -455,7 +459,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _apply_arguments(parser) -> None:
+def _apply_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--source", choices=SOURCE_CHOICES, default="all")
     parser.add_argument(
@@ -476,11 +480,11 @@ def _apply_arguments(parser) -> None:
     )
 
 
-def _roots(args) -> list[Path]:
+def _roots(args: argparse.Namespace) -> list[Path]:
     return parse_dir_list(args.dirs_file, args.dirs) or [Path.cwd()]
 
 
-def _catalog_candidates(args) -> int:
+def _catalog_candidates(args: argparse.Namespace) -> int:
     policy = read_json(args.policy) if args.policy else None
     if policy:
         validate_policy(policy)
@@ -540,7 +544,7 @@ def _catalog_candidates(args) -> int:
     return 0
 
 
-def _catalog_decide(args) -> int:
+def _catalog_decide(args: argparse.Namespace) -> int:
     _json(record_decision(
         args.catalog, project_ref=args.project, decision=args.decision,
         reviewer=args.reviewer, notes=args.notes,
@@ -548,13 +552,13 @@ def _catalog_decide(args) -> int:
     return 0
 
 
-def _catalog_status(args) -> int:
+def _catalog_status(args: argparse.Namespace) -> int:
     report = catalog_readiness(args.registry)
     _json(report)
     return 0 if report["summary"]["not_query_ready_projects"] == 0 else 1
 
 
-def _catalog_annotations(args) -> int:
+def _catalog_annotations(args: argparse.Namespace) -> int:
     report = build_project_annotations(
         args.registry,
         baseline_selection=args.baseline_selection,
@@ -621,7 +625,7 @@ def _catalog_annotations(args) -> int:
     return 0
 
 
-def _catalog_state(args) -> int:
+def _catalog_state(args: argparse.Namespace) -> int:
     _json(set_project_selection_state(
         args.registry,
         args.project_id,
@@ -632,7 +636,7 @@ def _catalog_state(args) -> int:
     return 0
 
 
-def _catalog_onboard(args) -> int:
+def _catalog_onboard(args: argparse.Namespace) -> int:
     result = onboard_catalog(
         args.catalog, registry=args.registry, repo_root=REPO_ROOT,
         decision=args.review_decision, source=args.source, raw_mode=args.raw_mode,
@@ -643,22 +647,22 @@ def _catalog_onboard(args) -> int:
     return 0 if result["status"] not in {"preflight_rejected", "apply_failed"} else 1
 
 
-def _location_add(args) -> int:
+def _location_add(args: argparse.Namespace) -> int:
     _json(add_project_location(args.registry, args.project_id, args.path))
     return 0
 
 
-def _location_retire(args) -> int:
+def _location_retire(args: argparse.Namespace) -> int:
     _json(retire_location(args.registry, args.project_id, args.path))
     return 0
 
 
-def _catalog_relocate(args) -> int:
+def _catalog_relocate(args: argparse.Namespace) -> int:
     _json(relocate_project(args.registry, args.project_id, args.old_path, args.new_path))
     return 0
 
 
-def _baseline_validate(args) -> int:
+def _baseline_validate(args: argparse.Namespace) -> int:
     report = validate_project(
         args.project, policy=load_policy(args.policy), raw_store_root=args.raw_store_root
     )
@@ -673,7 +677,7 @@ def _baseline_validate(args) -> int:
     return 1 if report["status"] == "rejected" else 0
 
 
-def _baseline_apply(args) -> int:
+def _baseline_apply(args: argparse.Namespace) -> int:
     result = apply_project(
         args.project, source=args.source, raw_mode=args.raw_mode,
         registry=args.registry, policy_path=args.policy, repeat=args.repeat,
@@ -686,20 +690,29 @@ def _baseline_apply(args) -> int:
     return 0
 
 
-def _baseline_freeze(args) -> int:
+def _baseline_freeze(args: argparse.Namespace) -> int:
+    """Freeze the accepted Projects into the approved and reviewed catalogs.
+
+    `catalog_base` is the selection document's own directory, which is what makes
+    a selection and its policies portable as a pair. This passed `repo_root=` --
+    a keyword the callee does not accept, so every invocation raised `TypeError`
+    -- and the value would have been wrong too: resolving a relative `policy`
+    against the checkout is exactly what moving the catalog out of it undid.
+    """
+    selection_path = Path(args.selection).expanduser().resolve()
     _json(freeze_reviewed_catalogs(
         load_baseline_selection(args.selection), approved_path=args.approved,
-        reviewed_path=args.reviewed, repo_root=REPO_ROOT,
+        reviewed_path=args.reviewed, catalog_base=selection_path.parent,
     ))
     return 0
 
 
-def _baseline_verify(args) -> int:
+def _baseline_verify(args: argparse.Namespace) -> int:
     _json(verify_reviewed_catalog(args.catalog))
     return 0
 
 
-def _package_verify(args) -> int:
+def _package_verify(args: argparse.Namespace) -> int:
     """Verify every released file and report both digests.
 
     This is where exact package verification lives now that the write gate
@@ -732,7 +745,7 @@ def _package_verify(args) -> int:
     return 0
 
 
-def _evidence_gather(args) -> int:
+def _evidence_gather(args: argparse.Namespace) -> int:
     components = {}
     report = build_evidence_inventory(
         args.registry, cursor_db=args.cursor_db, claude_root=args.claude_root,
@@ -753,7 +766,7 @@ def _write_optional(path: Path | None, report: dict) -> None:
     _json(report)
 
 
-def _audit_claude(args) -> int:
+def _audit_claude(args: argparse.Namespace) -> int:
     _write_optional(args.output, audit_claude_features(
         args.root, max_files=args.max_files,
         max_record_bytes=args.max_record_bytes,
@@ -761,12 +774,12 @@ def _audit_claude(args) -> int:
     return 0
 
 
-def _audit_codex(args) -> int:
+def _audit_codex(args: argparse.Namespace) -> int:
     _write_optional(args.output, audit_parentage([("active", args.active), ("archive", args.archive)]))
     return 0
 
 
-def _audit_codex_features(args) -> int:
+def _audit_codex_features(args: argparse.Namespace) -> int:
     _write_optional(args.output, audit_codex_features(
         [("active", args.active), ("archive", args.archive)],
         max_files=args.max_files,
@@ -775,12 +788,12 @@ def _audit_codex_features(args) -> int:
     return 0
 
 
-def _audit_cursor(args) -> int:
+def _audit_cursor(args: argparse.Namespace) -> int:
     _write_optional(args.output, audit_cursor_features(args.db, load_catalog(args.registry)))
     return 0
 
 
-def _audit_mcp(args) -> int:
+def _audit_mcp(args: argparse.Namespace) -> int:
     _write_optional(args.output, audit_mcp_interactions(
         args.registry,
         codex_rollouts=args.codex_rollout,
@@ -789,7 +802,7 @@ def _audit_mcp(args) -> int:
     return 0
 
 
-def _audit_orientation(args) -> int:
+def _audit_orientation(args: argparse.Namespace) -> int:
     report = audit_orientation(
         args.registry, project_ids=args.project_id,
     )
@@ -797,13 +810,13 @@ def _audit_orientation(args) -> int:
     return 1 if report["summary"]["projects_failed"] else 0
 
 
-def _config_discovery(args) -> int:
+def _config_discovery(args: argparse.Namespace) -> int:
     """Report the resolved discovery configuration, and propose exclusions.
 
     The first step of the setup sequence in Operations 10.5.2. It exists as a
     command because the values that matter are what *this process* resolved:
     an operator reading `env` sees what one shell exports, which disagrees
-    with the running scan the moment a variable is set elsewhere (W59).
+    with the running scan the moment a variable is set elsewhere.
 
     The logic lives in `tools/setup_discovery.py`, which is separately
     runnable from a checkout without an install. This routes to it rather than
@@ -823,7 +836,7 @@ def _config_discovery(args) -> int:
     return 0
 
 
-def _schema_compare(args) -> int:
+def _schema_compare(args: argparse.Namespace) -> int:
     findings = list(compare(read_json(args.old), read_json(args.new)))
     need = required(findings)
     _json({"required": need, "declared": args.declared, "findings": [
@@ -833,21 +846,21 @@ def _schema_compare(args) -> int:
     return 1 if need == "manual" or RANK[args.declared] < RANK[need] else 0
 
 
-def _session_name(args) -> int:
+def _session_name(args: argparse.Namespace) -> int:
     _json(set_session_name(
         args.registry, args.project_id, args.session_id, args.name
     ))
     return 0
 
 
-def _session_unname(args) -> int:
+def _session_unname(args: argparse.Namespace) -> int:
     _json(remove_session_name(
         args.registry, args.project_id, args.session_id
     ))
     return 0
 
 
-def _session_names(args) -> int:
+def _session_names(args: argparse.Namespace) -> int:
     value = load_session_names(args.registry)
     if args.project_id:
         value = {
@@ -861,12 +874,12 @@ def _session_names(args) -> int:
     return 0
 
 
-def _baseline_recover_pointer(args) -> int:
+def _baseline_recover_pointer(args: argparse.Namespace) -> int:
     """Rebuild a lost or corrupted `current.json` from a retained snapshot.
 
     `snapshot.recover_current_snapshot` could do this and no command reached
     it, so Operations 10.5 directed an operator with a hash mismatch to
-    `codess baseline`, which cannot (W41). The operation is safe to run
+    `codess baseline`, which cannot. The operation is safe to run
     unconditionally: it republishes an existing snapshot that still validates
     and creates nothing, so it needs no `--apply` gate.
     """
@@ -883,7 +896,7 @@ def _baseline_recover_pointer(args) -> int:
     return 0
 
 
-def _baseline_recover_manifest(args) -> int:
+def _baseline_recover_manifest(args: argparse.Namespace) -> int:
     """Reconstruct a corrupted `manifest.json` from the surviving stores.
 
     Reports by default and writes only under `--apply`, because unlike the
@@ -914,7 +927,7 @@ def _baseline_recover_manifest(args) -> int:
     return 0
 
 
-def _storage_report(args) -> int:
+def _storage_report(args: argparse.Namespace) -> int:
     if args.codess_limit_gb <= 0 or args.cursor_limit_gb <= 0:
         raise ValueError("storage size limits must be positive")
     report = build_storage_report(
@@ -929,14 +942,14 @@ def _storage_report(args) -> int:
     return 0
 
 
-def _registry_prune(args) -> int:
+def _registry_prune(args: argparse.Namespace) -> int:
     """Report, and optionally remove, registry entries whose path is gone.
 
     The registry gains an entry per Project ever scanned and drops none, so a
     test run that scans a temporary directory leaves a permanent record. This
     reports by default and removes only under `--apply`, matching the other
     storage operations: a path can be absent because a volume is unmounted
-    rather than because the Project is gone (W28).
+    rather than because the Project is gone.
     """
     from codess.registry_store import prune_stale_entries
 
@@ -945,7 +958,7 @@ def _registry_prune(args) -> int:
     return 0
 
 
-def _storage_prune(args) -> int:
+def _storage_prune(args: argparse.Namespace) -> int:
     catalogs = args.reference_catalog or [
         catalog_root() / "approved-baselines.json",
         catalog_root() / "reviewed-baselines.json",
@@ -968,7 +981,7 @@ def _storage_prune(args) -> int:
     return 0 if args.apply or result["safe_to_apply"] else 1
 
 
-def _storage_token_validate(args) -> int:
+def _storage_token_validate(args: argparse.Namespace) -> int:
     stores, _ = all_store_paths(args.registry.expanduser().resolve())
     paths = source_paths(stores, "openai.codex")
     result = validate_codex_token_usage(paths)

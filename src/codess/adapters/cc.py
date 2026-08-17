@@ -5,10 +5,12 @@ import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from codess import field_state
 from codess.bounded_jsonl import iter_bounded_jsonl
 from codess.config import (
+    MAX_EXTERNAL_CONTENT_BYTES,
     TRUNCATE_DIALOG,
     TRUNCATE_GREP_PATTERN,
     TRUNCATE_PROMPT,
@@ -438,7 +440,7 @@ def _build_tool_map(path: Path) -> dict[str, str]:
     return tool_map
 
 
-def _parse_timestamp(ts) -> float | None:
+def _parse_timestamp(ts: Any) -> float | None:
     """Convert timestamp to Unix ms. Handles float or ISO 8601 string."""
     if ts is None:
         return None
@@ -446,8 +448,10 @@ def _parse_timestamp(ts) -> float | None:
         return float(ts)
     if isinstance(ts, str):
         try:
-            s = ts.replace("Z", "+00:00")
-            dt = datetime.fromisoformat(s)
+            # `fromisoformat` parses a `Z` suffix natively since 3.11, which
+            # is the declared floor, so the `+00:00` substitution five sites
+            # carried is removable duplication rather than a compatibility need.
+            dt = datetime.fromisoformat(ts)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=UTC)
             return dt.timestamp() * 1000
@@ -479,7 +483,10 @@ def _block_event_id(line_num: int, emitted_index: int) -> str:
     return str(line_num) if emitted_index == 0 else f"{line_num}:{emitted_index}"
 
 
-def _event_metadata(record: dict, tool_use_id=None, extra: dict | None = None) -> str | None:
+def _event_metadata(
+    record: dict, tool_use_id: str | None = None,
+    extra: dict | None = None,
+) -> str | None:
     """Retain stable Claude lineage identifiers without copying the envelope."""
     metadata = {}
     if record.get("uuid") is not None:
@@ -505,7 +512,7 @@ def _assistant_configuration(record: dict) -> dict:
     values = {}
     provenance = {}
 
-    def keep(common: str, source_field: str, value) -> None:
+    def keep(common: str, source_field: str, value: Any) -> None:
         if value is None or isinstance(value, (dict, list)):
             return
         text = str(value).strip()
@@ -551,7 +558,7 @@ def _record_refused(
     *which*, with the locator the call site already holds. Without it the
     coverage report's record-level loss is structurally zero and that zero is
     unfalsifiable rather than measured -- a reader cannot distinguish "no
-    record was refused" from "refusals are not recorded" (CoPlan W47).
+    record was refused" from "refusals are not recorded".
 
     Collected rather than written here: an adapter must not write SQL (3.3),
     so these accumulate on `opts` and `store` persists them against the Source
@@ -592,7 +599,7 @@ def _base_event(
     }
 
 
-def _attach_timestamp_state(event: dict, record: dict, timestamp) -> None:
+def _attach_timestamp_state(event: dict, record: dict, timestamp: Any) -> None:
     if timestamp is not None:
         return
     value, state = field_state.get_state(record, "timestamp")
@@ -692,7 +699,7 @@ with more Events than `tool.call`. The four kinds separate what a reader
 actually selects on: what the Session is called, how the harness was
 configured, what material was attached, and where a position was marked.
 `last_prompt_marker` is its own kind rather than attached material because it
-points at a position rather than carrying content (CoPlan W36).
+points at a position rather than carrying content.
 """
 
 
@@ -1405,6 +1412,28 @@ def normalize_user(
                     f"persisted tool output outside session tree: {path}"
                 )
             before = path.stat()
+            # The size is checked before the read, not after: reading first and
+            # then rejecting would already have materialized the body this bound
+            # exists to keep out of memory. Nothing in the vendor contract bounds
+            # this file -- it is written by whatever tool produced the output, so
+            # its size is a property of that tool rather than of a Session.
+            limit = int(
+                opts.get("max_external_content_bytes")
+                or MAX_EXTERNAL_CONTENT_BYTES
+            )
+            if before.st_size > limit:
+                _record_refused(
+                    opts, "external_content_oversize",
+                    source_file=source_file, line_num=line_num,
+                    record_type="external.tool_result",
+                    detail=(
+                        f"persisted tool output is {before.st_size} bytes, "
+                        f"above the {limit}-byte bound: {path.name}"
+                    ),
+                )
+                raise SourceCompatibilityError(
+                    f"persisted tool output exceeds {limit} bytes: {path}"
+                )
             raw = path.read_bytes()
             after = path.stat()
             if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):

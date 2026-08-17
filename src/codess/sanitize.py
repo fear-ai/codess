@@ -1,6 +1,8 @@
 """Content sanitization: control chars, ANSI, redaction."""
 
 import re
+from collections.abc import Iterable
+from typing import Any
 
 from codess.config import REDACT_PATTERNS
 
@@ -32,7 +34,7 @@ def sanitize_for_display(s: str, max_len: int = 512) -> str:
     return t
 
 
-def sanitize_tabular(value) -> str:
+def sanitize_tabular(value: Any) -> str:
     """Sanitize a scalar for one-line/tabular terminal output."""
     if value is None:
         return ""
@@ -55,7 +57,7 @@ def tabular_row(*values, separator: str = TABULAR_SEPARATOR) -> str:
     fields with a tab or interpolating several into an f-string -- so every site
     independently re-decided the separator, the column order, and which fields
     needed sanitizing, and adding a field to one report reached the others only
-    if someone edited each (CoPlan W38).
+    if someone edited each.
 
     The sanitizing belongs here rather than at the call site for the same reason
     the separator does: a field that reaches output unsanitized can carry a tab
@@ -80,7 +82,7 @@ def tabular_fields(*pairs, separator: str = " ") -> str:
     )
 
 
-def sanitize_value(value, redact_enabled: bool = False):
+def sanitize_value(value: Any, redact_enabled: bool = False) -> Any:
     """Recursively sanitize strings in JSON-like tool input structures."""
     if isinstance(value, str):
         return apply_sanitization(value, redact_enabled)
@@ -98,7 +100,7 @@ def sanitize_value(value, redact_enabled: bool = False):
     return value
 
 
-def protect_csv_cell(value):
+def protect_csv_cell(value: Any) -> Any:
     """Prevent spreadsheet formula interpretation for string CSV cells."""
     if not isinstance(value, str) or not value:
         return value
@@ -107,7 +109,7 @@ def protect_csv_cell(value):
     return value
 
 
-def protect_csv_row(row) -> list:
+def protect_csv_row(row: Iterable[Any]) -> list:
     return [protect_csv_cell(value) for value in row]
 
 

@@ -607,7 +607,7 @@ Encoding tolerates lone surrogates rather than rejecting them. Filesystem
 paths whose bytes are not valid UTF-8 surface in Python as surrogates, and
 strict encoding would raise on them, so a single undecodable filename would
 otherwise abort an operation. `codess/hashing.py` owns this serialization;
-CoPlan 13.4.8 records the analysis behind it.
+CoReview 4.8 records the analysis behind it.
 
 ## 10. Content
 

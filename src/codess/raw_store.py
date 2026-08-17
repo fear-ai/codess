@@ -144,7 +144,7 @@ def _sqlite_backup(
     # A pure `backup()` target: SQLite copies pages, so row-level constraints
     # never apply and nothing is written through this connection afterwards.
     # It therefore does not use `open_writable`, and says so rather than
-    # leaving the difference to be inferred (W56).
+    # leaving the difference to be inferred.
     target = sqlite3.connect(backup_path)
     backup_start_tick = last_progress_tick = time.monotonic()
 
@@ -238,7 +238,7 @@ def _compress_file(
 class RawStore:
     """Content-addressed raw object repository rooted outside project stores."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path) -> None:
         self.root = root / "codess.raw-1"
 
     def observe(

@@ -47,7 +47,7 @@ def _counts_by(conn: sqlite3.Connection, column: str, where: str = "") -> dict[s
 
     The column is resolved against the live store before it reaches the SQL,
     so a rename fails here naming the column rather than returning an empty
-    report from a query that no longer matches anything (CoPlan W52 step 2).
+    report from a query that no longer matches anything.
     """
     if column not in column_names(conn, "mapping_diagnostics"):
         raise SchemaContractError(
@@ -135,7 +135,7 @@ def loss(conn: sqlite3.Connection) -> dict[str, Any]:
             name: by_granularity.get(name, 0) for name in _LOSS_GRANULARITIES
         },
         # Adapters now write record-level diagnostics when they refuse a
-        # record (W47), so a zero here is evidence rather than silence -- but
+        # record, so a zero here is evidence rather than silence -- but
         # only for the refusals that are routed. The flag stays so a reader
         # can tell a measured zero from a store written before that landed.
         "record_loss_recorded": any(
@@ -158,14 +158,14 @@ def undecoded_evidence(source_system_id: str | None) -> dict[str, Any]:
     retained, in a container Codess knows about, that no adapter admits at all.
     A store cannot report it, because the whole point is that nothing was
     written -- so a report derived only from the store states zero by
-    construction, which is the unfalsifiable zero W47 removed elsewhere.
+    construction, which is the unfalsifiable zero record-level diagnostics removed elsewhere.
 
     Codex is the one vendor with a measured instance. `~/.codex/history.jsonl`
     records human prompts keyed by Session, and a Session can appear there with
     no rollout: measured on one machine, 19 history Sessions, 18 with rollouts,
     one without carrying 2 prompts. Admitting it would mean a Session with
     prompts and no Model Turns, which changes what a Session is and is a mapping
-    decision under 6.5. Reporting it is the honest middle path (CoPlan W63).
+    decision under 6.5. Reporting it is the honest middle path.
 
     Keyed by `source_system_id` so a store's own report names only its vendor,
     and returns `available: False` for a vendor with nothing of this kind rather

@@ -682,7 +682,7 @@ def test_scan_debug_reports_discovery_events():
     These were `[dir]` and `[scan]` prefixed prints. They are now
     `scan.source.mapped` and `scan.project.metrics` through the reporting
     contract, so the assertion is on the event names rather than on a prefix that
-    only the print statements had (CoPlan W21).
+    only the print statements had.
     """
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)

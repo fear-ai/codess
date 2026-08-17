@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from codess.catalog_operations import (
     relocate_project,
     retire_location,
 )
+from codess.child_invocation import ChildInvocation
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.project import parse_and_run
 from codess.project_catalog import (
@@ -75,25 +77,32 @@ def test_admin_ingest_paths_forward_resource_policy(tmp_path, monkeypatch):
         calls.append(command)
         return Result()
 
+    # One patch point for both paths, because both now build the same
+    # `ChildInvocation`. Before, each caller ran the child itself and this test
+    # patched two modules -- which is what let three hand-built command lists
+    # drift apart without a test noticing.
     monkeypatch.setattr(
-        "codess.baseline_operations.subprocess.run", fake_run
+        "codess.child_invocation.subprocess.run", fake_run
     )
     policy = tmp_path / "resources.json"
-    run_ingest(
-        tmp_path / "project",
-        source="all",
+    run_ingest(ChildInvocation(
+        projects=(tmp_path / "project",),
+        vendor_selector="all",
         raw_mode="reference",
         registry=tmp_path / "registry",
-        min_size=0,
         repo_root=tmp_path,
         resource_policy=policy,
-    )
-    assert calls[0][-2:] == ["--resource-policy", str(policy)]
+        force=True,
+    ))
+    def flag_value(command: list[str], flag: str) -> str | None:
+        return (
+            command[command.index(flag) + 1] if flag in command else None
+        )
+
+    assert flag_value(calls[0], "--resource-policy") == str(policy)
+    assert "--force" in calls[0]
 
     calls.clear()
-    monkeypatch.setattr(
-        "codess.catalog_operations.subprocess.run", fake_run
-    )
     _run_ingest_stage(
         {"projects": [{"path": str(tmp_path / "project")}]},
         validate=True,
@@ -103,8 +112,8 @@ def test_admin_ingest_paths_forward_resource_policy(tmp_path, monkeypatch):
         repo_root=tmp_path,
         resource_policy=policy,
     )
-    assert ["--resource-policy", str(policy)] == calls[0][-3:-1]
-    assert calls[0][-1] == "--validate"
+    assert flag_value(calls[0], "--resource-policy") == str(policy)
+    assert "--validate" in calls[0]
 
 
 def _captured_project(tmp_path: Path) -> tuple[Path, Path, str]:
@@ -276,7 +285,7 @@ def test_git_discovery_never_walks_a_broad_system_root():
 
 
 class TestScanIsBounded:
-    """A traversal states its budget and whether it reached it (CoPlan W62).
+    """A traversal states its budget and whether it reached it.
 
     Before this, `discover_git_roots` had a depth limit and no bound on the work:
     on a large or slow tree it ran until it finished and the operator's only
@@ -348,7 +357,7 @@ class TestScanIsBounded:
 
 
 class TestFilesystemCrossingIsReported:
-    """`os.walk` crosses a device boundary without saying so (CoPlan W61).
+    """`os.walk` crosses a device boundary without saying so.
 
     A network mount inside the work root turns a seconds-long scan into a
     minutes-long one with no explanation, and is a disclosure surface besides.
@@ -1068,3 +1077,83 @@ def test_package_verify_reports_both_digests_and_what_each_covers():
     assert set(report["contract_files"]) == CONTRACT_ROLES
     assert report["other_files"], "the fixtures outside the gate must be named"
     assert not set(report["other_files"]) & CONTRACT_ROLES
+
+
+class TestTheFreezeHandlerCallsItsLibrary:
+    """The CLI handler, not just the function it calls.
+
+    `_baseline_freeze` passed `repo_root=` to a callee taking `catalog_base=`, so
+    every invocation raised `TypeError`. The library function was well tested and
+    the handler was not, which is how a wrong keyword survived: the tests exercised
+    the callee directly and never the one-line call site.
+    """
+
+    def test_the_handler_passes_the_keywords_its_callee_accepts(self):
+        """Signature agreement, checked without needing a valid selection.
+
+        Reaching the call requires a fully-formed selection document, which is why
+        no functional test covered it. Comparing the keywords the handler passes
+        against the callee's signature needs neither.
+        """
+        import ast
+        import inspect as inspect_module
+
+        import cli.admin_cmd as admin
+        from codess.baseline_catalog import freeze_reviewed_catalogs
+
+        accepted = set(
+            inspect_module.signature(freeze_reviewed_catalogs).parameters
+        )
+        # The whole module, not a re-indented function source: `getsource` of a
+        # nested definition is not parseable on its own.
+        tree = ast.parse(
+            pathlib.Path(admin.__file__).read_text(encoding="utf-8")
+        )
+        passed = {
+            keyword.arg
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "freeze_reviewed_catalogs"
+            for keyword in node.keywords
+            if keyword.arg
+        }
+        assert passed, "the scan found no call, so it is checking nothing"
+        assert passed <= accepted, (
+            f"passes keywords the callee does not accept: {sorted(passed - accepted)}"
+        )
+
+    def test_the_policy_base_is_the_selection_directory_not_the_checkout(self):
+        """The value was wrong as well as the keyword.
+
+        `catalog_base` is the directory a relative `policy` field resolves
+        against, and it is the selection document's own directory -- which is what
+        makes a selection and its policies portable as a pair. Resolving against
+        the checkout is precisely what moving the catalog out of it undid.
+        """
+        import ast
+
+        import cli.admin_cmd as admin
+
+        tree = ast.parse(pathlib.Path(admin.__file__).read_text(encoding="utf-8"))
+        handler = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_baseline_freeze"
+        )
+        # The keywords on the call, not the function's text: the docstring names
+        # `repo_root=` to explain the defect, and a substring check over the whole
+        # body would match that explanation.
+        keywords = {
+            keyword.arg
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "freeze_reviewed_catalogs"
+            for keyword in node.keywords
+            if keyword.arg
+        }
+        assert "catalog_base" in keywords
+        assert "repo_root" not in keywords
+        assert "selection_path.parent" in ast.unparse(handler)
+

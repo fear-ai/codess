@@ -1,6 +1,7 @@
 """Read-only, cross-store session query CLI command.
 """
 
+import argparse
 import contextlib
 import csv
 import json
@@ -154,7 +155,7 @@ class QueryScope:
         )
 
 
-def _open_readable_store(path):
+def _open_readable_store(path: Path) -> sqlite3.Connection:
     """Open one store read-only, confirming its core tables are queryable.
 
     The probe distinguishes a store that exists from one that can actually be
@@ -169,7 +170,7 @@ def _open_readable_store(path):
     except sqlite3.Error as exc:
         # The probe reads core tables, so a driver failure here means the same
         # thing `connect_store` would have reported and is raised as the store
-        # layer's error rather than the driver's (W56 step 4).
+        # layer's error rather than the driver's.
         conn.close()
         raise StoreError(f"cannot read store {path}: {exc}") from exc
     except Exception:
@@ -368,7 +369,7 @@ def _session_by_identifier(scope: QueryScope, identifier: str) -> dict | None:
     return matches[0] if matches else None
 
 
-def run(args) -> int:
+def run(args: argparse.Namespace) -> int:
     """Run session-query. Returns exit code."""
     config_errors = validate_config()
     for msg in config_errors:
@@ -608,7 +609,7 @@ def _coverage(scope: QueryScope) -> int:
                 print("    " + tabular_row(reason, count))
         # Evidence no adapter admits, measured from the vendor container rather
         # than the store: a store cannot report what was never written to it, so
-        # without this the report's zero was true by construction (W63).
+        # without this the report's zero was true by construction.
         undecoded = report["undecoded"]
         if undecoded.get("available") and undecoded["undecodable_sessions"]:
             print(
@@ -625,7 +626,7 @@ def _coverage(scope: QueryScope) -> int:
     return 0
 
 
-def _typed_filters(args, source_tokens: set[str] | None) -> dict:
+def _typed_filters(args: argparse.Namespace, source_tokens: set[str] | None) -> dict:
     filters = {}
     values = {
         "event_ids": getattr(args, "event_ids", None),
@@ -670,7 +671,9 @@ def _typed_filters(args, source_tokens: set[str] | None) -> dict:
     return filters
 
 
-def _typed_output(scope: QueryScope, args, *, snapshot_id: str | None) -> int:
+def _typed_output(
+    scope: QueryScope, args: argparse.Namespace, *, snapshot_id: str | None,
+) -> int:
     """Execute the typed interface and retain exact replay/provenance contracts."""
     action = args.query_action
     if action == "cite":
@@ -1064,7 +1067,7 @@ def _diagnostics(scope: QueryScope, limit: int | None = None) -> int:
         return 0
     # Header and rows read one key list, so a renamed column cannot leave the
     # header naming one that no longer exists -- which is what `level` did after
-    # it became `granularity` (W38's drift, seen in its own output).
+    # it became `granularity` which is this drift seen in its own output.
     columns = (
         "project_path", "session_id", "event_id", "granularity", "severity",
         "reason_code", "source_field", "source_value", "mapping_rule", "detail",
@@ -1273,7 +1276,7 @@ def _sessions(scope: QueryScope, with_id: bool, limit: int | None = None) -> int
     return 0
 
 
-def _json_metadata(raw) -> dict:
+def _json_metadata(raw: Any) -> dict:
     if not raw:
         return {}
     try:
@@ -1283,7 +1286,7 @@ def _json_metadata(raw) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _session_details(raw) -> str:
+def _session_details(raw: Any) -> str:
     metadata = _json_metadata(raw)
     details = []
     for key in ("originator", "source", "storage", "parent_session_id"):
@@ -1294,7 +1297,7 @@ def _session_details(raw) -> str:
     return sanitize_tabular(",".join(details))
 
 
-def _lineage_id(raw) -> str:
+def _lineage_id(raw: Any) -> str:
     metadata = _json_metadata(raw)
     return str(metadata.get("call_id") or metadata.get("tool_use_id") or "")
 

@@ -913,7 +913,7 @@ def test_a_store_disagreeing_with_its_own_manifest_is_refused(tmp_path):
 
 
 class TestRecoveryIsReachable:
-    """Both recovery operations have a command route (W41).
+    """Both recovery operations have a command route.
 
     `recover_current_snapshot` and `rebuild_manifest` existed and no command
     reached either, so Operations 10.5 directed an operator with a hash

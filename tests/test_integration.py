@@ -633,6 +633,13 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(durable_tmp_p
         command.extend(["--dir", str(project)])
     command.extend([
         "--source", "cursor", "--raw-mode", "capture",
+        # The assertions below are on debug-level trace events -- per-source and
+        # per-composer detail. Ingest defaults to the `validation` profile, which
+        # reports lifecycle and withholds the trace, so a test that wants the
+        # trace asks for it. That is the level gate working rather than a
+        # regression: the previous facility printed every event unconditionally,
+        # which is why `--debug` had nothing to add.
+        "--report-profile", "debug",
     ])
     result = subprocess.run(
         command,

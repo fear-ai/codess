@@ -3,8 +3,7 @@
 import contextlib
 import json
 import logging
-import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from codess.codex_source import build_session_index as build_codex_session_index
@@ -24,8 +23,12 @@ from codess.cursor_source import (
     get_workspace_ids as get_cursor_workspace_ids,
 )
 from codess.helpers import is_excluded, local_path_from_uri, slug_to_path
+from codess.project import get_cc_session_dir
 from codess.reporting import code as _code
 from codess.reporting import event
+from codess.units import DAY_MS, DAY_SECONDS, WEEK_MS
+
+log = logging.getLogger(__name__)
 
 # Resolved once at import: a code lookup is a dict hit, and doing it per call in
 # a loop over every candidate directory is the cost the integer code exists to
@@ -39,7 +42,7 @@ def _report_metrics(vendor_key: str, project_path: str, metrics: dict) -> None:
     """One event per vendor with metrics, rather than a formatted block.
 
     These were four `print` statements composing a labelled line per vendor
-    (W21). As events each field is a field, so a jsonl sink emits them
+   . As events each field is a field, so a jsonl sink emits them
     structurally and the privacy profile can classify `project` as a path rather
     than having to find one inside rendered text.
     """
@@ -53,9 +56,6 @@ def _report_metrics(vendor_key: str, project_path: str, metrics: dict) -> None:
         header_count=metrics.get("header_count"),
         timed_header_count=metrics.get("timed_header_count"),
     )
-from codess.project import get_cc_session_dir
-
-log = logging.getLogger(__name__)
 
 
 def _record_diagnostic(
@@ -100,7 +100,11 @@ def _days_ago(max_ts: float) -> float | None:
     """(now - max_ts) in days. None if max_ts is 0 or invalid."""
     if not max_ts:
         return None
-    return round((time.time() * 1000 - max_ts) / (24 * 3600 * 1000), 1)
+    # `datetime.now(UTC)` rather than `time.time()`: both are the same clock,
+    # and having two spellings for "the current instant" is the divergence this
+    # removes. `time.monotonic` is a different clock and stays where it is used.
+    now_ms = datetime.now(UTC).timestamp() * 1000
+    return round((now_ms - max_ts) / DAY_MS, 1)
 
 
 def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool = False) -> dict:
@@ -173,7 +177,7 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool 
                     max_ts = max(max_ts, mtime)
                 except OSError:
                     pass
-    span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
+    span = (max_ts - min_ts) / WEEK_MS if max_ts > min_ts else None
     if cc_dir is not None and not subagent_sessions:
         subagent_sessions = len(list(cc_dir.glob("*/subagents/**/*.jsonl")))
     return {"count": count, "events": events, "size_mb": round(BMB(total_bytes), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "stale_index_entries": stale_index_entries, "main_sessions": main_sessions, "subagent_sessions_available": subagent_sessions, "subagents_included": subagent}
@@ -221,7 +225,7 @@ def _session_metrics_codex(
                 max_ts = max(max_ts, ts_ms)
         except (StopIteration, json.JSONDecodeError, OSError, KeyError):
             pass
-    span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
+    span = (max_ts - min_ts) / WEEK_MS if max_ts > min_ts else None
     return {"count": count, "events": events, "size_mb": round(BMB(total_bytes), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts)}
 
 
@@ -264,7 +268,7 @@ def _session_metrics_cursor(p: Path) -> dict:
                 max_ts = max(max_ts, m["max_ts"])
             if m.get("error"):
                 errors.append(f"{global_db}: {m['error']}")
-    span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
+    span = (max_ts - min_ts) / WEEK_MS if max_ts > min_ts else None
     return {"count": count, "events": events, "size_mb": round(BMB(total_bytes), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts or None, "days_ago": _days_ago(max_ts), "invalid_keys": invalid_keys, "header_count": header_count, "timed_header_count": timed_header_count, "errors": errors}
 
 
@@ -275,7 +279,7 @@ def _session_metrics_cursor_global() -> dict:
         return {"count": 0, "events": 0, "size_mb": 0.0, "span_weeks": None, "max_ts": None, "days_ago": None}
     m = get_db_metrics(db)
     min_ts, max_ts = m.get("min_ts"), m.get("max_ts")
-    span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if min_ts is not None and max_ts is not None and max_ts > min_ts else None
+    span = (max_ts - min_ts) / WEEK_MS if min_ts is not None and max_ts is not None and max_ts > min_ts else None
     return {"count": m["count"], "events": m["events"], "size_mb": round(BMB(m["size_bytes"]), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "invalid_keys": m.get("invalid_keys", 0), "header_count": m.get("header_count", 0), "timed_header_count": m.get("timed_header_count", 0), "errors": [m["error"]] if m.get("error") else []}
 
 
@@ -306,7 +310,7 @@ def _has_any_sessions(
 # These four decide *which directory is the Project*, which is the logic most
 # likely to be wrong and, until they were lifted, the logic hardest to test:
 # they were nested inside `walk_sessions` and reachable only by running vendor
-# discovery over a populated filesystem (CoPlan 13.4.7, W19). None captured
+# discovery over a populated filesystem (CoReview 4.7). None captured
 # accumulating state -- only `work_root` and the set of live paths -- so each
 # becomes a module-level function by naming what it already read.
 
@@ -399,7 +403,7 @@ def walk_sessions(
     `debug` is retained for the call signature and no longer gates output. The
     discovery diagnostics are debug-*level* events now, so whether they are
     emitted is the reporting profile's decision rather than an argument threaded
-    through this function -- which is what W21 removed. `scan_cmd` selects the
+    through this function -- which the reporting contract removed. `scan_cmd` selects the
     `debug` profile when `--debug` is passed."""
     work_root = work_root.resolve()
     vendors = frozenset(vendor_filter or VENDOR_KEYS)
@@ -526,8 +530,9 @@ def walk_sessions(
     # with it. Projects excluded by the window are counted and reported.
     cutoff_ms = None
     if recent_days is not None and recent_days > 0:
-        import time
-        cutoff_ms = (time.time() - recent_days * 86400) * 1000
+        cutoff_ms = (
+            datetime.now(UTC).timestamp() - recent_days * DAY_SECONDS
+        ) * 1000
     excluded_by_recency = 0
 
     projects = sorted(

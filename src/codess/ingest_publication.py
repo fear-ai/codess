@@ -44,7 +44,7 @@ from codess.store import connect, record_processing_run
 log = logging.getLogger(__name__)
 
 # Projections of `config.VENDORS`, kept as names because both directions are
-# used at call sites that read better with a mapping than with a lookup (W24).
+# used at call sites that read better with a mapping than with a lookup.
 VENDOR_DISPLAY_NAMES = {
     key: description["adapter_key"] for key, description in VENDORS.items()
 }

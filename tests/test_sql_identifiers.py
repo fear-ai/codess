@@ -5,7 +5,7 @@ column name at execution, so a statement naming a column the DDL no longer
 declares raises `OperationalError` only on the path that runs it -- and a
 report nobody exercises returns nothing instead of failing. Renaming
 `global_id` to three table-qualified names broke 34 tests, each found by
-running them; this check is the mechanical form of that search (CoPlan W52).
+running them; this check is the mechanical form of that search.
 
 The check reads SQL text out of the source rather than executing it, so a
 statement in a rarely-taken branch is covered exactly like a common one.
@@ -326,7 +326,7 @@ class TestTheCheckActuallyDetects:
     def test_a_qualified_column_that_moved_tables_is_caught(self):
         """`started_at` exists on `sessions`, so only the table resolves it.
 
-        This is the W25 case: the column was renamed on `tool_invocations`
+        This is the measured case: the column was renamed on `tool_invocations`
         alone, so a check that merely asked "does this name exist anywhere"
         would have passed.
         """
