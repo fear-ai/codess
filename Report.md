@@ -6,7 +6,7 @@ problems, the measurements that constrain any solution, the requirements
 those imply, and a partitioned set of designs that satisfy them.
 
 This document is authoritative for the facility's structure, cost, and
-lifecycle. [CoPlan 9.6](CoPlan.md#96-operational-reporting) owns the boundary
+lifecycle. [CoPlan](CoPlan.md#96-operational-reporting) owns the boundary
 around it -- the channel separation, which is a CLI contract, and the rule that
 `mapping_diagnostics` stays in CoSchema. The design sketch CoPlan once carried
 beside this one is removed: two specifications of one subsystem is how a reader
@@ -15,7 +15,7 @@ ends up implementing the older.
 **Implemented.** `src/codess/reporting/` realizes this design. What the
 implementation established, including one cost figure predicted here that the
 measurement did not support, is recorded in
-[CoReview 4.12](CoReview.md#412-the-reporting-facility).
+[CoReview](CoReview.md#the-reporting-facility).
 
 ## Table of Contents
 
@@ -80,11 +80,11 @@ destinations, and overheads. There is one setting, `enabled`.
 
 ## 2. Measurements
 
-All figures are Python 3.12.12, arm64, Darwin. Reproduce with
-`tools/reporting_bench.py`. They are stated first because they, not
-preference, decide the design.
+All figures are Python 3.12.12, arm64, Darwin, in nanoseconds per call, and
+reproduce with `tools/reporting_bench.py`. They are stated before the design
+because the design follows from them.
 
-### 2.1 Where the Current 1.245 us Goes
+### 2.1 Where the Current 1,245 ns Goes
 
 | Component | Cost | Share |
 |---|---:|---:|
@@ -192,9 +192,9 @@ Derived from 1 and 2, each traceable to a measurement:
 | R6 | Immediacy and permanence are selected independently | 1.4 |
 | R7 | A call site cannot know which sinks exist | 1.1 |
 | R8 | Profiles configure volume, destination, and overhead together | 1.5 |
-| R9 | stdout carries only the requested result | CoPlan 9.6 |
-| R10 | A reporting call never raises into the operation it reports on | CoPlan 9.6 |
-| R11 | `mapping_diagnostics` stays in CoSchema, outside this facility | CoPlan 9.6 |
+| R9 | stdout carries only the requested result | CoPlan |
+| R10 | A reporting call never raises into the operation it reports on | CoPlan |
+| R11 | `mapping_diagnostics` stays in CoSchema, outside this facility | CoPlan |
 
 ## 4. Design Partition
 
@@ -262,7 +262,7 @@ irrelevant:
 CODE, TICK, LEVEL, SCOPE, FIELDS = range(5)
 ```
 
-This is the same trade CoNotes 1.5 makes for CoSchema field names: the
+This is the same trade CoNotes makes for CoSchema field names: the
 literal position is the documentation, and an indirection that costs a lookup
 on the hot path buys nothing.
 
@@ -318,7 +318,7 @@ defect is that it follows it.
 | `FLUSH_SECONDS` | latency ceiling | 0.5 s |
 
 Exceeding a limit is recorded as a dropped-event count, never a raise (R10),
-which is what CoPlan 9.6 already requires of the collector.
+which is what CoPlan already requires of the collector.
 
 ## 7. Time Sources
 
@@ -435,7 +435,7 @@ One named profile sets all limits together (R8):
 
 **benchmark exists to measure the operation, not the facility.** With the
 compile gate off and the null sink, reporting contributes zero to a timing
-run — which is what makes W08's workloads measure ingest rather than ingest
+run — which is what makes the workloads measure ingest rather than ingest
 plus instrumentation.
 
 ## 12. Adoption and Sequencing
@@ -465,7 +465,7 @@ Validated against uses that already exist, not fixtures:
 | Cursor cohort preflight | `span` nesting, three cache statuses | the three cache statuses, unit tested |
 | Record refusals | `count` beside the durable half | the `mapping_diagnostics` rows, which must not move (R11) |
 | `query --output-format jsonl` | Channel separation under load | **stdout byte-identical before and after** |
-| W08 workload under `benchmark` | Zero instrumentation overhead | Timing with the facility compiled out |
+| Workload under `benchmark` | Zero instrumentation overhead | Timing with the facility compiled out |
 
 The fourth is the acceptance test for the whole item, and is the comparison
 that verified the ingest-phase extraction and the shared bound-check helper.
@@ -551,7 +551,7 @@ Entry is gated on evidence, not on completeness:
 | **G3** | `ProgressTrace` is a shim and ingest still emits identical progress | The existing 3 progress test modules pass unchanged |
 | **G4** | Ingest routed; the 11 printed counters still agree with the summary | A real Project ingest, counters compared before and after |
 | **G5** | Channels enforced across scan, query, and admin | **stdout byte-identical** for `query --output-format jsonl`, captured separately before and after |
-| **G6** | `benchmark` profile contributes zero measurable overhead | W08's workload timed with the facility compiled out and in |
+| **G6** | `benchmark` profile contributes zero measurable overhead | The workload timed with the facility compiled out and in |
 
 **G1 to G3 add a facility without removing one**, so they land first and
 independently. The exception hierarchy (14) can also land at any point, since
@@ -701,7 +701,7 @@ is what lets it precede the routing work rather than block on it.
 ### 14.5 What This Does Not Do
 
 It does not introduce a deep hierarchy: three families is the whole of it, and
-CoPlan 9.6 explicitly does not require more. It does not change which
+CoPlan explicitly does not require more. It does not change which
 exceptions are raised where -- the existing thirteen keep their names and
 their raise sites, and only their bases and a `code` attribute change. And it
 does not catch `OSError` or `sqlite3.Error` at the boundary: those are wrapped
@@ -756,7 +756,7 @@ The relevant standards are about *categories* rather than a fixed list:
 |---|---|---|
 | **GDPR Art. 5(1)(c)**, data minimisation | Collect only what the purpose requires | A progress event's purpose is "which source, how big, how long" -- the *identity* of the source is needed, its absolute path is not |
 | **OWASP Logging Cheat Sheet** | Exclude PII and secrets; log identifiers, not values | Names the practice this section implements: an identifier that resolves to the value, rather than the value |
-| **OpenTelemetry semantic conventions** | Attributes are typed and named from a registry; values are bounded | Report 5's interned code table and field allowlist are the same shape |
+| **OpenTelemetry semantic conventions** | Attributes are typed and named from a registry; values are bounded | the interned-code approach below table and field allowlist are the same shape |
 | **Structured-logging practice generally** | Redaction belongs at the sink, not the call site | A call site that must remember to redact will eventually forget |
 
 The common conclusion, and the one Codess should adopt: **the call site passes
@@ -796,7 +796,7 @@ call site distributes a policy decision across 183 places.
 1. **An allowlist, not a denylist.** A field name absent from the registry is
    rendered as `<unregistered>` under any non-local profile. A denylist fails
    open -- the field nobody classified is the one that leaks -- and this is
-   the same argument CoReview 1.1 makes for accepting a coverage gap only
+   the same argument CoReview makes for accepting a coverage gap only
    with evidence.
 2. **Type restriction.** A field value must be a scalar: `int`, `float`,
    `str`, `bool`, or `None`. A dict or a list is where a transcript body
@@ -837,13 +837,13 @@ choice -- what this run is for:
 **`local` is the default deliberately.** Codess reads a developer's own data
 on their own machine, and a facility that redacts by default would make the
 ordinary case harder to read for a risk the ordinary case does not carry --
-which is the same reasoning CoPlan 8.4 uses for integrity checks. The profile
+which is the same reasoning CoPlan uses for integrity checks. The profile
 exists so that *sharing* is a choice with a mechanism, rather than a hope.
 
 ### 15.6 What Stays Out
 
 `mapping_diagnostics` is not covered by any of this. It is evidence about
-decoded data, stored in CoSchema and queried beside it (CoPlan 9.6), and it
+decoded data, stored in CoSchema and queried beside it (CoPlan), and it
 is subject to the content policy that already governs stored content. Applying
 an operational redaction profile to it would redact the evidence a reader
 opened the store to see.

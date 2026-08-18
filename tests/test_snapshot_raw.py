@@ -916,8 +916,8 @@ class TestRecoveryIsReachable:
     """Both recovery operations have a command route.
 
     `recover_current_snapshot` and `rebuild_manifest` existed and no command
-    reached either, so Operations 10.5 directed an operator with a hash
-    mismatch to `codess baseline`, which could not do the job. Dead-code
+    reached either, so an operator with a hash mismatch was directed to
+    `codess baseline`, which could not do the job. Dead-code
     detection reported both; the defect was the missing route.
     """
 

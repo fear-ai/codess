@@ -515,8 +515,14 @@ def test_store_counts_omit_a_project_with_no_open_store():
 
 # --- module boundary --------------------------------------------------------
 
-def test_the_query_command_owns_no_report_sql():
-    """Report SQL belongs to the domain, not the command layer."""
+def test_the_query_command_owns_no_sql():
+    """SQL belongs to the domain, not the command layer.
+
+    The one prior exception was a store-readability probe, kept here because it
+    checked a connection rather than producing a report. It is now
+    `store.connect_readable`: the distinction did not survive the question of
+    who owns a statement, and an exception a rule carries is a rule that erodes.
+    """
     import ast
     import re
 
@@ -528,8 +534,10 @@ def test_the_query_command_owns_no_report_sql():
             body = "\n".join(lines[node.lineno - 1:node.end_lineno])
             if re.search(r"\.execute\(", body):
                 with_sql.append(node.name)
-    # The store-readability probe is a connection check, not a report.
-    assert with_sql == ["_open_readable_store"]
+    assert with_sql == [], (
+        f"{with_sql} execute SQL in the command layer; the statement belongs "
+        "to store, query, or a source-access module"
+    )
 
 
 def test_the_report_module_does_not_import_the_command_layer():

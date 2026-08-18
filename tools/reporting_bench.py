@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure the costs Report.md's design rests on.
 
-Every figure in Report.md 2 comes from here. It exists so a reader can
+Every measurement in Report comes from here. It exists so a reader can
 re-run the measurements rather than trust them, and so a later change to the
 reporting facility can be checked against the same baseline on the machine
 that will run it -- these are platform and interpreter specific, and the
@@ -180,9 +180,9 @@ def current_facility(number: int) -> list[tuple[str, float]]:
     what replaced it: the same call through `codess.progress.emit`, with no sink
     attached and with a collector attached.
 
-    The 1,245 ns figure is retained in Report 2.1 as the measurement that
-    motivated the design. It is not re-measured here because the code that
-    produced it no longer exists.
+    The 1,245 ns figure is retained in Report as the measurement that motivated
+    the design. It is not re-measured here because the code that produced it no
+    longer exists.
     """
     sys.path.insert(
         0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src")

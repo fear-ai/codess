@@ -1,9 +1,8 @@
 """A fixed-capacity ring for events, and the policy that decides when to flush.
 
-Report R5: output is batched, and flush is a policy rather than something every
-call performs. The current facility writes and flushes per call, which is why a
-progress line costs 1,245 ns of which most is formatting and I/O nobody asked
-for (Report 2.1).
+Output is batched, and flush is a policy rather than something every call
+performs. The facility this replaced wrote and flushed per call, which is why a
+progress line cost 1,245 ns, most of it formatting and I/O nobody asked for.
 
 **The ring never grows.** A preallocated list with a write index bounds memory
 by construction, which is what lets a long ingest report without accumulating a
@@ -19,18 +18,17 @@ from collections.abc import Callable, Iterator
 from codess.reporting.codes import WARNING
 
 DEFAULT_CAPACITY = 2_000
-"""Report 6's `MAX_RETAINED`. Sized for a report, not for a transcript."""
+"""How many events are retained. Sized for a report, not for a transcript."""
 
 DEFAULT_FLUSH_EVENTS = 256
-"""Report 6's `FLUSH_EVENTS`: how many events accumulate before a write."""
+"""How many events accumulate before a write."""
 
 
 class EventRing:
     """Bounded event storage with a batch-and-drain flush policy.
 
     Holds tuples, not rendered strings: a sink decides its own format, and an
-    event kept as a structure can reach a second sink in a different one
-    (Report 10).
+    event kept as a structure can reach a second sink in a different one.
     """
 
     __slots__ = (
@@ -58,7 +56,7 @@ class EventRing:
         A warning or error returns True regardless of the batch count. Deferring
         a failure behind 255 routine events would mean the operator sees the
         problem after the run that caused it, which is the one case where
-        latency matters more than throughput (Report 8).
+        latency matters more than throughput.
         """
         if self._stored == self._capacity:
             self.dropped += 1

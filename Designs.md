@@ -13,7 +13,7 @@ machine-readable contracts. Its subject is the behavior that must remain true
 when an implementation module, vendor release, physical table, or external
 consumer changes.
 
-## 1. Functional Scope and Authority
+## Functional Scope and Authority
 
 Codess conversion has two simultaneous obligations. It must preserve enough
 source evidence to explain and reconsider an interpretation, and it must emit
@@ -45,7 +45,7 @@ diagnosed, and optional malformed evidence does not invalidate an otherwise
 usable record. Publication and query must expose those boundaries rather than
 turning a successful conversion into an unqualified completeness claim.
 
-## 2. Conversion Pipeline
+## Conversion Pipeline
 
 The Conversion Pipeline describes one source-system contribution to one
 Project. Its purpose is narrower than the project-level diagram in Codess: it
@@ -89,9 +89,9 @@ Mapping cannot make an unavailable source relationship direct. Storage and
 query cannot reinterpret an unknown vendor record merely to satisfy a column or
 predicate.
 
-## 3. Identity, Entities, and Relationships
+## Identity, Entities, and Relationships
 
-### 3.1 Normative Terminology
+### Normative Terminology
 
 Codess specifications use entity names precisely:
 
@@ -117,7 +117,7 @@ Session identity. A model is configuration for a Model Turn, not an Actor. An
 agent-branded tool name is source evidence, not proof of a separate runtime
 participant.
 
-### 3.2 Identity Scope
+### Identity Scope
 
 Identity keys reflect the smallest authority that can establish sameness:
 
@@ -138,7 +138,7 @@ can be observed through successive Source revisions or Project store sets. A
 query result must be able to distinguish the stable entity from the particular
 observation that supplied it.
 
-### 3.3 Event Hierarchy and Cardinality
+### Event Hierarchy and Cardinality
 
 The common event hierarchy is intentionally not a user-message/assistant-message
 pair:
@@ -166,7 +166,7 @@ Session parentage and relation kind are stored only when the Source supplies a
 direct field or a supported structural mapping. Timestamp proximity, adjacent
 files, similar text, and agent-like names do not establish parentage.
 
-### 3.4 Ordering and Time
+### Ordering and Time
 
 `sequence_no` is the deterministic normalized order within a Session and the
 basis for reconstruction. Source order is preserved even when timestamps are
@@ -179,7 +179,7 @@ different facts and remain in separate fields. File modification time can help
 detect a changed Source but does not become Session or Event time without an
 explicit mapping rule.
 
-### 3.5 Tools, Artifacts, and Content
+### Tools, Artifacts, and Content
 
 A Tool Invocation is a requested operation associated with the requesting
 Event, Session, and available Interaction or Model Turn. It can have no result,
@@ -203,9 +203,9 @@ Artifact identity. Typed relations connect one retained or derived content
 object to those entities. Deduplicating equal bytes must not delete distinct
 Events or Source records.
 
-## 4. Conversion Semantics and Controlled Vocabulary
+## Conversion Semantics and Controlled Vocabulary
 
-### 4.1 Field States and Admission
+### Field States and Admission
 
 Absent, explicit null, empty, sentinel-valued, malformed, unsupported, and
 valid are distinct source-field states. Adapters decode those states before
@@ -218,7 +218,7 @@ No individual source value should crash the complete ingest. This tolerance is
 not silent coercion. The resulting Event, diagnostic, or Source failure must
 show which field or structure could not be used and why.
 
-### 4.2 Mapping and Retention
+### Mapping and Retention
 
 Each supported normalized value names the source field or structure and the
 mapping rule that produced it. Mapping profiles describe supported selectors,
@@ -243,7 +243,7 @@ irregular states. Vendor-only evidence can be retained before it qualifies for
 the common model. Codess does not create point-to-point translations between
 vendors; every supported source maps independently into CoSchema.
 
-### 4.3 Vocabulary Classes
+### Vocabulary Classes
 
 Codess distinguishes vocabulary governance from physical type:
 
@@ -259,7 +259,7 @@ Field names and vocabulary values use lowercase `snake_case` in common storage.
 Exact vendor spelling remains in source fields. A normalized value never
 replaces the source value from which it was derived.
 
-### 4.4 Participant and Session Classification
+### Participant and Session Classification
 
 Participant evidence is classified along independent axes. `source_role`
 preserves the vendor role. `actor_kind` identifies the immediate producer or
@@ -281,7 +281,7 @@ relationships, participant evidence, delegated prompts, caller/callee fields,
 status, configuration, and timing. Branding a tool or record as `agent` does
 not by itself establish a new Actor or Session.
 
-### 4.5 Event and Outcome Classification
+### Event and Outcome Classification
 
 Common Event kinds describe observable function: message content, tool
 invocation or result, permission decision, context operation, lifecycle change,
@@ -300,7 +300,7 @@ family, exact model name, revision, reasoning effort, speed tier, service tier,
 and mode are recorded only from direct or explicitly inherited evidence. Codess
 does not parse one dimension from a suggestive value in another.
 
-### 4.6 Context, Compaction, and Content
+### Context, Compaction, and Content
 
 System and developer instructions, harness context, request context, memory
 operations, reasoning summaries, and compaction records have different source
@@ -323,7 +323,7 @@ record can carry tool, configuration, context, status, or Artifact evidence.
 Conversely, arbitrary metadata, binary data, or a massive log is not promoted
 to Session content merely because it occupies a text-capable field.
 
-### 4.7 Processing, Bounds, and Provenance
+### Processing, Bounds, and Provenance
 
 Content processing can decode declared character sets, normalize supported
 Unicode, remove invalid controls, redact secrets, mask private values, blank
@@ -343,7 +343,7 @@ system, Source revision, Source record locator and type, mapping rule, and
 applicable field evidence. Diagnostics distinguish Source, record, and field
 scope independently from severity and use bounded detail.
 
-### 4.8 Raw Evidence and Integrity
+### Raw Evidence and Integrity
 
 Raw evidence preserves an exact Source revision outside the searchable
 database when a decoder must be repeated against identical bytes, a Source can
@@ -372,9 +372,9 @@ SQLite backup. Complete SHA-256 identifies retained objects and published
 stores. Bounded fingerprints can detect routine change but do not authenticate
 content or replace complete verification.
 
-## 5. Storage and Query Semantics
+## Storage and Query Semantics
 
-### 5.1 Source-System Stores
+### Source-System Stores
 
 Each source-system store contains one vendor contribution to a selected
 Project observation. A Project store set combines the selected stores,
@@ -390,7 +390,7 @@ Physical tables and indexes implement CoSchema but do not define vendor
 meaning. Typed source fields, mapping evidence, and bounded extensions retain
 source-specific distinctions without creating incompatible vendor query models.
 
-### 5.2 Query Predicates and Ordering
+### Query Predicates and Ordering
 
 Typed predicates narrow before content search. Project, source system, Session,
 Event kind, Actor, content role, origin, tool, status, model configuration,
@@ -406,7 +406,7 @@ Results use deterministic order and global row and byte limits. Cross-store
 merge cannot apply a complete limit independently to each store and present the
 union as a globally bounded result.
 
-### 5.3 Reconstruction and Repetition
+### Reconstruction and Repetition
 
 Interaction or Model Turn reconstruction begins with stable selected identities
 and follows persisted relations and Session order. It returns the complete
@@ -421,7 +421,7 @@ every constituent Event identity remains available and the group expands
 losslessly. Similarity or topical relation requires a versioned derived method
 and never authorizes deletion.
 
-### 5.4 Result Contracts
+### Result Contracts
 
 A structured result binds its canonical request, Project and snapshot scope,
 store provenance, stable row identities, deterministic ordering, applied
@@ -434,7 +434,7 @@ distributions, query-plan inspection, and specialized research. Repeated public
 behavior belongs in the typed query contract so that command, library, and
 external consumers share predicate and result semantics.
 
-## 6. Derived Results and Composition
+## Derived Results and Composition
 
 Composition combines selected stores or bounded query results for a downstream
 investigation without creating another vendor decoder or common-schema

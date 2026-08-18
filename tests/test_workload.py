@@ -98,7 +98,7 @@ class TestResultDigestComparesResults:
 
 
 class TestMeasurement:
-    """CoPlan 11.4's required evidence, and the figure that compares sizes."""
+    """The evidence a measurement carries, and the figure that compares sizes."""
 
     def test_per_row_cost_is_reported_for_a_measured_row_count(self):
         m = Measurement(name="q", seconds=0.5, rows=1_000)

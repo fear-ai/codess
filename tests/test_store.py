@@ -1130,7 +1130,7 @@ class TestFormatSixRemovals:
 
 
 class TestDiagnosticGranularity:
-    """`level` became `granularity`, because that is what it holds (W50).
+    """`level` became `granularity`, because that is what it holds.
 
     The column carries `source`/`record`/`field` -- which part of the input a
     diagnostic is about -- while `severity` sits beside it holding how much it
@@ -1349,7 +1349,7 @@ class TestTheOpenersOwnTheConnectionContracts:
     `foreign_keys`, `busy_timeout`, `row_factory` -- are guarantees of how a
     file was opened, not of the file. A site that connects directly gets none
     of them, silently, which is what made the read guarantee vary by call site
-    before `open_readonly` existed (CoNotes 1.4).
+    before `open_readonly` existed.
 
     The two permitted exceptions each state their reason at the call site: the
     openers themselves, and `raw_store`'s pure `backup()` target.

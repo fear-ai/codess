@@ -268,6 +268,6 @@ def run(args: argparse.Namespace) -> int:
     _print_scan_diagnostics(diagnostics)
     # A command boundary: whatever is still buffered must reach the sink before
     # the process ends, or a batch smaller than the flush threshold is silently
-    # lost (Report 8).
+    # lost.
     reporting.flush()
     return 1 if had_error else 0

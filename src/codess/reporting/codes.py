@@ -1,8 +1,8 @@
 """The event code table, the counter slots, and the field registry.
 
-Three closed sets, all sized at import so the hot path allocates nothing
-(Report 9). Each answers a different question and they are here together
-because each is a name-to-index table the sinks read and the call sites index.
+Three closed sets, all sized at import so the hot path allocates nothing. Each
+answers a different question, and they are here together because each is a
+name-to-index table the sinks read and the call sites index.
 
 ## Why These Structures
 
@@ -53,17 +53,17 @@ field access is ~15-20 ns for everything. A structure built per record should be
 tuple or a list slot; a structure built per phase can be whatever reads best.
 
 **An event code is an integer.** Codes are known at import, so an integer
-compares and dispatches faster than a string and keeps the event tuple uniform
-(Report 5). The dotted name lives here, consulted only when a sink renders.
+compares and dispatches faster than a string and keeps the event tuple
+uniform. The dotted name lives here, consulted only when a sink renders.
 
 **A counter is a list index.** A per-record fact answers *how many*, not
 *when*, so it is `counters[i] += 1` at 66 ns with no allocation rather than an
-event that has to be stored and later aggregated (Report 2.3).
+event that has to be stored and later aggregated.
 
 **A field name is classified before it can be rendered.** The registry is an
 allowlist: a name absent from it renders as `<unregistered>` under any
 non-local privacy profile. A denylist fails open, and the field nobody
-classified is the one that leaks (Report 15.4).
+classified is the one that leaks.
 """
 
 from __future__ import annotations
@@ -98,10 +98,11 @@ SCOPE_NAMES = {
 
 # --- Event codes -------------------------------------------------------------
 #
-# Seeded from the event names `ProgressTrace` already emits, because those are
-# the events that exist and must keep working when it becomes a shim (Report
-# 13.1, gate G3). A code is assigned once and never renumbered: a retained
-# report holds integers, so reusing one would silently relabel history.
+# A code is assigned once and never renumbered: a retained report holds
+# integers, so reusing one would silently relabel history. The set below is
+# derived from the emitting call sites, and a test derives it again -- an event
+# added to a call site without a code fails rather than rendering without a
+# level or scope.
 _EVENT_SPECS: tuple[tuple[str, int, int], ...] = (
     # Ingest lifecycle.
     ("ingest.start", INFO, SCOPE_INGEST),
@@ -153,11 +154,11 @@ _EVENT_SPECS: tuple[tuple[str, int, int], ...] = (
     ("retention.start", INFO, SCOPE_ADMIN),
     ("retention.done", INFO, SCOPE_ADMIN),
     # The facility reporting on itself. Dropped events must be visible, or a
-    # bounded buffer silently becomes a lie about what happened (Report 6).
+    # bounded buffer silently becomes a lie about what happened.
     ("report.events_dropped", WARNING, SCOPE_NONE),
     ("report.field_rejected", WARNING, SCOPE_NONE),
     # A command-boundary failure, carrying the exception family rather than a
-    # rendered traceback (Report 14).
+    # rendered traceback.
     ("command.failed", ERROR, SCOPE_NONE),
 
     # --- Derived from the call sites rather than proposed -----------------
@@ -282,9 +283,9 @@ def slot(name: str) -> int:
 
 # --- Field registry ----------------------------------------------------------
 #
-# Report 15.4's three classes. `open` is a count, size, duration, or vendor
-# name; `located` names a filesystem position; `linking` is an identifier that
-# correlates to a retained record.
+# Three classes. `open` is a count, size, duration, or vendor name; `located`
+# names a filesystem position; `linking` is an identifier that correlates to a
+# retained record.
 OPEN = "open"
 LOCATED = "located"
 LINKING = "linking"

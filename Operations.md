@@ -4,7 +4,7 @@ This guide gets Codess installed, connected to local Claude Code, Codex, and
 Cursor stores, and running against Projects. It covers the normal operating
 path and basic diagnosis. Exact command options remain in `codess --help`.
 
-## 1. Requirements
+## Requirements
 
 Codess requires:
 
@@ -16,7 +16,7 @@ Codess requires:
 SQLite support is supplied by Python. The `zstandard` package is installed as a
 runtime dependency for bounded raw-object capture.
 
-## 2. Installation
+## Installation
 
 Choose the intended Python environment, then install from the repository root:
 
@@ -34,7 +34,7 @@ pytest -q
 The installed `codess` command is the normal interface. Running source files
 directly is reserved for development and diagnosis.
 
-## 3. Source Locations
+## Source Locations
 
 Codess uses the ordinary vendor locations by default:
 
@@ -59,7 +59,7 @@ Every configured Source root must be absolute. Pointing Codess at copied test
 data is a useful way to diagnose source interpretation without touching live
 application state.
 
-### 3.1 Scan Scoping
+### Scan Scoping
 
 Scan treats some directories as groupings that contain Projects rather than
 as Projects themselves, and skips others as review or backup trees. Both
@@ -83,7 +83,7 @@ Set these when scanning an unfamiliar tree. The defaults describe one
 developer's layout, so on another machine they may both group directories
 that are Projects and scan trees that should be skipped.
 
-## 4. Regenerating After a Schema or Package Change
+## Regenerating After a Schema or Package Change
 
 Read this first if `ingest` reports:
 
@@ -171,12 +171,12 @@ To rehearse the decode without writing anything, add `--validate`: ingest
 stages into a temporary directory, reports the same diagnostics, and leaves
 the Project, registry, and raw store untouched.
 
-## 5. First Project
+## First Project
 
 Use one real repository or Project directory whose Sessions are expected to be
 small and easy to recognize.
 
-### 5.1 Discover
+### Discover
 
 ```bash
 PROJECT=/absolute/path/to/project
@@ -187,7 +187,7 @@ Scan consults vendor indexes and bounded metadata. It does not normalize
 Session content. Confirm that the row names the intended Project and
 source systems before ingesting.
 
-### 5.2 Validate
+### Validate
 
 Run a non-publishing parse and validation when testing a new Source shape or
 configuration:
@@ -199,7 +199,7 @@ codess ingest --dir "$PROJECT" --source all --validate
 Validation uses temporary stores and reports malformed, ignored, empty, and
 failed Sources without changing the Project's selected Project store set.
 
-### 5.3 Ingest
+### Ingest
 
 ```bash
 codess ingest --dir "$PROJECT" --source all
@@ -210,7 +210,7 @@ the common records, writes per-source-system SQLite stores, and publishes the
 completed Project store set. Progress is emitted on standard error without
 printing Session content.
 
-### 5.4 Orient
+### Orient
 
 ```bash
 codess query overview --dir "$PROJECT"
@@ -228,7 +228,7 @@ If results do not resemble the expected Project work, stop and investigate
 Project attribution, Source selection, and vendor mapping before ingesting more
 Projects.
 
-## 6. Routine Updates
+## Routine Updates
 
 Repeating ingest performs an assessed update. Unchanged selected evidence is
 skipped; changed Sources are decoded and replace their prior normalized
@@ -270,7 +270,7 @@ codess catalog status
 codess catalog annotations
 ```
 
-## 7. Selecting Several Projects
+## Selecting Several Projects
 
 `--dir` may be repeated. `--dirs` accepts a plain path list or a CSV containing
 `directory_path`.
@@ -287,7 +287,7 @@ Inspect the resolved Project scope before drawing cross-Project conclusions.
 The stores preserve Project and source-system identity even when results are
 merged for display.
 
-## 8. Content and Resource Controls
+## Content and Resource Controls
 
 Built-in bounds protect against accidental binary ingestion, extremely large
 transcripts, oversized context bodies, and excessive Event counts. They are
@@ -309,7 +309,7 @@ record before raising it. Oversize or non-text input can indicate incorrect
 Project selection, a vendor format change, or a record that should remain
 external rather than searchable content.
 
-## 9. Raw Evidence
+## Raw Evidence
 
 The ordinary `reference` mode records the Source locator and bounded update
 evidence without retaining another complete copy. `observe` retains even less,
@@ -328,11 +328,11 @@ Raw capture can contain private code, prompts, tool data, and credentials. Use
 it only with an explicit retention purpose and adequate local storage. Raw
 objects support provenance and recovery; they are not inserted wholesale into
 the searchable database. The functional tradeoffs and mode boundaries are
-defined in [Raw Evidence and Integrity](Designs.md#48-raw-evidence-and-integrity).
+defined in [Raw Evidence and Integrity](Designs.md#raw-evidence-and-integrity).
 
-## 10. Basic Diagnosis
+## Basic Diagnosis
 
-### 10.1 No Project Appears in Scan
+### No Project Appears in Scan
 
 Check:
 
@@ -345,7 +345,7 @@ Check:
 Use `--debug` for bounded source-selection diagnostics. It must not be treated
 as a routine content dump.
 
-### 10.2 Ingest Reports Malformed or Unsupported Records
+### Ingest Reports Malformed or Unsupported Records
 
 Start with the coverage report, which states what was mapped and what was
 not for each store in a Project:
@@ -370,7 +370,7 @@ vendor schema and adapter fixture. A malformed optional field should not
 remove an otherwise usable Event; a core identity or ordering failure should
 remain explicit.
 
-### 10.3 Search Returns Unexpected Counts
+### Search Returns Unexpected Counts
 
 Verify:
 
@@ -383,14 +383,14 @@ Verify:
 
 Use direct read-only SQLite queries to reconcile a focused result.
 
-### 10.4 Cursor Is Slow or Busy
+### Cursor Is Slow or Busy
 
 Codess queries selected Cursor headers and composer key ranges through read-only
 SQLite connections. Confirm that the selected workspace mapping is narrow and
 that the live database is not continuously changing. Do not copy, vacuum,
 rewrite, or fully decode the Cursor database merely to diagnose one Project.
 
-### 10.5 First Discovery on a New Machine
+### First Discovery on a New Machine
 
 Codess ships with empty grouping and exclusion lists, so a fresh install
 classifies nothing by name. Discovery is a three-step process rather than a
@@ -441,7 +441,7 @@ which a frozen default could not make.
 `~/Work` remains the default work root when no `--dir` is given, since it is
 home-relative and costs nothing when absent.
 
-#### 10.5.1 What Is Excluded Without Configuration
+#### What Is Excluded Without Configuration
 
 Two exclusion mechanisms exist, and they differ in what they name:
 
@@ -487,7 +487,7 @@ mount or external volume inside the work root is scanned like any other
 directory, which is usually wanted and is slow when the mount is remote. Use
 an explicit `--dir` or an exclusion entry if a mounted tree should be skipped.
 
-#### 10.5.2 Recommended Setup Sequence
+#### Recommended Setup Sequence
 
 A first scan over an unfamiliar tree can be long. This order informs the
 operator before committing to it:
@@ -556,7 +556,7 @@ repositories is not being tested. Cursor's shared store appears as
 `(global)`, which is an observation rather than a Project and is never
 written to the registry.
 
-### 10.6 Current Snapshot Manifest Hash Mismatch
+### Current Snapshot Manifest Hash Mismatch
 
 `scan`, `ingest`, and `query` verify the current snapshot's `manifest.json`
 against the hash recorded in its `current.json` pointer before trusting it.
@@ -591,10 +591,10 @@ what is recoverable before overwriting what is there. The reconstructed
 document carries `"reconstructed": true`.
 
 `--no-hash` skips this verification; see
-[Integrity Check Overrides](#107-integrity-check-overrides) for its behavior
+[Integrity Check Overrides](#integrity-check-overrides) for its behavior
 and the conditions under which it is appropriate.
 
-### 10.7 Integrity Check Overrides
+### Integrity Check Overrides
 
 Two checks guard reads and writes, and each has one escape. Both are recovery
 and test options rather than routine flags. Each accepts a command-line flag
@@ -641,11 +641,11 @@ one:
   corrupted manifest, without regenerating the released set.
 
 Outside those, identify and fix the cause. For a contract mismatch, [Schema
-Maintenance](#11-schema-maintenance) covers comparing the two contracts; for a
+Maintenance](#schema-maintenance) covers comparing the two contracts; for a
 hash mismatch, the investigation steps are in
-[10.6](#106-current-snapshot-manifest-hash-mismatch).
+[10.6](#current-snapshot-manifest-hash-mismatch).
 
-## 11. Schema Maintenance
+## Schema Maintenance
 
 Normal ingest verifies the installed schema package before it writes a store.
 When changing CoSchema, a mapping profile, or SQLite DDL, run the focused
@@ -662,13 +662,13 @@ Choose `same`, `compatible`, `breaking`, or `manual` only after reviewing the
 reported contract changes. Then run the full test suite and the smallest real
 source-system example that exercises the changed translation.
 
-## 12. Repository Tools
+## Repository Tools
 
 The `codess` command is the supported interface. The scripts under `tools/`
 are development and diagnosis aids that are not installed as commands and are
 run with the repository's Python. They are grouped here by what they answer.
 
-### 12.1 Decode and Evidence Audits
+### Decode and Evidence Audits
 
 These read ingested stores or vendor Sources and report structure, counts, and
 classifications. They report record shapes and never message, prompt,
@@ -692,7 +692,7 @@ python tools/decode_audit.py --dir "$PROJECT" --out audit.json
 
 `--dir` is repeatable, so several Projects can be audited as one report.
 
-### 12.2 Contract and Quality Checks
+### Contract and Quality Checks
 
 | Tool | Answers |
 |---|---|
@@ -705,10 +705,10 @@ python tools/quality_report.py
 python tools/quality_report.py --skip-tests
 ```
 
-### 12.3 Snapshot and Catalog Maintenance
+### Snapshot and Catalog Maintenance
 
 These operate on published state. Review their reports before applying a
-change, and see [Maintenance Boundaries](#13-maintenance-boundaries).
+change, and see [Maintenance Boundaries](#maintenance-boundaries).
 
 | Tool | Answers |
 |---|---|
@@ -718,7 +718,7 @@ change, and see [Maintenance Boundaries](#13-maintenance-boundaries).
 | `project_status.sh` | What state is a Project in before any large vendor extraction? Content-free orientation over the Project directory and the registry. |
 | `retire_project.py`, `apply_and_verify.py`, `freeze_reviewed_baselines.py`, `verify_reviewed_baselines.py` | Validated Project relocation, and reviewed-baseline apply, freeze, and verification. Each is a compatibility wrapper over the corresponding `codess baseline` or `codess catalog` operation; prefer the command. |
 
-## 13. Maintenance Boundaries
+## Maintenance Boundaries
 
 Snapshots, raw objects, catalogs, and receipts support repeatable operation but
 are not the primary product surface. Before deleting any of them:

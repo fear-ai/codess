@@ -5,13 +5,13 @@ hand-written validator's behavior matches it exactly. The fixture is
 tool-agnostic by design (plain request/outcome pairs, no reference to
 validate_request's internals) so it can also validate any future
 replacement -- pydantic, jsonschema, or otherwise -- without being rewritten
-first. See CoPlan.md 13.4.2 for the capability gaps (canonical form,
-related-field comparison, action-dependent filters) this fixture specifically
-covers.
+first. It covers three capability gaps a JSON Schema cannot express: canonical
+form, related-field comparison, and action-dependent filters.
 """
 
 from __future__ import annotations
 
+import ast
 import copy
 import json
 from pathlib import Path
@@ -19,6 +19,11 @@ from pathlib import Path
 import pytest
 
 from codess.query_api import QueryContractError, validate_request
+
+# Every `raise` in `validate_request`, each reachable from a vector below.
+# Recorded rather than derived: a derived count cannot tell a path that gained
+# a vector from one that never had one.
+REJECTION_PATHS = 36
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 VECTORS = json.loads(
@@ -63,3 +68,33 @@ def test_vectors_file_is_self_consistent():
         assert vector["outcome"] in ("accept", "reject")
         if vector["outcome"] == "reject":
             assert "message_contains" in vector
+
+
+def test_every_rejection_path_has_a_vector():
+    """No `raise` in `validate_request` may be unreachable from the fixture.
+
+    The vectors are only a contract if they are complete. A validator gains a
+    check more easily than a fixture gains a vector, so without this the file
+    decays into a sample: the paths it covers stay covered and every new one
+    arrives untested, which is indistinguishable from full coverage when
+    reading a passing run.
+
+    Asserts against a recorded count rather than a `>=` comparison. Several
+    paths carry more than one vector -- a bound has a low and a high case --
+    so a comparison would leave slack equal to that surplus and only fail once
+    it was used up, which is the ninth new path rather than the first.
+    """
+    source = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "codess" / "query_api.py"
+    ).read_text(encoding="utf-8")
+    validator = next(
+        node for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef) and node.name == "validate_request"
+    )
+    raises = [n for n in ast.walk(validator) if isinstance(n, ast.Raise)]
+    assert len(raises) == REJECTION_PATHS, (
+        f"validate_request has {len(raises)} rejection paths, recorded as "
+        f"{REJECTION_PATHS}. Add a vector covering the new path and update the "
+        "count, or remove the count if the path went away."
+    )

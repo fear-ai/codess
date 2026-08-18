@@ -133,7 +133,7 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
         candidates.append(candidate)
     if source_path:
         live_path = Path(source_path)
-        live = {
+        live: dict[str, Any] = {
             "kind": "live", "location": str(live_path),
             "available": live_path.is_file(), "equality": "unavailable",
         }
@@ -154,10 +154,10 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
                         "verification_method": "recorded-stat-change",
                     })
                 else:
-                    observed = hash_file(live_path)
+                    digest = hash_file(live_path)
                     live.update({
-                        "revision": f"sha256:{observed}",
-                        "equality": "exact" if observed == row["content_digest"] else "mismatch",
+                        "revision": f"sha256:{digest}",
+                        "equality": "exact" if digest == row["content_digest"] else "mismatch",
                         "verification_method": "complete-sha256",
                     })
             else:

@@ -9,7 +9,7 @@ The machine-readable logical contract is
 `schema/coschema/sqlite/schema.sql`. Those files are authoritative for fields,
 types, nullability, references, constraints, and indexes.
 
-## 1. Package Identity
+## Package Identity
 
 The current package is rooted at `schema/coschema/` and includes the common
 contract, mapping grammar, SQLite DDL, manifest, and conformance fixtures.
@@ -31,7 +31,7 @@ Codess software version, source-system release, model configuration, decoder
 profile, validator profile, and CoSchema format describe different things and
 remain separate provenance.
 
-### 1.1 Versioning Between Code and Extractions
+### Versioning Between Code and Extractions
 
 Six identifiers are maintained independently because they answer different
 questions. Conflating them would force a rebuild whenever any one changed:
@@ -39,7 +39,7 @@ questions. Conflating them would force a rebuild whenever any one changed:
 | Identifier | Declares | Changing it means |
 |---|---|---|
 | `FORMAT_VERSION` (5) | The CoSchema layout: tables, columns, constraints | Stores must be rebuilt; a different layout cannot be read |
-| `contract_digest` | The executable contract -- the DDL, the logical and mapping contracts, and the three vendor profiles | Something that determines how a store is written or decoded changed. Validation fixtures are deliberately outside it (13.4.4) |
+| `contract_digest` | The executable contract -- the DDL, the logical and mapping contracts, and the three vendor profiles | Something that determines how a store is written or decoded changed. Validation fixtures are deliberately outside it |
 | `DECODER_VERSION` (0.2) | How vendor records are interpreted into common Events | The same source would now decode differently, so existing rows are not comparable to new ones |
 | `VALIDATOR_VERSION` (0.2) | What is accepted, rejected, or diagnosed | The same records would now be admitted or refused differently |
 | `IDENTITY_FORMAT` (`codess.id/1`, emitted as `id1`) | How entity identities are derived | Every `entity_id` changes; nothing resolves across the boundary. The tag travels in the value, so two schemes are distinguishable |
@@ -73,7 +73,7 @@ would otherwise appear to disagree about the same Session.
 Every identity is therefore now `codess:<kind>:id1:<64 hex>`. The tag names
 the derivation scheme; the algorithm is deliberately absent, because a reader
 recomputes through `codess_hash`, which owns that choice, and naming it in
-the value would make changing the algorithm a wire-format change (13.4.8).
+the value would make changing the algorithm a wire-format change.
 A change to `IDENTITY_FORMAT` remains a format change requiring a full
 rebuild, but a reader can now tell which scheme produced a value.
 
@@ -136,7 +136,7 @@ path without a compatibility layer: the vendors have kept their record
 envelopes stable, and the cases where they have not are visible as
 diagnostics rather than silent loss.
 
-## 2. Core Entities
+## Core Entities
 
 | Entity | Purpose |
 |---|---|
@@ -145,11 +145,11 @@ diagnostics rather than silent loss.
 | `workspace_bindings` | Evidence-backed source-system workspace attribution to a Project. |
 | `sources` | One observed Source revision, locator, storage family, availability, and integrity evidence. |
 | `source_records` | Exact record positions, types, subtypes, ordering, and classification within a Source. |
-| `sessions` | Source-system conversation/thread identity, Project attribution, lifecycle, time, and relation evidence. Carries both `id` (the vendor's own identifier, unique in this store) and `session_entity_id` (derived from vendor-stated facts, identical on any machine that ingested the same Session). `events` and `sources` follow the same pattern with `event_entity_id` and `source_entity_id`. See [CoNames 4](CoNames.md#4-identifier-suffixes). |
+| `sessions` | Source-system conversation/thread identity, Project attribution, lifecycle, time, and relation evidence. Carries both `id` (the vendor's own identifier, unique in this store) and `session_entity_id` (derived from vendor-stated facts, identical on any machine that ingested the same Session). `events` and `sources` follow the same pattern with `event_entity_id` and `source_entity_id`. See [CoNames 4](CoNames.md#identifier-suffixes). |
 | `interactions` | Initiating work units within a Session. |
 | `model_turns` | Evidenced model executions and their optional Interaction and configuration. |
 | `events` | Ordered normalized observations with exact source classification and mapping evidence. |
-| `model_params` | Nullable independent parameters a user selected or a vendor stated: provider, line, generation, version, gradation, variant, exact name, revision, effort, speed, service, and mode. **`provider` names the company whose model answered, which is not the vendor of the harness that ran it**: Cursor engages Anthropic and xAI models alongside its own, so the two differ in half its rows. **Line, generation, version, and gradation decompose the model name**: the line is the series (`claude`, `gpt`), the generation its major step in whole numbers, the version the release within it, and the gradation the capability level (`opus`, `sol`). A name Codess cannot resolve leaves the derived columns null rather than guessed, so "not recognized" is distinct from "has none". See [CoNames 3](CoNames.md#3-model-name-parts). |
+| `model_params` | Nullable independent parameters a user selected or a vendor stated: provider, line, generation, version, gradation, variant, exact name, revision, effort, speed, service, and mode. **`provider` names the company whose model answered, which is not the vendor of the harness that ran it**: Cursor engages Anthropic and xAI models alongside its own, so the two differ in half its rows. **Line, generation, version, and gradation decompose the model name**: the line is the series (`claude`, `gpt`), the generation its major step in whole numbers, the version the release within it, and the gradation the capability level (`opus`, `sol`). A name Codess cannot resolve leaves the derived columns null rather than guessed, so "not recognized" is distinct from "has none". See [CoNames 3](CoNames.md#model-name-parts). |
 | `tool_invocations` | Requested tool operations, exact names, call lineage, input, and status. |
 | `tool_results` | Ordered results and outcomes linked to invocations when source evidence permits. |
 | `artifacts` and `event_artifacts` | Durable files, URIs, repository objects, and evidence-backed Event operations. |
@@ -158,7 +158,7 @@ diagnostics rather than silent loss.
 | `mapping_diagnostics` | Source-, record-, or field-scoped mapping limitations and failures. |
 | `correlation_assertions` | Reviewable cross-record or cross-Project relationships with method and evidence. |
 
-## 3. Relationships
+## Relationships
 
 ```mermaid
 erDiagram
@@ -226,9 +226,9 @@ depends on. Identity and integrity belong to a layer above the data they
 describe: content is hashed, and the resulting digest and any name are
 recorded in a separate document that is not itself an input to that hash.
 
-## 4. Identity
+## Identity
 
-### 4.1 Identifier Classes
+### Identifier Classes
 
 Entities carry more than one identifier because each answers a different
 question. Four classes exist, and the prefix names the class:
@@ -289,13 +289,13 @@ them, binding a row additionally to its Project and Source revision. Query
 results carry an observation identity so a reader can tell which extraction
 supplied a row when several stores contribute to one answer.
 
-### 4.2 Project
+### Project
 
 Projects use generated stable identifiers independent of paths. For Git-backed
 work, one repository is one Project. Locations, linked worktrees, workspace
 identifiers, and source-reported paths are observations related to that Project.
 
-### 4.3 Source
+### Source
 
 A Source revision is unique by source-system namespace, Source URI, and revision
 evidence. Source records are located within that revision. The same logical
@@ -327,7 +327,7 @@ re-point at different content.
 Both retain the full digest. Neither is path-derived, so both are portable
 across machines.
 
-### 4.4 Session and Event
+### Session and Event
 
 A Session ID is deterministic from the source-system namespace and available
 source Session identity. The exact upstream ID remains in
@@ -337,14 +337,14 @@ Source revision context where required.
 
 Human-readable Session names and source titles are metadata, not identity.
 
-### 4.5 Tool Calls
+### Tool Calls
 
 `tool_invocations.source_call_id` is an exact vendor free-text lineage value
 scoped by source system and Session. The relational copy is bounded to 100
 UTF-8 bytes. Longer values use a UTF-8-safe prefix plus a complete SHA-256
 digest; source metadata or retained evidence keeps the original.
 
-## 5. Ordering and Time
+## Ordering and Time
 
 `sequence_no` is the deterministic within-Session order for normalized Events
 and applicable Interaction and Model Turn groups. Event sequence values are
@@ -358,7 +358,7 @@ Event-oriented numeric times use Unix milliseconds. Manifest, ingest, and
 observation timestamps use RFC 3339 UTC strings. Time-basis fields state the
 evidence supporting a normalized value.
 
-### 5.1 Time Column Naming
+### Time Column Naming
 
 The rule above -- numeric for source-reported event time, text for
 Codess-recorded time -- is currently stated only in prose, while every column
@@ -415,7 +415,7 @@ filesystem state**. The genuinely distinct time facts are the vendor instant
 `record_at` for raw records, the derived Session span, and the ingest
 observation -- roughly six, which is close to what the sources support.
 
-#### 5.1.1 Resolution
+#### Resolution
 
 **Four removals and one rename are implemented; two proposed removals are
 held.** The duplicates and the unwritten column are gone, the collision is
@@ -452,7 +452,7 @@ That is the cost the original reasoning did not weigh, and it inverts the
 conclusion: the denormalization has a measured consumer. The columns stay,
 with the DDL stating that they are materialized `MIN`/`MAX(event_at)` so a
 reader is not left to infer it. Whether they should instead become a view
-depends on the workloads W08 establishes; until those exist, removing a
+depends on the measured workloads; until those exist, removing a
 column that carries the common read path would be optimizing against a guess.
 
 *Kept -- seven, each answering a distinct question.*
@@ -515,7 +515,7 @@ visible at the point of use: `sessions.source_started_at` against
 tracked with the other CoSchema strengthening work rather than applied
 piecemeal.
 
-## 6. Types and Classification
+## Types and Classification
 
 Every mapped Event can retain:
 
@@ -535,7 +535,7 @@ Common classifications remain open where vendor evidence can introduce useful
 new values. Closed taxonomies are used only where stable query behavior requires
 a bounded vocabulary.
 
-## 7. Tools and Outcomes
+## Tools and Outcomes
 
 Source tool names are free text. `canonical_tool_name` can group reviewed aliases
 without replacing the exact name.
@@ -550,7 +550,7 @@ search over pending, running, succeeded, failed, denied, cancelled, incomplete,
 and unknown outcomes. Transport and application status can coexist so a
 completed transport does not conceal an operation failure.
 
-## 8. Model Configuration
+## Model Configuration
 
 Model configuration dimensions are nullable and independent:
 
@@ -571,7 +571,7 @@ Each normalized occurrence records direct source field and locator provenance.
 When a vendor places one setting on a governing record, propagated occurrences
 are explicitly marked as inherited and retain the governing Event or record.
 
-## 9. Metadata and JSON
+## Metadata and JSON
 
 Typed, frequently queried meaning belongs in columns or relations. JSON is used
 only for intrinsically structured or sparse values:
@@ -588,7 +588,7 @@ mapping rules remain scalar. Extension JSON cannot conceal required identity,
 duplicate canonical fields, contradict common values, or become an unbounded
 raw-record dump. SQLite enforces `json_valid()` for structured fields.
 
-### 9.1 Canonical Serialization
+### Canonical Serialization
 
 JSON that is stored, compared, or digested uses one serialization: keys
 sorted, compact separators, and non-ASCII characters emitted as UTF-8 rather
@@ -607,9 +607,9 @@ Encoding tolerates lone surrogates rather than rejecting them. Filesystem
 paths whose bytes are not valid UTF-8 surface in Python as surrogates, and
 strict encoding would raise on them, so a single undecodable filename would
 otherwise abort an operation. `codess/hashing.py` owns this serialization;
-CoReview 4.8 records the analysis behind it.
+CoReview records the analysis behind it.
 
-## 10. Content
+## Content
 
 Content objects separate content identity from Event projections and raw-object
 location. They record media type, charset, byte and character length, storage
@@ -624,7 +624,7 @@ Content processing records the selected policy, processor, action sequence,
 input/output identity, and rejection or truncation reason. Derived searchable
 content never silently claims to be exact source bytes.
 
-## 11. Artifacts and Correlation
+## Artifacts and Correlation
 
 Artifact identity prefers Project-relative paths for files inside a Project.
 Observed absolute paths remain evidence. External files use an external URI and
@@ -635,7 +635,7 @@ assertion with method, evidence, confidence, and observation context. An
 assertion does not rewrite the original Project, Artifact, Session, or Event
 identity.
 
-## 12. Diagnostics
+## Diagnostics
 
 Mapping diagnostics separate structural scope from operational severity:
 
@@ -649,7 +649,7 @@ mapping rule, reason, severity, and bounded detail. Query and validation can
 therefore distinguish unavailable evidence from a supported value that happens
 to be `NULL`.
 
-## 13. Store Sets and Raw Evidence
+## Store Sets and Raw Evidence
 
 Codess writes per-source-system SQLite stores for a selected Project and
 publishes them through a manifest and current pointer as one Project store set.
@@ -667,7 +667,7 @@ JSONL capture uses bounded streaming. Cursor capture uses SQLite backup so
 committed write-ahead-log state is represented consistently. Exact retained
 objects and source-system stores use complete SHA-256 verification.
 
-## 14. Query Contract
+## Query Contract
 
 The common query contract supports Sessions, overview, Events, and search over
 one or more selected Project store sets. Predicates cover identifiers, source
@@ -682,7 +682,7 @@ Events. Structured request and result contracts live in `schema/query-*.json`.
 Direct SQLite access remains supported for exploratory joins, distributions,
 query-plan inspection, and specialized analysis.
 
-## 15. Mapping Contract
+## Mapping Contract
 
 `schema/coschema/mapping-contract.json` defines the executable profile shape.
 A mapping entry identifies its source system and storage family, supported
@@ -696,7 +696,7 @@ severity. Conformance fixtures cover required minima, representative optional
 values, valid boundaries, named invariant failures, vendor hazards, and exact
 source-to-common outcomes.
 
-## 16. Contract Maintenance
+## Contract Maintenance
 
 The schema package, mappings, DDL, writer, query code, and fixtures must agree.
 A current contract change proceeds from functional requirement and vendor

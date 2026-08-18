@@ -1,18 +1,17 @@
 """One wall reading, one monotonic anchor, and a tick per event.
 
-Formatting a timestamp costs 816 ns and reading a monotonic tick costs 25 ns
-(Report 2.1, 2.5), and most events are never rendered -- so the call site
-records a tick and the sink resolves it to wall-clock text only for the events
-it actually emits. That is Report R4, and it is 58% of the current per-call
-cost.
+Formatting a timestamp costs 816 ns and reading a monotonic tick costs 25 ns,
+and most events are never rendered -- so the call site records a tick and the
+sink resolves it to wall-clock text only for the events it actually emits.
+Timestamp formatting was 58% of the per-call cost this replaced.
 
 Resolution works because both clocks advance at the same rate within a process:
 an offset captured once converts any later tick to a wall instant. Verified
-accurate to the millisecond against a direct reading (Report 2.6).
+accurate to the millisecond against a direct reading.
 
 Monotonic is the tick source rather than wall clock because it cannot move
 backwards. An NTP correction mid-run would make a wall-clock duration negative,
-which CoPlan 14.4 already records as a real hazard for ingest timing.
+which is a real hazard for ingest timing.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ ANCHOR_TICK_NS = time.monotonic_ns()
 tick = time.monotonic_ns
 """The hot-path clock, bound directly so a call site pays no wrapper.
 
-Report 12.1 rejects `process_time_ns` (203 ns) and a raw hardware counter: the
+`process_time_ns` (203 ns) and a raw hardware counter were both rejected: the
 first measures CPU rather than elapsed time, and the second saves ~20 ns while
 giving up frequency-scaling correctness, core-migration safety, and portability.
 """

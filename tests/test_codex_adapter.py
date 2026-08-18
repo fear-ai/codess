@@ -1147,7 +1147,7 @@ class TestUnrolledHistorySessions:
     `history.jsonl` and the rollout tree are written independently, so a
     Session can appear in one and not the other. Reporting that is a coverage
     statement; admitting it as a Session with no Model Turns would be a
-    mapping decision under CoPlan 6.5.
+    mapping decision, which this is not.
     """
 
     def _history(self, path, entries):
@@ -1202,7 +1202,7 @@ class TestUnrolledHistorySessions:
 
         A first count reported three unrolled Sessions by reading only the
         active tree; two had archived rollouts. The archive is a rollout
-        location, not a different Session identity (CoPlan 6.3).
+        location, not a different Session identity.
         """
         from codess import codex_source
 

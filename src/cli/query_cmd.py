@@ -7,7 +7,6 @@ import csv
 import json
 import logging
 import re
-import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -71,8 +70,7 @@ from codess.snapshot import (
     snapshot_store_paths_from_base,
 )
 from codess.source_verification import verify_event_source
-from codess.store import StoreError
-from codess.store import connect as connect_store
+from codess.store import StoreError, connect_readable
 
 log = logging.getLogger(__name__)
 
@@ -155,30 +153,6 @@ class QueryScope:
         )
 
 
-def _open_readable_store(path: Path) -> sqlite3.Connection:
-    """Open one store read-only, confirming its core tables are queryable.
-
-    The probe distinguishes a store that exists from one that can actually be
-    read, so a caller does not discover a truncated or foreign file midway
-    through a query. The connection is closed before the error propagates,
-    since a failed open must not leak a handle.
-    """
-    conn = connect_store(path, read_only=True)
-    try:
-        conn.execute("SELECT 1 FROM sessions LIMIT 1")
-        conn.execute("SELECT 1 FROM events LIMIT 1")
-    except sqlite3.Error as exc:
-        # The probe reads core tables, so a driver failure here means the same
-        # thing `connect_store` would have reported and is raised as the store
-        # layer's error rather than the driver's.
-        conn.close()
-        raise StoreError(f"cannot read store {path}: {exc}") from exc
-    except Exception:
-        conn.close()
-        raise
-    return conn
-
-
 def _open_query_scope(
     roots: list[Path],
     *,
@@ -204,7 +178,7 @@ def _open_query_scope(
                 roots_without_stores.append(resolved_root)
                 continue
             for path in stores:
-                conn = _open_readable_store(path)
+                conn = connect_readable(path)
                 scope.stores.append(
                     {"conn": conn, "path": path, "project_path": resolved_root}
                 )
@@ -256,7 +230,7 @@ def _open_project_id_query_scope(
                 missing.append(base)
                 continue
             for path in stores:
-                conn = _open_readable_store(path)
+                conn = connect_readable(path)
                 scope.stores.append({
                     "conn": conn,
                     "path": path,

@@ -9,17 +9,17 @@ the same concept named elsewhere.
 
 Any proposed rename is checked against this document, and a landed one is
 recorded in it. Where a name here differs from the one in the code, the
-difference is a scheduled change listed under [Renames](#6-renames), not a
+difference is a scheduled change listed under [Renames](#renames), not a
 discrepancy to fix locally.
 
 **Scope.** CoNames names things. What those things *mean* is
-[Codess 7](Codess.md#7-core-model-and-terminology) for entities and
+[Codess](Codess.md#core-model-and-terminology) for entities and
 [CoSchema](CoSchema.md) for fields; neither is restated here.
 
 CoNames covers designators -- the names of companies, programs, files, keys, and
 columns -- which the glossary does not.
 
-## 1. The Four Facts a Name May Refer To
+## The Four Facts a Name May Refer To
 
 Seven concepts currently share three words. They separate as follows, and no
 name may conflate two of them.
@@ -44,7 +44,7 @@ harness's model names (`claude-4.6-opus-high-thinking`, recorded by Cursor). A
 token match on `claude` therefore cannot tell product from model, which is why
 the designators below are matched exactly rather than by substring.
 
-## 2. Vendor and Harness Designators
+## Vendor and Harness Designators
 
 Each row is one concept. The columns are the places that concept is named.
 
@@ -55,7 +55,6 @@ Each row is one concept. The columns are the places that concept is named.
 | Harness | `sessions.harness_name` | profile `harness_name`; Codex decodes `originator` | `claude-code`, `codex`, `cursor` |
 | Surface | `sessions.surface_kind` | `adapters/cc._CC_SURFACE`, `adapters/codex._CODEX_SURFACE` | `cli`, `desktop`, `ide`, `api` |
 | Source system | `sessions.source_system_id` | profile, composed `vendor + "." + product` | `anthropic.claude-code`, `openai.codex`, `cursor.composer` |
-| Product | `sessions.product_name` | profile `product_name` | `claude-code`, `codex`, `cursor-composer` |
 | Storage format | `sessions.storage_format` | profile `storage_format` | `claude-jsonl`, `codex-jsonl`, `cursor-sqlite` |
 | Adapter module | -- | `codess/adapters/{cc,codex,cursor}.py` | `cc`, `codex`, `cursor` |
 | Store filename | -- | `config.STORE_DB_{CC,CODEX,CURSOR}` | `sessions_cc.db`, … |
@@ -77,17 +76,16 @@ Codex's decoded `originator` values keep their vendor spelling (`Codex Desktop`,
 `codex_cli_rs`) because an exact source value is retained rather than
 normalized; the surface is read separately from its `source` field.
 
-**Two of these are still wrong** and are listed in [Renames](#6-renames):
-`vendor_name` names a product for Cursor, and `product_name` is derivable from
-`source_system_id`. Removing the surface suffix makes `harness_name` and
-`product_name` identical for Claude and Codex, which is the same finding from
-the other side: with the surface in its own column, the program and the product
-are one fact spelled twice, and `product_name` is the copy to drop.
+**One of these is still wrong** and is listed in [Renames](#renames):
+`vendor_name` names a product for Cursor. A second, `product_name`, is already
+gone: removing the surface suffix made `harness_name` and `product_name`
+identical for Claude and Codex, so with the surface in its own column the
+program and the product were one fact spelled twice, and the copy was dropped.
 
 **Only Codex names its own program.** Claude states a surface (`entrypoint`) and
 no program; Cursor states neither, so both take the profile constant.
 
-## 3. Model Name Parts
+## Model Name Parts
 
 A model name decomposes along three axes -- line, generation, version -- plus a
 gradation, and carries settings a user selected. Each has a column on
@@ -193,101 +191,8 @@ the server, and splitting on the first hyphen would record `cursor` rather than
 rather than parsed, and an undeclared one stays unresolved. A built-in tool has no
 namespace: it belongs to the harness, not a server.
 
-**Hashing is for identity, integrity, and content addressing -- not for naming.**
-Evaluated across all 51 remaining call sites: 4 derive a cross-store identity, 10 are integrity
-digests a reader recomputes, 6 are the raw store's content addresses, and 9 are change
-detection. The rest were convenience -- a dict or a path hashed to get a name for it --
-and two were written and never read at all.
 
-**A name a process invents needs no digest.** A within-run label takes an index; a
-temporary directory takes the platform's own facility. Hashing a path to name a staging
-directory implied a stable identity the value neither had nor needed.
-
-**A file test records four `stat` facts, and each earns its place**: `size` catches
-any length change and is the cheapest discriminator; `mtime_ns` catches an in-place
-edit of the same length, at nanosecond resolution because a second-resolution stamp
-misses fast successive writes; `inode` catches a replacement by rename, which can carry
-the same size and a copied timestamp; `device` because an inode is unique only within a
-filesystem. `st_ctime` is excluded -- it moves on a permission change, which is not a
-content change -- as are `st_nlink` and `st_mode`, which describe the link rather than
-the bytes.
-
-**Three questions, three functions, chosen by what the caller does with the answer.**
-`file_unchanged` returns a boolean and suits a caller deciding whether to re-read.
-`file_changes` returns `{field: (was, is)}` and suits a caller explaining a difference,
-because "size 4,096 to 8,192" and "same size, new inode" are different findings that a
-hash comparison flattens into "differs". `read_source_revision` reads content and answers
-byte identity, by one size-driven policy: full read under the configured maximum,
-sampled windows above it, inode-and-size for a SQLite container.
-
-**Change detection asks a different question from integrity.** `fileio.file_state`
-records `(size, mtime_ns, inode)` and `file_unchanged` compares it: that answers "is
-this the same file", which is what decides whether to re-read. `read_source_revision`
-reads content and answers "are these the same bytes". The first is 216x cheaper on the
-real corpus and sufficient for its question; the second is required where byte identity
-is the claim. **The inode matters**: a file replaced by rename can carry the same size
-and a copied mtime, so those two alone report it unchanged.
-
-**Parsing methods, in the order a decoder should reach for them.** Vendor evidence is
-overwhelmingly JSON, so the first choice is a real parser and the last is a regular
-expression over free text.
-
-| Method | Uses | Modules | Applies to |
-|---|---|---|---|
-| `json.loads` | 98 | 38 | vendor records, envelopes, stored metadata |
-| SQLite `json_extract` / `json_valid` | 42 | 6 | querying stored JSON without materializing it |
-| `str.startswith` / `endswith` | 38 | 17 | prefix classification (`mcp__`, `codess:`) |
-| `re` | 31 | 9 | genuinely irregular text, such as the Codex output header |
-| `str.split` / `partition` | 20 | 15 | known single separators |
-| `removeprefix` / `removesuffix` | 4 | 4 | stripping a declared prefix |
-| `datetime.fromisoformat` | 7 | 6 | vendor timestamps |
-| `urllib.parse` | 8 | 4 | Artifact URIs |
-
-**SQLite JSON or Python JSON, measured rather than assumed.** Both parse the same
-blobs; which is faster depends on how much crosses the boundary, and the intuition that
-"push it into the database" always wins is wrong here.
-
-| Case | `json_extract` | `json.loads` |
-|---|---|---|
-| Extract a field present on most rows (9,695 of 14,267) | 0.104s | **0.025s** |
-| Filter where almost nothing matches | **0.009s** | 0.024s |
-
-**The rule: filter in SQLite, read in Python.** Concretely:
-
-```sql
--- Yes: the predicate is selective, so non-matching rows never cross the boundary.
-SELECT event_id, content FROM events
-WHERE json_extract(metadata,'$.parent_uuid') = ?;
-```
-
-```python
-# Yes: the rows are being read anyway, so parse once in Python rather than
-# asking SQLite to parse the same blob per extracted path.
-for row in conn.execute("SELECT event_id, metadata FROM events WHERE metadata IS NOT NULL"):
-    meta = json.loads(row["metadata"])
-    uuid, parent = meta.get("record_uuid"), meta.get("parent_uuid")
-```
-
-```sql
--- No: three extractions parse the same blob three times, for rows already selected.
-SELECT json_extract(metadata,'$.record_uuid'),
-       json_extract(metadata,'$.parent_uuid'),
-       json_extract(metadata,'$.tool_use_id') FROM events;
-```
- A selective predicate belongs in the
-query, because rows that do not match never cross the boundary. A field wanted from
-rows already being read belongs in Python, whose parser is faster than SQLite's and
-runs once per row rather than once per extracted path. The 3.6 MB of metadata in one
-Project is small enough that transfer is not the deciding cost either way; the
-deciding cost is how many times each blob is parsed.
-
-**A regular expression is the last resort, and never over JSON.** The one substantial
-use is Codex's output header, where fields are optional, reorderable, and doubly
-spelled -- `Wall time:` and `Wall time` -- which `split` cannot express and
-`startswith` cannot extract from. Even there the match is per line, so an unrecognized
-line rejects the whole header rather than half-populating it.
-
-## 4. Identifier Suffixes
+## Identifier Suffixes
 
 `_id` currently carries four incompatible formats, so a reader cannot tell from
 the suffix whether a value is derived, assigned, or borrowed.
@@ -297,6 +202,11 @@ the suffix whether a value is derived, assigned, or borrowed.
 | `_id` on a rowid | SQLite surrogate key, assigned locally | `sources.id`, `model_params.id` |
 | `_id` from a vendor | Identifier the source system assigned | `sessions.id` (vendor UUID) |
 | `entity_id` | Derived by Codess from declared components | `codess:session:id1:…` |
+| `_key` | Composed literal, not an identifier | `sessions.source_system_id` (pending rename) |
+
+The rule: **`_id` names an identifier something assigned; a composed or
+descriptive literal takes `_key` or no suffix.** `source_system_id` violates it
+and is renamed. A bare rowid named `id` is unremarkable and stays.
 
 **`entity_id` is a poor name, and for `sources` it is also wrong.** The value is a
 digest of vendor-stated facts, so two machines ingesting the same Session derive the
@@ -327,11 +237,6 @@ observation attribute, which is the split `projects` and `project_locations`
 already model: identity is what the entity is, the path is where a machine found
 it. `source-record` and `observation` inherit the fix, since both derive from the
 source-revision identity.
-| `_key` | Composed literal, not an identifier | `sessions.source_system_id` (pending rename) |
-
-The rule: **`_id` names an identifier something assigned; a composed or
-descriptive literal takes `_key` or no suffix.** `source_system_id` violates it
-and is renamed. A bare rowid named `id` is unremarkable and stays.
 
 **Every entity row carries two identities, and both are needed.** `sources`,
 `sessions`, and `events` each hold a local `id` -- a rowid, or the vendor's own string
@@ -355,7 +260,7 @@ joining Sessions to Events now selects both without aliasing either.
 stores, or hand an identifier to a later query by `*_entity_id`. A `*_entity_id` is
 stable across machines; an `id` is not.
 
-## 5. Plurality
+## Plurality
 
 **The rule: countable entities are plural; mass nouns are singular.**
 
@@ -366,7 +271,7 @@ mass nouns -- `store_meta` and the four `*_content` tables.
 `event_content` to match it is withdrawn: the two names disagree because the
 nouns differ, not because the convention does.
 
-## 6. Renames
+## Renames
 
 Every accepted rename, stated once. All are wire-format, so each requires
 regenerating every store.
@@ -394,7 +299,14 @@ regenerating every store.
 | `codess:<kind>:sha256:` in stored values | `codess:<kind>:id1:` | Names the derivation scheme instead of the algorithm, so a reader can tell two schemes apart and changing the algorithm is not a wire-format change |
 | `tool_invocations.started_at` | `source_started_at` | Distinguishes vendor-reported from Codess-recorded times |
 | `events.state.product` | four kinds | `session.label`, `harness.setting`, `content.attachment`, `session.marker` |
-| `allow_package_mismatch`, `--snapshot-package-policy` | `allow_contract_mismatch`, `--snapshot-contract-policy` | The value compared is the contract digest. The old flag spelling stays as a hidden alias, since it is a published CLI surface |
+| `allow_package_mismatch`, `--snapshot-package-policy` | `allow_contract_mismatch`, `--snapshot-contract-policy` | The value compared is the contract digest. The old flag spelling is still accepted, and both appear in `--help`, since removing an accepted flag breaks a caller's script |
+
+**Landed in CoSchema format 6:**
+
+| From | To | Why |
+|---|---|---|
+| `sessions.product_name` | *dropped* | A pure function of `source_system_id` |
+| `mapping_diagnostics.level` | `granularity` | Held `source`/`record`/`field`, a granularity, while `field_state` uses `level` for severity |
 
 **Pending**, for the next regeneration:
 
@@ -403,20 +315,19 @@ regenerating every store.
 | `sessions.source` | `adapter_key` | Holds the `SOURCE_PROFILES` key, not the Source entity |
 | `sessions.source_system_id` | `source_system_key` | A composed literal, not an assigned identifier |
 | `sessions.vendor_name` | *records the company* | `cursor` is a product; Anysphere is the vendor |
-| `sessions.product_name` | *dropped* | A pure function of `source_system_id` |
-| `mapping_diagnostics.level` | *names granularity* | Holds `source`/`record`/`field`, a granularity, while `field_state` uses `level` for severity |
 
 **Not renamed, and why.** `sources.id` -- a bare rowid is unremarkable.
-`event_content` -- mass noun, see [5](#5-plurality). `surface_kind`,
+`event_content` -- mass noun, see [Plurality](#plurality). `surface_kind`,
 `harness_name` as *names* -- the concepts are right; only `harness_name`'s
 Claude value is wrong, which is a decode fix rather than a rename.
 
-## 7. How to Use This Document
+## How to Use This Document
 
-Before proposing a rename: find the concept in [2](#2-vendor-and-harness-designators)
-or [6](#6-renames). If it is already recorded, the name is settled and
+Before proposing a rename: find the concept in
+[Designators](#vendor-and-harness-designators) or [Renames](#renames). If it is already recorded, the name is settled and
 the proposal is redundant. If it is not, add the row here in the same change
 that proposes it, so the next proposal is checked against a complete list.
 
-Before adding a column: check that its suffix follows [4](#4-identifier-suffixes)
-and its plurality follows [5](#5-plurality).
+Before adding a column: check that its suffix follows
+[Identifier Suffixes](#identifier-suffixes) and its plurality follows
+[Plurality](#plurality).

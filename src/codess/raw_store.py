@@ -16,6 +16,9 @@ from codess.config import RAW_MODES as RAW_MODE_VALUES
 from codess.fileio import hash_file, open_readonly, read_source_revision, stat_consistency
 from codess.hashing import codess_digest, codess_text_hash
 
+# Raw capture needs zstandard, ordinary ingest does not; each entry point
+# raises a user-facing error on None before touching it. The None assignment is
+# an accepted mypy error, as in `resources.py`.
 try:
     import zstandard
 except ImportError:  # pragma: no cover - exercised as a user-facing error

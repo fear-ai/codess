@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 # Resolved once at import: a code lookup is a dict hit, and doing it per call in
 # a loop over every candidate directory is the cost the integer code exists to
-# avoid (Report 5).
+# avoid.
 LINKED = _code("scan.source.linked")
 MAPPED = _code("scan.source.mapped")
 METRICS = _code("scan.project.metrics")
@@ -310,9 +310,9 @@ def _has_any_sessions(
 # These four decide *which directory is the Project*, which is the logic most
 # likely to be wrong and, until they were lifted, the logic hardest to test:
 # they were nested inside `walk_sessions` and reachable only by running vendor
-# discovery over a populated filesystem (CoReview 4.7). None captured
-# accumulating state -- only `work_root` and the set of live paths -- so each
-# becomes a module-level function by naming what it already read.
+# discovery over a populated filesystem. None captured accumulating state --
+# only `work_root` and the set of live paths -- so each becomes a module-level
+# function by naming what it already read.
 
 
 def in_work_root(raw_path: str, work_root: Path) -> bool:

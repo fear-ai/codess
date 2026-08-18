@@ -7,9 +7,12 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+# Windows has no `resource`; every use guards on None. mypy reports the None as
+# an assignment error and cannot be told otherwise -- an import statement takes
+# no annotation -- so the error is accepted rather than worked around.
 try:
     import resource
-except ImportError:  # Windows has no resource module.
+except ImportError:
     resource = None
 
 

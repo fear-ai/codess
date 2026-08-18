@@ -217,8 +217,8 @@ def _candidate_identifiers(sql: str) -> set[str]:
 
 
 # Vendor storage access, not CoSchema. `cursor_source` owns every query
-# against Cursor's shared database (CoPlan 6.4), whose columns are the
-# vendor's own camelCase names and are deliberately outside the DDL.
+# against Cursor's shared database, whose columns are the vendor's own
+# camelCase names and are deliberately outside the DDL.
 _VENDOR_STORAGE_MODULES = {"cursor_source.py"}
 
 
@@ -371,7 +371,7 @@ class TestTheCheckActuallyDetects:
         ) == set()
 
     def test_vendor_storage_modules_are_excluded_deliberately(self):
-        """Cursor's own tables are outside the DDL by design (CoPlan 6.4)."""
+        """Cursor's own tables are outside the DDL by design."""
         assert "cursor_source.py" in _VENDOR_STORAGE_MODULES
         assert all(
             path.name not in _VENDOR_STORAGE_MODULES for path in _python_files()

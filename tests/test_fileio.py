@@ -406,9 +406,9 @@ class TestQuoteIdentifierRaiseReachesACaller:
     def test_the_best_effort_annotation_degrades_instead(self, tmp_path):
         """`project_annotations` records the fault and keeps going.
 
-        It is a report row, not a gate: CoPlan 3.4 records it as a best-effort
-        read that already degrades on an unreadable store, so one Project's
-        bad name must not cost the annotations for every other.
+        It is a report row, not a gate: the read is best-effort and already
+        degrades on an unreadable store, so one Project's bad name must not
+        cost the annotations for every other.
         """
         from unittest.mock import patch
 

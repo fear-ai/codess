@@ -813,7 +813,7 @@ def _audit_orientation(args: argparse.Namespace) -> int:
 def _config_discovery(args: argparse.Namespace) -> int:
     """Report the resolved discovery configuration, and propose exclusions.
 
-    The first step of the setup sequence in Operations 10.5.2. It exists as a
+    The first step of the documented setup sequence. It exists as a
     command because the values that matter are what *this process* resolved:
     an operator reading `env` sees what one shell exports, which disagrees
     with the running scan the moment a variable is set elsewhere.
@@ -878,8 +878,8 @@ def _baseline_recover_pointer(args: argparse.Namespace) -> int:
     """Rebuild a lost or corrupted `current.json` from a retained snapshot.
 
     `snapshot.recover_current_snapshot` could do this and no command reached
-    it, so Operations 10.5 directed an operator with a hash mismatch to
-    `codess baseline`, which cannot. The operation is safe to run
+    it, so an operator with a hash mismatch was directed to `codess baseline`,
+    which cannot recover a pointer. The operation is safe to run
     unconditionally: it republishes an existing snapshot that still validates
     and creates nothing, so it needs no `--apply` gate.
     """

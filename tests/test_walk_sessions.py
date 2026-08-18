@@ -2,9 +2,8 @@
 
 These rules were nested inside `walk_sessions` and reachable only by running
 vendor discovery over a populated filesystem, so the logic most likely to be
-wrong was the logic hardest to test (CoReview 4.7). Lifting them made
-these cases expressible; every one below is new coverage rather than relocated
-coverage.
+wrong was the logic hardest to test. Lifting them made these cases
+expressible; every one below is new coverage rather than relocated coverage.
 
 Paths are synthetic. A repository is a directory holding `.git`, which is what
 `project_boundary` looks for, so a marker directory is enough.
@@ -70,7 +69,7 @@ class TestProjectBoundary:
         assert project_boundary(nested, tmp_path, {repo}) == repo
 
     def test_the_innermost_repository_wins(self, tmp_path):
-        """A repository inside a repository is its own Project (CoPlan 6)."""
+        """A repository inside a repository is its own Project."""
         outer = _repo(tmp_path / "outer")
         inner = _repo(outer / "inner")
         assert project_boundary(inner, tmp_path, {outer, inner}) == inner

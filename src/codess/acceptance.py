@@ -141,9 +141,9 @@ def compare_snapshot_rows(
                 for index, pair in enumerate(
                     zip_longest(old_rows, new_rows, fillvalue=None), 1
                 ):
-                    old, new = pair
-                    old = {} if old is None else dict(old)
-                    new = {} if new is None else dict(new)
+                    old_row, new_row = pair
+                    old = {} if old_row is None else dict(old_row)
+                    new = {} if new_row is None else dict(new_row)
                     context = {
                         "store": store_name,
                         "table": table,

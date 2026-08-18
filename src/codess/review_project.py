@@ -206,8 +206,8 @@ class ScanBudget:
     A scan of an unknown tree needs to be able to stop. Before
     this, `discover_git_roots` took a root, a depth limit, and no bound on the
     work itself: on a slow or enormous tree it ran until it finished, and the
-    operator's only signal was that it had not returned. Operations 10.5.2
-    recommends a quick probe first precisely because the full scan is unbounded,
+    operator's only signal was that it had not returned. The documented
+    procedure recommends a quick probe first because the full scan is unbounded,
     which is a documentation workaround for a missing control.
 
     **A partial result is returned and marked, not discarded.** A scan that
@@ -239,8 +239,8 @@ class ScanBudget:
     def visit(self) -> bool:
         """Count one directory; return whether the traversal may continue.
 
-        Monotonic rather than wall clock, for the reason CoPlan 14.4 records: a
-        backward NTP step would extend the deadline unpredictably.
+        Monotonic rather than wall clock: a backward NTP step would extend the
+        deadline unpredictably.
         """
         self.directories += 1
         if self.max_directories and self.directories > self.max_directories:

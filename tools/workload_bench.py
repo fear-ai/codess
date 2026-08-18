@@ -2,9 +2,9 @@
 """Run the repeatable ingest and query workloads and report their evidence.
 
 Establishes what "too slow" means, so a bound chosen later has a measurement
-behind it rather than an argument. Every figure CoPlan 11.4 requires is reported
-together: phase timing, rows, source bytes, peak allocation, SQLite plans, and a
-digest over the ordered result.
+behind it rather than an argument. Every figure is reported together: phase
+timing, rows, source bytes, peak allocation, SQLite plans, and a digest over
+the ordered result.
 
 Two sizes per workload. The correctness case is small enough to assert exact
 results on and exists to prove the measurement measures the right thing; the

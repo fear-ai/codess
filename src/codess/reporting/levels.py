@@ -1,22 +1,21 @@
 """Gates, limits, and the two profiles that set them together.
 
-Report 6 specifies three gates applied cheapest-first, and Report 11 and 15.5
-specify that volume and privacy are each chosen once per run rather than per
-call site. Both live here because a gate reads a limit and a limit comes from a
-profile.
+Three gates are applied cheapest-first, and volume and privacy are each chosen
+once per run rather than per call site. Both live here because a gate reads a
+limit and a limit comes from a profile.
 
 The gates, in the order a call pays them, with the cost measured on this
-implementation rather than on Report 2's prototypes:
+implementation rather than on the design prototypes:
 
   (a) compile-time   a literal `False` build constant folds the site away   16 ns
   (b) import-time    below MIN_LEVEL, checked after the sink table         86 ns
   (c) run-time       no sink attached, checked before any construction     76 ns
 
-(c) must precede construction, which is the defect Report 6 records in the
-current facility: it builds the record and then decides not to emit it.
+(c) must precede construction, which is the defect in the facility this
+replaced: it built the record and then decided not to emit it.
 
-(b) and (c) cost more than Report 3 estimated, because `**fields` packs a dict
-before the function body runs and no in-body gate can precede that -- the
+(b) and (c) cost more than predicted, because `**fields` packs a dict before
+the function body runs and no in-body gate can precede that -- the
 reasoning is on `api.event`. (a) is the only gate that reaches a per-call cost
 low enough for a site inside a decode loop, which is why it exists separately.
 """
@@ -32,23 +31,23 @@ from codess.reporting.codes import DEBUG, ERROR, INFO, LEVEL_BY_NAME, WARNING
 # Read from the environment at import so it is a module constant by the time any
 # call site is compiled. A site written as `if REPORT_TRACE:` around a per-record
 # trace point costs nothing when this is False, because CPython folds a branch on
-# a literal-bound constant (Report 2.4). It is deliberately separate from the
-# level gate: a trace point inside the decode loop should not exist in a
-# deployment build at all, which is a stronger statement than "not emitted".
+# a literal-bound constant. It is deliberately separate from the level gate: a
+# trace point inside the decode loop should not exist in a deployment build at
+# all, which is a stronger statement than "not emitted".
 REPORT_TRACE = os.environ.get("CODESS_REPORT_TRACE", "0").strip().lower() in (
     "1", "true", "yes",
 )
 
 # --- Limits ------------------------------------------------------------------
 MAX_FIELD_BYTES = 4 * 1024
-"""Report 6. A scalar longer than this is truncated with a marker.
+"""A scalar longer than this is truncated with a marker.
 
 Truncation is visible rather than silent: an unexpectedly large value is
 evidence about the caller, and hiding it would remove the signal.
 """
 
 MAX_FIELDS = 24
-"""Report 6. Fields past this are dropped and counted, never raised (R10)."""
+"""Fields past this are dropped and counted, never raised (R10)."""
 
 
 class Profile:
@@ -78,8 +77,8 @@ class Profile:
         )
 
 
-# Report 11's table. `deployment` is the default because an ordinary run should
-# report what an operator must act on and nothing else.
+# `deployment` is the default because an ordinary run should report what an
+# operator must act on and nothing else.
 PROFILES: dict[str, Profile] = {
     "debug": Profile(
         "debug", min_level=DEBUG, sinks=("human",), flush_events=32,
@@ -99,7 +98,7 @@ PROFILES: dict[str, Profile] = {
     ),
 }
 
-# Report 15.5. `local` is the default deliberately: Codess reads a developer's
+# `local` is the default deliberately: Codess reads a developer's
 # own data on their own machine, so redacting by default would make the ordinary
 # case harder to read against a risk the ordinary case does not carry. The
 # profile exists so that *sharing* is a choice with a mechanism.

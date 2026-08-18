@@ -90,7 +90,7 @@ def severity(state: str) -> str | None:
     granularity column beside it in `mapping_diagnostics` and produced exactly
     that confusion: the emitted dict carried `level` meaning severity and
     `diagnostic_level` meaning granularity, and the store read the second into
-    the column named after the first (CoPlan W50).
+    the column named after the first.
     """
     if state in _WARN_STATES:
         return "warn"

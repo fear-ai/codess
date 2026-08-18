@@ -91,13 +91,13 @@ every other module in that package -- catalog, store, query, scan/ingest
 coordination, snapshot, retention, evidence, per-vendor source access
 (`codex_source.py`, `cursor_source.py`), and shared utilities -- is a flat
 file at the same directory level, not grouped into further subdirectories.
-The Component Responsibilities table in 3.2 and the Dependency Rules in 3.3
+The Component Responsibilities table and the Dependency Rules below
 are the actual grouping and boundary authority; this diagram shows where
 files sit on disk, which is coarser than and does not substitute for either.
 A prior version of this diagram implied a directory split by concern (source
 access, domain, store, query, operations) that does not exist in the source
 tree; the dependency rules those directories would have encoded are enforced
-in code today (see 13.2, 13.4.1) independent of physical file placement.
+in code today independent of physical file placement.
 
 The installed entry point is `codess.project:console_main`. Normal users invoke
 `codess`; modules below `src/` are implementation surfaces rather than separate
@@ -200,7 +200,7 @@ where a source-access module does not already own the storage in question.
 already owned Cursor connections and key ranges, so the audit's own
 connection was a second, weaker implementation of a solved problem rather
 than access the exception was needed for. Its queries now live with the rest
-of Cursor selection (6.4), and the audit owns the report. Where the exception
+of Cursor selection, and the audit owns the report. Where the exception
 does still apply -- an audit over a vendor shape no ingest path reads -- the
 bound is the same: read-only, structure-only, and not a second decode.
 
@@ -210,7 +210,7 @@ must not become hidden vendor parsers.
 
 ### 3.4 Snapshot File-Access Case Study
 
-Section 3.2 assigns `snapshot` sole behavioral authority over "publication
+The Component Responsibilities table assigns `snapshot` sole behavioral authority over "publication
 and retained evidence." Before the consolidation described here, that
 assignment was true in intent but not in the code: the physical layout it
 governs -- `.codess/`, `current.json`, `manifest.json`,
@@ -218,7 +218,7 @@ governs -- `.codess/`, `current.json`, `manifest.json`,
 constructed and, in several cases, independently *read and hash-verified*
 by twelve modules with no shared implementation. This section records what
 was found, because the specific shape of the duplication is the evidence
-for the dependency rules in 3.3, not merely a historical note.
+for the dependency rules above, not merely a historical note.
 
 #### 3.4.1 What Was Duplicated
 
@@ -307,7 +307,7 @@ not visible without deliberately comparing the two.
   pass/fail checks on files that may be large (a raw-capture object, a
   SQLite store) and must stream rather than be held in memory, and
   `rewrite_hash` for a verified read-modify-write. `CODESS_NO_HASH` /
-  `--no-hash` (Operations.md 9.5) is a recovery/debugging bypass built on
+  `--no-hash` is a recovery/debugging bypass built on
   the same primitives, not a separate mechanism -- every module that calls
   `read_hash`/`verify_hash`/`rewrite_hash` observes the bypass identically,
   rather than each needing its own opt-out check.
@@ -322,8 +322,8 @@ not visible without deliberately comparing the two.
 The mechanism observed here -- a module needs one fact from a file another
 module already owns, a three-line inline read is smaller than a shared-code
 change, the inline read silently drops a check the canonical path performs
--- is not specific to snapshot files. Section 14 (Current Task List)
-already tracks the Cursor SQL boundary as a comparable case: a second
+-- is not specific to snapshot files. [CoTasks](CoTasks.md)
+tracked the Cursor SQL boundary as a comparable case: a second
 module reimplementing access to state its owning module already exposes.
 Any future audit for the same pattern should look for the same three
 preconditions -- a shared physical format, more than one module reading it
@@ -1017,7 +1017,7 @@ logging, progress messages, and error reporting. [Report](Report.md) is the
 authoritative specification -- measured costs, event structure, capability gates,
 time sources, buffering, backends, profiles, the error boundary, and privacy
 classes -- and what the implementation established, including one cost figure
-Report over-predicted, is in [CoReview 4.12](CoReview.md#412-the-reporting-facility).
+Report over-predicted, is in [CoReview](CoReview.md#the-reporting-facility).
 
 The design sketch that stood here is removed rather than retained beside a fuller
 one: two specifications of the same subsystem is how a reader ends up
@@ -1264,7 +1264,7 @@ unrecognized pattern, and no exploitable injection was found.
 
 Neither the count of currently-suppressed sites nor the list of files that
 carry them belongs in this document: both change as sites are read,
-rewritten (10.4.2 gives the rewrite criteria), or newly introduced and
+rewritten under the criteria below, or newly introduced and
 reviewed, and a number or file list written into prose goes stale the next
 time either happens without anyone updating the text. Run
 `tools/report_sql_suppressions.py` for the current figures instead of
@@ -1275,7 +1275,7 @@ an existing exemption was removed without a rewrite, and needs the same
 read-and-classify treatment as every other site before it ships.
 
 Each remaining site is covered by a file-level
-`[tool.ruff.lint.per-file-ignores]` entry in `pyproject.toml` (10.4.4), added
+`[tool.ruff.lint.per-file-ignores]` entry in `pyproject.toml` (see Suppression Mechanism below), added
 only after manual verification (not before). A source file carries at most a
 single-line pointer at its first S608 site or in its module docstring naming
 the permitted pattern its sites use, so the suppression is locally traceable
@@ -1309,7 +1309,7 @@ need:
   apart across separate triple-quoted blocks, splitting `IN (` from its
   closing `)` across list items — a net readability loss, not a style
   disagreement; the SQL's own structure is what gets fragmented. An
-  f-string with no source annotation (10.4.4) is the better response here
+  f-string with no source annotation (see Suppression Mechanism below) is the better response here
   even though a mechanical rewrite exists.
 
 **Choose per function, not per query.** If one function contains both a
@@ -1395,8 +1395,8 @@ judgment once a human has named the patterns:
 
 None of this replaces the initial human read that produced the three named
 patterns; it prevents the verified conclusion from silently going stale as
-the codebase changes. It belongs with the mechanical-enforcement checks in
-13.5 once implemented, as a Secure Coding-specific companion to the
+the codebase changes. It belongs with the mechanical-enforcement checks CoReview records
+once implemented, as a Secure Coding-specific companion to the
 import-boundary and SQL-ownership checks already listed there: those check
 *where* SQL may be constructed, this checks *how* the SQL that is
 constructed there stays safe.
@@ -1535,10 +1535,30 @@ Coverage must therefore be read along several dimensions:
 
 CLI integration tests launch child processes. An ordinary parent-process
 coverage run does not attribute those child paths, so a low scan or ingest
-percentage can coexist with successful installed-command tests. W13 must add
-subprocess-aware collection or directly test extracted domain coordinators
-while retaining the subprocess tests. Coverage percentage remains diagnostic;
-completion depends on the named behavior and expected evidence.
+percentage can coexist with successful installed-command tests. Coverage
+percentage remains diagnostic; completion depends on the named behavior and
+expected evidence.
+
+**The command-layer figures from a parent-only run are wrong, not merely
+incomplete**, and by enough to mislead. Measured both ways over the same suite:
+
+| Module | Parent-process only | With child processes attributed |
+|---|---|---|
+| `cli/scan_cmd.py` | 0% | fully covered |
+| `cli/query_cmd.py` | 12% | 73% |
+| `cli/ingest_cmd.py` | 66% | 93% |
+| `codess/walk_sessions.py` | 36% | 87% |
+| **Whole tree** | **79%** | **87%** |
+
+A module reported at 0% that 53 CLI tests exercise is the failure mode to
+recognize: the number describes where coverage was collected, not what the
+suite ran.
+
+**Collecting the child processes** needs `coverage`'s own subprocess support --
+a `.pth` file on the path calling `coverage.process_startup()`, `parallel =
+True`, and `COVERAGE_PROCESS_START` pointing at that configuration, then
+`coverage combine`. Wiring this into the ordinary invocation is W13; until it
+is, read a command-module percentage as unmeasured rather than as untested.
 
 ### 11.3 Validation Sequence
 
@@ -1598,11 +1618,20 @@ observation, and reviewed pruning are implemented sufficiently for current
 operation. Work in these areas is maintenance unless a correctness, recovery,
 or storage defect blocks the core pipeline.
 
-Operational reporting is partial. Ingest has bounded structured progress
-records and attaches selected records to its report, but application logging,
-status rendering, error rendering, and exit behavior do not yet share one
-contract. `codess.reporting` implements it without changing CoSchema mapping
-diagnostics or stdout query results.
+Operational reporting is **built but not adopted**, and the distinction
+matters: `codess.reporting` implements the contract -- gates, event structure,
+sinks, profiles, privacy -- and is exercised by its own tests, while the
+command layer still writes status through the facilities it was built to
+replace. Measured across `src/`: 8 `reporting.*` call sites against 43
+`print(file=sys.stderr)` calls and 63 direct `sys.stderr` writes, all in the
+four command modules.
+
+The stdout half is correct and should not change: a `print()` carrying a
+requested result is the result channel, which is what lets `--output-format
+jsonl` pipe safely. What has not moved is the stderr half -- status, progress,
+warnings, and errors -- which is exactly what the facility exists for. Adoption
+is tracked as a work item; until it lands, the channel separation holds by
+convention at each call site rather than by construction.
 
 ### 12.3 Functionality Baselines
 
@@ -1628,16 +1657,16 @@ Already in place: decode for the three source systems, transactional
 publication with verified snapshots, the typed query surface over Sessions,
 overview, Events, and search, Interaction and Model Turn expansion, and
 bounded JSON and CSV output. The identity and integrity foundation is
-settled -- the write gate consults the executable contract (13.4.4), every
-derived value states what it identifies (13.4.8), and no derivation happens
+settled -- the write gate consults the executable contract, every
+derived value states what it identifies, and no derivation happens
 outside one module.
 
-**Met.** Decode is validated against real Sessions rather than fixtures --
-17 Projects, 142,363 Events, no classification inconsistency
-([CoReview 5](CoReview.md#5-real-source-validation)) -- the discovery lists are
-environment-configurable rather than fixed to one machine's tree, and lint, type,
-and test counts report together so the claims are measurable rather than
-asserted.
+**Met.** Decode is validated against real Sessions rather than fixtures, with no
+classification inconsistency across every Project the development machine holds
+([CoReview](CoReview.md#real-source-validation) records the scale and the
+method) -- the discovery lists are environment-configurable rather than fixed to
+one machine's tree, and lint, type, and test counts report together so the claims
+are measurable rather than asserted.
 
 What this baseline does not require: cross-Project work, external output
 contracts, or performance characterisation. A single Project answered
@@ -1673,17 +1702,17 @@ against, which is the same input Baseline 1's decode validation used.
 rename, algorithm names out of stored values, identity derivation, and an
 Event-kind split landed together as CoSchema format 5; nine constant columns, a
 diagnostic-granularity rename, and one shared vendor description landed together
-as format 6 ([CoReview 4.11](CoReview.md#411-coschema-format-6)). Batching is what
+as format 6 ([CoReview](CoReview.md#coschema-format-6)). Batching is what
 makes that two rebuilds instead of eleven.
 
 #### 12.3.3 Why a Third Baseline Is Not Defined
 
 External consumption -- W16's interface evaluation, W17's cross-Project
-inputs, and the analytical products in 14.5 -- would be the natural third.
+inputs, and the deferred analytical products -- would be the natural third.
 It is not stated as a baseline because no consumer has asked for it. 9.7
 analyses the capability intersection carefully, but building an interface
 against no requester is how a system acquires surfaces nobody uses and
-everybody maintains. The standing rule in 14.5 applies: reopen when a
+everybody maintains. The standing rule for deferred directions applies: reopen when a
 concrete consumer or a measured limitation justifies it, and let that
 consumer's requirements define the baseline rather than this document
 guessing them.

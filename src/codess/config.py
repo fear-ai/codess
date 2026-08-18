@@ -586,7 +586,7 @@ def validate_config() -> list[str]:
                 errs.append(
                     f"{name} entry {value!r} must be relative to the work root"
                 )
-    for name, value in (
+    for name, limit in (
         ("CODESS_MAX_TRANSCRIPT_BYTES", MAX_TRANSCRIPT_BYTES),
         ("CODESS_MAX_CURSOR_CONTAINER_BYTES", MAX_CURSOR_CONTAINER_BYTES),
         ("CODESS_MAX_EVENTS_PER_SOURCE", MAX_EVENTS_PER_SOURCE),
@@ -597,8 +597,8 @@ def validate_config() -> list[str]:
         ("CODESS_MAX_CODESS_DB_BYTES", MAX_CODESS_DB_BYTES),
         ("CODESS_MAX_CURSOR_DB_BYTES", MAX_CURSOR_DB_BYTES),
     ):
-        if value <= 0:
-            errs.append(f"{name}={value} must be > 0")
+        if limit <= 0:
+            errs.append(f"{name}={limit} must be > 0")
     if RAW_MODE not in RAW_MODES:
         errs.append(raw_mode_error("CODESS_RAW_MODE", RAW_MODE))
     if not CC_PROJECTS.is_absolute():

@@ -40,8 +40,8 @@ from codess.reporting.privacy import Roots, render_fields
 CODE, TICK, LEVEL, SCOPE, FIELDS = range(5)
 """Positional accessors, for readability at sink sites where cost is irrelevant.
 
-The literal position is the documentation on the hot path (Report 5); this is
-the same trade CoNotes 1.5 makes for CoSchema field names.
+The literal position is the documentation on the hot path, the same trade
+CoSchema field names make: the literal names what it reads.
 """
 
 
@@ -103,8 +103,8 @@ def wall_text(tick: int) -> str:
     """One tick as ISO 8601 text, resolved only because a sink is rendering.
 
     **The largest single cost on the rendering path, measured at 863 ns, and
-    deliberately not cached.** Report 7 offers a second-granularity cache as
-    optional, "worth it only if flush volume proves high". Measured on a real
+    deliberately not cached.** A second-granularity cache was considered and
+    is not worth it. Measured on a real
     ingest report it is not: 242 events span 211 distinct millisecond timestamps,
     at most 3 sharing one, so a cache would hit about 13% of the time and add a
     dict lookup to the other 87%.
@@ -130,8 +130,8 @@ def _scalar_text(value: object) -> str:
 class HumanSink:
     """Concise lines on stderr, the interactive default.
 
-    Matches the shape `ProgressTrace` emits today, so the transition is not
-    also a change in what an operator reads (Report 12.3 step 4).
+    Keeps the line shape the previous progress facility emitted, so replacing
+    it was not also a change in what an operator reads.
     """
 
     def __init__(
@@ -349,8 +349,8 @@ class BridgeSink:
     """Events into the standard library's `logging`, for a call site that has no
     reporter.
 
-    Report 12.1 adopts stdlib `logging` for exactly this and rejects it as the
-    primary path: a `LogRecord` has no place for a counter, and `basicConfig` is
+    Stdlib `logging` is adopted for exactly this and rejected as the primary
+    path: a `LogRecord` has no place for a counter, and `basicConfig` is
     process-global state a bounded command should not depend on. As a *sink* it
     is the right shape -- a library whose caller configured logging and never
     calls `reporting.configure` still reaches a handler.
@@ -399,8 +399,8 @@ class BridgeSink:
 class NullSink:
     """Accepts and discards, so a benchmark measures the operation.
 
-    Report 11: with the compile gate off and this attached, reporting
-    contributes nothing measurable to a timing run -- which is what makes the
+    With the compile gate off and this attached, reporting contributes nothing
+    measurable to a timing run -- which is what makes the
     measured workloads report ingest rather than ingest plus instrumentation.
     """
 
@@ -456,8 +456,7 @@ def build(
     """Construct the named sinks for a profile.
 
     An empty tuple is the fast path the run-time gate checks: with no sink
-    attached, a reporting call returns before constructing an event at all
-    (Report 6c).
+    attached, a reporting call returns before constructing an event at all.
     """
     built = []
     for name in names:

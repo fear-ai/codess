@@ -207,7 +207,7 @@ def audit(
                 ),
             })
         for row in conn.execute(configuration_sql, configuration_params):
-            values = {field: row[field] for field in SETTING_FIELDS}
+            settings = {field: row[field] for field in SETTING_FIELDS}
             source_params = None
             if row["source_params"]:
                 try:
@@ -231,7 +231,7 @@ def audit(
             turns_with_occurrence_provenance += occurrence_provenance
             configurations.append({
                 "project_path": str(store["project_path"]),
-                "configuration_id": row["id"], **values,
+                "configuration_id": row["id"], **settings,
                 "source_params": source_params,
                 "provenance_state": "recorded" if source_params else "normalized_only",
                 "model_turn_occurrences": turn_occurrences,

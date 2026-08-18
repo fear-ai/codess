@@ -181,3 +181,25 @@ warn_unused_ignores = true
 #   disallow_untyped_defs  -- broad annotation work, no owning item
 #   strict_optional        -- W04, at the decode boundary
 #   warn_return_any        -- W04, same reason
+
+[tool.coverage.run]
+# CLI integration tests exercise the command layer by launching a child
+# `codess` process, so a parent-only run reports 0% for modules those tests
+# cover thoroughly. `parallel` writes one data file per process and
+# `coverage combine` merges them; the child processes start measuring because
+# `tests/conftest.py` sets COVERAGE_PROCESS_START and installs a sitecustomize
+# path entry for them.
+parallel = true
+branch = true
+source = ["src/codess", "src/cli"]
+
+[tool.coverage.paths]
+# The child runs from the same checkout, but may resolve src/ through a
+# different prefix; without this the combined report lists a module twice.
+source = ["src/", "*/src/"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

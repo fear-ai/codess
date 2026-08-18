@@ -237,6 +237,35 @@ def connect(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
     return conn
 
 
+def connect_readable(db_path: Path) -> sqlite3.Connection:
+    """Open one store read-only, confirming its core tables are queryable.
+
+    `connect` validates the store's identity and format; this additionally
+    reads from `sessions` and `events`, so a caller learns that a store is
+    truncated or foreign before a query is part-way through rather than
+    mid-result. The connection is closed before the error propagates, since a
+    failed open must not leak a handle.
+
+    Lives here rather than in the command layer because it constructs SQL: a
+    module that adapts arguments and renders results does not own a statement,
+    however small.
+    """
+    conn = connect(db_path, read_only=True)
+    try:
+        conn.execute("SELECT 1 FROM sessions LIMIT 1")
+        conn.execute("SELECT 1 FROM events LIMIT 1")
+    except sqlite3.Error as exc:
+        # The probe reads core tables, so a driver failure here means the same
+        # thing `connect` would have reported and is raised as the store
+        # layer's error rather than the driver's.
+        conn.close()
+        raise StoreError(f"cannot read store {db_path}: {exc}") from exc
+    except Exception:
+        conn.close()
+        raise
+    return conn
+
+
 def table_counts(
     conn: sqlite3.Connection, tables: Iterable[str] | None = None,
 ) -> dict[str, int]:
@@ -1366,7 +1395,7 @@ def _record_artifact(conn: sqlite3.Connection, event: dict[str, Any], row_id: in
     absolute = os.path.realpath(os.path.expanduser(path)) if os.path.isabs(path) else (
         os.path.realpath(os.path.join(project_path, path)) if project_path else None
     )
-    relative = path
+    relative: str | None = path
     uri = None
     artifact_metadata = None
     if absolute and project_path:

@@ -65,7 +65,7 @@ class QueryContractError(ValueError):
 # concern (a very long LIKE pattern) and a legibility concern (control chars,
 # markup, or script-like content echoed back in results/errors).
 #
-# Searched content is bounded UTF-8 (CoPlan.md 7.3) and can legitimately
+# Searched content is bounded UTF-8 and can legitimately
 # contain any Unicode text (non-English strings, emoji, symbols in code).
 # The charset bound therefore excludes only control/formatting characters,
 # matching sanitize.py's CONTROL_CHARS_RE precedent, not non-ASCII text.

@@ -825,9 +825,9 @@ def parse_and_run(argv: list[str] | None = None) -> int:
     try:
         return handler(args)
     finally:
-        # A batch below the flush threshold must still reach the sink before the
-        # process ends (Report 8). In `finally` so an error path reports what it
-        # had recorded rather than losing it with the exception.
+        # A batch below the flush threshold must still reach the sink before
+        # the process ends. In `finally` so an error path reports what it had
+        # recorded rather than losing it with the exception.
         reporting.flush()
 
 

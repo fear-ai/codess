@@ -526,10 +526,10 @@ def check_policy_format(
 
     candidate_review.validate_policy and baseline_validation.load_policy
     each hand-rolled this exact format-marker-then-unknown-fields sequence
-    for their own differently-shaped policy documents; every field beyond
-    this is genuinely specific to each document and stays in its own
-    module -- see CoPlan.md 13.4.2 for why this is a narrow, not a
-    5-function, consolidation.
+    for their own differently-shaped policy documents. Only that sequence is
+    shared: every field beyond it is specific to its document and stays in the
+    module that owns it, so this is a narrow extraction rather than one
+    validator for both.
     """
     if policy.get("policy_format") != expected_format:
         raise ValueError(f"{document_name} must declare {expected_format}")

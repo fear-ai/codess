@@ -3,8 +3,8 @@
 
 Codess ships its grouping and exclusion lists empty, because a default drawn
 from one machine's tree misclassifies directories on every other one. This is
-the first step of the setup sequence in Operations 10.5.2: it states what the
-running process resolved -- not what a documentation table says -- and then
+the first step of the documented setup sequence: it states what the running
+process resolved -- not what a documentation table says -- and then
 proposes candidates from the operator's own tree for them to edit.
 
 It reads directory names and vendor indexes. It does not read Session content,

@@ -1,11 +1,11 @@
 """Repeatable performance workloads: what to measure, and what to record with it.
 
-A timing on its own is not evidence. CoPlan 11.4 requires that performance
-evidence record the selected shape, phase timing, source bytes, selected record
-counts, SQLite plans and rows visited, memory, and the ordered result identity --
-because an optimization is only complete when *the functional result is
-unchanged* and the measured bottleneck improves. A run that got faster and
-returned different rows has not improved anything.
+A timing on its own is not evidence. Performance evidence records the selected
+shape, phase timing, source bytes, selected record counts, SQLite plans and
+rows visited, memory, and the ordered result identity -- because an
+optimization is only complete when *the functional result is unchanged* and the
+measured bottleneck improves. A run that got faster and returned different rows
+has not improved anything.
 
 **Why this exists before the bounds that need it.** Bounding a read without a
 repeatable workload means choosing the limit by argument: any number can be
@@ -57,7 +57,7 @@ CASE_SIZES: dict[str, int] = {
 
 @dataclass
 class Measurement:
-    """One measured phase, with everything CoPlan 11.4 requires beside it.
+    """One measured phase, with the evidence that makes it comparable beside it.
 
     A dataclass rather than a dict so a missing field is a construction error
     rather than a report that silently omits the evidence it was supposed to
@@ -280,8 +280,7 @@ class Workload:
 
         Result equality is checked before timing and reported first, because a
         faster run that returns different rows is a defect rather than an
-        improvement -- which is the property CoPlan 11.4 requires and the reason
-        a digest is recorded at all.
+        improvement -- which is why a digest is recorded at all.
         """
         phases: dict[str, Any] = {}
         for mine in self.measurements:

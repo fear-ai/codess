@@ -1,5 +1,6 @@
 """Pytest fixtures and configuration."""
 
+import os
 import shutil
 import sys
 import tempfile
@@ -15,6 +16,40 @@ if str(_src) not in sys.path:
 _here = Path(__file__).parent
 if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
+
+
+def pytest_configure(config):
+    """Let child `codess` processes contribute to the coverage run.
+
+    Domain operations launch a second `codess` process, and the CLI integration
+    tests drive the command layer through it. A child starts with no coverage
+    active, so a parent-only run reports those modules as unexecuted however
+    thoroughly the tests exercise them -- `scan_cmd` measured 0% against 53
+    tests that run it.
+
+    `coverage` starts in a subprocess only if `COVERAGE_PROCESS_START` names a
+    configuration *and* something calls `coverage.process_startup()` during
+    interpreter start-up. The supported hook for the second half is a `.pth`
+    file in site-packages, which a checkout must not write. A `sitecustomize`
+    module on `PYTHONPATH` is imported at the same point and needs nothing
+    installed, so the directory holding one is prepended here.
+
+    Does nothing unless the parent is already measuring coverage, so an
+    ordinary `pytest` run is unaffected.
+    """
+    if not os.environ.get("COVERAGE_RUN") and "coverage" not in sys.modules:
+        return
+    support = Path(__file__).parent / "coverage_support"
+    if not (support / "sitecustomize.py").is_file():
+        return
+    os.environ["COVERAGE_PROCESS_START"] = str(
+        Path(__file__).resolve().parent.parent / "pyproject.toml"
+    )
+    existing = os.environ.get("PYTHONPATH", "")
+    if str(support) not in existing.split(os.pathsep):
+        os.environ["PYTHONPATH"] = (
+            f"{support}{os.pathsep}{existing}" if existing else str(support)
+        )
 
 
 @pytest.fixture(autouse=True)

@@ -1,7 +1,7 @@
 """Field rendering under a privacy profile: allowlist, type check, bound.
 
-Report 15.4's three mechanisms, in the order they are applied, each catching
-what the next cannot:
+Three mechanisms, in the order they are applied, each catching what the next
+cannot:
 
 1. **An allowlist.** A field name absent from `codes.FIELD_CLASSES` renders as
    `<unregistered>` under any non-local profile. A denylist fails open, and the
@@ -106,7 +106,7 @@ def _tail(value: str, segments: int = 2) -> str:
     Under `shared`, a root-relative path can still encode the original location,
     because Claude's project directory naming embeds the absolute path in a slug
     -- so making the path root-relative is not enough on its own. Keeping the
-    final two segments is `identity.source_key`'s existing rule (Report 15.4).
+    final two segments is `identity.source_key`'s existing rule.
 
     **This bounds the leak; it does not close it.** Measured on a real ingest,
     `shared` renders a Claude source as
@@ -168,8 +168,8 @@ def render_fields(
 ) -> dict[str, object]:
     """Render a flat (key, value, key, value, ...) tuple into a mapping.
 
-    The flat tuple is the call site's cheap form (Report 5); materializing a
-    mapping happens here, once, for a sink that is actually emitting.
+    The flat tuple is the call site's cheap form; materializing a mapping
+    happens here, once, for a sink that is actually emitting.
     """
     rendered: dict[str, object] = {}
     for index in range(0, len(fields) - 1, 2):

@@ -1742,6 +1742,6 @@ def run(args: argparse.Namespace) -> int:
         progress_trace, opts, diagnostics, outcome,
     )
     # A command boundary: a batch smaller than the flush threshold must still
-    # reach the sink before the process ends (Report 8).
+    # reach the sink before the process ends.
     reporting.flush()
     return 1 if outcome.tally.errors else 0

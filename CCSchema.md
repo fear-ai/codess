@@ -4,7 +4,7 @@ Vendor-specific structure for **Claude Code** (`@anthropic-ai/claude-code`). Nor
 
 **Version note:** Claude Code is distributed as a compiled npm package; on-disk formats evolve. Field names below match current Codess parsing and common installs.
 
-## 1. Source Scope
+## Source Scope
 
 | Field | Value |
 |-------|--------|
@@ -13,7 +13,7 @@ Vendor-specific structure for **Claude Code** (`@anthropic-ai/claude-code`). Nor
 | **Encoding** | UTF-8 JSONL |
 | **Time basis** | `fileMtime` (ms) in index; record `timestamp` in JSONL (ISO or ms) |
 
-## 2. Storage Layout
+## Storage Layout
 
 | Path pattern | Role |
 |--------------|------|
@@ -26,7 +26,7 @@ Vendor-specific structure for **Claude Code** (`@anthropic-ai/claude-code`). Nor
 characters or separators. Codess uses resolved `projectPath` from the index
 when present.
 
-## 3. Selective Access
+## Selective Access
 
 | Method | Use |
 |--------|-----|
@@ -34,7 +34,7 @@ when present.
 | **Codess ingest** | `codess ingest --dir <project>`; reads top-level `*.jsonl` per project slug |
 | **Direct read** | Parse `sessions-index.json` + `fullPath` or glob `*.jsonl` |
 
-## 4. `sessions-index.json`
+## `sessions-index.json`
 
 Array under `entries` (typical fields used by Codess):
 
@@ -49,7 +49,7 @@ Array under `entries` (typical fields used by Codess):
 
 **Observed ranges:** `fileMtime` large ms since epoch; `messageCount` ≥ 0.
 
-## 5. JSONL Records and Runtime Context
+## JSONL Records and Runtime Context
 
 Line-delimited JSON contains both transcript content and Claude Code product
 state. Persisted records are not a verbatim copy of the model's runtime context.
@@ -122,7 +122,7 @@ supported events, Codess removes the prior normalized session and reports an
 
 **Timestamps:** `timestamp` on record or nested in `message`; ISO 8601 strings or numeric ms.
 
-## 6. Subagent and Main-Session Scope
+## Subagent and Main-Session Scope
 
 | Aspect | Main | Subagent (sidechain) |
 |--------|------|----------------------|
@@ -151,7 +151,7 @@ retained in metadata. Main-session records without a delegated/harness marker
 remain human prompts; direct `origin.kind` and typed/queued prompt evidence are
 stronger than that fallback.
 
-## 7. Scan Observations
+## Scan Observations
 
 | Metric | Definition |
 |--------|------------|
@@ -161,7 +161,7 @@ stronger than that fallback.
 | **days_ago** | `(now_ms - max fileMtime)` / 1 day |
 | **span_weeks** | `(max_ts - min_ts)` / 7 days among counted entries |
 
-## 8. Limitations
+## Limitations
 
 - Index may omit `fullPath` → size uses directory rglob (may mix subagent files).
 - Ingest deliberately recurses only below `{parent}/subagents/`; unrelated nested JSONL fragments are not treated as sessions.
@@ -171,7 +171,7 @@ stronger than that fallback.
   replaced with the currently installed Claude version.
 - **Slug decode (implementation impact):** `slug_to_path` is lossy (e.g. hyphen vs path segment). Discovery prefers `projectPath` from `sessions-index.json` when present; `project.py` / scan fall back to slug-derived paths.
 
-## 9. Codess Mapping Boundaries
+## Codess Mapping Boundaries
 
 Mode, permission, attachment, snapshot, AI/custom title, agent name, queue,
 duration, scheduled-task, and direct `fork-context-ref` facts have bounded

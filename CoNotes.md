@@ -10,37 +10,32 @@ the answer, and separate from [CoReview](CoReview.md) because these are
 observations about *how the work was done* rather than findings about the
 software.
 
-## Table of Contents
+## Duplication and Centralization Audits
 
-- [1. Duplication and Centralization Audits](#1-duplication-and-centralization-audits)
-- [2. Observed Process Misses](#2-observed-process-misses)
+CoPlan's snapshot case study names the mechanism these audits look for: a
+module needs one fact, an inline literal is smaller than a shared-code
+change, and the inline copy silently drops a check the canonical path
+performs. The same mechanism was checked against numeric constants, focused
+on byte-size thresholds after `1024`-scale arithmetic was found scattered
+well beyond `config.py`'s already-centralized `resource_policy`-derived
+maximums. Unlike the file-literal case, most of what was found was not
+duplicated -- the audit therefore had to distinguish the two before
+centralizing anything, since collapsing genuinely independent constants
+into a false shared value would be a worse outcome than leaving them alone.
 
-## 1. Duplication and Centralization Audits
+The constant audit and its outcome are below. The final subsection applies
+the same criterion to repeated standard-library calls, where the mechanism
+is identical but the duplication conceals a decision rather than a value,
+and is therefore harder to see and more consequential when it diverges.
 
-The same "a module needs one fact, an inline literal is smaller than a
-shared-code change" mechanism from 3.4 was checked against numeric
-constants, focused on byte-size thresholds after `1024`-scale arithmetic
-was found scattered well beyond `config.py`'s already-centralized
-`resource_policy`-derived maximums. Unlike the file-literal case, most of
-what was found was not duplicated -- the audit therefore had to
-distinguish the two before centralizing anything, since collapsing
-genuinely independent constants into a false shared value would be a worse
-outcome than leaving them alone.
-
-3.5.1 through 3.5.3 record that constant audit and its outcome. 3.5.4
-applies the same criterion to repeated standard-library calls, where the
-mechanism is identical but the duplication conceals a decision rather than
-a value, and is therefore harder to see and more consequential when it
-diverges.
-
-### 1.1 Two Confirmed Duplication Clusters
+### Two Confirmed Duplication Clusters
 
 | Value | Meaning | Independent declarations found |
 |---|---|---|
 | 128 MiB | A normalized store at or above this size is labelled "large" | `cli.admin_cmd` (`--large-bytes` default, two subcommands), `refresh_operations` (two function parameter defaults), `project_annotations` (`DEFAULT_LARGE_STORE_BYTES`) |
 | 2 MiB | A single-line source record above this size is rejected | `cli.admin_cmd` (`--max-record-bytes` default, two subcommands), `bounded_jsonl` (`DEFAULT_MAX_RECORD_BYTES`) |
 
-Both clusters shared the same origin as 3.4's file-literal case: the value
+Both clusters shared the same origin as the file-literal case: the value
 was correct everywhere it appeared, nothing was functionally broken, and
 each independent declaration was individually reasonable at the moment it
 was written. The risk was latent, not active -- a future change to either
@@ -49,7 +44,7 @@ no mechanism forcing that to happen. Both are now defined once in
 `config.py` (`LARGE_STORE_BYTES`, `MAX_RECORD_BYTES`) and imported
 everywhere they were previously re-declared.
 
-### 1.2 Genuinely Independent Constants, Centralized on Request
+### Genuinely Independent Constants, Centralized on Request
 
 The remaining `1024`-scale constants found were each a distinct, correctly
 scoped decision with no duplication:
@@ -63,7 +58,7 @@ scoped decision with no duplication:
 | `DEFAULT_QUERY_BYTE_LIMIT` (16 MiB) | `cli.query_cmd` | Default maximum inline content bytes for one typed query result, overridden by explicit `--byte-limit` |
 
 None of these were wrong or duplicated -- each was the single place its own
-governing decision lived, which is the outcome 3.4's consolidation was
+governing decision lived, which is the outcome the file-literal consolidation was
 working toward for file literals. They were moved to `config.py` on an
 explicit decision to optimize for one discoverable location over literal
 proximity to the one function that uses each value, not because leaving
@@ -81,14 +76,14 @@ under a separate heading in `config.py` for this reason; a future reader
 should not infer a governance meaning from their presence next to the
 threshold constants above.
 
-### 1.3 What Was Deliberately Left Alone
+### What Was Deliberately Left Alone
 
 Several other `1024`-shaped expressions were checked and are not
 duplicated, not policy thresholds, and were left as local arithmetic:
 
 - `resource_policy.BUILTIN_MAXIMUMS` (`transcript_bytes`, `cursor_container_bytes`)
   is the source `config.py` itself already reads from via the table-driven
-  env-var defaults (12.1); moving it would invert that ownership rather
+  env-var defaults; moving it would invert that ownership rather
   than fix a duplication.
 - `bounded_jsonl`'s `1024`-byte floor on `max_record_bytes` is a sanity
   minimum on a caller-supplied value, not a default or a threshold shared
@@ -104,10 +99,10 @@ duplicated, not policy thresholds, and were left as local arithmetic:
   convention, not a Codess policy value.
 
 Centralizing these would have added indirection without removing any real
-duplication -- the same failure mode 3.4.4 warns against for file literals,
+duplication -- the same failure mode that applies to file literals,
 applied to numbers instead of names.
 
-### 1.4 The Same Audit Applied to Low-Level Calls
+### The Same Audit Applied to Low-Level Calls
 
 The constant audit above asks one question -- *is this literal a shared
 decision or an independent one?* -- and the answer decides whether
@@ -126,7 +121,7 @@ constant criterion to calls rather than literals.
 
 The pattern is uniform. Each site was individually reasonable, nothing was
 visibly broken, and the duplication was accumulated rather than chosen --
-the same origin 3.5.1 records for the byte-size clusters. What differs is
+the same origin recorded above for the byte-size clusters. What differs is
 the consequence. A duplicated constant risks a *future* inconsistency when
 one site is updated and others are missed; a duplicated call already
 carries an *embedded decision*, so the sites can diverge without anyone
@@ -143,7 +138,7 @@ not the ranking the site counts suggest:
   the smallest cluster.
 - **Unreviewed values.** The SHA-256 widths were selected per site; of the
   five key sites, one turned out not to need a hash at all and the rest moved
-  to declared widths (13.4.8). Resolved under W20.
+  to declared widths. Resolved.
 - **Reader confusion.** The `_now` return-type split means a name does not
   predict its own type. No incorrect behavior, but every reader must check.
 
@@ -243,7 +238,7 @@ in `experiments/structural-analysis-tools.md`.
 
 Dead-code detection over the same tree found nine definitions with no
 consumer, of which two -- `_source_predicate` and `_limited` in `query_cmd`
--- were residue from W06 step 6: their callers moved to `query_reports` and
+-- were residue from the command-layer split: their callers moved to `query_reports` and
 the originals stayed, called by nothing. A suite passing throughout is
 expected, since a function nothing calls breaks nothing when removed. The
 same class had already been found once by hand (`store.replace_source_sessions`
@@ -260,7 +255,7 @@ symmetric set, which wants isolation rather than deletion; and something that
 
 The fourth class is why the list is worth reading. `schema_contract.validate_mapped_event`
 is exercised by four test modules and called from no production path --
-which is exactly 13.4.2's finding that it "is not a common ingest boundary",
+which matches the review finding that it "is not a common ingest boundary",
 tracked as W04. A dead-code report and an open architectural item pointed at
 the same function from opposite directions.
 
@@ -342,7 +337,7 @@ constructions keep their read policy in `fileio`: only the digest
 construction was a shared decision, not the bounded-window sampling around
 it.
 
-### 1.5 Coupling and Separation of Concerns
+### Coupling and Separation of Concerns
 
 The audits above work upward from individual values. Two further passes
 look at the codebase as a whole -- one from repeated values, one from module
@@ -364,7 +359,7 @@ Three reasons, in order of weight.
 First, the indirection loses information. `row["project_id"]` names the
 column it reads; `row[FIELD_PROJECT_ID]` names a constant that names the
 column, so every reader resolves one extra hop to learn the same fact. That
-is the cost 3.5.3 warns about for constants, and it applies with more force
+is the cost named above for constants, and it applies with more force
 here because the literal *is* the documentation.
 
 Second, constants would not catch the actual failure. A misspelled key fails
@@ -380,7 +375,7 @@ search-and-replace with no mechanical check. A test asserting that every
 field name used in a query exists in `contract.json` closes exactly that gap,
 catches the misspelling case that constants do not, and leaves the call sites
 readable. That is the better trade, and it belongs with the mechanical checks
-in 13.5 rather than with a renaming pass.
+with CoReview's mechanical-enforcement checks rather than with a renaming pass.
 
 Closed vocabularies are the opposite. Their values are enumerated in
 CoSchema and validated at the store boundary, so a wrong literal is a
@@ -390,7 +385,7 @@ naming it is genuinely clarifying. These are the ones worth extracting.
 **Which vocabularies are actually closed, on inspection.** The examples this
 table originally listed -- Actor kinds, origin kinds, content roles -- are
 not among them. `contract.json` declares all three `open_vocabulary`, and
-CoSchema 6 states the rule directly: "Common classifications remain open
+CoSchema states the rule directly: "Common classifications remain open
 where vendor evidence can introduce useful new values. Closed taxonomies are
 used only where stable query behavior requires a bounded vocabulary."
 Extracting them as enumerations would have contradicted the design and
@@ -455,7 +450,7 @@ so the three change scenarios cost very differently.
 | Add a processing step for every vendor | All three adapters, plus `store` if the common model gains a field | Reasonable. Repetition across three adapters is the cost of keeping vendor decode separate, and is preferable to a shared decoder with per-vendor branches |
 | Add a fourth vendor | Sixteen files, including every command module, `config`, `walk_sessions`, `project`, `snapshot`, `evidence`, `token_usage`, `storage_report`, and `schema_contract` | The defect. Most of those files need only a *description* of the vendor -- its key, display name, paths, store filename -- not knowledge of how it decodes |
 
-The third row is the argument for W24. The adapters are legitimately
+The third row is the argument for one vendor table. The adapters are legitimately
 per-vendor and would still be written for a new vendor; what should not be
 required is editing a dozen unrelated modules that merely enumerate vendors.
 Once one vendor table supplies keys, display names, paths, and store
@@ -471,11 +466,11 @@ does not address.
 about twenty functions -- an average near a hundred lines each -- and
 `cli/query_cmd.py` is third largest. A command module should adapt
 arguments, call a domain operation, and render a result; these run ingest
-workflows and report SQL directly. This is W06, and the size measurement is
-the argument for prioritizing it: the two largest modules in the codebase
-are both in the layer that should hold the least.
+workflows and report SQL directly. The size measurement was the argument for
+prioritizing the split: the two largest modules in the codebase were both in
+the layer that should hold the least.
 
-W06 has since closed on exactly this reading. `ingest_cmd` is about 1,400
+That separation has since closed on exactly this reading. `ingest_cmd` is about 1,400
 lines and `query_cmd` about 1,350, with the workflows in `ingest_sources`,
 `ingest_publication`, and `query_reports`; neither command module decodes a
 source, opens a publication transaction, or writes a report query. The
@@ -486,23 +481,23 @@ describe it should be read together.** Each was found by a different route
 and each is a face of the same thing: state whose lifetime is not expressed
 by the structure holding it.
 
-| Item | Where it shows | Status |
+| Case | Where it shows | Status |
 |---|---|---|
-| **W06** step 4 | `opts` mixed three lifetimes -- run-wide inputs, run-wide collectors, per-Project state -- in one dict every adapter takes whole | Complete: `ProjectScope` names the per-Project half, so the lifetimes are distinguishable at a call site |
-| **W45** | `_ingest_project` took 17 parameters and `_cursor_preflight` 10 -- **5 accumulators and 12 read-only inputs**, the same three lifetimes hoisted from the dict into a signature | Complete |
+| **Command-layer `opts`** | `opts` mixed three lifetimes -- run-wide inputs, run-wide collectors, per-Project state -- in one dict every adapter takes whole | Complete: `ProjectScope` names the per-Project half, so the lifetimes are distinguishable at a call site |
+| **Ingest signatures** | `_ingest_project` took 17 parameters and `_cursor_preflight` 10 -- **5 accumulators and 12 read-only inputs**, the same three lifetimes hoisted from the dict into a signature | Complete |
 | **Phase extraction** | It found three calls to `run`'s `cleanup_cursor_cohort` closure from functions where it no longer resolved, plus a bare `1` where a tuple was required -- all correct while the state was implicit in one scope | Complete |
-| **W38** | `query_cmd` assembles 27 rows by hand because no object owns "a report row" | Planned |
-| **W42** | `codex.process_file`'s 27 `None` guards are the absence of a type that says "content, or dropped by policy" | Planned |
+| **Report rows** | `query_cmd` assembled 27 rows by hand because no object owned "a report row" | Complete |
+| **Dropped-content guards** | `codex.process_file`'s 27 `None` guards are the absence of a type that says "content, or dropped by policy" | Complete |
 
-The order held, and both are now closed. **W45 and W06 step 4 were one
-change**: `IngestConfig` and `RunTotals` took `_ingest_project` from 17
+The order held, and both are now closed. **The signature and `opts` cases were
+one change**: `IngestConfig` and `RunTotals` took `_ingest_project` from 17
 parameters to 10, and `ProjectScope` finished it by naming the per-Project
 lifetime as a type rather than seven keys a reader had to recognize. The
 `opts` dict itself stays, because the adapters take it as their diagnostics
 sink; what changed is that its three lifetimes are no longer
 indistinguishable at a call site.
 
-**W46 followed W45, as required.** The Cursor selection-marker decision --
+**The Cursor cache change followed, as required.** The selection-marker decision --
 cache load, scan on miss, container-stability bracket, cache save -- moved to
 `cursor_cohort.resolve_selection_markers`, which is the module that declares
 it owns Cursor caching. The command now reports what it resolved. Three
@@ -595,13 +590,13 @@ per-session files, so selection and caching are separate concerns. Claude
 Code and Codex have feature-audit modules while Cursor's sits elsewhere.
 And `cli.ingest_cmd` alone carries 138 references -- more than every
 adapter combined -- which is not a vendor property at all but the command-
-layer concentration W06 tracks.
+layer concentration recorded above.
 
 **Expected reduction.** The vendor table does not delete files; it removes
 knowledge from them. The 17 enumerate files should drop to near zero vendor
 references, since almost all of what they name is description rather than
 behavior. The 4 dispatch files retain argument validation only, and shrink
-much further now that W06 has moved their workflows into domain modules. The 8
+much further now that their workflows have moved into domain modules. The 8
 decode files and 3 incidental ones are unaffected. So the count of files
 naming a vendor should fall from 32 to roughly 11 -- the decode layer plus
 the vendor table itself -- and the count that must change to add a vendor from
@@ -615,7 +610,7 @@ not be called a registry in prose or in code. `VENDORS` as an ordered tuple
 with lookup helpers needs no collective noun; where one is unavoidable,
 "vendor table" or "vendor descriptions" avoids the clash.
 
-**Cursor SQL is a separate axis, and now closed.** W10 concerned *where
+**Cursor SQL is a separate axis, and now closed.** That work concerned *where
 vendor SQL lives*, not which modules know vendor names, and it is complete:
 `cursor_source` owns every vendor-table query and connection, and
 `adapters/cursor.py` has no SQL and no SQLite dependency. The adapter asks
@@ -624,25 +619,26 @@ for records by path (`read_composer_data`, `open_bubble_rows`,
 remaining `cursorDiskKV` mentions are record-type labels retained as source
 evidence, which is correct.
 
-That leaves W24 free of interference: W10 pushed vendor-specific *access*
-down into the source layer, while W24 pulls vendor-specific *description*
+That leaves the vendor table free of interference: the SQL boundary pushed
+vendor-specific *access* down into the source layer, while the table pulls
+vendor-specific *description*
 out of unrelated modules. The Cursor module partitioning the closed boundary
-made assessable was W26, now settled: the four-way split holds, and the one
-module that spanned two concerns was corrected (6.4).
+made assessable was the Cursor module split, now settled: it holds, and the one
+module that spanned two concerns was corrected.
 
-**Sequencing.** W24 is unblocked. W06 was complementary rather than
+**Sequencing.** The vendor table is unblocked. The command-layer split was complementary rather than
 blocking -- the vendor table reduces what command modules *know* about
-vendors, while W06 reduced what they *do* at all -- and is now complete, so
-W24 runs against a command layer that no longer holds the workflows. The
+vendors, while the split reduced what they *do* at all -- and is now complete,
+so the table runs against a command layer that no longer holds the workflows. The
 vendor references remain, since moving a workflow does not remove a name:
 `ingest_publication` carries its own vendor table, which is one of the
-partial views W24 consolidates.
+partial views the table consolidates.
 
 What it must not become is a home for vendor *behavior*. Decoding differences
 belong in the adapters, and a vendor table that starts holding decode callbacks
-recreates the vendor mixing 3.5.5 identifies in the command layer, only
+recreates the vendor mixing identified in the command layer, only
 centralized. The boundary is that the registry describes vendors and the
-adapters interpret them, which is the same separation W10 established for
+adapters interpret them, which is the same separation established for
 Cursor source access.
 
 **Top-down: command modules concentrate every concern.** Measuring how many
@@ -655,9 +651,9 @@ concerns collect:
 | `cli.ingest_cmd` | Nearly as high | All three vendors by name, plus transactions, raw capture, and publication |
 | `cli.query_cmd` | Third | Report SQL alongside argument adaptation |
 
-This is the same finding as **W06**, recorded here with a measurement behind
+This is the same command-layer finding, recorded here with a measurement behind
 it rather than an impression; the workflow half is now resolved, and the
-vendor-naming half is W24's. The vendor mixing is the sharper half: `cli.ingest_cmd`
+vendor-naming half belongs to the vendor table. The vendor mixing is the sharper half: `cli.ingest_cmd`
 names Claude Code, Codex, and Cursor throughout, so adding or changing a
 vendor means editing a command module. `store` and `walk_sessions` mix
 vendors too, but for a defensible reason -- they implement the common model
@@ -675,7 +671,7 @@ modules by size. `project_catalog` is large and contained two functions over
 a hundred lines each (`ensure_project_binding`, `catalog_readiness`), which
 was worth reducing -- but by extracting the steps those functions perform,
 not by dividing the module, since catalog identity, locations, and readiness
-are one concern. The failure mode to avoid is the one 3.5.3 records for
+are one concern. The failure mode to avoid is the one recorded above for
 constants: rearranging structure without removing a shared decision leaves
 the same coupling with more files to read.
 
@@ -711,7 +707,7 @@ function called `datetime.now(UTC)` three times while recording one
 observation, so a single logical event could be stamped at three different
 instants; the value is now computed once and applied to the entry, the
 location, and the catalog together. This is the same failure the removal of
-the `_now` wrappers found in this module's other write paths (14.4), which is
+the `_now` wrappers found in this module's other write paths, which is
 evidence for the general point rather than a coincidence: a hundred-line
 function hides repeated calls that a four-step one does not.
 
@@ -735,7 +731,7 @@ than for the value the first write used. The rule that follows is narrow --
 *one recorded event, one clock read* -- and it does not extend to intervals
 or to per-item stamps, where two reads are the point.
 
-## 2. Observed Process Misses
+## Observed Process Misses
 
 Specific misses observed during real review and implementation sessions -- in
 evaluation, in documentation, and in code -- with the instruction that would have
@@ -748,12 +744,12 @@ happening", which is the question that decides where a standing instruction is
 worth its cost. Entries are not removed when the underlying miss is fixed -- the
 record of the mistake is what has future value.
 
-### 2.1 Incomplete Sweeps
+### Incomplete Sweeps
 
 *The most frequently recurring group: a fix applied to the instance in hand and
 not to its siblings.*
 
-### 2.1.1 Duplication Findings Not Propagated to Siblings
+#### Duplication Findings Not Propagated to Siblings
 
 **Miss:** `LARGE_STORE_BYTES` was centralized from `project_annotations.py`
 into `config.py` as part of a fix for a confirmed 128 MiB duplication
@@ -769,7 +765,7 @@ constant defined in the same few lines for the same criterion, not just the
 one already flagged. A sibling constant left behind is a new inconsistency,
 not a smaller version of the one just fixed."
 
-### 2.1.2 One Confirmed Fix Pattern Not Swept Across All Structurally Identical Sites
+#### One Confirmed Fix Pattern Not Swept Across All Structurally Identical Sites
 
 **Miss:** A CLI-argument-default-vs-owning-constant mismatch was found and
 fixed at one site (`--large-bytes`/`--max-record-bytes` in `admin_cmd.py`),
@@ -785,7 +781,7 @@ codebase-wide, for every other instance of that exact pattern shape before
 considering the finding closed. Fixing one occurrence and moving on treats
 a systemic fault as a local one."
 
-### 2.1.3 A Wrong Conclusion Repeated Into Four Places Before Being Checked
+#### A Wrong Conclusion Repeated Into Four Places Before Being Checked
 
 **Miss:** Having found the ignores, the next claim was that they "have no
 effect" because `S` is not in ruff's default set. That was asserted from
@@ -800,7 +796,7 @@ propagated before it was tested.
 before writing it down once, let alone four times. A statement that some
 configuration is inert is a claim about behavior, and behavior is checked by
 running it. Propagating an untested claim multiplies the correction."
-### 2.1.4 A Rename Applied by Substring, Reaching a Call Site It Should Not Have
+#### A Rename Applied by Substring, Reaching a Call Site It Should Not Have
 
 **Miss:** Renaming a dataclass field from `source` to `vendor_selector` was done
 with a text replacement over three modules. The pattern matched two calls to
@@ -816,12 +812,12 @@ a keyword that no longer matches its callee is invisible to the test suite until
 that path executes."
 
 
-### 2.2 Evidence and Verification
+### Evidence and Verification
 
 *A conclusion asserted, restated, or drawn from a search that could not have found
 the answer.*
 
-### 2.2.1 A Finding Reclassified on Assertion Rather Than Evidence
+#### A Finding Reclassified on Assertion Rather Than Evidence
 
 **Miss:** The software version being lower than values already recorded in
 published stores was reported as a defect. Told the reset was deliberate, the
@@ -837,7 +833,7 @@ and effect are separate findings: an edit can be deliberate and still leave a
 broken invariant, and the useful item names both. Reclassifying on assertion
 turns a verified observation into an unverified one."
 
-### 2.2.2 Configuration Reported Absent After a Grep That Could Not Find It
+#### Configuration Reported Absent After a Grep That Could Not Find It
 
 **Miss:** `pyproject.toml` was reported as having no ruff configuration,
 based on a clean lint run and a grep for `[tool.ruff]` written to match only
@@ -850,7 +846,7 @@ returned nothing, which was then read as evidence.
 missing, read the file. A grep that finds nothing proves the pattern did not
 match, not that the setting is absent, and configuration formats nest."
 
-### 2.2.3 A Proposal Restated Until It Read as an Approved Rule
+#### A Proposal Restated Until It Read as an Approved Rule
 
 **Miss:** A naming rule -- `_id` for entities, `_key` for lookups,
 `_hash` for integrity claims -- was proposed in one section, then referenced
@@ -863,7 +859,7 @@ The same happened with a replacement for "package": one candidate was called
 time it is restated, not only where it is introduced. A rule referenced
 three sections later reads as decided, and the reader has no way to tell that
 it was one option among several."
-### 2.2.4 A Design Rationale Asserted From Reading Two Sites, Not All Five
+#### A Design Rationale Asserted From Reading Two Sites, Not All Five
 
 **Miss:** The rule for which sinks drop an absent field was stated as a per-sink
 difference after reading two of five sinks. Testing all five showed the rule
@@ -875,7 +871,7 @@ once, which the two-site reading could not have revealed.
 members of a set, exercise every member. Two examples establish a pattern and
 cannot establish its boundary."
 
-### 2.2.5 A Correction That Overcorrected, Hiding the Defect It Was Fixing
+#### A Correction That Overcorrected, Hiding the Defect It Was Fixing
 
 **Miss:** A result digest compared unequal across two runs because it included the
 temporary directory each used. The fix excluded location fields outright -- which
@@ -889,11 +885,11 @@ state what real difference the exclusion now hides, and check that case. An
 exclusion is a claim that the field carries no information; verify the claim
 rather than assuming it from the one case that prompted it."
 
-### 2.3 Scope and Instruction Handling
+### Scope and Instruction Handling
 
 *Work requested and not done, or proposed and treated as approved.*
 
-### 2.3.1 A Requested Follow-Up Section Not Actually Created
+#### A Requested Follow-Up Section Not Actually Created
 
 **Miss:** A request to "add a Prompt Ideas subsection" was acknowledged in
 conversation but not translated into an actual document edit or tracked
@@ -907,7 +903,7 @@ document or task list for the artifact just claimed to exist. A sentence
 describing an intention is not the same event as the edit that fulfills it,
 and only the edit is verifiable."
 
-### 2.3.2 Related Work Split Into Separate Items That Cannot Be Scheduled Apart
+#### Related Work Split Into Separate Items That Cannot Be Scheduled Apart
 
 **Miss:** Rule selection, the `S608` exemptions, and reducing SQL
 interpolation were filed as three items across two priorities. They are one
@@ -922,7 +918,7 @@ one area, ask whether any could be finished without the others. If not, they
 are one item with parts, and splitting them hides the dependency rather than
 recording it."
 
-### 2.3.3 Naming Decisions Made From the Function in Isolation, Not Its Call Site
+#### Naming Decisions Made From the Function in Isolation, Not Its Call Site
 
 **Miss:** Early proposals for renaming `catalog.py`'s functions (`scan_`,
 `verify_`, `review_`-prefixed candidates) were generated by inspecting the
@@ -937,15 +933,15 @@ name for a function or module, read every caller's actual invocation
 first, not just the function's own signature and docstring -- a name is a
 claim about the relationship between a function and its consumers, and
 that relationship is only visible from the consumer side."
-### 2.4 Collateral Damage
+### Collateral Damage
 
 *A change correct in itself that silently broke something adjacent.*
 
-### 2.4.1 A Documentation Diagram's Layout Silently Corrupted an Unrelated Paragraph
+#### A Documentation Diagram's Layout Silently Corrupted an Unrelated Paragraph
 
-**Miss:** Inserting a new subsection (3.4) into CoPlan.md by appending
+**Miss:** Inserting a new subsection into CoPlan.md by appending
 after a chosen anchor point placed it before a closing paragraph that
-belonged to the *previous* section (3.3), silently detaching that paragraph
+belonged to the *previous* section, silently detaching that paragraph
 from its own section and reattaching it to the end of the new one. The
 error was only caught later, incidentally, while re-reading the document
 for an unrelated addition.
@@ -956,14 +952,14 @@ insertion point, not just the immediate anchor line -- a numbered-heading
 insertion can silently reassign a trailing paragraph's section by moving
 the heading boundary without moving the paragraph."
 
-### 2.4.2 Format-String Value Changes Conflated With Python-Name Changes
+#### Format-String Value Changes Conflated With Python-Name Changes
 
 **Miss:** Early in the `catalog.py`/`candidate_review.py` rename, module
 and function renames were applied without a separate, explicit decision
 about the `_FORMAT` constants' *string values* -- which are written into
 real saved documents and are a compatibility surface distinct from Python
 identifier names (established earlier, independently, for `RAW_FORMAT` and
-`SOURCE_LINKS_FORMAT` in 3.4). The distinction had to be re-raised as an
+`SOURCE_LINKS_FORMAT`). The distinction had to be re-raised as an
 explicit question rather than being applied automatically from the
 already-established precedent.
 
@@ -975,7 +971,7 @@ being changed, explicitly, every time either changes, even when a
 precedent for the distinction already exists elsewhere in the same
 document."
 
-### 2.4.3 An Automatic Import Fix Removing an Import the Same Edit Had Just Required
+#### An Automatic Import Fix Removing an Import the Same Edit Had Just Required
 
 **Miss:** Adding a type annotation and running `ruff --fix --select F401` in the
 same step removed the `Any` import the annotation needed, because the autofix ran

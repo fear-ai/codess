@@ -21,7 +21,7 @@ inputs to later research or assessment.
 
 ### I Want to Explore One Project
 
-Follow the [basic setup and first run](Operations.md#5-first-project) to scan,
+Follow the [basic setup and first run](Operations.md#first-project) to scan,
 ingest, orient, and search one repository. Start here if you want to answer:
 
 - Which Sessions exist for this Project?
@@ -31,14 +31,14 @@ ingest, orient, and search one repository. Start here if you want to answer:
 
 ### I Want to Investigate Sessions or Interactions
 
-Read [Search and Investigation](Codess.md#5-search-and-investigation), then use the typed query
+Read [Search and Investigation](Codess.md#search-and-investigation), then use the typed query
 actions described under [Investigation](#investigation). These operations can
 filter Events, expand complete Interactions or Model Turns, and retain stable
 identities for later evidence review.
 
 ### I Want to Compare Projects, Vendors, or Models
 
-Read [Vendor, Harness, and Model Comparison](Codess.md#43-vendor-harness-and-model-comparison) and
+Read [Vendor, Harness, and Model Comparison](Codess.md#vendor-harness-and-model-comparison) and
 the relevant vendor reference:
 
 - [Claude Code Source Schema](CCSchema.md)
@@ -52,8 +52,8 @@ available to qualify results.
 
 ### I Operate or Maintain Codess
 
-Use [First Project](Operations.md#5-first-project) for ordinary operation and
-[Basic Diagnosis](Operations.md#10-basic-diagnosis) when results or performance
+Use [First Project](Operations.md#first-project) for ordinary operation and
+[Basic Diagnosis](Operations.md#basic-diagnosis) when results or performance
 are unexpected.
 
 ## Quick Start
@@ -155,7 +155,7 @@ Each source-system store is a SQLite database and may be inspected read-only
 with the SQLite command line, Python's `sqlite3`, database browsers, notebooks,
 or other query tools. The physical schema is
 `schema/coschema/sqlite/schema.sql`; the
-[Query Contract](CoSchema.md#14-query-contract) explains the logical access
+[Query Contract](CoSchema.md#query-contract) explains the logical access
 surface.
 
 Open a store without allowing writes:
@@ -214,7 +214,7 @@ local paths, credentials, and other private material.
 - Export or third-party indexing must be explicitly selected.
 - `.codess/` data should not be committed to a Project repository.
 
-The [Raw Evidence](Operations.md#9-raw-evidence) procedure covers explicit
+The [Raw Evidence](Operations.md#raw-evidence) procedure covers explicit
 capture. Storage deletion remains a reviewed maintenance operation.
 
 ## Documentation Map
@@ -236,7 +236,7 @@ capture. Storage deletion remains a reviewed maintenance operation.
 | [Cursor Source Schema](CursorSchema.md) | Cursor storage, records, selective access, mapping, and limitations |
 | `schema/` | Executable SQL, JSON, mapping, policy, and fixture contracts |
 | `catalog/` and the configured registry | Project selections, source bindings, observations, reports, and receipts |
-| `tools/` | Development and diagnosis scripts, described in [Repository Tools](Operations.md#12-repository-tools) |
+| `tools/` | Development and diagnosis scripts, described in [Repository Tools](Operations.md#repository-tools) |
 | `experiments/` | Bounded investigations that are not part of the accepted design or implementation plan |
 
 ## Release Notes
@@ -369,7 +369,7 @@ analytics service.
   representative fixtures, hazard cases, and automated unit, contract,
   adapter, integration, and scale tests. Real vendor Sources are a separate
   validation layer, exercised by the audit tools described in
-  [Repository Tools](Operations.md#12-repository-tools).
+  [Repository Tools](Operations.md#repository-tools).
 
 #### Important Boundaries
 

@@ -38,7 +38,7 @@ from codess.schema_contract import (
 # a value missing. Conflating the two overstates loss, which is why the report
 # separates them rather than summing -- and is why the column is named
 # `granularity` rather than `level`, which reads as an ordering that could be
-# summed (CoPlan W50).
+# summed.
 _LOSS_GRANULARITIES = ("source", "record")
 
 

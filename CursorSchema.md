@@ -9,7 +9,7 @@ shared components rather than implementing independent database readers.
 Cursor's SQLite format is private and can change without notice. Use read-only
 access and tolerate missing tables, null values, and new fields.
 
-## 1. Source Scope and Locations
+## Source Scope and Locations
 
 `CODESS_CURSOR_DATA` overrides the platform default Cursor `User` directory.
 
@@ -33,9 +33,9 @@ accepts an object whose `folder.path` contains the path.
 The separate `~/.cursor/projects/<project-slug>/agent-transcripts/` tree is not
 part of the SQLite pipeline and is not currently ingested.
 
-## 2. Storage Layout
+## Storage Layout
 
-### 2.1 `cursorDiskKV`
+### `cursorDiskKV`
 
 Key/value table with unique text keys and text, blob, or null values.
 
@@ -50,7 +50,7 @@ Key/value table with unique text keys and text, blob, or null values.
 JSON values are usually UTF-8 JSON text. Codess also attempts base64-wrapped
 JSON for bubble and composer data. Null or undecodable values are skipped.
 
-### 2.2 `composerHeaders`
+### `composerHeaders`
 
 Session-level index:
 
@@ -80,7 +80,7 @@ parent composer/session is not consistently available, so
 `parent_session_id` remains NULL instead of being inferred from time, content,
 or workspace proximity.
 
-### 2.3 `ItemTable`
+### `ItemTable`
 
 Most rows are editor/workbench state and are ignored. One workspace-local row,
 `composer.composerData`, is a secondary session index. Its `allComposers`
@@ -93,7 +93,7 @@ fallback-selected Session records
 `selection_source=workspace.composerData`; current global headers override an
 overlapping fallback.
 
-## 3. Selective Access
+## Selective Access
 
 Use SQLite read-only mode:
 
@@ -123,7 +123,7 @@ decoding unrelated bubbles in the global database. Workspace selection and SQL
 live in `codess.cursor_source`; the adapter only decodes selected values and
 normalizes events.
 
-## 4. Bubble Records
+## Bubble Records
 
 Fields relevant to normalization:
 
@@ -215,7 +215,7 @@ explicitly supported context subset is `conversationSummary`,
 `contextWindowStatusAtCreation`, and top-level `messageRequestContext`; other
 large attachment/context-selection envelopes remain in captured raw evidence.
 
-### 4.1 Repetition and Deduplication
+### Repetition and Deduplication
 
 Cursor evidence has three distinct repetition cases:
 
@@ -253,7 +253,7 @@ must be versioned and confidence-bearing, cite its constituent events, and
 produce a derived grouping or assertion only; it can never authorize source or
 Event removal.
 
-## 5. Composer Records
+## Composer Records
 
 `composerData:<composerId>` may include identity, title, model/mode, context,
 conversation-header, file-state, and opaque conversation-state fields. It can
@@ -281,7 +281,7 @@ workspace metadata come first from `composerHeaders`; workspace
 `composer.composerData` supplies a provenance-labeled fallback when the primary
 header is absent. A current header wins when both exist.
 
-## 6. Mapping Boundaries
+## Mapping Boundaries
 
 | Codess concept | Workspace DB | Global DB |
 |---|---|---|
@@ -349,7 +349,7 @@ only with `immutable=1` after confirming that neither `-wal` nor `-shm` exists.
 An indexed prefix existence probe then advances ingest state without parsing or
 retaining workspace databases that contain no `bubbleId:*` records.
 
-## 7. Limitations
+## Limitations
 
 - Global composers without a usable current-header or workspace-fallback
   mapping are excluded from Project ingest.

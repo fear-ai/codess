@@ -9,16 +9,14 @@ have different costs. `count` answers *how many* and is an integer add against a
 preallocated slot -- cheap enough for a per-record site. `event` answers *when
 and what* and constructs a tuple. `span` answers *how long* and is two ticks the
 sink subtracts. Collapsing them onto one `log()` would charge every per-record
-site the cost of the most expensive shape, which is the defect Report 1.3
-records.
+site the cost of the most expensive shape.
 
 **The gate order matters and is measured.** The run-time sink check comes before
 the field tuple is built, so a run with nothing attached does not construct a
-record it will discard (Report 6c). That is the specific thing the current
-facility does wrong.
+record it will discard, which is what the facility it replaced did wrong.
 
-**Measured on the implementation, and one figure is worse than Report 3
-predicted.** R1 asks that a disabled site cost no more than a bare call:
+**Measured on the implementation, and one figure is worse than predicted.** R1
+asks that a disabled site cost no more than a bare call:
 
     no sink attached, event(code, path=..., events=...)      76 ns
     sink attached, level below MIN_LEVEL                     86 ns
@@ -26,10 +24,10 @@ predicted.** R1 asks that a disabled site cost no more than a bare call:
     count(slot)                                              50 ns   (R3: target 66)
     compile-gated site, `if REPORT_TRACE:`                    16 ns   (R2)
 
-The 76 ns is not the ~16 ns Report 3 estimated, and the reason is structural
-rather than fixable by reordering: **`**fields` packs a dict before the function
-body runs**, measured at ~43 ns for two fields, so no gate inside the function
-can precede it. Report's figure assumed a bare call with no keyword arguments.
+The 76 ns is not the ~16 ns predicted, and the reason is structural rather than
+fixable by reordering: **`**fields` packs a dict before the function body runs**,
+measured at ~43 ns for two fields, so no gate inside the function can precede it.
+The prediction assumed a bare call with no keyword arguments.
 
 Three things follow. The cost is still 16x better than the 1,245 ns it replaces,
 so R1's intent holds even where its number does not. A per-record site inside a
@@ -85,7 +83,7 @@ __all__ = [
 # Module-level rather than passed through every call. A reporting facility a
 # caller has to thread an object into is one that library code -- `fileio`, the
 # adapters -- cannot reach without a signature change at every layer, which is
-# what Report 12.1 rejects `basicConfig` for while keeping the same shape.
+# why stdlib `basicConfig` was rejected, while keeping the same shape.
 _COUNTERS: list[int] = [0] * COUNTER_COUNT
 _SINKS: tuple[Any, ...] = ()
 _RING: EventRing | None = None
@@ -132,8 +130,8 @@ def configure(
     # A profile sets what an operator sees; a durable sink retains more, because a
     # report is read after the fact by someone diagnosing and the event they need
     # is usually the one the interactive run suppressed. One threshold for both is
-    # the conflation Report 1.4 names, and it emptied the durable ingest report of
-    # every debug event when it was tried.
+    # the conflation, and it emptied the durable ingest report of every debug
+    # event when it was tried.
     #
     # Each sink then drops what it does not want, so a lower floor here widens
     # what is *constructed* without widening what is printed.
@@ -194,8 +192,8 @@ def count(index: int, amount: int = 1) -> None:
     """Add to a preallocated counter slot.
 
     Ungated on purpose. An integer add against a list slot is 66 ns and
-    allocates nothing (Report 2.3), so gating it would add a branch that costs a
-    measurable fraction of the operation it protects. Counters are also wanted
+    allocates nothing, so gating it would add a branch costing a measurable
+    fraction of the operation it protects. Counters are also wanted
     even when nothing is emitted -- an ingest summary reports them at the end of
     a run whose events were all below the level threshold.
     """
@@ -235,7 +233,7 @@ def event(event_code: int, **fields: Any) -> None:
     flat: tuple = ()
     if fields:
         # Flat (k, v, k, v, ...) rather than a dict: cheaper to build, and the
-        # sink materializes a mapping only when it renders (Report 5).
+        # sink materializes a mapping only when it renders.
         items = list(fields.items())
         if len(items) > MAX_FIELDS:
             items = items[:MAX_FIELDS]
@@ -275,9 +273,9 @@ class ProgressEmitter(Protocol):
     """What a library module needs from a progress reporter.
 
     A protocol rather than a concrete type, because the point of passing the
-    emitter as an argument is that the callee does not depend on the facility --
-    CoPlan 3.3 forbids a library module depending on the command layer, and
-    `reporting.api` holds process-wide mutable state. A caller can pass
+    emitter as an argument is that the callee does not depend on the facility:
+    a library module must not depend on the command layer, and `reporting.api`
+    holds process-wide mutable state. A caller can pass
     `emit_named`, a test double, or nothing.
 
     Named and exported so the six functions that thread it can say what they

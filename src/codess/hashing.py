@@ -27,8 +27,8 @@ not affect collision resistance for SHA-256 -- no region of the output is
 weaker than another -- but it must be fixed, because a value that changes end
 changes every key already derived from it.
 
-This module does not decide what a value means: naming a result `_id`, `_key`,
-or `_hash` is the caller's decision and is documented in CoReview 4.8.
+This module does not decide what a value means: whether a result is named
+`_id`, `_key`, or `_hash` is the caller's decision.
 """
 
 from __future__ import annotations
