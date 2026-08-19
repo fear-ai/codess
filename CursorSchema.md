@@ -58,7 +58,7 @@ Session-level index:
 |---|---|
 | `composerId` | Session identifier and primary key |
 | `workspaceId` | Workspace-storage directory id when known; used to scope global ingest |
-| `createdAt`, `lastUpdatedAt` | Epoch-millisecond header timestamps |
+| `createdAt`, `lastUpdatedAt` | Epoch-millisecond header timestamps. Present on all 66 headers measured. **Read by scan for its time-range row and by `cursor_source`, and not carried into a Session**: `sessions.started_at` and `ended_at` are null on Cursor stores, so a Cursor Project can hold Events with no time at any level |
 | `isArchived`, `isSubagent` | Session classification flags |
 | `recency`, `checkpointAt`, `value` | Cursor state not currently used by Codess |
 
@@ -133,8 +133,8 @@ Fields relevant to normalization:
 | `text` | Message body | Sanitized and truncated |
 | `createdAt` | ISO-8601 event timestamp | Primary normalized timestamp and sort key |
 | `timingInfo.clientStartTime` | Relative client timing, or an epoch value in alternate shapes | Used only when it plausibly represents Unix seconds or milliseconds |
-| `toolFormerData` | One tool name/call id/model-call id, arguments, result, status, and optional `userDecision` | Emitted as a linked invocation and, for final states or a result body, a result/failure event; exact accepted/rejected permission evidence is retained |
-| `toolResults` | Alternate tool-result array | Nonempty arrays are mapped when present; selected stores commonly contain empty arrays |
+| `toolFormerData` | One tool name/call id/model-call id, arguments, result, status, and optional `userDecision`. **"Former" does not mean superseded**: this is the only populated tool shape, and its `tool` field is a numeric enum paired with `name` (`5` beside `read_file`, `15` beside `run_terminal_cmd`), so the name reads as a UI component rather than a point in time. What it denotes in Cursor's own vocabulary is not established | Emitted as a linked invocation and, for final states or a result body, a result/failure event; exact accepted/rejected permission evidence is retained |
+| `toolResults` | Alternate tool-result array | **Present on every bubble and empty on every one measured**: 6,000 bubbles sampled from the live global store, `toolResults` populated on none. `toolFormerData` was populated on 5,078 of the same sample and produced 60,875 tool results across the current-format Codess stores, against zero from this key. `cursor.tool-result-legacy` is therefore declared and unused; it is retained because a store written when the shape carried data still needs it |
 | `modelInfo.modelName` | Model selection attached to a user request | Non-`default` values configure the following inferred model turn with exact source-field provenance; `default` remains source metadata |
 | `conversationSummary` | JSON string with summary body and truncation boundary IDs | Bounded `context.compact` event |
 | `contextWindowStatusAtCreation` | Context usage observation (`tokensUsed`, `tokenLimit`, percentages) | Preserved as source metadata on the bubble's emitted events |
@@ -252,6 +252,43 @@ and semantically similar answers are a separate future analysis. Such a method
 must be versioned and confidence-bearing, cite its constituent events, and
 produce a derived grouping or assertion only; it can never authorize source or
 Event removal.
+
+## Capability Vocabulary
+
+Cursor declares a lifecycle vocabulary on the bubble and records no instances of
+it. Both halves are worth keeping: the names state which phases the harness
+knows about, and the emptiness states that this store is not where they land.
+
+`capabilityStatuses` maps a phase name to a list, present on 8,457 bubbles in
+the measured corpus with **every list empty on every one**:
+
+| Phase | Bubbles carrying the key |
+|---|---|
+| `mutate-request` | 8,457 |
+| `start-submit-chat` | 8,457 |
+| `before-submit-chat` | 8,457 |
+| `process-stream` | 8,457 |
+| `chat-stream-finished` | 8,457 |
+| `before-apply` | 8,457 |
+| `after-apply` | 8,457 |
+| `accept-all-edits` | 8,457 |
+| `composer-done` | 8,457 |
+| `add-pending-action` | 137 |
+
+The order above is a plausible execution order rather than the key order, which
+is not stable across bubbles. Nine phases appear together and
+`add-pending-action` only sometimes, so it is conditional on the turn rather
+than part of the fixed set.
+
+`capabilityType` is a separate numeric enum on 11,454 bubbles with three
+observed values: `15` (122,661 occurrences), `30` (44,922), `22` (289). What
+each denotes is not established, and it is not the phase set above -- the value
+counts match no phase distribution.
+
+**Neither is decoded today.** These names are the closest thing Cursor offers to
+the task lifecycle Codex records directly, so if a later release begins
+populating the lists, this vocabulary is what a mapping would be built against.
+Recording it now is what lets a future comparison show the change.
 
 ## Composer Records
 

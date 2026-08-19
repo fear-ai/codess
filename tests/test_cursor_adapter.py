@@ -14,6 +14,7 @@ from cursor_fixtures import (
     put_records,
 )
 
+from codess.adapters import cursor
 from codess.adapters.cursor import (
     _bubble_timestamp,
     _bubble_to_events,
@@ -1207,3 +1208,42 @@ class TestComposerSettings:
         )
         assert headers["c1"]["model_name"] == "default"
         assert "model" not in headers["c1"]
+
+
+class TestRepeatedToolCallsAreCounted:
+    """A tool call surviving on two bubbles after dedup is reported, not dropped.
+
+    `(type, serverBubbleId)` collapses server-written copies and exempts a
+    bubble with no server identity, because a missing identity cannot prove
+    duplication. A re-synced composer gains server copies of bubbles it already
+    held locally, so one `toolCallId` survives on two bubbles. Both are real
+    vendor records, so the count is the finding.
+    """
+
+    def test_one_call_on_two_bubbles(self):
+        diagnostics: dict = {}
+        cursor._count_surviving_repeats(
+            [
+                ("b1", {"toolFormerData": {"toolCallId": "t1"}}),
+                ("b2", {"toolFormerData": {"toolCallId": "t1"}}),
+                ("b3", {"toolFormerData": {"toolCallId": "t2"}}),
+            ],
+            diagnostics,
+        )
+        assert diagnostics == {"repeated_tool_calls": 1}
+
+    def test_distinct_calls_are_not_repeats(self):
+        diagnostics: dict = {}
+        cursor._count_surviving_repeats(
+            [
+                ("b1", {"toolFormerData": {"toolCallId": "t1"}}),
+                ("b2", {"toolFormerData": {"toolCallId": "t2"}}),
+            ],
+            diagnostics,
+        )
+        assert diagnostics == {}, "no key rather than a zero, so a clean run is silent"
+
+    def test_a_bubble_without_a_tool_is_ignored(self):
+        diagnostics: dict = {}
+        cursor._count_surviving_repeats([("b1", {})], diagnostics)
+        assert diagnostics == {}

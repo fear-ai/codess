@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from codess.project_catalog import catalog_readiness, durable_project_root
-from codess.query_api import execute, make_request, session_structure_counts
+from codess.query_api import (
+    activity_bucket,
+    execute,
+    make_request,
+    session_structure_counts,
+)
 from codess.snapshot import snapshot_store_paths_from_base
 from codess.store import connect
 
@@ -37,39 +42,27 @@ def _month(timestamp: float) -> str:
 
 
 def _bucket(day: str) -> dict[str, Any]:
-    return {
-        "day": day,
-        "events": 0,
-        "content_characters": 0,
-        "sessions": set(),
-        "interactions": set(),
-        "first_event_at": None,
-        "last_event_at": None,
-        "human_prompts": 0,
-        "human_prompt_characters": 0,
-        "model_outputs": 0,
-        "model_output_characters": 0,
-        "human_prompt_interactions": set(),
-        "tool_calls": 0,
-        "tool_results": 0,
-        "tool_input_characters": 0,
-        "tool_output_characters": 0,
-        "tool_call_interactions": set(),
-        "tool_result_interactions": set(),
-        "tool_calls_by_name": Counter(),
-        "actor_events": Counter(),
-        "actor_characters": Counter(),
-        "actor_sessions": {},
-        "actor_interactions": {},
-        "relation_events": Counter(),
-        "relation_characters": Counter(),
-        "relation_sessions": {},
-        "relation_interactions": {},
-        "relation_actor_events": {},
-        "first_human_prompt_at": None,
-        "last_human_prompt_at": None,
-        "last_human_prompt_interaction": None,
-    }
+    """One day's activity, with the per-Actor and per-relation breakdowns.
+
+    The shared counters come from `query_api.activity_bucket`; the extras here
+    are what an orientation report needs and a query result does not.
+    """
+    return activity_bucket(
+        day,
+        tool_calls_by_name=Counter(),
+        actor_events=Counter(),
+        actor_characters=Counter(),
+        actor_sessions={},
+        actor_interactions={},
+        relation_events=Counter(),
+        relation_characters=Counter(),
+        relation_sessions={},
+        relation_interactions={},
+        relation_actor_events={},
+        first_human_prompt_at=None,
+        last_human_prompt_at=None,
+        last_human_prompt_interaction=None,
+    )
 
 
 def _sqlite_observations(

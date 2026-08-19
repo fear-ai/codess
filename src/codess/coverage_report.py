@@ -30,6 +30,8 @@ from codess.fileio import quote_identifier
 from codess.schema_contract import (
     SchemaContractError,
     column_names,
+    contract_digest,
+    load_mapping,
     table_names,
 )
 
@@ -192,6 +194,89 @@ def undecoded_evidence(source_system_id: str | None) -> dict[str, Any]:
     }
 
 
+def profile_conformance(
+    conn: sqlite3.Connection, source_system_id: str | None,
+) -> dict[str, Any]:
+    """Whether the rules a store used are the rules its profile declares.
+
+    `source_record_shapes` reports which rules a store used; the released
+    profile declares which rules exist. Neither alone answers the question a
+    coverage report is asked -- *is this store conformant* -- because a rule
+    the adapter invented and a rule the profile declares look identical once
+    stored.
+
+    Two directions, and they mean different things:
+
+    - **undeclared**: a `mapping_rule` in the store that the profile does not
+      name. The adapter emitted a rule id nothing released describes, so the
+      store records a mapping no contract covers.
+    - **unused**: a declared rule no Event carries. Usually a shape this
+      Project's Sessions did not contain, which is unremarkable; consistently
+      unused across every Project is evidence the rule is dead or the decoder
+      stopped reaching it.
+
+    Returns `available: False` rather than an empty result when the store's
+    source system has no released profile, so a reader can tell "compared,
+    nothing found" from "not compared".
+    """
+    profile_for = {
+        "anthropic.claude-code": "claude",
+        "openai.codex": "codex",
+        "cursor.composer": "cursor",
+    }
+    if "store_meta" in table_names(conn):
+        row = conn.execute(
+            "SELECT value FROM store_meta WHERE key='contract_digest'"
+        ).fetchone()
+        # A store predating the contract-digest column records no digest at
+        # all, so an absent value is a superseded store rather than a matching
+        # one -- treating absence as agreement is what let stale stores be
+        # compared against profiles they never saw.
+        written_under = str(row[0]) if row and row[0] else None
+        if written_under != contract_digest():
+            # A store written under an older contract is compared against
+            # profiles it never saw. Its rule ids were declared then and are
+            # not now, so every one reads as undeclared -- which says the store
+            # is superseded, not that a decoder invented anything. Measured:
+            # nine of thirty stores on the development machine predate the
+            # current format, and one of them accounts for every undeclared id.
+            return {
+                "available": False,
+                "reason": "store was written under a superseded contract",
+            }
+    if source_system_id is None:
+        return {
+            "available": False,
+            "reason": "store holds no Sessions, so it names no source system",
+        }
+    name = profile_for.get(source_system_id)
+    if name is None:
+        return {
+            "available": False,
+            "reason": f"no released profile for {source_system_id}",
+        }
+    try:
+        declared = {
+            str(rule["id"]) for rule in load_mapping(name).get("rules", [])
+            if rule.get("id")
+        }
+    except SchemaContractError as exc:
+        return {"available": False, "reason": str(exc)}
+    stored = {
+        str(row[0]) for row in conn.execute(
+            "SELECT DISTINCT mapping_rule FROM events WHERE mapping_rule IS NOT NULL"
+        )
+    }
+    return {
+        "available": True,
+        "profile": name,
+        "declared": len(declared),
+        "used": len(stored & declared),
+        "undeclared": sorted(stored - declared),
+        "unused": sorted(declared - stored),
+    }
+
+
 def _store_source_system(conn: sqlite3.Connection) -> str | None:
     """Which vendor this store holds, from its own rows."""
     if "sessions" not in table_names(conn):
@@ -209,9 +294,11 @@ def store_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
     which is why it is resolved here rather than inside `loss`: a store is a
     report of what was mapped, and evidence nothing mapped leaves no row.
     """
+    source_system_id = _store_source_system(conn)
     return {
         "coverage": mapped_coverage(conn),
         "shapes": source_record_shapes(conn),
+        "conformance": profile_conformance(conn, source_system_id),
         "loss": loss(conn),
-        "undecoded": undecoded_evidence(_store_source_system(conn)),
+        "undecoded": undecoded_evidence(source_system_id),
     }

@@ -1512,24 +1512,14 @@ def process_file(
             )
             if truncated is None:
                 continue
-            ev = {
-                "session_id": session_id,
-                "event_id": str(line_num),
-                "event_type": "assistant_message",
-                "subtype": "turn_aborted",
-                "role": "assistant",
-                "content": truncated,
-                "content_len": content_len,
-                "content_ref": None,
-                "tool_name": None,
-                "tool_input": None,
-                "tool_output": None,
-                "timestamp": timestamp,
-                "file_path": None,
-                "source_file": source_file,
-                "metadata": json.dumps({"event_msg_type": msg_type}) if msg_type else None,
-                "source_raw": source_raw,
-            }
+            ev = _base_event(
+                session_id=session_id, line_num=line_num,
+                event_type="assistant_message", subtype="turn_aborted",
+                role="assistant", timestamp=timestamp, source_file=source_file,
+                content=truncated, content_len=content_len,
+                metadata=json.dumps({"event_msg_type": msg_type}) if msg_type else None,
+                source_raw=source_raw,
+            )
             yield _annotate_source(ev, rtype, payload, line_num)
         elif diagnostics is not None:
             if rtype == "world_state":

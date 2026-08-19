@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from store_fixtures import insert_event, insert_session
 
+from codess import coverage_report
 from codess.config import get_store_path
 from codess.coverage_report import (
     loss,
@@ -24,6 +25,18 @@ from codess.coverage_report import (
     store_coverage,
 )
 from codess.store import connect, init_db
+
+
+def _store_with_rules(tmp_path, source_system_id, rules):
+    """A store whose Events carry exactly `rules`, for conformance checks."""
+    path = get_store_path(tmp_path, "cc")
+    init_db(path)
+    conn = connect(path)
+    if source_system_id is not None:
+        insert_session(conn, "s1", source_system_id=source_system_id)
+        for index, rule in enumerate(rules):
+            insert_event(conn, "s1", str(index), mapping_rule=rule)
+    return conn
 
 
 def make_store(tmp_path: Path, name: str = "Claude") -> Path:
@@ -177,12 +190,17 @@ class TestLoss:
 
 
 def test_store_coverage_reports_every_section(store):
-    """The sections travel together: a count, its shapes, its loss, and the
-    evidence no decoder admits at all."""
+    """Every section of the report travels with the others.
+
+    A count, its shapes, whether those shapes match the released profile, its
+    loss, and the evidence no decoder admits at all.
+    """
     add_event(store, "e1", event_kind="tool.call", source_record_type="assistant")
     store.commit()
     report = store_coverage(store)
-    assert set(report) == {"coverage", "shapes", "loss", "undecoded"}
+    assert set(report) == {
+        "coverage", "shapes", "conformance", "loss", "undecoded",
+    }
     assert report["coverage"]["admitted_events"] == 1
     assert report["shapes"]["by_source_record_type"] == {"assistant": 1}
     assert report["loss"]["available"] is True
@@ -315,3 +333,55 @@ def test_a_column_the_store_lacks_fails_naming_it(tmp_path):
         assert _counts_by(conn, "granularity") == {}
     finally:
         conn.close()
+
+
+class TestProfileConformance:
+    """The store's rules against the profile's, in both directions.
+
+    `source_record_shapes` reports which rules a store used and the released
+    profile declares which exist, but nothing compared them: a rule an adapter
+    invented and a rule a contract declares are indistinguishable once stored.
+    """
+
+    def test_a_rule_the_profile_does_not_name(self, tmp_path):
+        """An adapter emitting an undeclared id is what this exists to find."""
+        conn = _store_with_rules(tmp_path, "anthropic.claude-code",
+                                 ["claude.message", "claude.invented"])
+        result = coverage_report.profile_conformance(conn, "anthropic.claude-code")
+        assert result["available"] is True
+        assert result["undeclared"] == ["claude.invented"]
+
+    def test_a_declared_rule_no_event_carries(self, tmp_path):
+        """Unused is reported, not silently equated with conformance."""
+        conn = _store_with_rules(tmp_path, "anthropic.claude-code", ["claude.message"])
+        result = coverage_report.profile_conformance(conn, "anthropic.claude-code")
+        assert "claude.lineage" in result["unused"]
+        assert result["used"] == 1
+
+    def test_an_empty_store_is_not_a_missing_profile(self, tmp_path):
+        """Two unavailabilities, distinguishable by their reason.
+
+        A store with no Sessions names no source system. Reporting that as
+        "no released profile" would read as a contract gap rather than as an
+        empty store, and the two need different responses.
+        """
+        conn = _store_with_rules(tmp_path, None, [])
+        result = coverage_report.profile_conformance(conn, None)
+        assert result["available"] is False
+        assert "no Sessions" in result["reason"]
+
+    def test_a_superseded_store_is_not_compared(self, tmp_path):
+        """A store written under an older contract cannot be judged by today's.
+
+        Its rule ids were declared when it was written and are not now, so
+        every one reads as undeclared -- a statement about the store's age
+        rather than about any decoder. A store predating the digest column
+        records none at all, so an absent digest is superseded rather than
+        matching: treating absence as agreement is what let stale stores be
+        compared against profiles they never saw.
+        """
+        conn = _store_with_rules(tmp_path, "anthropic.claude-code", ["claude.message"])
+        conn.execute("DELETE FROM store_meta WHERE key='contract_digest'")
+        result = coverage_report.profile_conformance(conn, "anthropic.claude-code")
+        assert result["available"] is False
+        assert "superseded" in result["reason"]

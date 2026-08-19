@@ -146,6 +146,82 @@ def _load_message_request_contexts(
     return contexts
 
 
+def _base_event(
+    *, session_id: str, event_id: str, event_type: str, subtype: str, role: str,
+    content: str | None, content_len: int | None, timestamp: float | None,
+    source_file: str, metadata: str | None = None, **extra: Any,
+) -> dict[str, Any]:
+    """One Cursor Event envelope, holding the fields every record shares.
+
+    The eighteen keys below were written out at each construction site, so a
+    reader comparing two sites had to diff two blocks to see which few fields
+    actually differed. `adapters/cc` and `adapters/codex` each solved this with
+    a builder of the same name; Cursor had only a closure inside
+    `_bubble_to_events`, which the request-context path could not reach.
+
+    `extra` carries what only some records have -- classification, tool fields,
+    a file path -- so a caller with none of them does not spell out a `None`
+    per key. An omitted classification is left out of the dict rather than set
+    to `None`, because `store._event_classification` fills only absent
+    dimensions and a `None` would be an explicit classification of nothing.
+    """
+    event: dict[str, Any] = {
+        "session_id": session_id,
+        "event_id": event_id,
+        "event_type": event_type,
+        "subtype": subtype,
+        "role": role,
+        "content": content,
+        "content_len": content_len,
+        "content_ref": None,
+        "tool_name": None,
+        "tool_input": None,
+        "tool_output": None,
+        "timestamp": timestamp,
+        "file_path": None,
+        "source_file": source_file,
+        "metadata": metadata,
+        "source_raw": None,
+    }
+    event.update(extra)
+    return event
+
+
+def _count_surviving_repeats(
+    ordered: list[tuple[str, dict]], diagnostics: dict | None,
+) -> None:
+    """Count tool calls still appearing on more than one bubble after dedup.
+
+    The `(type, serverBubbleId)` key collapses server-written copies, and a
+    bubble with no server identity is exempt because a missing identity cannot
+    prove duplication. That exemption is correct and it leaks: a composer that
+    is re-synced gains server copies of bubbles it already held locally, so one
+    `toolCallId` survives on two bubbles -- the local original and the canonical
+    server copy.
+
+    Measured on the development machine, the leak is bounded by circumstance
+    rather than random: a composer whose tool bubbles are all locally written
+    never shows it (111 of 111), and it appears in 10 of the 14 composers that
+    both hold server copies and span three or more days.
+
+    Counted rather than removed, because both bubbles are real vendor records
+    and the store is a projection of what the vendor wrote. The count is what
+    lets a reader tell a Session that was re-synced from one that was not.
+    """
+    if diagnostics is None:
+        return
+    seen: dict[str, int] = {}
+    for _bubble_id, data in ordered:
+        call_id = (data.get("toolFormerData") or {}).get("toolCallId")
+        if call_id:
+            seen[str(call_id)] = seen.get(str(call_id), 0) + 1
+    repeats = sum(count - 1 for count in seen.values() if count > 1)
+    if repeats:
+        diagnostics["repeated_tool_calls"] = (
+            diagnostics.get("repeated_tool_calls", 0) + repeats
+        )
+
+
 def _request_context_event(
     composer_id: str,
     bubble_id: str,
@@ -176,33 +252,27 @@ def _request_context_event(
         return None
     text, _post_length, post_truncated = bound_context_content(text, opts)
     truncated = truncated or post_truncated
-    event = {
-        "session_id": composer_id,
-        "event_id": f"{composer_id}:{bubble_id}:request-context",
-        "event_type": "system_event",
-        "subtype": "context_injection",
-        "role": "harness",
-        "content": text,
-        "content_len": content_len,
-        "content_ref": None,
-        "tool_name": None,
-        "tool_input": None,
-        "tool_output": None,
-        "timestamp": timestamp,
-        "file_path": None,
-        "source_file": source_file,
-        "metadata": json.dumps({
+    event = _base_event(
+        session_id=composer_id,
+        event_id=f"{composer_id}:{bubble_id}:request-context",
+        event_type="system_event",
+        subtype="context_injection",
+        role="harness",
+        content=text,
+        content_len=content_len,
+        timestamp=timestamp,
+        source_file=source_file,
+        metadata=json.dumps({
             "context_kind": "message_request_context",
             "request_bubble_id": bubble_id,
             "context_fields": sorted(value),
             "content_truncated": truncated,
         }, separators=(",", ":")),
-        "source_raw": None,
-        "event_kind": "context.inject",
-        "actor_kind": "harness",
-        "content_role": "context",
-        "origin_kind": "harness_injected",
-    }
+        event_kind="context.inject",
+        actor_kind="harness",
+        content_role="context",
+        origin_kind="harness_injected",
+    )
     return annotate_mapping(
         event,
         source_record_type="cursorDiskKV.messageRequestContext",
@@ -404,6 +474,7 @@ def _process_composer(
             diagnostics.get("duplicate_records", 0) + duplicate_count
         )
     ordered = without_server_identity + list(canonical.values())
+    _count_surviving_repeats(ordered, diagnostics)
     ordered.sort(key=sort_key)
     for bubble_id, data in ordered:
         events = list(
@@ -495,24 +566,18 @@ def _bubble_to_events(
     def base_ev(
         etype: str, subtype: str, role: str, content: str, content_len: int,
     ) -> dict[str, Any]:
-        return {
-            "session_id": composer_id,
-            "event_id": event_id,
-            "event_type": etype,
-            "subtype": subtype,
-            "role": role,
-            "content": content,
-            "content_len": content_len,
-            "content_ref": None,
-            "tool_name": None,
-            "tool_input": None,
-            "tool_output": None,
-            "timestamp": timestamp,
-            "file_path": None,
-            "source_file": source_file,
-            "metadata": None,
-            "source_raw": None,
-        }
+        """This bubble's Event envelope, binding the four per-bubble values.
+
+        A thin closure over `_base_event` rather than a second definition: the
+        surrounding function already knows the composer, event id, timestamp,
+        and source file, so every call would otherwise repeat them.
+        """
+        return _base_event(
+            session_id=composer_id, event_id=event_id, event_type=etype,
+            subtype=subtype, role=role, content=content,
+            content_len=content_len, timestamp=timestamp,
+            source_file=source_file,
+        )
 
     def mapped(event: dict, rule: str, source_path: str = "$.bubble") -> dict:
         metadata = json.loads(event.get("metadata") or "{}")

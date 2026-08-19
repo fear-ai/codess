@@ -684,7 +684,105 @@ different questions: `cursor_source` decides which rows exist, and
 `cursor_cohort` decides whether a capture may be reused across Projects. The
 cache holds no vendor SQL, which is the test that would have shown otherwise.
 
-### 6.5 Evidence Audits
+### 6.5 What Each Vendor Actually Produces
+
+The three preceding sections describe how each source family is decoded. This
+compares the result, because the differences are evidence about the vendors
+rather than about the decoders, and a reader comparing two stores needs to know
+which absences are expected.
+
+Measured over the current-format stores on the development machine:
+
+| Event kind | Claude | Codex | Cursor |
+|---|---|---|---|
+| `message.prompt` | 599 | 4,065 | 4,112 |
+| `message.response` | 2,740 | 11,946 | 9,386 |
+| `message.context` | 54 | 321 | 25 |
+| `message.reasoning_summary` | -- | 4,343 | -- |
+| `tool.call` | 3,232 | 27,992 | 60,875 |
+| `tool.result` | 3,232 | 30,415 | 60,875 |
+| `context.compact` | 1 | 227 | 2 |
+| `context.inject` | 1 | -- | 52 |
+| `lifecycle.start` / `.complete` / `.abort` | -- | 2,716 / 2,665 / 68 | -- |
+| `lifecycle.vendor` | 1,058 | -- | -- |
+| `session.label` / `.marker` | 1,071 / 1,046 | -- | -- |
+| `harness.setting` | 1,448 | -- | -- |
+| `content.attachment` | 2,110 | -- | -- |
+| `command.invoke` / `.result` | 11 / 11 | -- | -- |
+| `tool.transport` | -- | 97 | -- |
+| `context.rollback` | -- | 7 | -- |
+
+**Three readings, and only one is a gap.**
+
+*Messages and tools are universal, and the call/result counts differ for two
+distinct reasons.* Every result links to a call -- zero orphans across all three
+vendors -- so a difference is never an unmatched result. Claude is strictly 1:1
+across 3,232 pairs. Codex has 1,075 calls with no result, which is a vendor
+condition: an aborted turn leaves a request unanswered. Cursor's excess is
+byte-identical duplicate results concentrated in three stores while three
+comparable stores have almost none, which reads as a decode defect rather than
+vendor data and is tracked in W74.
+
+*Product state is Claude's alone.* `session.label`, `session.marker`,
+`harness.setting`, `content.attachment`, and the command pair exist because
+Claude writes those as separate record shapes. Their absence elsewhere is the
+vendor not recording them, not a decoder omission.
+
+*Lifecycle is a real asymmetry.* Codex produces 5,449 lifecycle Events and
+Claude 1,058 under its own vendor kind; Cursor produces none and has no
+lifecycle rule. Whether Cursor records task start and completion anywhere is an
+open decode question rather than a settled mapping choice.
+
+**One rule can produce several kinds, and Cursor is where that concentrates.**
+`cursor.bubble` alone yields `message.prompt`, `message.response`, and
+`message.context`, classified in the adapter from the bubble's type and content.
+Claude splits the same ground across `claude.typed-prompt` and `claude.message`.
+Neither is wrong: Cursor stores prompts, responses, and injected context in one
+bubble structure, so one rule matching that structure describes the source
+honestly, while Claude's separate record shapes justify separate rules.
+
+### 6.6 Request and Response Evidence, and Where the Role Lies
+
+Each vendor records who produced a message differently, and each records the
+request-to-response edge differently. Both matter to the same question -- which
+model execution answered which request -- so they are compared together.
+
+| Vendor | Request/response edge | How it is evidenced |
+|---|---|---|
+| Codex | `turn_context.payload.turn_id` | Stated directly; one identity per Model Turn |
+| Claude | `parentUuid` chain | Stated per record; the edge is lineage rather than a turn identity |
+| Cursor | `requestId` on a `type=1` bubble, `usageUuid` on `type=2` | Not stated as an edge. Measured: 664 of 1,505 `requestId` values equal a `usageUuid` within the next five bubbles, so the correlation is real and partial |
+
+Cursor's two identities are not one field under two names: no bubble carries
+both, `requestId` appears only on user bubbles and `usageUuid` only on assistant
+bubbles. Mapping them to one column would erase the direction.
+
+**The envelope role is wrong often enough to measure.** Comparing the vendor's
+own `role` against the classified `actor_kind` over the current-format stores:
+
+| Vendor | `role` | `actor_kind` | Events | Share of store |
+|---|---|---|---|---|
+| Codex | `user` | `tool` | 26,933 | **31.7%** |
+| Claude | `user` | `tool` | 3,232 | **19.5%** |
+| Codex | `user` | `harness` | 229 | 0.3% |
+| Codex | `assistant` | `harness` | 68 | 0.1% |
+
+Nearly a third of the Codex store and a fifth of Claude's carry a `user`
+envelope around content no human wrote -- tool results, chiefly, and
+harness-injected context. Cursor shows none of this, because its bubble type is
+a structural position rather than a role claim.
+
+This is the measured form of the rule Codess states elsewhere: a `user` envelope
+does not establish a human Actor. Anything correlating requests to responses by
+role alone would attribute a third of Codex's tool results to a person.
+
+**Where a mismatch should warn.** A `role`/`actor_kind` pair outside the four
+combinations above is a shape no vendor has been observed to produce, and is
+worth a diagnostic rather than silent acceptance -- the classifier reaching an
+unobserved combination means either a vendor change or a decode fault, and both
+are findings.
+
+### 6.7 Evidence Audits
 
 “Audit” is Codess implementation terminology, not a vendor record type or a
 CoSchema field. It does not mean a security or compliance audit. It is a

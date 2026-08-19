@@ -602,15 +602,26 @@ def _process_text(text: str, opts: dict, *, phase: str, record_type: str) -> str
 def _base_event(
     *, session_id: str, event_id: str, event_type: str, subtype: str,
     role: str, timestamp: float | None, source_file: str,
+    content: str | None = None, content_len: int | None = None,
+    metadata: str | None = None, **extra: Any,
 ) -> dict:
-    return {
+    """One Claude Event envelope, holding the fields every record shares.
+
+    `content` and `metadata` default to None so a caller emitting a bare
+    lifecycle record passes neither; a caller with text passes both rather than
+    building the sixteen keys again. `extra` carries what only some records
+    have, so a caller without them spells out no `None` per key.
+    """
+    event = {
         "session_id": session_id, "event_id": event_id,
         "event_type": event_type, "subtype": subtype, "role": role,
-        "content": None, "content_len": None, "content_ref": None,
+        "content": content, "content_len": content_len, "content_ref": None,
         "tool_name": None, "tool_input": None, "tool_output": None,
         "timestamp": timestamp, "file_path": None,
-        "source_file": source_file, "metadata": None, "source_raw": None,
+        "source_file": source_file, "metadata": metadata, "source_raw": None,
     }
+    event.update(extra)
+    return event
 
 
 def _attach_timestamp_state(event: dict, record: dict, timestamp: Any) -> None:
@@ -946,24 +957,14 @@ def normalize_assistant(
             if processed is None:
                 continue
             truncated = processed
-            events.append({
-                "session_id": session_id,
-                "event_id": _block_event_id(line_num, emitted_index),
-                "event_type": "assistant_message",
-                "subtype": subtype,
-                "role": role,
-                "content": truncated,
-                "content_len": content_len,
-                "content_ref": None,
-                "tool_name": None,
-                "tool_input": None,
-                "tool_output": None,
-                "timestamp": ts,
-                "file_path": None,
-                "source_file": source_file,
-                "metadata": _event_metadata(record, extra=model_configuration),
-                "source_raw": None,
-            })
+            events.append(_base_event(
+                session_id=session_id,
+                event_id=_block_event_id(line_num, emitted_index),
+                event_type="assistant_message", subtype=subtype, role=role,
+                timestamp=ts, source_file=source_file,
+                content=truncated, content_len=content_len,
+                metadata=_event_metadata(record, extra=model_configuration),
+            ))
             _attach_timestamp_state(events[-1], record, ts)
             _attach_configuration_state(events[-1], record)
             emitted_index += 1

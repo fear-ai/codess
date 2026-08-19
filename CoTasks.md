@@ -69,8 +69,11 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W66 | High | Planned | Unify configuration into one subsystem | -- |
 | W67 | Normal | Planned | Move relay fields into the objects that carry them | -- |
 | W70 | Normal | Planned | Re-partition documentation; remove cross-document redundancy | -- |
-| W72 | Normal | Planned | One Event-record builder per adapter; Cursor has none | -- |
 | W71 | Normal | Planned | Adopt the reporting facility in the command layer | -- |
+| W72 | Normal | Planned | One Event-record builder per adapter; Cursor has none | -- |
+| W73 | High | Planned | Resolve or close the fifteen open vendor decode gaps CoPlan records | -- |
+| W74 | High | Planned | Cursor Session times dropped; unread populated fields; two vendor facts to record | -- |
+| W75 | Normal | Planned | Harness experiments for conditions no stored data records | Feeds W55, W73, W74 |
 
 ## Queue
 
@@ -86,6 +89,41 @@ not a preference.
 | 5 | **W67** | Follows W66 directly and is mechanical once it lands: each relay already has an object to take, the measurement separating a relay from a builder is written down, and the five shared parameters are the same subset `ChildInvocation` carries. |
 | 6 | **W64 + W65** | W65's record-context cluster is adapter signatures, so consolidating before W04 rewrites them twice. W64 no longer waits on W04 -- what remains after the naming pass is dominated by optional-narrowing, which is what `strict_optional` decides -- but it is cheapest once the signatures have settled. |
 
+### Execution Rounds
+
+The queue orders items; this groups them into sessions that can each finish. A
+round is sized to leave the suite green and the store readable at its end.
+
+**Round 1 -- evidence, no store change.** W75 first: eight harness conditions,
+one session per vendor, producing observations three other items are waiting on.
+Then W05's named investigations, which need no rebuild because format-6 stores
+exist. Nothing here writes a column, so nothing blocks.
+
+**Round 2 -- the Cursor field pass.** W74.5a's nine map decisions plus the
+`context` leaves, `webCitations`, and the `richText` mentions. These add Event
+metadata and Artifact references rather than columns, so they land without a
+format change. W74.1 (Session times) belongs here too: it fills
+`sessions.started_at`, which already exists. Retest is the null-count query
+recorded on the item.
+
+**Round 3 -- one wire-format change, batched.** W50 + W51 naming, W74.3's
+`duplicate_of` reference, and `tokenCount` retention for all three vendors.
+Every one needs a column or a rename, and the rebuild is paid once per format
+regardless of how many. Batching them is the whole argument; splitting costs
+three rebuilds.
+
+**Round 4 -- structure.** W66 then W67, in that order for the reason the queue
+states. W72's remaining adapter clusters fold in, since they touch the same
+signatures.
+
+**Round 5 -- enforcement.** W04's five steps, now that W75 has settled what the
+adapters must accept. W64 and W65 follow, since W04 moves the boundary they
+would otherwise be decided against.
+
+**Continuous, not a round.** W70 (documentation partition), W71 (reporting
+adoption), and W73's fifteen decode gaps, which are individually small and each
+belong to whichever round touches their vendor.
+
 **Not queued**, each for a stated reason rather than for lack of room:
 
 | Item | Why not queued |
@@ -96,6 +134,9 @@ not a preference.
 | **W35** | No longer gates anything a store does; it is now a question about what the released set should contain. |
 | **W43** | Withdrawn on inspection. Retained so the analysis is not repeated. |
 | **W55** | Correctness-neutral, so it batches with anything and blocks nothing. |
+| **W73** | Fifteen gaps in six groups; each belongs to the round that touches its vendor rather than to a round of its own. |
+| **W74** | Three findings settled, four open. The two touching the store are in round 3; the rest are round 2. |
+| **W75** | Round 1, and the only item that produces evidence rather than consuming it. |
 | **W70** | Documentation only, and continuous enough that queuing it would imply an end date it does not have. Do it alongside whatever item touches a document. |
 
 ## Dependencies and Batching
@@ -213,6 +254,176 @@ diagnostic policy for a non-conforming candidate.
 
 `validate_mapped_event` being test-only is the item in one line: the contract is
 written and unenforced.
+
+**Now measured, and the adapters conform.** Coverage reporting gained a
+profile-conformance comparison. Over the **21 current-format stores, every one
+is conformant**: no Event carries a `mapping_rule` its released profile does not
+declare.
+
+Claude's decoder shows why. `_mapping_rule` is a fixed table returning declared
+ids only, and `_PRODUCT_STATE_RULES` derives its ids from the kind table by
+comprehension -- so a rule and the kind it produces cannot disagree, because one
+is computed from the other.
+
+An earlier reading of this comparison surveyed **all 30** stores and found 25
+undeclared ids, which looked like a naming-scheme conflict. It was not: those
+ids appear only in one stale format-3 store, written by a decoder that derived
+`vendor.event_type.subtype` from the record rather than selecting a declared
+rule. Nine of the thirty stores predate format 6 and are superseded
+observations. Filtering to the current format is what the comparison must do,
+and the check now records the store's format so a stale store cannot be read as
+a live defect.
+
+**How the profiles and adapters match up.** They already do, and the mechanism
+is worth naming because it is what step 1 must preserve:
+
+| Adapter | How a rule id is chosen | Guarantee |
+|---|---|---|
+| `cc` | `_mapping_rule` is a fixed dispatch table over `event_type`/`subtype`, returning declared ids only | Every branch is a literal; adding an unlisted one is a visible edit |
+| `cc` product state | `_PRODUCT_STATE_RULES` is a comprehension over `_PRODUCT_STATE_KINDS` | A rule and the kind it produces are computed from one table, so they cannot disagree |
+| `codex`, `cursor` | Literal ids at the `annotate_mapping` call sites | Same property, less centrally |
+
+The derived `vendor.event_type.subtype` form exists only in stores predating the
+current contract. No current decoder constructs an id from a record.
+
+**Claude's profile is larger but not finer**, which is worth stating because the
+opposite reads naturally from the counts:
+
+| Profile | Rules | Source constructs covered | Constructs per rule |
+|---|---|---|---|
+| `claude` | 16 | 25 | 1.56 |
+| `codex` | 12 | 18 | 1.50 |
+| `cursor` | 12 | 12 | 1.00 |
+
+Claude has the **most aggregated** rules, not the most specific: six of its
+sixteen cover several vendor constructs at once -- `claude.session-label` spans
+`ai-title|custom-title|agent-name`, `claude.lifecycle` spans three unrelated
+system records. Cursor is the opposite, with one construct per rule throughout.
+Measured against stored Events the same way round: Claude uses 13 rules to
+produce 15 Event kinds (1.15 kinds per rule), Codex 8 rules for 12 kinds (1.50),
+Cursor 5 for 7 (1.40).
+
+The count difference is what each vendor *records*, not how finely Codess splits
+it. Claude writes harness settings, a session label, a version, fork context,
+and lineage as separate record shapes; Cursor puts most state in one bubble
+structure and needs rules for the bubble's parts instead.
+
+**The forty rules are not forty unrelated things.** Grouped by what they write
+rather than by their ids, they collapse to **nineteen CoSchema concepts, nine of
+which more than one vendor writes**:
+
+| Concept | Written by | Rules |
+|---|---|---|
+| `events` | all three | `claude.message`, `codex.message`, `cursor.bubble` |
+| `events.context` | all three | compaction and injection, four rules |
+| `tool_invocations` | all three | `tool-use`, `tool-call`, `tool-former-invocation` |
+| `tool_results` | all three | four rules; Cursor has two because it records the outcome two ways |
+| `events.message` | Claude, Codex | typed prompt, context injection, reasoning summary |
+| `events.lifecycle` | Claude, Codex | vendor lifecycle, task lifecycle, abort |
+| `model_params` | Claude, Codex | both named `configuration` |
+| `sessions` | Codex, Cursor | `session-meta`, `header` |
+| `sessions.archive_state` | Codex, Cursor | `archive-location`, `archive` |
+
+Nineteen of the forty rules are one vendor's version of a shared concept. The
+remaining twenty-one are genuinely vendor-only, and they are exactly the places
+a vendor records something the others do not: Claude's harness settings, session
+label and marker, harness version, lineage, and fork context; Cursor's context-
+window observation, subagent flag, and permission decision; Codex's turn
+identity and reasoning summary.
+
+So the ids differ because each names *a vendor's construct*, while the targets
+show what they have in common. Rule targets are also nearly one-to-one -- 16 of
+16 distinct for Claude, 12 of 12 for Codex, 11 of 12 for Cursor -- so rule count
+tracks separable destinations rather than granularity of matching.
+
+**Recommended resolution for W04.** Enforce the property that already holds,
+and do not change either scheme:
+
+1. *Keep the declared ids as they are.* They are coarser than `event_type` plus
+   `subtype`, deliberately: a rule names a mapping decision, and several record
+   subtypes can share one. Making profiles finer to match a derived form would
+   turn the profile into a restatement of the taxonomy rather than a contract
+   over it.
+2. *Keep `_mapping_rule` as a dispatch table.* Its value is that every id is a
+   literal a reader can find. A derivation would be shorter and would silently
+   admit whatever the record contained -- which is what the stale store shows.
+3. *Wire `validate_mapped_event` at the post-decode boundary as step 1 already
+   says.* It will not reject current Events, so the change is additive.
+4. *Assert conformance on current-format stores only.* The check must exclude a
+   store written under a superseded contract, or it reports a store's age as a
+   decoder defect -- which it did on the first run of this comparison.
+
+**Per vendor**, because the three adapters choose a rule id three different
+ways and each recommendation lands differently:
+
+| | Claude (`cc`) | Codex | Cursor |
+|---|---|---|---|
+| Mechanism today | `_mapping_rule` dispatch table, plus `_PRODUCT_STATE_RULES` derived from the kind table | `_mapping_rule` dispatch table | Seven literals at their `annotate_mapping` call sites; no dispatch function |
+| **1. Keep ids coarse** | Most affected: six of sixteen rules aggregate several constructs, so a finer profile would split `session-label` into three and `lifecycle` into three | Affected: five rules aggregate, including `tool-call` over three call shapes | Not affected: one construct per rule already, so there is nothing to keep coarse |
+| **2. Keep the dispatch table** | Applies as written; the product-state comprehension is the pattern to preserve, since rule and kind cannot drift | Applies as written | **Does not apply** -- there is no table. The literals give the same guarantee at seven sites instead of one, so the question is whether to add a table, not whether to keep one |
+| **3. Wire the post-decode check** | No change expected; 13 declared ids in use, none undeclared | No change expected | No change expected, and it is the adapter that most needs the check: a literal at a call site is the easiest place for an eighth, unreviewed id to appear |
+| **4. Compare current-format stores only** | Identical for all three, and deliberately so: the filter reads `store_meta.contract_digest`, which every store carries regardless of which adapter wrote it. A per-vendor rule here would mean one vendor's stale store was judged by today's profiles and another's was not | Identical | Identical |
+
+**Why Cursor writes `tool_results` twice.** Not two readings of one outcome --
+two vendor storage shapes. `toolFormerData.result,status` is the current object
+form and `toolResults[]` an older array; CursorSchema records that selected
+stores commonly hold the array empty. Measured across the current-format
+stores: `cursor.tool-former-result` produced 60,875 Events and
+`cursor.tool-result-legacy` produced **zero**. The legacy rule is declared and
+unused, which is precisely the `unused` case the conformance check now reports
+-- correct to keep, because a store written before the shape changed still
+needs it, and removing it would make that store unreadable rather than tidier.
+
+**How Cursor handles `events.message` and `events.lifecycle`.** Measured over
+the current-format stores, one rule produces three message kinds and lifecycle
+is absent entirely:
+
+| Rule | Event kinds produced | Count |
+|---|---|---|
+| `cursor.bubble` | `message.prompt`, `message.response`, `message.context` | 4,112 / 9,386 / 25 |
+| `cursor.compaction-summary` | `context.compact` | 2 |
+| `cursor.request-context` | `context.inject` | 52 |
+| `cursor.tool-former-invocation` | `tool.call` | 60,875 |
+| `cursor.tool-former-result` | `tool.result` | 60,875 |
+
+So Cursor *does* write `events.message` -- through `cursor.bubble`, whose
+classification is decided in the adapter from the bubble's type and content
+rather than by a separate rule per kind. That is the mirror image of Claude,
+which has `claude.typed-prompt` and `claude.message` as distinct rules. Neither
+is wrong: Cursor stores prompts, responses, and injected context in one bubble
+structure, so one rule matching that structure is the honest description of the
+source.
+
+**Lifecycle is genuinely absent.** Claude produces 1,058 `lifecycle.vendor`
+Events and Codex 5,449 across `lifecycle.start`, `lifecycle.complete`, and
+`lifecycle.abort`; Cursor produces none, and has no lifecycle rule to produce
+them with. Whether Cursor records task start and completion anywhere is a
+decode gap rather than a mapping choice, and belongs with the coverage question
+in W73 rather than here.
+
+**A follow-on for Cursor, not a blocker.** Its seven literals are correct today
+and were each written beside the record they describe, which is a real argument
+for leaving them. But they are the one adapter where a new id needs no edit to a
+central table, so if the conformance check ever reports an undeclared id, Cursor
+is where to look first.
+
+The case for a table there is weaker than it looks, and worth stating so it is
+not adopted by symmetry. Claude and Codex need a dispatch function because one
+call site emits many kinds: `cc._mapping_rule` has eleven branches over
+`event_type`/`subtype`. Cursor's seven ids sit at seven distinct call sites,
+each already selected by the surrounding code -- a table would move the id away
+from the record it names and add a lookup that decides nothing. The property a
+table buys, that every id is a literal a reader can find, Cursor already has.
+
+What Cursor lacks is not the table but the *check*, which is step 3 and applies
+to all three adapters equally. Revisit a table only if the conformance test
+starts failing there, since that would be evidence the call sites drifted.
+
+**Justification.** The alternative -- reconciling two id schemes -- was the
+reading before the measurement, and it would have been a wire-format change
+serving a defect that does not exist. The measurement cost one comparison and
+removed a step from the item. What remains is the original gap: a property held
+by construction with nothing testing it, which is one refactor from being lost.
 
 **Steps.** Ordered by what feeds what, not by size.
 
@@ -461,7 +672,7 @@ under one name.
 | R7 | Return `None` for every unparseable input; never raise | Callers treat `None` as "no time" and pair it with a field state. An exception would abort a decode over one bad field |
 | R8 | Never infer a time from another value | Codess does not derive time from ordering, adjacency, or file position; the normalizer must not become the place that starts |
 
-**Deliberately out of scope**, because these are the caller's:
+**Could be out of scope**, because these are the caller's:
 
 - *Which field to read.* `timestamp`, `createdAt`, `clientStartTime`, and the
   rest are vendor knowledge and stay in the adapters.
@@ -1072,6 +1283,52 @@ invocation is constructed twice where one would do; `ChildInvocation`'s policy
 and target halves are separable, or the reason they are not is recorded; the
 relay census runs as a test.
 
+### W70 -- Documentation Partition and Redundancy
+
+**Work.** Re-partition the documentation set against its stated charters, and
+remove the conceptual redundancy that has accumulated across documents.
+
+**The evidence.** Verbatim duplication is not the problem -- exactly one
+sentence appears in two documents. The problem is that a single topic is
+discussed, from scratch, in many places:
+
+| Topic | Documents discussing it |
+|---|---|
+| Mapping profiles | 8 |
+| Snapshots | 7 |
+| Raw mode and capture | 5 |
+| Coverage reporting | 4 |
+| `quality_report` | 4 |
+| Candidate records | 3 |
+
+Work items spread the same way. W04 was mentioned 40 times across four
+documents before this item was written, including a five-step implementation
+plan with verification criteria in CoReview -- forward-looking planning inside
+the document whose charter is "evidence, not a plan". Moving that plan to
+CoTasks cut CoReview's W04 mentions from 17 to 5.
+
+**The rule to apply.** One topic has one authoritative location; every other
+document states only what its own charter requires and links rather than
+restates. Where two documents must both discuss a topic, the second states the
+consequence for its own subject, not the topic.
+
+**Method.** For each topic above, identify the charter that owns it, reduce
+every other treatment to a consequence or a link, and check the result against
+the documentation map. The charters exist and are stated in each document's
+opening; the divergence is between them and the contents, so the charter is the
+fixed point.
+
+**Evidence to close.** Every topic in the table has one authoritative location
+named in the documentation map; no document restates another's subject beyond
+the consequence for its own; no work item's scope, steps, or verification
+criteria appear outside CoTasks.
+
+**Cost.** Documentation only. No rebuild, no code change.
+
+**Why it is an item.** It has a completion condition and an enumerated scope.
+The recurring alternative -- fixing repetition when it is noticed -- is what
+produced the current state.
+
 ### W71 -- Adopt the Reporting Facility in the Command Layer
 
 **Work.** Route command-layer status, progress, warnings, and errors through
@@ -1141,59 +1398,505 @@ line 178 still spells the record out.
 | Catalog entry fields | `project_annotations`, `project_catalog`, `refresh_operations` | Three readers of the same catalog row; a typed accessor is the fix, and it is W04's shape one level up |
 | Command preamble | `ingest_cmd`, `query_cmd` | Both resolve roots and store root the same way; W67 territory |
 
+**Landed.** Cursor has a module-level `_base_event`, and its nested `base_ev`
+is now a four-value closure over it rather than a second definition. The three
+sites that bypassed a builder -- Cursor's request-context path, Codex's
+`turn_aborted` path, Claude's assistant-text path -- construct through one.
+`cc._base_event` gained `content`, `content_len`, `metadata`, and `**extra`,
+which is what its bypassing site needed and the reason it had one.
+The per-day activity accumulator is also one definition:
+`query_api.activity_bucket` holds the twenty-one counters both sites shared,
+and each passes its own extras -- the audit's per-Actor and per-relation
+breakdowns, the query's last-human-prompt key. Sets are built per call rather
+than defaulted, since one shared set would report the same Sessions on every
+day.
+
+`pylint R0801` clusters fell from 16 to 10, and the adapter Event-shape group
+from 7 to 4.
+
+**Remaining.** Four adapter clusters, which are not the Event envelope: two are
+the shared import and constant blocks at the head of `cc` and `codex`, one is
+`codex`/`cursor_source` timestamp parsing (W55), one is a tool-field block. The
+catalog row read in three modules is untouched, and is the same shape W04
+addresses one level up.
+
 **Evidence to close.** No adapter constructs an Event dict outside its builder;
-Cursor has a module-level builder like the other two; the per-day accumulator
-has one definition; `pylint --enable=R0801` reports only the re-export cluster,
-which is recorded as accepted.
+the per-day accumulator has one definition; `pylint --enable=R0801` reports only
+clusters recorded here as accepted.
 
 **Cost.** Correctness-neutral, no rebuild. Overlaps W04 (adapter signatures) and
 W67 (command preamble), so it batches with whichever lands first.
 
-### W70 -- Documentation Partition and Redundancy
+### W73 -- The Vendor Decode Gaps CoPlan Records
 
-**Work.** Re-partition the documentation set against its stated charters, and
-remove the conceptual redundancy that has accumulated across documents.
+**Work.** Resolve, or explicitly close, the per-vendor source cases CoPlan lists
+as having a remaining action.
 
-**The evidence.** Verbatim duplication is not the problem -- exactly one
-sentence appears in two documents. The problem is that a single topic is
-discussed, from scratch, in many places:
+**Why it is an item now.** CoPlan's three vendor sections each carry a
+`Source case | Current decision | Remaining action` table. Sixteen rows, one
+marked Done, **fifteen open** -- and none of the fifteen is named by any work
+item, so the largest body of identified decode work in the repository is
+tracked only as prose inside an architecture document. That is the same failure
+the item list exists to prevent: a reader of CoTasks would conclude the decode
+layer has no open questions.
 
-| Topic | Documents discussing it |
+**The fifteen, by vendor.** Codex carries the most, and the split is not even:
+
+| Vendor | Open | Concentrated in |
+|---|---|---|
+| Claude Code | 4 | Attachments and product state |
+| Codex | 6 | Envelope duplication and lineage |
+| Cursor | 5 | Composer attribution and projection loss |
+
+**By component, which is what decides who does the work.**
+
+| Component | Cases | Note |
+|---|---|---|
+| Adapter decode | 6 | `cc` attachment shapes, `codex` reasoning placement and compaction variants, `cursor` projection loss |
+| Session relations | 4 | Claude `isSidechain`/`agentId`, Codex `parent_thread_id`/collaboration records, Cursor agent-looking state. One subject, three vendors |
+| Mapping and CoSchema | 3 | Artifact/content linkage for Claude images and attachments and for Cursor file-backed content -- all three need the same new mapping |
+| Coverage reporting | 2 | Cursor composers absent from an index, and projected-key comparison. Both are reporting over evidence already retained |
+
+**By function, which decides what the work actually is.**
+
+| Function | Cases | What has to happen first |
+|---|---|---|
+| Measure | 5 | Field availability by release, false-attribution rates, dangling identifier counts. No code changes until the measurement exists |
+| Decide | 4 | Whether a subtype earns a mapping, where an inherited setting terminates, what an unbound composer becomes. Judgement, not effort |
+| Extend fixtures | 3 | New notification and compaction shapes as vendors ship them. Recurring rather than closable |
+| Define a mapping | 3 | The Artifact/content link. One decision serving all three |
+
+**By impact and complexity**, which is the ordering that matters:
+
+| Case group | Impact if unresolved | Complexity | Read |
+|---|---|---|---|
+| Artifact/content linkage (3) | Image and file-backed content stays unsearchable; the store under-reports what a Session contained | Medium -- one CoSchema mapping, three call sites | Highest value per unit of work; all three close together |
+| Session parentage (4) | Subagent and fork relationships stay absent, so Interaction reconstruction misses delegated work | Medium -- measurement first, then a narrow relation | Highest product impact; blocked on evidence, not on code |
+| Coverage reporting (2) | A coverage report cannot state what a Cursor projection dropped, so a clean report overstates | Low -- the report exists; this adds two comparisons | Cheapest, and it makes the other groups' progress visible |
+| Setting inheritance (1) | Codex Model Turn settings may attach past their real boundary | Medium -- needs a stated termination rule and tests per field | Correctness risk, narrow scope |
+| Duplicate envelopes (2) | A vendor release adds a notification shape and it is counted twice | Low per instance, but recurring | Maintenance, not a closable item |
+| Retention decisions (3) | Unknown product state stays a diagnostic rather than a queryable subtype | Low each, but each needs the four-part mapping gate | Do only where a query need exists; otherwise close as declined |
+
+**Suggested order**: coverage reporting first because it is cheap and reveals
+the rest; then Artifact linkage, which is one decision unlocking three cases
+across two vendors; then parentage, which needs measurement before code. The
+duplicate-envelope and retention groups are ongoing and should not hold the
+item open.
+
+**Evidence to close.** Every row in CoPlan's three remaining-action tables reads
+`Done` with the evidence, or states the decision that closed it without work.
+The tables stay -- they are the vendor-by-vendor record -- but no row is left
+describing an action nobody owns.
+
+**Cost.** Varies per group and is not one change. The Artifact-linkage group is
+a mapping decision under W04's gate; the coverage group depends on the coverage
+report that already exists; the parentage group needs measurement before any
+code. Nothing here is blocked on a rebuild.
+
+**Note.** This item exists to make the gaps visible and to route each group to
+its owner. Resolving all fifteen under one identifier would be a batch nobody
+can finish; splitting them once each group's decision is made is the expected
+path.
+
+### W74 -- Four Measured Cursor and Codex Findings
+
+**Work.** Four findings from reading vendor data rather than stores. Grouped
+because each is small and three touch the Cursor adapter.
+
+**1. Cursor Session times are extracted and then dropped.** `cursor_source`
+reads `created_at` and `last_updated_at` from every composer header -- present
+on all 66 on the development machine -- and `adapters/cursor` never references
+either. Scan *does* use them, for the time-range row CursorSchema documents, so
+the values are proven usable; only the ingest path discards them. The consequence is visible in a store: one Cursor Project has 667 Events
+and two Sessions with **no timestamp anywhere**, so it cannot be ordered by time
+or filtered by `--since`. This is the closest Cursor has to lifecycle evidence
+and it is already selected; only the mapping is missing.
+
+**2. Cursor has no task lifecycle, and that is a vendor fact.** Searching every
+bubble field for start, end, complete, abort, cancel, status, and duration
+returns `capabilityStatuses`, `statusUpdates`, and `skipRendering` -- none of
+which records a task boundary. Codex produces 5,449 lifecycle Events and Claude
+1,058 under its own vendor kind; Cursor has nothing to produce them from. Close
+the W73 lifecycle row for Cursor as *declined, no source evidence* rather than
+leaving it open.
+
+**3. Duplicate tool results are real vendor records, not a decode artifact.**
+The first reading blamed the decoder. Comparing the bubbles **field by field**
+rather than by the three stored columns settles it: two bubbles carrying one
+`toolCallId` differ in exactly three fields -- `bubbleId`, `serverBubbleId`, and
+`createdAt` -- and agree on the other ninety-five, including the tool name,
+arguments, result, and status.
+
+The `createdAt` values are what identify the mechanism:
+
+| Bubble | serverBubbleId | createdAt |
+|---|---|---|
+| `c3ccc7f1` | *(none)* | 2026-06-08T08:44:27Z |
+| `c556845d` | `814e8729…` | 2026-06-29T08:00:10Z |
+| `4d97c7a2` | `814e8729…` | 2026-06-29T08:00:19Z |
+| …five more | `814e8729…` | 2026-06-29T08:00:33Z – 08:01:37Z |
+
+One original from 8 June, seven copies written on 29 June seconds apart, all
+sharing a single `serverBubbleId`. Across the composer, **28,704 bubbles carry a
+`createdAt` of 2026-06-29** against a few hundred on each neighbouring day. That
+is one bulk write by the vendor -- a sync, a migration, or a session replay --
+not a decoder reading a record twice.
+
+**The existing dedup already works.** Keyed on `(type, serverBubbleId)`, it
+collapses the seven server copies to one; measured over all 4,053 groups, the
+survivor count is exactly 2 in every case -- the one canonical server copy plus
+the one locally-written bubble that has no server identity to be judged by. The
+rule is doing what CoPlan describes; two genuine vendor records reach the store.
+
+**Resolution: record the relationship rather than delete a record.** Since both
+bubbles are real, dropping either loses evidence. Add an advisory field on the
+later Event naming the earlier one -- a `duplicate_of` reference to the prior
+Event's identity, with the evidence that justified it (`toolCallId` match, same
+composer, later `createdAt`). Justification: this is the standard the rest of
+the schema already uses -- a source status and a normalized outcome coexist, an
+exact vendor value sits beside a mapped one -- and it keeps a query able to
+exclude replays without the store having decided they never happened. Deleting
+would also be unrecoverable, while an advisory reference can be ignored by a
+reader who wants the raw record count.
+
+**The duplication is circumstance-bound, and the circumstance is measurable.**
+Across 145 composers holding tool calls:
+
+| Composer shape | Count | Duplicated |
+|---|---|---|
+| No server-identified tool bubbles at all | 111 | **0** |
+| Has server copies, spans under 3 days | 20 | 0 |
+| Has server copies, spans 3-16 days | 14 | **10** |
+
+Server copies are *necessary*: a composer whose tool bubbles are all
+locally-written never duplicates, 111 of 111. They are not sufficient -- what
+separates the 10 from the 24 is elapsed time. Duplicating composers span a
+median of 4 distinct `createdAt` days (3 to 16); non-duplicating ones with
+server copies have a median span of **0**, meaning every bubble was written the
+same day.
+
+It is not version-bound: `_v` is 3 on every bubble in every composer, duplicated
+or not. And it is not type-bound: the copies carry the same `type` as their
+original, which is why the `(type, serverBubbleId)` key collapses them
+correctly.
+
+So the shape is: **a long-lived composer is re-synced, and the re-sync writes
+server-identified copies of bubbles that already exist locally.** The rate
+follows how much of the composer predates the sync -- 0.74 and 0.62 in the two
+largest, near zero elsewhere.
+
+**What the replay is, and what it is not.** Three hypotheses tested against the
+composer with 4,053 duplicate groups:
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| Context compaction triggered it | Are `conversationSummary` bubbles near the bulk day? | **No** -- this composer has none at all |
+| A global migration | Do other composers share the bulk day? | **No** -- peak days are 2026-06-29, 2026-08-17, 2026-06-06, 2026-08-10, one per composer |
+| A version change mid-session | Do field shapes differ across the boundary? | **Partly** -- five fields (`checkpointId`, `context`, `contextWindowStatusAtCreation`, `isPlanExecution`, `modelInfo`) appear only after the bulk write, though `_v` stays 3 throughout |
+
+So it is per-session and coincides with a schema change, but the schema change
+does not explain it: **none of the five new fields appears on any duplicated
+tool bubble**, original or copy, in all 4,053 groups. The new shape arrived with
+the write; the duplication is not the new shape being applied.
+
+Two further regularities narrow it. Every group has **exactly seven** server
+copies -- not a range, the same number 4,053 times -- and in every group those
+seven carry **one** `serverBubbleId` between them. A constant seven is not what
+a backfill writing each record once produces, and seven records under a single
+server identity are treated as one by the existing dedup key. The actionable
+guess is a retry or fan-out within one sync rather than seven separate writes;
+what makes it actionable is that a harness experiment can reproduce a sync and
+count the copies.
+
+**What this does not settle**, and a harness experiment would: why the local
+bubble carries no `serverBubbleId`, and what produces the seven. Both readings
+of the local bubble -- an optimistic write later superseded, or a record
+retained alongside the copies -- fit what is observed, and the advisory field is
+correct under either, which is why it does not wait.
+
+**Original measurement, for reference.****Original measurement, for reference.** Every result links to a
+call -- **zero orphans across all three vendors** -- so the call/result count
+difference is multiple results per call, not unmatched ones:
+
+| Vendor | Results per call | Reading |
+|---|---|---|
+| Claude | strictly 1:1 across 3,232 | The vendor pairs them and the decoder preserves it |
+| Codex | 25,033 single, 2,680 double, 4 higher | 1,075 calls have no result: a real vendor condition, since an aborted turn leaves a request unanswered |
+| Cursor | 45,628 single, 7,248 double, 196 higher | Suspicious, and measurably so |
+
+The Cursor duplicates are **byte-identical** -- same `source_status`,
+`normalized_status`, and `output_text` -- and are concentrated: three stores hold
+3,243, 3,051, and 111 duplicate groups while three comparable stores hold 0, 0,
+and 2. That distribution does not follow from the decode path, which is the
+same for every store, so it points at the source data rather than at the reader
+-- which the field-by-field comparison above then confirmed.
+
+**4. `toolFormerData` is the current shape, not a former one.** The name invites
+reading it as superseded, which is what `cursor.tool-result-legacy` appears to
+confirm. Measured over 6,000 bubbles: `toolFormerData` populated on 5,078,
+`toolResults` populated on **zero** -- and `toolResults` is present but empty on
+every single bubble. So the legacy rule matches a key that always exists and
+never carries anything. `tool` inside `toolFormerData` is a numeric enum paired
+with the `name` string (`5` beside `read_file`, `15` beside `run_terminal_cmd`),
+which suggests "Former" names a UI component rather than a point in time.
+Record what it is; do not rename around a guess.
+
+**5a. Every populated field is reviewed, or its exclusion is recorded.** The
+standing rule, stated here because the Cursor adapter is where it is currently
+broken: a field the vendor populates is evidence, and dropping it needs a reason
+someone wrote down. Acceptable reasons are narrow -- it duplicates a field
+already carried, its values are inconsistent or malformed, it is unbounded
+content the resource policy refuses, or it is an internal identity that means
+nothing outside the vendor's process. "We did not get to it" is not one, because
+a reader cannot tell that from a decision.
+
+`adapters/cursor._MAPPED_BUBBLE_FIELDS` projects **10 of 98** bubble fields.
+Measured over 20,000 bubbles, **34 populated fields are dropped with no recorded
+reason**:
+
+| Field | Bubbles | Sample value | Decision | Why |
+|---|---|---|---|---|
+| `thinking`, `thinkingStyle`, `thinkingDurationMs` | 891 | reasoning text plus a duration | **Map** | Codex's equivalent already maps to `message.reasoning_summary` and produces 4,343 Events. A reader comparing reasoning across vendors currently sees Cursor as having none, which is false |
+| `turnDurationMs`, `timingInfo` | 1,651 / 685 | `7050`; four client timestamps | **Map** | The only measured durations Cursor records, and the store has nowhere else to get them. `timingInfo.clientStartTime` is already read for one purpose, so the shape is proven |
+| `errorDetails` | 5 | `HTTP 504 [unavailable]` with request id and stack | **Map** | A recorded failure is exactly what a tool-result status should reflect, and five instances is enough to define the shape |
+| `checkpointId`, `afterCheckpointId` | 2,717 / 1,364 | a UUID pair around an edit | **Map** | Bounds a change, which is Artifact-adjacent evidence; decide with the W73 Artifact-linkage group rather than separately |
+| `codeBlocks` | 1,831 | file URI plus content | **Map** | Content beside `text` that the store currently loses; bounded by the content policy like any other body |
+| `requestId`, `usageUuid` | 1,505 / 4,699 | a UUID, never both on one bubble | **Map both, separately** | Not one field under two names, which the first reading assumed. `requestId` appears only on `type=1` (user) bubbles and `usageUuid` only on `type=2` (assistant); no bubble carries both. They correlate: **664 of 1,505** user `requestId` values equal the `usageUuid` of an assistant bubble within the next five. So `requestId` identifies a request and `usageUuid` its response, which is a Model Turn edge -- Codex records the same relation explicitly as `turn_context.payload.turn_id`, and Claude through `parentUuid` lineage. Mapping them to one column would erase the direction |
+| `lastTerminalCwd` | 510 | an absolute path | **Map** | Names where a command ran, which is Artifact evidence and currently absent |
+| `symbolLinks`, `fileLinks` | 443 / 209 | JSON strings naming a symbol or file | **Map** | Explicit references to Artifacts, which the schema has a place for |
+| `todos` | 10 | JSON strings of task text | **Map** | Small, structured, and content a reader would search for |
+| `context` | 1,184 | nested containers, mostly empty | **Map the populated leaves** | Nine leaves do carry values: `terminalFiles` (153), `fileSelections` (20), `externalLinks` (5), `composers` (36), `selections`, `selectedImages`, `terminalSelections`. Those are Artifact and context references the store has a place for. The outer container is mostly empty; the leaves are not |
+| `webCitations` | 4 | `{"title": …, "url": "https://github.com/…"}` | **Map, with a content caution** | Title and URL, which is exactly an Artifact. Four instances define the shape completely. **But this is the first field carrying a URL and a label that a model retrieved rather than a person typed**, so both are attacker-influenced in a way a file path is not: a title can carry markup or a prompt-injection payload, and a URL can point anywhere. See the caution below |
+| `tokenCount` | 19,999 | `{"inputTokens": 0, "outputTokens": 0}` | **Retain always** | Non-zero on 627 of 30,000. Retained regardless: an explicitly recorded zero is evidence the vendor reported no usage, which is not the same as the field being absent, and the distinction is exactly what a usage question needs. Applied to all three vendors, not only Cursor |
+| `conversationState` | 21,606 | base64, decodes to binary | **Record presence, size, digest** | Median length **1** and 95th percentile 1 -- almost every instance is a single character -- with a maximum of 57,101 and 21 MB total. Retaining the bytes stores an undecodable blob; retaining nothing loses the observation that it exists and how large it is. Presence, byte length, and a digest are queryable and bounded |
+| `capabilityType`, `capabilityStatuses` | 11,454 / 8,457 | `15`; nine phase names, all empty | **Record presence, document vocabulary** | The vocabulary is in CursorSchema. The values are numeric enums with no published meaning, so decoding them would be a guess; recording that they were present with which values is not |
+| `richText` | 1,184 | Lexical editor JSON | **Map its `mention` nodes only** | Extracted text matches `text` once newlines are accounted for -- the 241 apparent differences were all line breaks. But the node types include `mention` (6 instances) alongside `text`, `linebreak`, `tab`, and a mention is a reference `text` cannot carry. Map the mentions, not the second copy of the prose |
+| `unifiedMode`, `isAgentic`, `supportedTools`, `editToolSupportsSearchAndReplace`, `isNudge`, `isPlanExecution` | 677-19,999 | `2`; `true`; `[1, 3, 5, …]` | **Record, do not interpret** | `unifiedMode` is `2` on 29,994 of 30,000 and `1` on five, so it is near-constant; `supportedTools` is a numeric enum list with no published meaning. Recording the value costs a column and preserves the observation; interpreting it would be invention. This is a *storage* decision, not a judgement that configuration is uninteresting |
+| `_v`, `bubbleId` | 19,999 | `3`; a UUID | **Already carried** | `bubbleId` is the source locator and `_v` the record version; both are retained as source evidence today. Nothing to add |
+| `existedPreviousTerminalCommand`, `existedSubsequentTerminalCommand` | 6 / 1 | `true` | **Record** | Booleans naming whether a terminal command bracketed this bubble. Cheap to carry and directly relevant to tool context |
+| `serviceStatusUpdate`, `statusUpdates`, `skipRendering` | 1 / 4 / 10 | a UI message; `{}`; `false` | **Record presence only** | `serviceStatusUpdate` is a product notice addressed to the operator rather than evidence about the work; `statusUpdates` holds `{}` wherever it appears; `skipRendering` is `false` on all ten. Presence is the finding |
+| `promptDryRunInfo`, `attachedFileCodeChunksMetadataOnly` | 32 / 498 | UI tooltips; chunk metadata | **Record presence and size** | Context-assembly detail rather than the assembled context. Presence and size say whether a bubble had context trimmed |
+
+**A caution the retrieved-content fields raise.** `webCitations` -- and
+`externalLinks` inside `context`, and any `mention` resolving to a URL -- carry
+text and locations a model fetched from the open web. Three consequences the
+existing content policy does not yet cover, because until now the content it
+bounded was authored locally:
+
+- *A title is untrusted text.* It reaches a report or a terminal unescaped
+  today. The existing control-character and ANSI stripping in `sanitize` covers
+  the terminal case; markup and prompt-injection payloads reaching a downstream
+  consumer are not covered.
+- *A URL is not evidence that it is safe to visit.* Codess does not fetch, and
+  must not start; storing the string is right, and any consumer that follows one
+  is making its own decision. That boundary should be stated where the field is
+  documented rather than assumed.
+- *A URL can carry a secret.* A query string with a token is exactly what
+  `redact` exists for, and the redaction patterns should be checked against URL
+  shapes rather than assumed to cover them.
+
+The resolution is not to drop the field -- retrieved references are real
+evidence about what informed a response. It is to route these through the
+content policy on the same terms as message text, and to record in CoSchema that
+an Artifact URI from a retrieval is attacker-influenced where one from a file
+path is not. Scoped with the mapping work in round 2.
+
+**How the decisions were made, revised.** The first pass excluded eleven groups
+and three of those exclusions were wrong on the evidence:
+
+- *`context` is not empty.* Nine leaves carry values, including `terminalFiles`
+  on 153 bubbles and `fileSelections` on 20. Walking the structure rather than
+  reading the top level found them.
+- *`richText` is not purely a re-encoding.* Its extracted text does match `text`
+  -- the 241 apparent differences were line breaks my extraction dropped -- but
+  it also carries `mention` nodes, which `text` cannot represent.
+- *`webCitations` is a URL and a title*, which is an Artifact regardless of
+  appearing four times.
+
+**The standing preference is to decode what we can and retain the rest**, so an
+exclusion now needs one of three specific grounds:
+
+| Ground | Fields | Treatment |
+|---|---|---|
+| Undecodable without the vendor's encoding | `conversationState` | Presence, byte length, digest -- not the bytes |
+| A numeric enum with no published meaning | `capabilityType`, `supportedTools`, `unifiedMode` | Record the value, do not interpret it |
+| Already carried under another name | `_v`, `bubbleId`, `richText` prose | Nothing to add |
+
+Nothing is dropped for being small, near-constant, or uninteresting. Four
+instances of `webCitations` and one of `existedSubsequentTerminalCommand` are
+retained on the same footing as fields appearing twenty thousand times, because
+a count bounds how much a field contributes and not whether it is evidence.
+
+**`tokenCount` is retained always, for every vendor.** A recorded zero and an
+absent field are different observations, and only the first says the vendor
+reported no usage. CoSchema already distinguishes absent from null from empty
+through `field_state`; storing the zero is what lets that distinction reach a
+usage query. This supersedes the earlier reading that a mostly-zero field would
+mislead -- it would only mislead if the store failed to say it was recorded as
+zero.
+
+**5b. The Cursor bubble carries 98 fields**5b. The Cursor bubble carries 98 fields and about 40 are never populated.**
+Sampled over 20,000 bubbles from the live global store. Present on essentially
+every bubble and non-empty on none: `lints`, `commits`, `pullRequests`,
+`gitDiffs`, `images`, `attachedFolders`, `interpreterResults`, `notepads`,
+`capabilities`, `consoleLogs`, `knowledgeItems`, `webReferences`,
+`aiWebSearchResults`, and roughly thirty more. `toolResults` is one of these.
+
+Populated and **not currently read** -- the list worth reviewing before anything
+else here:
+
+| Field | Bubbles | What it holds |
+|---|---|---|
+| `tokenCount` | 19,999 | Present on every bubble |
+| `conversationState` | 11,606 | An opaque base64 blob |
+| `capabilityType` | 11,454 | A per-bubble capability designator |
+| `usageUuid` | 4,699 | A usage identifier |
+| `checkpointId` / `afterCheckpointId` | 2,717 / 1,364 | Checkpoint identities around an edit |
+| `thinking` / `thinkingStyle` / `thinkingDurationMs` | 891 | Reasoning text and its duration |
+| `timingInfo` | 685 | Four client timestamps per turn |
+| `turnDurationMs` | 1,651 of 60,000 | The measured duration of one turn |
+| `errorDetails` | 5 | A real failure: `HTTP 504 [unavailable]` with request id and stack |
+
+`thinking` is the sharpest of these: Codex maps its reasoning summary to
+`message.reasoning_summary` and produces 4,343 such Events, while Cursor's
+equivalent is present and unread.
+
+**6. `statusUpdates`, `skipRendering`, and `capabilityStatuses` explain the
+lifecycle absence.** All three exist and none carries a boundary:
+`statusUpdates` holds `{}` where present (4 bubbles), `skipRendering` is `false`
+on all 10, and `capabilityStatuses` is the interesting one -- it names nine
+phases including `start-submit-chat`, `chat-stream-finished`, and
+`composer-done`, and **every phase list is empty on all 8,457 bubbles that
+carry it**. Cursor declares a lifecycle vocabulary and records no instances of
+it.
+
+**7. A task boundary is derivable from bubble type, and worth proposing.**
+Within a composer the sequence is `type=1` (user) followed by one or more
+`type=2` (assistant, some carrying `toolFormerData`). Measured over 60,000
+bubbles: 2,823 type-1 against 57,175 type-2, so a type-1 bubble is a turn start
+and the following run is its response. `turnDurationMs` on 1,651 bubbles and
+`timingInfo` on 685 give a measured duration for part of that run.
+
+This is a derivation rather than vendor evidence, so it must be recorded as
+one: an Interaction boundary from sequence carries a different warrant than
+Codex's `task_started` record, and CoPlan's rule against inferring relationships
+from adjacency applies. Proposing it as an explicit `event_at_basis`-style
+derivation, visible as derived, is the honest form.
+
+**Status of each finding.** All seven are diagnosed; **none has changed code.**
+Stated because a diagnosed finding reads like a fixed one in a document that
+only describes it:
+
+| # | Finding | State | Next action |
+|---|---|---|---|
+| 1 | Session times extracted and dropped | Diagnosed | Map `created_at`/`last_updated_at` onto Session start/end |
+| 2 | No task lifecycle in Cursor | **Settled** -- recorded in CursorSchema | Close the W73 row as declined |
+| 3 | Duplicate results are real vendor records | **Detection landed**; the advisory field is not built | `adapters/cursor._count_surviving_repeats` reports `repeated_tool_calls` per Source, so a re-synced Session is now visible. Add the `duplicate_of` reference next, which needs a column and so batches with a rebuild |
+| 4 | `toolFormerData` is current, not former | **Settled** -- recorded in CursorSchema | None |
+| 5a | 34 populated fields dropped unreviewed | Diagnosed | One recorded decision per field |
+| 5b | ~40 fields never populated | **Settled** -- policy recorded | Record as measured-empty in the audit |
+| 6 | Capability vocabulary declared, never filled | **Settled** -- recorded in CursorSchema | Consider a matching enum when a release populates it |
+| 7 | Task boundary derivable from bubble type | Diagnosed | Decide whether a derived Interaction boundary is admitted |
+| 8 | Role/actor disagreement measured, unguarded | Diagnosed | Diagnose a fifth combination; the four observed are the baseline |
+
+**"Settled" means documented and no code follows** -- the finding is a vendor
+fact, it is written where a reader will meet it, and nothing further is
+outstanding. It does not mean a resolution was chosen and deferred. Where a
+resolution *is* chosen but unbuilt, the row says Diagnosed and names the next
+action, so the two states are distinguishable.
+
+By that reading: 2, 4, and 6 are closed. 1, 3, 5a, and 7 are open, and two of
+them (1 and 3) add columns or values to the store, so they batch with a rebuild
+rather than landing alone.
+
+**Retestable now, and how.** Each open finding has a check that already runs, so
+a fix is verifiable rather than asserted:
+
+| # | Retest |
 |---|---|
-| Mapping profiles | 8 |
-| Snapshots | 7 |
-| Raw mode and capture | 5 |
-| Coverage reporting | 4 |
-| `quality_report` | 4 |
-| Candidate records | 3 |
+| 1 | `SELECT count(*) FROM sessions WHERE started_at IS NULL` on a Cursor store -- currently every row; zero after the mapping |
+| 3 | The duplicate-group count per invocation, which is 2 in all 4,053 groups today and stays 2 with a `duplicate_of` reference recorded on the later one |
+| 5a | The projected-field count against the populated-field count: 10 of 98 projected, 34 populated and unprojected, both re-derivable from the live store |
+| 7 | The type-1 count per composer against the Interaction count, which should agree once a boundary is derived |
 
-Work items spread the same way. W04 was mentioned 40 times across four
-documents before this item was written, including a five-step implementation
-plan with verification criteria in CoReview -- forward-looking planning inside
-the document whose charter is "evidence, not a plan". Moving that plan to
-CoTasks cut CoReview's W04 mentions from 17 to 5.
+**8. Warn on an unobserved role/actor combination.** Comparing the vendor
+`role` against the classified `actor_kind` over the current-format stores gives
+four combinations that disagree, and all four are expected: `user`/`tool` on
+26,933 Codex and 3,232 Claude Events, `user`/`harness` on 229, and
+`assistant`/`harness` on 68. Nearly a third of the Codex store carries a `user`
+envelope around content no human wrote.
 
-**The rule to apply.** One topic has one authoritative location; every other
-document states only what its own charter requires and links rather than
-restates. Where two documents must both discuss a topic, the second states the
-consequence for its own subject, not the topic.
+A fifth combination would mean the classifier reached a shape no vendor has been
+observed to produce -- a vendor change or a decode fault, both findings. Emit a
+record-level diagnostic rather than accepting it silently. The measured set
+above is the baseline the check compares against, and it is in CoPlan beside the
+per-vendor request/response evidence.
 
-**Method.** For each topic above, identify the charter that owns it, reduce
-every other treatment to a consequence or a link, and check the result against
-the documentation map. The charters exist and are stated in each document's
-opening; the divergence is between them and the contents, so the charter is the
-fixed point.
+**Evidence to close.** Cursor Sessions carry times where the header supplies
+them; the Cursor lifecycle row in W73 is closed as declined for task records and
+reopened as a derivation question; duplicate results carry a `duplicate_of`
+reference; the 34 unread populated fields each have a decision recorded.
 
-**Evidence to close.** Every topic in the table has one authoritative location
-named in the documentation map; no document restates another's subject beyond
-the consequence for its own; no work item's scope, steps, or verification
-criteria appear outside CoTasks.
+**A policy question these raise: what to do with a field that is always
+declared and never filled.** Roughly forty Cursor bubble fields, `toolResults`
+among them, are present on every record and empty on every one measured. Three
+treatments, and the choice should be stated once rather than per field:
 
-**Cost.** Documentation only. No rebuild, no code change.
+| Treatment | Cost | When it is right |
+|---|---|---|
+| Ignore silently | Nothing | Never -- it is indistinguishable from not having looked |
+| Record as measured-empty in the audit | One count per field | Default: `vendor_audits.cursor_features` already inventories shapes, and "present on 20,000, empty on 20,000" is a finding a later release can contradict |
+| Declare a mapping rule | A released rule that never fires | Only where a store written earlier still carries data, which is why `cursor.tool-result-legacy` stays |
 
-**Why it is an item.** It has a completion condition and an enumerated scope.
-The recurring alternative -- fixing repetition when it is noticed -- is what
-produced the current state.
+The distinction that matters is between *the vendor stopped writing this* and
+*we never checked*. An always-empty field recorded with its sample size is the
+first; an absent one is the second, and only the first can be revisited when a
+vendor release changes.
+
+**Aborted turns beyond Codex.** Codex records `event_msg.turn_aborted` and
+produces 68 `lifecycle.abort` Events. Claude produces none and has no abort
+rule; Cursor produces none. Whether either records an abort under another shape
+is unestablished; W75 carries the conditions that would settle it.
+
+**Cost.** Small each. Finding 1 is a mapping addition, 3 is a decode defect with
+a proposed rule, 2 and 4 are documentation, 5 and 7 are decisions, 6 is a
+recorded vendor fact.
+
+### W75 -- Harness Experiments for Unrecorded Conditions
+
+**Work.** Reproduce named conditions against live harnesses and record what each
+writes. Stored data contains only what was written, so a question about a
+condition nobody has triggered cannot be answered by reading more of it.
+
+**Why an item rather than a note.** Six open questions across W73, W74, and W55
+all reduce to "does the vendor record this", and each is cheap to settle and
+impossible to settle by inspection. Grouping them means one session with three
+harnesses answers several at once.
+
+| Condition | Question | Feeds |
+|---|---|---|
+| Interrupt a Cursor turn mid-stream | Does `capabilityStatuses` gain entries, or `statusUpdates` become non-empty? | W74.6, the lifecycle vocabulary |
+| Force a Cursor tool failure | Does `errorDetails` populate beyond the 5 observed, and does `toolFormerData.status` distinguish it? | W74.5a |
+| Run a Cursor turn with no tool call | Is the local bubble still written without a `serverBubbleId`, or is that tool-specific? | W74.3, the duplicate mechanism |
+| Deny a Cursor tool permission | Is `userDecision` the only record, or does a phase fire? | W74.6 |
+| Abort a Codex turn | Is `turn_aborted` the only abort evidence, and is a partial result written? | W73 duplicate-envelope group |
+| Abort a Claude turn | Claude has 1,058 `lifecycle.vendor` Events and no abort kind -- is one produced? | W73 parentage/lifecycle |
+| Leave a Cursor composer idle across a session boundary | Does `last_updated_at` advance without new bubbles? | W74.1, Session times |
+| Emit a Claude timestamp in seconds | Does any vendor produce the seconds-scale value the three parsers disagree on? | W55 R3 |
+
+**Method.** Each run is a fresh Project directory so the vendor writes are
+isolated, followed by a scan and ingest, followed by reading the vendor store
+directly for the fields named above. Record the observation whether or not the
+field populated: "triggered and absent" is the finding that closes a question,
+and is the one an inspection cannot produce.
+
+**Evidence to close.** Each condition has a recorded observation naming what the
+vendor wrote, and each dependent question above is answered or reclassified as
+not-reproducible with the reason.
+
+**Cost.** One session per harness. No code change; the output is evidence that
+unblocks decisions in three other items.
+
 
 ## Maintenance Directions
 

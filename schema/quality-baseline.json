@@ -1,7 +1,7 @@
 {
   "format": "codess.quality-baseline/1",
   "counts": {
-    "lint": 173,
+    "lint": 172,
     "types": 80
   },
   "note": "Ceilings, not targets. A count at or below its entry passes; a rise fails. Lower an entry when a change reduces a count, with tools/quality_report.py --accept."

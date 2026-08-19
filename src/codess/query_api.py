@@ -196,6 +196,44 @@ def make_request(
     return request
 
 
+def activity_bucket(day: str, **extra: Any) -> dict[str, Any]:
+    """The counters every activity bucket carries, plus a caller's own.
+
+    `query_api` and `orientation_audit` both accumulate per-day activity and
+    shared twenty-one keys spelled out at each site, which `pylint R0801`
+    reports as one cluster. Each also has keys the other does not -- the audit
+    tracks per-Actor and per-relation breakdowns, the query tracks the
+    interaction key of the last human prompt -- so this is the common core
+    rather than the whole bucket.
+
+    Sets are constructed per call, not shared: a default argument holding a set
+    would be one object across every bucket, and every day would then report
+    the same Sessions.
+    """
+    bucket: dict[str, Any] = {
+        "day": day,
+        "events": 0,
+        "content_characters": 0,
+        "sessions": set(),
+        "interactions": set(),
+        "first_event_at": None,
+        "last_event_at": None,
+        "human_prompts": 0,
+        "human_prompt_characters": 0,
+        "model_outputs": 0,
+        "model_output_characters": 0,
+        "human_prompt_interactions": set(),
+        "tool_calls": 0,
+        "tool_results": 0,
+        "tool_input_characters": 0,
+        "tool_output_characters": 0,
+        "tool_call_interactions": set(),
+        "tool_result_interactions": set(),
+    }
+    bucket.update(extra)
+    return bucket
+
+
 def validate_request(request: dict[str, Any]) -> None:
     unknown_fields = sorted(set(request) - REQUEST_FIELDS)
     if unknown_fields:
@@ -1190,32 +1228,17 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
 
     def day_bucket(timestamp: float) -> dict[str, Any]:
         day = calendar_keys(timestamp)[0]
-        return daily.setdefault(day, {
-            "day": day,
-            "events": 0,
-            "content_characters": 0,
-            "sessions": set(),
-            "interactions": set(),
-            "first_event_at": timestamp,
-            "last_event_at": timestamp,
-            "first_human_prompt_at": None,
-            "last_human_prompt_at": None,
-            "last_human_prompt_interaction_key": None,
-            "human_prompts": 0,
-            "human_prompt_characters": 0,
-            "model_outputs": 0,
-            "model_output_characters": 0,
-            "human_prompt_interactions": set(),
-            "tool_calls": 0,
-            "tool_results": 0,
-            "tool_input_characters": 0,
-            "tool_output_characters": 0,
-            "tool_call_interactions": set(),
-            "tool_result_interactions": set(),
-            "tool_calls_by_name": {},
-            "actor_activity": {},
-            "session_relation_activity": {},
-        })
+        return daily.setdefault(day, activity_bucket(
+            day,
+            first_event_at=timestamp,
+            last_event_at=timestamp,
+            first_human_prompt_at=None,
+            last_human_prompt_at=None,
+            last_human_prompt_interaction_key=None,
+            tool_calls_by_name={},
+            actor_activity={},
+            session_relation_activity={},
+        ))
 
     def actor_bucket(bucket: dict[str, Any], actor: str) -> dict[str, Any]:
         return bucket["actor_activity"].setdefault(actor, {
