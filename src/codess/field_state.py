@@ -58,8 +58,22 @@ _MISSING = object()
 
 
 def classify(value: Any) -> str:
-    """Classify a value into a field state. Pass ``_MISSING`` for a missing key
-    to get ``absent``. Never raises; ``malformed`` is set by parsing callers."""
+    """Report which state a field value is in, separating four falsy cases.
+
+    ``if not value`` is true for an omitted key, ``None``, ``""``, and a
+    sentinel such as ``"unknown"``, so a decoder using it stores one state for
+    four different source conditions and its diagnostics cannot distinguish
+    them afterwards. This returns ``absent``, ``null``, ``empty``, and
+    ``sentinel`` respectively.
+
+    Pass ``_MISSING`` for a key that was not present at all; every other
+    argument is the value as read.
+
+    ``malformed`` is not returned here. It depends on the type a caller
+    expected, which this function is not given: the same string can be a valid
+    name and an invalid timestamp. A caller that parses classifies first and
+    replaces ``present`` with ``malformed`` when its parse fails.
+    """
     if value is _MISSING:
         return ABSENT
     if value is None:
@@ -100,17 +114,22 @@ def severity(state: str) -> str | None:
 
 
 def criticality(state: str, *, is_critical_field: bool) -> str | None:
-    """Return ``fatal``/``advisory``/None for a state on a (critical?) field.
-    ``present`` -> None; non-present -> ``fatal`` if critical else ``advisory``."""
+    """Return ``fatal``/``advisory``/None for a state on one field.
+
+    ``present`` yields None; a non-present state is ``fatal`` when the field is
+    critical and ``advisory`` when it is not.
+    """
     if state == PRESENT:
         return None
     return FATAL if is_critical_field else ADVISORY
 
 
 def compare(prior: Any, rebuilt: Any) -> str:
-    """Return ``match``/``mismatch``/``vacant`` for two values. ``vacant`` if
-    either side is non-present; else ``match`` if equal, ``mismatch`` if not.
-    Never raises."""
+    """Return ``match``/``mismatch``/``vacant`` for two values.
+
+    ``vacant`` if either side is non-present; else ``match`` if equal,
+    ``mismatch`` if not.
+    """
     prior_present = classify(prior) == PRESENT
     rebuilt_present = classify(rebuilt) == PRESENT
     if not (prior_present and rebuilt_present):
@@ -120,8 +139,11 @@ def compare(prior: Any, rebuilt: Any) -> str:
 
 def diagnose(opts: dict, *, field: str, state: str, source_field: str,
              value: Any = None, mapping_rule: str | None = None) -> None:
-    """Record a field diagnostic into ``opts['diagnostics']`` (name->count) and
-    ``opts['field_diagnostics']`` (rows); no-op for ``present``. Never raises."""
+    """Record a field diagnostic, as a count and as a row.
+
+    Writes ``opts['diagnostics']`` (name to count) and
+    ``opts['field_diagnostics']`` (rows); a ``present`` state is a no-op.
+    """
     if severity(state) is None:
         return
     diagnostics = opts.get("diagnostics")

@@ -17,9 +17,9 @@ from typing import Any
 from codess.config import get_stats_path
 
 
-def load_registry_data(registry_root: Path) -> dict[str, Any]:
+def load_registry_data(store_root: Path) -> dict[str, Any]:
     """Load registry JSON or return an empty shell (for first write)."""
-    stats_path = get_stats_path(registry_root)
+    stats_path = get_stats_path(store_root)
     if not stats_path.exists():
         return {"projects": [], "updated": datetime.now(UTC).isoformat()}
     try:
@@ -31,20 +31,20 @@ def load_registry_data(registry_root: Path) -> dict[str, Any]:
     return data
 
 
-def save_registry_data(registry_root: Path, data: dict[str, Any]) -> None:
-    stats_path = get_stats_path(registry_root)
+def save_registry_data(store_root: Path, data: dict[str, Any]) -> None:
+    stats_path = get_stats_path(store_root)
     stats_path.parent.mkdir(parents=True, exist_ok=True)
     data["updated"] = datetime.now(UTC).isoformat()
     stats_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def update_project_entry(
-    registry_root: Path,
+    store_root: Path,
     path_resolved: str,
     mutator: Callable[[dict[str, Any]], None],
 ) -> None:
     """Load registry, find or create entry for ``path_resolved``, run ``mutator`` (in-place)."""
-    data = load_registry_data(registry_root)
+    data = load_registry_data(store_root)
     by_path: dict[str, dict[str, Any]] = {}
     for ent in data.get("projects") or []:
         p = ent.get("path")
@@ -55,14 +55,14 @@ def update_project_entry(
     mutator(entry)
     by_path[path_resolved] = entry
     data["projects"] = list(by_path.values())
-    save_registry_data(registry_root, data)
+    save_registry_data(store_root, data)
 
 
 REPORTED_PATH_SAMPLE = 20
 """How many removable paths a prune report lists before counting the rest."""
 
 
-def stale_entries(registry_root: Path) -> list[dict[str, Any]]:
+def stale_entries(store_root: Path) -> list[dict[str, Any]]:
     """Registry entries whose Project path no longer exists.
 
     The registry gains an entry for every Project ever scanned and drops none,
@@ -76,7 +76,7 @@ def stale_entries(registry_root: Path) -> list[dict[str, Any]]:
     `prune_stale_entries` requires an explicit call rather than running on
     every write.
     """
-    entries = load_registry_data(registry_root).get("projects") or []
+    entries = load_registry_data(store_root).get("projects") or []
     stale = []
     for entry in entries:
         path = entry.get("path")
@@ -86,7 +86,7 @@ def stale_entries(registry_root: Path) -> list[dict[str, Any]]:
 
 
 def prune_stale_entries(
-    registry_root: Path, *, dry_run: bool = False,
+    store_root: Path, *, dry_run: bool = False,
 ) -> dict[str, Any]:
     """Remove entries whose Project path no longer exists.
 
@@ -94,7 +94,7 @@ def prune_stale_entries(
     rather than the intent. `dry_run` reports the same figures without
     writing, which is what makes this safe to run before deciding.
     """
-    data = load_registry_data(registry_root)
+    data = load_registry_data(store_root)
     entries = data.get("projects") or []
     removable = {
         entry.get("path") for entry in entries
@@ -117,7 +117,7 @@ def prune_stale_entries(
     }
     if not dry_run and result["removed"]:
         data["projects"] = retained
-        save_registry_data(registry_root, data)
+        save_registry_data(store_root, data)
     return result
 
 
@@ -152,15 +152,15 @@ def _is_legacy_global_entry(entry: dict[str, Any]) -> bool:
     )
 
 
-def prune_legacy_cursor_global_entries(registry_root: Path) -> int:
+def prune_legacy_cursor_global_entries(store_root: Path) -> int:
     """Remove scan-only pseudo-projects produced by the former global-row bug."""
-    data = load_registry_data(registry_root)
+    data = load_registry_data(store_root)
     projects = list(data.get("projects") or [])
     retained = [entry for entry in projects if not _is_legacy_global_entry(entry)]
     removed = len(projects) - len(retained)
     if removed:
         data["projects"] = retained
-        save_registry_data(registry_root, data)
+        save_registry_data(store_root, data)
     return removed
 
 

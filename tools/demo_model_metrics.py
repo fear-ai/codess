@@ -498,7 +498,10 @@ def main(argv: list[str] | None = None) -> int:
     selection.add_argument("--project", type=Path)
     selection.add_argument("--store", type=Path)
     parser.add_argument("--vendor", choices=sorted(VENDOR_STORES), default="cc")
-    parser.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    parser.add_argument(
+        "--store-root", dest="store_root", type=Path,
+        default=Path.home() / ".codess",
+    )
     parser.add_argument("--start", required=True, help="inclusive ISO date/time")
     parser.add_argument("--end", required=True, help="exclusive ISO date/time")
     parser.add_argument("--timezone", default="America/Los_Angeles")
@@ -519,7 +522,7 @@ def main(argv: list[str] | None = None) -> int:
             store=args.store,
             project=args.project,
             vendor=args.vendor,
-            registry=args.registry.expanduser().resolve(),
+            registry=args.store_root.expanduser().resolve(),
         )
         interactions = read_interactions(
             store,

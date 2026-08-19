@@ -143,13 +143,13 @@ def _resource_limits_report(settings: dict[str, Any]) -> dict:
 
 
 
-def _save_stats(project_path: Path, registry_root: Path, source_stats: dict) -> None:
+def _save_stats(project_path: Path, store_root: Path, source_stats: dict) -> None:
     """Merge ingest store stats into registry (preserves ``scan`` / ``query`` / etc.)."""
     from codess.registry_store import merge_ingest_sources, update_project_entry
 
     proj_str = str(project_path.resolve())
     update_project_entry(
-        registry_root, proj_str,
+        store_root, proj_str,
         partial(merge_ingest_sources, source_stats=source_stats),
     )
 
@@ -390,7 +390,7 @@ class IngestConfig:
 
     options: Mapping[str, Any]
     sources: tuple[str, ...]
-    registry_root: Path
+    store_root: Path
     staging_root: Path | None = None
     staged_store_roots: MutableMapping[Path, Path] = field(default_factory=dict)
 
@@ -406,7 +406,7 @@ class IngestConfig:
         cls,
         options: Mapping[str, Any],
         sources: Sequence[str],
-        registry_root: Path,
+        store_root: Path,
         *,
         staging_root: Path | None = None,
         staged_store_roots: MutableMapping[Path, Path] | None = None,
@@ -426,7 +426,7 @@ class IngestConfig:
         return cls(
             options=MappingProxyType(dict(options)),
             sources=tuple(sources),
-            registry_root=registry_root,
+            store_root=store_root,
             staging_root=staging_root,
             staged_store_roots=(
                 staged_store_roots if staged_store_roots is not None else {}
@@ -586,9 +586,9 @@ def _resolve_ingest_request(args: argparse.Namespace,
         print(err, file=sys.stderr)
         return 1
 
-    from codess.project import resolve_registry_directory
+    from codess.project import resolve_store_root
 
-    registry_root = resolve_registry_directory(args)
+    store_root = resolve_store_root(args)
 
     raw_src = getattr(args, "source", None) or "all"
     if "," in raw_src:
@@ -618,7 +618,7 @@ def _resolve_ingest_request(args: argparse.Namespace,
         if value is not None and value <= 0:
             print(f"codess: {name} must be > 0", file=sys.stderr)
             return 1
-    return roots, registry_root, sources, settings
+    return roots, store_root, sources, settings
 
 
 def _report_ingest_outcome(
@@ -773,7 +773,7 @@ def _publish_project(
     this run believed it changed did not in fact change, and their marks are
     cleared before the snapshot decision reads them.
     """
-    registry_root = config.registry_root
+    store_root = config.store_root
     opts = run_totals.opts
     diagnostics = run_totals.diagnostics
     # `_begin_project` places these in `opts` as per-Project state; taking them as
@@ -791,7 +791,7 @@ def _publish_project(
     published.derived_changed = correlate_project_artifacts(
         config, project_path,
         project.changed_vendors | project.catalog_changed_vendors,
-        registry_root,
+        store_root,
         diagnostics=diagnostics, progress_trace=progress_trace,
     )
     if opts.get("content_policy_data") and record_content_processing(
@@ -832,7 +832,7 @@ def _publish_project(
     published.snapshot_id, published.candidate_path = publish_snapshot(
         config, project_path, raw_records,
         raw_store=raw_store,
-        registry_root=registry_root,
+        store_root=store_root,
         project_id=project_id,
         sources=config.sources,
         minimum_source_size=min_size,
@@ -864,7 +864,7 @@ def _cursor_preflight(
     this call.
     """
     # From the two run-state halves: the registry is fixed for the run, `opts` accumulates.
-    registry_root = config.registry_root
+    store_root = config.store_root
     cursor_roots = cursor.roots
     cursor_workspace_ids = cursor.workspace_ids
     live_cursor_global = cursor.global_db
@@ -886,7 +886,7 @@ def _cursor_preflight(
                     for root in cursor_roots
                 }
                 selection_cache_path = (
-                    registry_root / "cache" / "cursor-selection-v1.json"
+                    store_root / "cache" / "cursor-selection-v1.json"
                 )
                 def observe_containers() -> dict:
                     """The Cursor container state -- main and WAL -- read now.
@@ -961,7 +961,7 @@ def _cursor_preflight(
                         "source_bytes": marker.get("source_size"),
                         "peak_rss_bytes": peak_rss_bytes(),
                     }
-                    cohort_store = RawStore(registry_root / "raw")
+                    cohort_store = RawStore(store_root / "raw")
                     state_needs_cohort = force or any(
                         cohort_needed(
                             live_global,
@@ -1007,7 +1007,7 @@ def _cursor_preflight(
                         live_global,
                         raw_store=cohort_store,
                         cache_path=(
-                            registry_root / "cache" / "cursor-cohort-v1.json"
+                            store_root / "cache" / "cursor-cohort-v1.json"
                         ),
                         working_path=cohort_db,
                         source_system_id=(
@@ -1112,7 +1112,7 @@ def _ingest_project(
     opts = run_totals.opts
     source_stats = outcome.source_stats
     sources = list(config.sources)
-    registry_root = config.registry_root
+    store_root = config.store_root
     staging_root = config.staging_root
     staged_store_roots = config.staged_store_roots
     rebuild_temporary = None
@@ -1168,8 +1168,8 @@ def _ingest_project(
                 "workspace_bindings": [], "path_aliases": [str(project_path)],
             }
         else:
-            binding = ensure_project_binding(registry_root, project_path)
-            project_entry = get_project_entry(registry_root, binding["project_id"])
+            binding = ensure_project_binding(store_root, project_path)
+            project_entry = get_project_entry(store_root, binding["project_id"])
         if staging_root:
             # Register the preflight staging directory so store paths and
             # the state path resolve through one mapping rather than each
@@ -1185,7 +1185,7 @@ def _ingest_project(
             [] if settings["validate_only"]
             else _current_raw_records_cached(project_path, raw_records_cache)
         )
-        raw_store = RawStore((staging_root / "raw") if staging_root else registry_root / "raw")
+        raw_store = RawStore((staging_root / "raw") if staging_root else store_root / "raw")
         _begin_project(
             opts, binding,
             raw_records=project_raw_records,
@@ -1373,7 +1373,7 @@ def _ingest_project(
                         return 1
                     return None
                 project_entry = get_project_entry(
-                    registry_root, opts["project_id"],
+                    store_root, opts["project_id"],
                 )
             published = _publish_project(
                 config,
@@ -1393,7 +1393,7 @@ def _ingest_project(
             evidence_summary = None
             evidence_summary_reused = False
             if not settings["validate_only"]:
-                _save_stats(project_path, registry_root, project.store_totals)
+                _save_stats(project_path, store_root, project.store_totals)
                 evidence_paths = [config.store_path(project_path, key) for key in VENDOR_KEYS]
                 previous_report = _load_runtime_report(project_path)
                 previous_summary = previous_report.get("evidence_summary")
@@ -1522,7 +1522,7 @@ def run(args: argparse.Namespace) -> int:
     resolved = _resolve_ingest_request(args)
     if isinstance(resolved, int):
         return resolved
-    roots, registry_root, sources, settings = resolved
+    roots, store_root, sources, settings = resolved
     diagnostics: dict[str, int] = {}
     # Decoder options, passed to every adapter. Distinct from `settings`
     # above: `settings` is what the run was configured to do, `opts` is what
@@ -1583,7 +1583,7 @@ def run(args: argparse.Namespace) -> int:
     # string, which failed on `.resolve()` several frames later.
     redaction_roots = {
         "home": Path.home(),
-        "registry": registry_root,
+        "registry": store_root,
         "cc-projects": CC_PROJECTS,
         "codex-sessions": CODEX_SESSIONS,
         "cursor-data": CURSOR_DATA,
@@ -1617,7 +1617,7 @@ def run(args: argparse.Namespace) -> int:
     # the emitter is substituted without touching a signature.
     progress_trace = progress_emit
     opts["progress"] = progress_emit
-    opts["registry_root"] = str(registry_root)
+    opts["store_root"] = str(store_root)
     progress_trace(
         "ingest.start", projects=len(roots), sources=",".join(sources),
         validate_only=settings["validate_only"], raw_mode=settings["raw_mode"],
@@ -1639,14 +1639,12 @@ def run(args: argparse.Namespace) -> int:
     min_size = settings["min_size"]
 
     outcome = IngestOutcome()
-    source_stats = outcome.source_stats
-
     staged_store_roots: dict[Path, Path] = {}
 
     temporary = tempfile.TemporaryDirectory(prefix="codess-preflight-") if settings["validate_only"] else None
     staging_root = Path(temporary.name) if temporary else None
     config = IngestConfig.from_options(
-        settings, sources, registry_root,
+        settings, sources, store_root,
         staging_root=staging_root, staged_store_roots=staged_store_roots,
     )
     # The two halves of run state: `config` is what was decided and does not
@@ -1660,7 +1658,7 @@ def run(args: argparse.Namespace) -> int:
         opts["codex_session_index"] = build_codex_session_index(
             cache_path=(
                 None if settings["validate_only"] else
-                registry_root / "cache" / "codex-session-index-v1.json"
+                store_root / "cache" / "codex-session-index-v1.json"
             )
         )
         progress_trace(

@@ -12,9 +12,9 @@ from codess import reporting
 from codess.codex_source import build_session_index as build_codex_session_index
 from codess.config import (
     CC_PROJECTS,
-    CODESS_DAYS,
     CODEX_SESSIONS,
     CURSOR_DATA,
+    DAYS,
     get_stats_path,
 )
 from codess.helpers import unsafe_traversal_root_reason, write_csv
@@ -22,7 +22,7 @@ from codess.project import (
     RootsWhenEmpty,
     build_scan_run_options,
     resolve_cli_roots,
-    resolve_registry_directory,
+    resolve_store_root,
     validate_scan_source_for_cli,
 )
 from codess.registry_store import (
@@ -44,9 +44,9 @@ def _registry_display_ts(ent: dict) -> str:
     )
 
 
-def _load_registry_map(registry_root: Path) -> tuple[dict[str, dict] | None, str | None]:
+def _load_registry_map(store_root: Path) -> tuple[dict[str, dict] | None, str | None]:
     """Load ``ingested_projects.json`` into path (resolved string) -> entry dict."""
-    stats_path = get_stats_path(registry_root)
+    stats_path = get_stats_path(store_root)
     if not stats_path.exists():
         return None, f"codess: registry file not found: {stats_path}"
     try:
@@ -82,7 +82,7 @@ def _print_scan_diagnostics(diagnostics: dict) -> None:
     if hidden:
         print(
             f"codess: {hidden} project(s) have coding work older than the "
-            f"{CODESS_DAYS}-day window and are not listed; "
+            f"{DAYS}-day window and are not listed; "
             "use --days 0 for all, or CODESS_DAYS to change the default",
             file=sys.stderr,
         )
@@ -121,7 +121,7 @@ def run(args: argparse.Namespace) -> int:
     seen_paths: set[str] = set()
     had_error = False
     diagnostics: dict = {}
-    write_root = resolve_registry_directory(args)
+    write_root = resolve_store_root(args)
     # `--debug` selects the reporting profile rather than a per-call flag: the
     # discovery diagnostics are debug-level events, and the level gate is what
     # decides whether they are emitted. Roots are registered so a
@@ -184,7 +184,7 @@ def run(args: argparse.Namespace) -> int:
             f"codess: removed {pruned_global} legacy Cursor global pseudo-projects",
             file=sys.stderr,
         )
-    reg_arg = getattr(args, "registry", None)
+    reg_arg = getattr(args, "store_root", None)
     filter_active = bool(reg_arg and str(reg_arg).strip())
 
     all_discovered = list(merged)

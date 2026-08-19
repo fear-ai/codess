@@ -18,6 +18,7 @@ from codess import __version__
 from codess.config import (
     CURRENT_POINTER_FILE,
     HASH_CHUNK_BYTES,
+    KEEP_SNAPSHOTS,
     MANIFEST_BACKUP_FILE,
     MANIFEST_FILE,
     RAW_MANIFEST_FILE,
@@ -38,6 +39,7 @@ from codess.hashing import codess_canonical_hash, codess_digest, codess_hash
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.project_catalog import durable_project_root
 from codess.raw_store import RAW_FORMAT, RawStore
+from codess.reporting import emit_named
 from codess.schema_contract import (
     APPLICATION_ID,
     FORMAT_ID,
@@ -358,7 +360,7 @@ def publish_snapshot(
     project_path: Path,
     snapshot: Path,
     *,
-    registry_root: Path | None = None,
+    store_root: Path | None = None,
     project_id: str | None = None,
 ) -> dict[str, Any]:
     """Promote one verified candidate while preserving pointer-pair consistency.
@@ -371,8 +373,8 @@ def publish_snapshot(
     snapshot = snapshot.expanduser().resolve()
     local_base = project_path / STORE_DIR
     expected_base = (
-        durable_project_root(registry_root, project_id).resolve()
-        if registry_root is not None and project_id is not None
+        durable_project_root(store_root, project_id).resolve()
+        if store_root is not None and project_id is not None
         else local_base.resolve()
     )
     if snapshot.parent.parent.resolve() != expected_base:
@@ -431,7 +433,7 @@ def publish_snapshot(
 def recover_current_snapshot(
     project_path: Path,
     *,
-    registry_root: Path | None = None,
+    store_root: Path | None = None,
     project_id: str | None = None,
 ) -> dict[str, Any]:
     """Rebuild a lost or corrupted current.json from the newest retained
@@ -442,8 +444,8 @@ def recover_current_snapshot(
     project_path = project_path.expanduser().resolve()
     local_base = project_path / STORE_DIR
     expected_base = (
-        durable_project_root(registry_root, project_id).resolve()
-        if registry_root is not None and project_id is not None
+        durable_project_root(store_root, project_id).resolve()
+        if store_root is not None and project_id is not None
         else local_base.resolve()
     )
     snapshots_dir = expected_base / SNAPSHOTS_DIR
@@ -465,7 +467,7 @@ def recover_current_snapshot(
             continue
         return publish_snapshot(
             project_path, candidate,
-            registry_root=registry_root, project_id=project_id,
+            store_root=store_root, project_id=project_id,
         )
     raise SnapshotError(
         "no retained snapshot could be recovered; tried "
@@ -481,15 +483,15 @@ def create_snapshot(
     raw_store: RawStore,
     seal: bool = False,
     build_policy: dict[str, Any] | None = None,
-    registry_root: Path | None = None,
+    store_root: Path | None = None,
     project_id: str | None = None,
     publish: bool = True,
 ) -> Path:
     """Build an immutable snapshot and optionally publish it as current."""
     local_base = project_path / STORE_DIR
     base = (
-        durable_project_root(registry_root, project_id)
-        if registry_root is not None and project_id is not None
+        durable_project_root(store_root, project_id)
+        if store_root is not None and project_id is not None
         else local_base
     )
     snapshots = base / SNAPSHOTS_DIR
@@ -601,10 +603,49 @@ def create_snapshot(
         publish_snapshot(
             project_path,
             final,
-            registry_root=registry_root,
+            store_root=store_root,
             project_id=project_id,
         )
+        _trim_prior_snapshots(snapshots, keep_current=snapshot_id)
     return final
+
+
+def _trim_prior_snapshots(snapshots: Path, *, keep_current: str) -> list[str]:
+    """Remove superseded snapshots beyond the configured limit.
+
+    Runs only after the new snapshot is published, so a failure here leaves a
+    complete, current, pointed-at store set behind: the worst outcome is that
+    more snapshots are retained than asked for, which is recoverable, while
+    trimming first could leave a Project with no readable store at all.
+
+    `CODESS_KEEP_SNAPSHOTS` counts snapshots *besides* the current one,
+    so the default of 2 leaves three directories: a rollback target, its
+    predecessor, and the snapshot just published. 0 disables trimming, which
+    an operator auditing a sequence of rebuilds needs.
+
+    Names sort chronologically because a snapshot id begins with its creation
+    timestamp, so the oldest are the ones removed. A directory that cannot be
+    removed is reported rather than raised: retention is not the operation the
+    caller asked for.
+    """
+    if KEEP_SNAPSHOTS <= 0:
+        return []
+    prior = sorted(
+        entry.name for entry in snapshots.iterdir()
+        if entry.is_dir() and entry.name != keep_current
+        and not entry.name.startswith(".")
+    )
+    removed = []
+    for name in prior[:max(0, len(prior) - KEEP_SNAPSHOTS)]:
+        try:
+            shutil.rmtree(snapshots / name)
+        except OSError as exc:
+            emit_named("snapshot.trim_failed", snapshot=name, error=type(exc).__name__)
+            continue
+        removed.append(name)
+    if removed:
+        emit_named("snapshot.trimmed", removed=len(removed), kept=KEEP_SNAPSHOTS)
+    return removed
 
 
 def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
@@ -733,7 +774,7 @@ def snapshot_store_paths_from_base(
             raise SnapshotContractMismatchError(
                 "retained snapshot was written under a different CoSchema "
                 "contract; rebuild it with `codess ingest --force`, or pass "
-                "--snapshot-contract-policy read-compatible to read it as it "
+                "--snapshot-policy read-compatible to read it as it "
                 "stands"
             )
         raw_manifest = snapshot / RAW_MANIFEST_FILE

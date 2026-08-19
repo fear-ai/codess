@@ -299,7 +299,7 @@ regenerating every store.
 | `codess:<kind>:sha256:` in stored values | `codess:<kind>:id1:` | Names the derivation scheme instead of the algorithm, so a reader can tell two schemes apart and changing the algorithm is not a wire-format change |
 | `tool_invocations.started_at` | `source_started_at` | Distinguishes vendor-reported from Codess-recorded times |
 | `events.state.product` | four kinds | `session.label`, `harness.setting`, `content.attachment`, `session.marker` |
-| `allow_package_mismatch`, `--snapshot-package-policy` | `allow_contract_mismatch`, `--snapshot-contract-policy` | The value compared is the contract digest. The old flag spelling is still accepted, and both appear in `--help`, since removing an accepted flag breaks a caller's script |
+| `allow_package_mismatch`, `--snapshot-package-policy` | `allow_contract_mismatch`, `--snapshot-policy` | The value compared is the contract digest. Both superseded spellings are removed rather than aliased: the flag names the policy, and the policy has one subject |
 
 **Landed in CoSchema format 6:**
 

@@ -148,7 +148,7 @@ def correlate_project_artifacts(
     config: StoreLocator,
     project_path: Path,
     vendors: set[str],
-    registry_root: Path,
+    store_root: Path,
     *,
     diagnostics: dict[str, int],
     progress_trace,
@@ -161,7 +161,7 @@ def correlate_project_artifacts(
     snapshot is warranted.
     """
     derived_changed = False
-    catalog = load_catalog(registry_root) if vendors else None
+    catalog = load_catalog(store_root) if vendors else None
     for vendor in sorted(vendors):
         path = config.store_path(project_path, VENDOR_SOURCE_KEYS[vendor])
         if not path.exists():
@@ -277,7 +277,7 @@ def publish_snapshot(
     raw_records: list[dict],
     *,
     raw_store,
-    registry_root: Path,
+    store_root: Path,
     project_id: str,
     sources: list[str] | tuple[str, ...],
     minimum_source_size: int,
@@ -327,7 +327,7 @@ def publish_snapshot(
             "minimum_source_size": minimum_source_size,
             "redaction_enabled": config["redact"],
         },
-        registry_root=registry_root,
+        store_root=store_root,
         project_id=project_id,
         publish=not candidate,
     )

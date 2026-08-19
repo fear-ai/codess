@@ -399,7 +399,7 @@ def walk_sessions(
     codex_index: list[dict] | None = None,
 ) -> list[dict]:
     """Discover projects with session data. Return list of dicts: path, vendor, sess, mb, span_weeks.
-    recent_days: if set, only include sessions from last N days (CODESS_DAYS).
+    recent_days: if set, only include sessions from last N days (DAYS).
     `debug` is retained for the call signature and no longer gates output. The
     discovery diagnostics are debug-*level* events now, so whether they are
     emitted is the reporting profile's decision rather than an argument threaded

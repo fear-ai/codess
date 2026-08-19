@@ -21,10 +21,10 @@ TEMP_PREFIXES = ("/private/var/folders/", "/var/folders/")
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--registry", type=Path, required=True)
+    parser.add_argument("--store", dest="store_root", type=Path, required=True)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
-    registry = args.registry.expanduser().resolve()
+    registry = args.store_root.expanduser().resolve()
     catalog = load_catalog(registry)
     removable = []
     retained = []

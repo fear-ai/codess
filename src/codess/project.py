@@ -193,17 +193,17 @@ def resolve_cli_roots(
     return roots, None
 
 
-def resolve_registry_directory(args: Any) -> Path:
-    """Directory for ``ingested_projects.json`` (``CODESS_REGISTRY``, default ``~/.codess``).
+def resolve_store_root(args: Any) -> Path:
+    """Directory for ``ingested_projects.json`` (``CODESS_STORE_ROOT``, default ``~/.codess``).
 
     ``--registry PATH`` overrides that default for this invocation (ingest, scan writes,
-    query ``--stats`` updates). Omitted flag → **config** ``REGISTRY``.
+    query ``--stats`` updates). Omitted flag → **config** ``STORE_ROOT``.
     """
-    from codess.config import REGISTRY
+    from codess.config import STORE_ROOT
 
-    raw = getattr(args, "registry", None)
+    raw = getattr(args, "store_root", None)
     if raw is None or not str(raw).strip():
-        return REGISTRY
+        return STORE_ROOT
     return Path(str(raw).strip()).expanduser()
 
 
@@ -248,13 +248,13 @@ def build_scan_run_options(args: Any) -> dict[str, Any]:
     same selection an ordinary run produces, or a reader cannot reproduce
     what they were shown; use `--days 0` to select all time.
     """
-    from codess.config import CODESS_DAYS, DEBUG, STOP, SUBAGENT
+    from codess.config import DAYS, DEBUG, STOP, SUBAGENT
 
     stop_on_error = flag_or_env(args, "stop", STOP)
     debug = flag_or_env(args, "debug", DEBUG)
     subagent = flag_or_env(args, "subagent", SUBAGENT)
     recent_days = (
-        args.days if getattr(args, "days", None) is not None else CODESS_DAYS
+        args.days if getattr(args, "days", None) is not None else DAYS
     )
     source_filter = getattr(args, "source", None)
     if source_filter and source_filter.strip().lower() == "all":
@@ -286,9 +286,9 @@ def build_ingest_run_options(args: Any) -> dict[str, Any]:
         CONTENT_POLICY,
         DEBUG,
         FORCE,
-        INGEST_REDACT,
         MIN_SIZE,
         RAW_MODE,
+        REDACT,
         RESOURCE_POLICY,
         STOP,
         STRICT_MAPPING,
@@ -331,8 +331,8 @@ def build_ingest_run_options(args: Any) -> dict[str, Any]:
             cli_overrides[key] = int(value)
     if cli_overrides:
         policy = policy.with_overrides(cli_overrides, origin="command-line")
-    if getattr(args, "no_resource_limits", False):
-        policy = policy.disabled(origin="--no-resource-limits")
+    if getattr(args, "no_resource", False):
+        policy = policy.disabled(origin="--no-resource")
     maximums = policy.maximums
 
     return {
@@ -340,7 +340,7 @@ def build_ingest_run_options(args: Any) -> dict[str, Any]:
         "force": flag_or_env(args, "force", FORCE),
         "min_size": min_size,
         "debug": flag_or_env(args, "debug", DEBUG),
-        "redact": flag_or_env(args, "redact", INGEST_REDACT),
+        "redact": flag_or_env(args, "redact", REDACT),
         # Canonicalized here as well as by the argparse `type`, because settings
         # resolution is reachable from a library caller that never built a parser.
         "raw_mode": canonical_raw_mode(
@@ -466,11 +466,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="scan: [CC] include sidechain sessions [CODESS_SUBAGENT]",
     )
     p.add_argument(
-        "--registry",
+        "--store",
+        dest="store_root",
         type=str,
         default=None,
         metavar="PATH",
-        help="Central registry dir for ingested_projects.json (default CODESS_REGISTRY). "
+        help="Central registry dir for ingested_projects.json (default CODESS_STORE_ROOT). "
         "PATH overrides ~/.codess default. scan: also filters CSV to known paths + reg_* "
         "when set; scan always merges index metrics into registry (default or PATH).",
     )
@@ -577,7 +578,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--no-resource-limits",
+        "--no-resource",
         action="store_true",
         help=(
             "ingest: explicitly disable transcript, Cursor-container, event, "
@@ -698,9 +699,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="query: select one retained snapshot (requires exactly one project)",
     )
     p.add_argument(
-        "--snapshot-contract-policy",
-        "--snapshot-package-policy",
-        dest="snapshot_contract_policy",
+        "--snapshot-policy",
+        dest="snapshot_policy",
         choices=("exact", "read-compatible"),
         default="exact",
         help="query: require the store's recorded contract to match, or explicitly "

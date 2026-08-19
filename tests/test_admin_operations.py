@@ -148,7 +148,7 @@ def _captured_project(tmp_path: Path) -> tuple[Path, Path, str]:
     )
     create_snapshot(
         project, [store], [record], raw_store=raw,
-        build_policy={"raw_mode": "capture"}, registry_root=registry,
+        build_policy={"raw_mode": "capture"}, store_root=registry,
         project_id=binding["project_id"],
     )
     return project, registry, binding["project_id"]
@@ -698,7 +698,7 @@ def test_reviewed_baseline_verifies_its_exact_retained_snapshot_after_current_ad
         project, [store], current_raw_records(project),
         raw_store=RawStore(registry / "raw"),
         build_policy={"raw_mode": "capture"},
-        registry_root=registry, project_id=project_id,
+        store_root=registry, project_id=project_id,
     )
     assert read_json(project / ".codess/current.json")["snapshot_id"] != (
         reviewed_snapshot
@@ -748,7 +748,7 @@ def test_candidate_snapshot_does_not_publish_before_validation(tmp_path, monkeyp
         [store],
         current_raw_records(project),
         raw_store=RawStore(registry / "raw"),
-        registry_root=registry,
+        store_root=registry,
         project_id=project_id,
         publish=False,
     )
@@ -809,7 +809,7 @@ def test_pointer_pair_publication_rolls_back_on_second_replace(
         [project / ".codess/sessions_codex.db"],
         current_raw_records(project),
         raw_store=RawStore(registry / "raw"),
-        registry_root=registry,
+        store_root=registry,
         project_id=project_id,
         publish=False,
     )
@@ -827,7 +827,7 @@ def test_pointer_pair_publication_rolls_back_on_second_replace(
         publish_snapshot(
             project,
             candidate,
-            registry_root=registry,
+            store_root=registry,
             project_id=project_id,
         )
 
@@ -849,7 +849,7 @@ def test_repeat_build_failure_leaves_prior_pointers_current(
         [project / ".codess/sessions_codex.db"],
         current_raw_records(project),
         raw_store=RawStore(registry / "raw"),
-        registry_root=registry,
+        store_root=registry,
         project_id=project_id,
         publish=False,
     )

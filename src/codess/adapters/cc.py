@@ -461,19 +461,33 @@ def _parse_timestamp(ts: Any) -> float | None:
 
 
 def _get_timestamp(record: dict, opts: dict | None = None) -> float | None:
-    """Extract timestamp from record or message. Returns Unix ms.
+    """Return the record's timestamp in Unix milliseconds, or None.
 
-    A present-but-unparseable timestamp is reported as ``malformed`` (warn) when
-    ``opts`` is given; absent/empty values stay silent. Never raises.
+    CCSchema records the stamp as ``timestamp`` on the record or nested in
+    ``message``, so both positions are read, top level first.
+
+    **Selects on field state rather than truthiness.** ``_parse_timestamp``
+    accepts ``0`` and returns ``0.0``, so an ``or`` chain would skip that value
+    and read the nested position instead. A vacant state -- absent, null, or
+    empty -- moves to the next position; any other state stops the search, so
+    an unparseable value is diagnosed here rather than masked by the nested
+    stamp.
+
+    With ``opts``, a stamp that stops the search but does not parse is reported
+    as ``malformed``; a vacant one is reported as its own state.
     """
-    ts = record.get("timestamp") or record.get("message", {}).get("timestamp")
-    parsed = _parse_timestamp(ts)
+    for source in (record, record.get("message") or {}):
+        raw, state = field_state.get_state(source, "timestamp")
+        if state not in field_state.VACANT_STATES:
+            break
+    parsed = _parse_timestamp(raw)
     if opts is not None and parsed is None:
-        state = field_state.classify(ts if ts is not None else field_state._MISSING)
         if state == field_state.PRESENT:
-            state = field_state.MALFORMED  # present but did not parse
+            # `classify` sees a non-empty value; that it had to be a timestamp
+            # is known here, so the narrower state is set here.
+            state = field_state.MALFORMED
         field_state.diagnose(
-            opts, field="event_at", state=state, source_field="timestamp", value=ts
+            opts, field="event_at", state=state, source_field="timestamp", value=raw
         )
     return parsed
 
@@ -509,8 +523,8 @@ def _assistant_configuration(record: dict) -> dict:
     message = record.get("message")
     if not isinstance(message, dict):
         message = {}
-    values = {}
-    provenance = {}
+    values: dict[str, Any] = {}
+    provenance: dict[str, Any] = {}
 
     def keep(common: str, source_field: str, value: Any) -> None:
         if value is None or isinstance(value, (dict, list)):
@@ -1039,14 +1053,14 @@ def normalize_user(
         )
         if text is None:
             return []
-        text, content_len, truncated = bound_context_content(text, opts)
+        text, content_len, was_truncated = bound_context_content(text, opts)
         text = _process_text(
             text, opts, phase="post", record_type="context.compact.summary"
         )
         if text is None:
             return []
         text, _post_length, post_truncated = bound_context_content(text, opts)
-        truncated = truncated or post_truncated
+        was_truncated = was_truncated or post_truncated
         event = _base_event(
             session_id=session_id,
             event_id=str(line_num),
@@ -1066,7 +1080,7 @@ def normalize_user(
             "metadata": _event_metadata(record, extra={
                 "context_kind": "compaction_summary",
                 "compaction_boundary_uuid": record.get("parentUuid"),
-                "content_truncated": truncated,
+                "content_truncated": was_truncated,
             }),
         })
         _attach_timestamp_state(event, record, ts)

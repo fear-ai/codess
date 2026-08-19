@@ -17,7 +17,7 @@ from codess.evidence import build_evidence_inventory
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    parser.add_argument("--store", type=Path, default=Path.home() / ".codess")
     parser.add_argument("--output", type=Path, default=ROOT / "catalog/evidence-inventory.json")
     parser.add_argument("--cursor-db", type=Path, default=Path.home() / "Library/Application Support/Cursor/User/globalStorage/state.vscdb")
     parser.add_argument("--claude-root", type=Path, default=Path.home() / ".claude/projects")
@@ -26,7 +26,7 @@ def main() -> int:
     args = parser.parse_args()
     components = {}
     report = build_evidence_inventory(
-        args.registry, cursor_db=args.cursor_db, claude_root=args.claude_root,
+        args.store_root, cursor_db=args.cursor_db, claude_root=args.claude_root,
         claude_max_files=args.claude_max_files, component_reports=components,
     )
     if args.component_dir:

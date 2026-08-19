@@ -30,7 +30,7 @@ from codess.config import (  # noqa: E402
     CURSOR_DATA,
     DEFAULT_WORK,
     EXCLUDE_REVIEW_DIRS,
-    REGISTRY,
+    STORE_ROOT,
 )
 from codess.helpers import (  # noqa: E402
     DISCOVERY_POLICY_PATH,
@@ -60,7 +60,7 @@ def report_configuration() -> dict:
             "exists": DEFAULT_WORK.exists(),
             "source": "CODESS_WORK (set)" if os.environ.get("CODESS_WORK") else "default ~/Work",
         },
-        "registry": {"value": str(REGISTRY), "exists": REGISTRY.exists()},
+        "registry": {"value": str(STORE_ROOT), "exists": STORE_ROOT.exists()},
         "vendor_roots": {
             "claude": {"path": str(CC_PROJECTS), "exists": CC_PROJECTS.exists()},
             "codex": {"path": str(CODEX_SESSIONS), "exists": CODEX_SESSIONS.exists()},

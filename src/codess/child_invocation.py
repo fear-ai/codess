@@ -92,7 +92,7 @@ class ChildInvocation:
         command.extend([
             "--source", self.vendor_selector,
             "--raw-mode", self.raw_mode,
-            "--registry", str(self.registry),
+            "--store", str(self.registry),
             "--min-size", str(self.min_size),
         ])
         if self.resource_policy is not None:

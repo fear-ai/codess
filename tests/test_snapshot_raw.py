@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import zstandard
 
+from codess import snapshot
 from codess.fileio import hash_file
 from codess.ingest_sources import _record_raw
 from codess.raw_store import (
@@ -813,7 +814,7 @@ class TestContractMismatchIsTyped:
             snapshot_store_paths(project, snapshot.name)
 
     def test_an_explicit_reader_may_still_open_it(self, tmp_path):
-        """`--snapshot-contract-policy read-compatible` is the opt-in.
+        """`--snapshot-policy read-compatible` is the opt-in.
 
         The manifest and the store it names are tampered together, because
         they are checked against each other independently of whether they
@@ -961,3 +962,53 @@ class TestRecoveryIsReachable:
             "parent_snapshot_id", "build_policy", "build_policy_digest",
         ):
             assert rebuilt[field_name] is None
+
+
+class TestPriorSnapshotsAreTrimmed:
+    """Publication keeps a bounded number of superseded snapshots.
+
+    Each publication writes a complete store set rather than a delta, so a
+    Project ingested repeatedly accumulates one full copy per run. On the
+    development machine that reached 48 snapshots of one Project, 47 of them
+    superseded, before any bound existed.
+    """
+
+    @staticmethod
+    def _snapshots(root, count):
+        for index in range(count):
+            (root / f"2026081{index}T000000.000000Z-coschema6-{index:016x}").mkdir()
+        return sorted(entry.name for entry in root.iterdir())
+
+    def test_oldest_beyond_the_limit(self, tmp_path, monkeypatch):
+        """The current snapshot survives whatever the limit is."""
+        monkeypatch.setattr(snapshot, "KEEP_SNAPSHOTS", 2)
+        names = self._snapshots(tmp_path, 6)
+        current = names[-1]
+
+        removed = snapshot._trim_prior_snapshots(tmp_path, keep_current=current)
+
+        remaining = sorted(entry.name for entry in tmp_path.iterdir())
+        assert len(removed) == 3
+        assert removed == names[:3], "the oldest are the ones removed"
+        assert current in remaining
+        assert len(remaining) == 3, "current plus two prior"
+
+    def test_zero_keeps_every_snapshot(self, tmp_path, monkeypatch):
+        """0 is unlimited, for an operator auditing a sequence of rebuilds."""
+        monkeypatch.setattr(snapshot, "KEEP_SNAPSHOTS", 0)
+        names = self._snapshots(tmp_path, 5)
+
+        removed = snapshot._trim_prior_snapshots(tmp_path, keep_current=names[-1])
+
+        assert removed == []
+        assert len(list(tmp_path.iterdir())) == 5
+
+    def test_fewer_than_the_limit(self, tmp_path, monkeypatch):
+        """Nothing is removed when the limit is not reached."""
+        monkeypatch.setattr(snapshot, "KEEP_SNAPSHOTS", 5)
+        names = self._snapshots(tmp_path, 3)
+
+        removed = snapshot._trim_prior_snapshots(tmp_path, keep_current=names[-1])
+
+        assert removed == []
+        assert len(list(tmp_path.iterdir())) == 3

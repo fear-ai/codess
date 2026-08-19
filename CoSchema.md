@@ -153,7 +153,8 @@ diagnostics rather than silent loss.
 | `tool_invocations` | Requested tool operations, exact names, call lineage, input, and status. |
 | `tool_results` | Ordered results and outcomes linked to invocations when source evidence permits. |
 | `artifacts` and `event_artifacts` | Durable files, URIs, repository objects, and evidence-backed Event operations. |
-| `content_objects` and content links | Deduplicated bounded content identity and its relation to Events, records, tools, and Artifacts. |
+| `content_objects` | Deduplicated bounded content identity: one row per distinct retained body. |
+| `event_content`, `source_record_content`, `tool_result_content`, `artifact_content` | The four link tables joining a content object to what it belongs to. Each carries a `relation_kind` and optional offsets, so one body can be referenced by several owners without being stored twice. |
 | `processing_runs` and `content_derivations` | Content policy, processor, actions, inputs, outputs, and limitations. |
 | `mapping_diagnostics` | Source-, record-, or field-scoped mapping limitations and failures. |
 | `correlation_assertions` | Reviewable cross-record or cross-Project relationships with method and evidence. |
@@ -186,7 +187,7 @@ Artifact relationship remains absent with an applicable diagnostic. It is not
 inferred from proximity, timestamps, equal text, or suggestive names.
 
 Identity flows through those relationships in a fixed direction. Each
-`global_` identity is derived from upstream evidence and, where an entity is
+`entity_id` is derived from upstream evidence and, where an entity is
 meaningful only inside a parent, from the parent's identity -- never the
 reverse, and never from a value stored in the row being identified:
 
@@ -240,7 +241,7 @@ question. Four classes exist, and the prefix names the class:
 | `observation_id` | `codess:observation:id1:<64 hex>` | One extraction of one entity | Which act of observing produced this row |
 | `vendor_`/`source_` value | Exact upstream text | The vendor's own namespace | What did the source system call it |
 
-**`global_` designates independence from storage.** A `entity_id` is
+**An `entity_id` is independent of storage.** It is
 derived only from upstream evidence -- a source-system namespace plus
 vendor-supplied identifiers -- never from a row number, file path, insertion
 order, or the database that happens to hold it. Two consequences follow, and

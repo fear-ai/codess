@@ -11,10 +11,10 @@ from typing import Any
 
 from codess.config import (
     PROJECT_FILE,
-    REGISTRY,
     SOURCE_LINKS_FILE,
     SOURCE_LINKS_FORMAT,
     STORE_DIR,
+    STORE_ROOT,
 )
 from codess.fileio import write_json_atomic
 from codess.hashing import codess_canonical_hash
@@ -32,8 +32,8 @@ PROJECT_SELECTION_STATES = frozenset({
 })
 
 
-def _catalog_path(registry_root: Path) -> Path:
-    return registry_root / "projects.json"
+def _catalog_path(store_root: Path) -> Path:
+    return store_root / "projects.json"
 
 
 def _binding_path(project_path: Path) -> Path:
@@ -41,7 +41,7 @@ def _binding_path(project_path: Path) -> Path:
 
 
 def _save_catalog_entry(
-    registry_root: Path, catalog: dict[str, Any], entry: dict[str, Any],
+    store_root: Path, catalog: dict[str, Any], entry: dict[str, Any],
 ) -> None:
     """Stamp `entry` and `catalog` as updated now, then persist `catalog`.
 
@@ -53,11 +53,11 @@ def _save_catalog_entry(
     stamped = datetime.now(UTC).isoformat()
     entry["updated_at"] = stamped
     catalog["updated_at"] = stamped
-    write_json_atomic(_catalog_path(registry_root), catalog)
+    write_json_atomic(_catalog_path(store_root), catalog)
 
 
-def _machine_id(registry_root: Path) -> str:
-    path = registry_root / "machine-id"
+def _machine_id(store_root: Path) -> str:
+    path = store_root / "machine-id"
     if path.exists():
         value = path.read_text(encoding="utf-8").strip()
         if value:
@@ -70,8 +70,8 @@ def _machine_id(registry_root: Path) -> str:
     return value
 
 
-def load_catalog(registry_root: Path) -> dict[str, Any]:
-    path = _catalog_path(registry_root)
+def load_catalog(store_root: Path) -> dict[str, Any]:
+    path = _catalog_path(store_root)
     if not path.exists():
         return {"catalog_format": CATALOG_FORMAT, "projects": []}
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -317,7 +317,7 @@ def read_project_binding(project_path: Path) -> dict[str, Any] | None:
     return _read_existing_binding(_binding_path(project_path))
 
 
-def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str, Any]:
+def ensure_project_binding(store_root: Path, project_path: Path) -> dict[str, Any]:
     """Return and persist one stable project identity for an observed location.
 
     Four steps, each a named function above: read any retained binding,
@@ -326,16 +326,16 @@ def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str,
     rather than into another because catalog identity, locations, and
     readiness are one concern (3.5.5).
     """
-    registry_root = registry_root.expanduser().resolve()
+    store_root = store_root.expanduser().resolve()
     project_path = project_path.expanduser().resolve()
-    if registry_root == REGISTRY.resolve():
+    if store_root == STORE_ROOT.resolve():
         reason = ephemeral_project_location_reason(project_path)
         if reason:
             raise ValueError(reason)
     binding_path = _binding_path(project_path)
     binding = _read_existing_binding(binding_path)
 
-    catalog = load_catalog(registry_root)
+    catalog = load_catalog(store_root)
     resolved = str(project_path)
     by_id = {
         item.get("project_id"): item
@@ -347,7 +347,7 @@ def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str,
     # One observation, one timestamp. These were three separate `now()` calls,
     # so a single logical event could be stamped at three different instants.
     observed_at = datetime.now(UTC).isoformat()
-    machine_id = _machine_id(registry_root)
+    machine_id = _machine_id(store_root)
     observed_location_id = location_id(machine_id, project_path)
 
     entry = dict(by_id.get(project_id) or {})
@@ -370,35 +370,35 @@ def ensure_project_binding(registry_root: Path, project_path: Path) -> dict[str,
     by_id[project_id] = entry
     catalog["projects"] = sorted(by_id.values(), key=lambda item: item["project_id"])
     catalog["updated_at"] = observed_at
-    write_json_atomic(_catalog_path(registry_root), catalog)
+    write_json_atomic(_catalog_path(store_root), catalog)
     binding = {
         "binding_format": PROJECT_BINDING_FORMAT,
         "project_id": project_id,
         "location_id": observed_location_id,
-        "registry_root": str(registry_root),
+        "store_root": str(store_root),
     }
     write_json_atomic(binding_path, binding)
     return binding
 
 
-def durable_project_root(registry_root: Path, project_id: str) -> Path:
+def durable_project_root(store_root: Path, project_id: str) -> Path:
     """Return the central baseline root for one stable project identity."""
     safe = project_id.removeprefix("codess:project:")
     if not safe or any(part in safe for part in ("/", "\\", "..")):
         raise ValueError("invalid project identity")
-    return registry_root.expanduser().resolve() / "projects" / safe
+    return store_root.expanduser().resolve() / "projects" / safe
 
 
-def get_project_entry(registry_root: Path, project_id: str) -> dict[str, Any]:
+def get_project_entry(store_root: Path, project_id: str) -> dict[str, Any]:
     """Return one catalog entry by stable ID."""
-    for item in load_catalog(registry_root).get("projects", []):
+    for item in load_catalog(store_root).get("projects", []):
         if item.get("project_id") == project_id:
             return dict(item)
     raise ValueError(f"project is absent from catalog: {project_id}")
 
 
 def set_project_selection_state(
-    registry_root: Path,
+    store_root: Path,
     project_id: str,
     state: str,
     *,
@@ -408,7 +408,7 @@ def set_project_selection_state(
     """Set an explicit catalog disposition without rewriting retained evidence."""
     if state not in PROJECT_SELECTION_STATES:
         raise ValueError(f"unsupported Project selection state: {state}")
-    catalog = load_catalog(registry_root)
+    catalog = load_catalog(store_root)
     by_id = {
         item.get("project_id"): item
         for item in catalog["projects"]
@@ -439,7 +439,7 @@ def set_project_selection_state(
     if note:
         disposition["note"] = note
     entry["catalog_disposition"] = disposition
-    _save_catalog_entry(registry_root, catalog, entry)
+    _save_catalog_entry(store_root, catalog, entry)
     return {
         "project_id": project_id,
         "selection_state": state,
@@ -544,7 +544,7 @@ def _entry_is_query_eligible(entry: dict[str, Any]) -> bool:
 
 
 def _assess_query_status(
-    registry_root: Path, project_id: str, *, eligible: bool,
+    store_root: Path, project_id: str, *, eligible: bool,
 ) -> tuple[str, str | None, str | None]:
     """Decide whether one Project can be queried, and why not if it cannot.
 
@@ -565,7 +565,7 @@ def _assess_query_status(
 
     if not eligible:
         return "not_selected", None, None
-    base = durable_project_root(registry_root, project_id)
+    base = durable_project_root(store_root, project_id)
     try:
         current_id = _current_snapshot_id(base)
         if current_id is None:
@@ -671,7 +671,7 @@ def _readiness_summary(projects: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def catalog_readiness(registry_root: Path) -> dict[str, Any]:
+def catalog_readiness(store_root: Path) -> dict[str, Any]:
     """Report per-Project query readiness without claiming source freshness.
 
     Three steps, each a named function above: assess whether a Project can be
@@ -679,11 +679,11 @@ def catalog_readiness(registry_root: Path) -> dict[str, Any]:
     """
     from codess.refresh_receipts import latest_refresh_observations
 
-    registry_root = registry_root.expanduser().resolve()
-    refresh_observations = latest_refresh_observations(registry_root)
+    store_root = store_root.expanduser().resolve()
+    refresh_observations = latest_refresh_observations(store_root)
     projects = []
     for entry in sorted(
-        load_catalog(registry_root).get("projects", []),
+        load_catalog(store_root).get("projects", []),
         key=lambda item: str(item.get("logical_name") or item.get("project_id") or ""),
     ):
         if not isinstance(entry, dict) or not entry.get("project_id"):
@@ -691,7 +691,7 @@ def catalog_readiness(registry_root: Path) -> dict[str, Any]:
         project_id = str(entry["project_id"])
         eligible = _entry_is_query_eligible(entry)
         status, current_id, detail = _assess_query_status(
-            registry_root, project_id, eligible=eligible,
+            store_root, project_id, eligible=eligible,
         )
         projects.append(_readiness_row(
             entry,
@@ -710,7 +710,7 @@ def catalog_readiness(registry_root: Path) -> dict[str, Any]:
 
 
 def resolve_project_query_scopes(
-    registry_root: Path,
+    store_root: Path,
     project_ids: list[str] | None = None,
     *,
     project_set: Path | None = None,
@@ -718,8 +718,8 @@ def resolve_project_query_scopes(
     allow_contract_mismatch: bool = False,
 ) -> list[dict[str, Any]]:
     """Resolve one exact, saved, or all-current Project scope without mutation."""
-    registry_root = registry_root.expanduser().resolve()
-    catalog = load_catalog(registry_root)
+    store_root = store_root.expanduser().resolve()
+    catalog = load_catalog(store_root)
     by_id = {
         item.get("project_id"): item
         for item in catalog.get("projects", [])
@@ -749,7 +749,7 @@ def resolve_project_query_scopes(
         def selectable_current(project_id: str, entry: dict[str, Any]) -> str | None:
             if not _entry_is_query_eligible(entry):
                 return None
-            base = durable_project_root(registry_root, project_id)
+            base = durable_project_root(store_root, project_id)
             try:
                 snapshot_id = _current_snapshot_id(base)
                 if snapshot_id is None:
@@ -803,7 +803,7 @@ def resolve_project_query_scopes(
             key=lambda path: str(path),
         )
         existing = [path.resolve() for path in active if path.is_dir()]
-        central = durable_project_root(registry_root, project_id)
+        central = durable_project_root(store_root, project_id)
         snapshot_id = requested_snapshot_id or _current_snapshot_id(central)
         if snapshot_id is None:
             raise ValueError(
@@ -838,14 +838,14 @@ def resolve_project_query_scopes(
 
 
 def add_project_location(
-    registry_root: Path, project_id: str, project_path: Path,
+    store_root: Path, project_id: str, project_path: Path,
 ) -> dict[str, Any]:
     """Explicitly bind an existing directory to a known Project identity."""
-    registry_root = registry_root.expanduser().resolve()
+    store_root = store_root.expanduser().resolve()
     project_path = project_path.expanduser().resolve()
     if not project_path.is_dir():
         raise ValueError(f"location is not a directory: {project_path}")
-    catalog = load_catalog(registry_root)
+    catalog = load_catalog(store_root)
     resolved = str(project_path)
     entry = next(
         (item for item in catalog["projects"] if item.get("project_id") == project_id),
@@ -861,7 +861,7 @@ def add_project_location(
             raise ValueError(
                 f"location is already bound to another Project: {resolved}"
             )
-    machine = _machine_id(registry_root)
+    machine = _machine_id(store_root)
     observed_location_id = location_id(machine, project_path)
     locations = {
         item.get("location_id"): dict(item)
@@ -885,28 +885,28 @@ def add_project_location(
         locations.values(), key=lambda item: item["location_id"]
     )
     entry["path_aliases"] = sorted(set(entry.get("path_aliases", [])) | {resolved})
-    _save_catalog_entry(registry_root, catalog, entry)
+    _save_catalog_entry(store_root, catalog, entry)
     binding = {
         "binding_format": PROJECT_BINDING_FORMAT,
         "project_id": project_id,
         "location_id": observed_location_id,
-        "registry_root": str(registry_root),
+        "store_root": str(store_root),
     }
     write_json_atomic(_binding_path(project_path), binding)
     return {**binding, "path": resolved, "state": "active"}
 
 
 def retire_project_location(
-    registry_root: Path,
+    store_root: Path,
     project_id: str,
     project_path: Path,
     *,
     allow_last_active: bool = False,
 ) -> dict[str, Any]:
     """Retire one known Project location without requiring a replacement."""
-    registry_root = registry_root.expanduser().resolve()
+    store_root = store_root.expanduser().resolve()
     resolved = str(project_path.expanduser().resolve())
-    catalog = load_catalog(registry_root)
+    catalog = load_catalog(store_root)
     entry = next(
         (item for item in catalog["projects"] if item.get("project_id") == project_id),
         None,
@@ -925,12 +925,12 @@ def retire_project_location(
     target["state"] = "retired"
     target["path_obsolete"] = True
     target["retired_at"] = datetime.now(UTC).isoformat()
-    _save_catalog_entry(registry_root, catalog, entry)
+    _save_catalog_entry(store_root, catalog, entry)
     return {"project_id": project_id, "path": resolved, "state": "retired"}
 
 
 def register_workspace_bindings(
-    registry_root: Path,
+    store_root: Path,
     project_id: str,
     location_id_value: str,
     workspace_ids: list[str] | set[str],
@@ -938,7 +938,7 @@ def register_workspace_bindings(
     source_project_path: str,
 ) -> dict[str, Any]:
     """Persist local Cursor workspace-to-Project evidence discovered by ingest."""
-    catalog = load_catalog(registry_root)
+    catalog = load_catalog(store_root)
     entry = next(
         (item for item in catalog["projects"] if item.get("project_id") == project_id),
         None,
@@ -965,7 +965,7 @@ def register_workspace_bindings(
     entry["workspace_bindings"] = sorted(
         bindings.values(), key=lambda item: (item["source_system_id"], item["workspace_id"])
     )
-    _save_catalog_entry(registry_root, catalog, entry)
+    _save_catalog_entry(store_root, catalog, entry)
     return dict(entry)
 
 

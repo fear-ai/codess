@@ -173,6 +173,8 @@ _EVENT_SPECS: tuple[tuple[str, int, int], ...] = (
     ("project.identity_changed", WARNING, SCOPE_INGEST),
     ("fresh_rebuild.promoted", INFO, SCOPE_INGEST),
     ("snapshot.skip", INFO, SCOPE_INGEST),
+    ("snapshot.trimmed", INFO, SCOPE_INGEST),
+    ("snapshot.trim_failed", WARNING, SCOPE_INGEST),
     # Cursor cohort preflight: a shared container is prepared once per run and
     # restored afterwards, so each half reports separately.
     ("cursor.cohort.prepare.start", DEBUG, SCOPE_INGEST),

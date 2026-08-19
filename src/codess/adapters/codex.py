@@ -12,7 +12,7 @@ from typing import Any
 from codess import field_state
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
 from codess.content_processing import apply_processing
-from codess.context_content import bound_context_content
+from codess.context_content import bound_context_content, truncate_content
 from codess.mapping import annotate_mapping
 from codess.sanitize import sanitize_value
 from codess.tool_result_status import application_failure_evidence
@@ -340,8 +340,8 @@ def _configuration_values(
         prefix = "payload.thread_settings"
     if not isinstance(source, dict):
         return {}
-    values = {}
-    provenance = {}
+    values: dict[str, Any] = {}
+    provenance: dict[str, Any] = {}
 
     def keep(common: str, source_field: str, value: Any) -> None:
         if value is None or isinstance(value, (dict, list)):
@@ -936,7 +936,7 @@ def process_file(
 
                 if role == "user" and direct_user:
                     subtype = "slash_command" if text.strip().startswith("/") else "prompt"
-                    truncated, content_len = _truncate(text, TRUNCATE_PROMPT)
+                    truncated, content_len = truncate_content(text, TRUNCATE_PROMPT)
                     truncated = apply_processing(
                         truncated, opts, vendor="Codex", record_type="message",
                         event_kind="message.prompt", phase="post",
@@ -957,7 +957,7 @@ def process_file(
                         source_file=source_file,
                         content=truncated,
                         content_len=content_len,
-                        metadata=_merge_metadata(payload, { **current_configuration, "source_role": "user", "actor_evidence": ( "event_msg.user_message" if has_direct_user_notifications else "legacy_user_role_fallback" ), "content_truncated": ( content_len > TRUNCATE_PROMPT ), }),
+                        metadata=_merge_metadata(payload, { **current_configuration, "source_role": "user", "actor_evidence": ( "event_msg.user_message" if has_direct_user_notifications else "legacy_user_role_fallback" ), "content_truncated": ( content_len > TRUNCATE_PROMPT ) }),
                         source_raw=source_raw,
                     ), rtype, payload, line_num)
                     if diagnostics is not None:
@@ -972,17 +972,17 @@ def process_file(
                     # whether the unpaired-user diagnostic applies -- so the
                     # two copies could drift on the bounding or processing
                     # they share, which is the part that matters.
-                    bounded, content_len, truncated = bound_context_content(
+                    context_text, content_len, was_truncated = bound_context_content(
                         text, opts
                     )
-                    bounded = apply_processing(
-                        bounded, opts, vendor="Codex", record_type="message",
+                    context_text = apply_processing(
+                        context_text, opts, vendor="Codex", record_type="message",
                         event_kind="message.context", phase="post",
                     )
-                    if bounded is None:
+                    if context_text is None:
                         continue
-                    bounded, _post_len, post_truncated = bound_context_content(
-                        bounded, opts
+                    context_text, _post_len, post_truncated = bound_context_content(
+                        context_text, opts
                     )
                     evidence = (
                         {"actor_evidence": "unpaired_response_item_user_role"}
@@ -1000,13 +1000,13 @@ def process_file(
                         origin_kind="harness_injected",
                         timestamp=timestamp,
                         source_file=source_file,
-                        content=bounded,
+                        content=context_text,
                         content_len=content_len,
                         metadata=_merge_metadata(payload, {
                             **current_configuration,
                             "source_role": role,
                             **evidence,
-                            "content_truncated": truncated or post_truncated,
+                            "content_truncated": was_truncated or post_truncated,
                         }),
                         source_raw=source_raw,
                     ), rtype, payload, line_num)
@@ -1017,7 +1017,7 @@ def process_file(
                             ) + 1
                         )
                 elif role == "assistant":
-                    truncated, content_len = _truncate(text, TRUNCATE_RESPONSE)
+                    truncated, content_len = truncate_content(text, TRUNCATE_RESPONSE)
                     truncated = apply_processing(
                         truncated, opts, vendor="Codex", record_type="message",
                         event_kind="message.response", phase="post",
@@ -1038,7 +1038,7 @@ def process_file(
                         source_file=source_file,
                         content=truncated,
                         content_len=content_len,
-                        metadata=_merge_metadata(payload, { **current_configuration, "source_role": "assistant", "actor_evidence": "response_item_assistant_role", "content_truncated": ( content_len > TRUNCATE_RESPONSE ), }),
+                        metadata=_merge_metadata(payload, { **current_configuration, "source_role": "assistant", "actor_evidence": "response_item_assistant_role", "content_truncated": ( content_len > TRUNCATE_RESPONSE ) }),
                         source_raw=source_raw,
                     ), rtype, payload, line_num)
                 elif diagnostics is not None:
@@ -1166,7 +1166,7 @@ def process_file(
                     content_len=content_len,
                     tool_name=call_map.get(str(call_id)) if call_id else None,
                     tool_output=truncated,
-                    metadata=_merge_metadata(payload, { **current_configuration, **({ "application_status": "failed", "result_status_evidence": application_failure, } if application_failure else {}), }),
+                    metadata=_merge_metadata(payload, { **current_configuration, **({ "application_status": "failed", "result_status_evidence": application_failure } if application_failure else {}) }),
                     source_raw=source_raw,
                     # The wrapper is kept verbatim; the header fields are lifted beside
                     # it so wall time, token count, and exit code are queryable without
@@ -1274,7 +1274,7 @@ def process_file(
                     )
                     if prompt is None:
                         continue
-                    content, content_len = _truncate(
+                    content, content_len = truncate_content(
                         prompt, TRUNCATE_PROMPT
                     )
                     content = apply_processing(
@@ -1336,7 +1336,7 @@ def process_file(
                     origin_kind="harness_generated",
                     timestamp=timestamp,
                     source_file=source_file,
-                    metadata=json.dumps({ "removed_user_turns": payload.get("num_turns"), }, separators=(",", ":")),
+                    metadata=json.dumps({ "removed_user_turns": payload.get("num_turns") }, separators=(",", ":")),
                     source_raw=source_raw,
                 ), rtype, payload, line_num)
                 continue
@@ -1402,7 +1402,7 @@ def process_file(
                     timestamp=timestamp,
                     source_file=source_file,
                     tool_name="web_search" if msg_type == "web_search_end" else "apply_patch",
-                    metadata=json.dumps( {key: value for key, value in metadata.items() if value is not None}, separators=(",", ":"), ),
+                    metadata=json.dumps( {key: value for key, value in metadata.items() if value is not None}, separators=(",", ":") ),
                     source_raw=source_raw,
                     source_status=payload.get("status"),
                     normalized_status="failed" if failed else "succeeded",
@@ -1472,7 +1472,7 @@ def process_file(
                     timestamp=timestamp,
                     source_file=source_file,
                     tool_name=invocation.get("tool"),
-                    metadata=json.dumps( { key: value for key, value in metadata.items() if value is not None }, separators=(",", ":"), ),
+                    metadata=json.dumps( { key: value for key, value in metadata.items() if value is not None }, separators=(",", ":") ),
                     source_raw=source_raw,
                     source_status=metadata["result_status"],
                     normalized_status="succeeded" if succeeded else "failed" if failed else None,
@@ -1505,7 +1505,7 @@ def process_file(
             )
             if content is None:
                 continue
-            truncated, content_len = _truncate(content, 500)
+            truncated, content_len = truncate_content(content, 500)
             truncated = apply_processing(
                 truncated, opts, vendor="Codex", record_type="turn_aborted",
                 event_kind="lifecycle.abort", phase="post",
@@ -1577,7 +1577,7 @@ def _bounded_content(
     )
     if processed is None:
         return None
-    truncated, content_len = _truncate(processed, limit)
+    truncated, content_len = truncate_content(processed, limit)
     truncated = apply_processing(
         truncated, opts, vendor="Codex", record_type=record_type,
         event_kind=event_kind, phase="post",
@@ -1587,14 +1587,3 @@ def _bounded_content(
     return truncated, content_len
 
 
-def _truncate(text: str, limit: int) -> tuple[str, int]:
-    """Return (truncated, full_len)."""
-    if text is None:
-        return "", 0
-    s = str(text)
-    n = len(s)
-    if limit <= 0:
-        return "…" if n else "", n
-    if n <= limit:
-        return s, n
-    return s[: limit - 1] + "…", n

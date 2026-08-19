@@ -11,10 +11,58 @@ Codess requires:
 - Python 3.11 or newer;
 - local read access to the vendor stores being examined;
 - write access to the selected Project's `.codess/` directory; and
-- write access to the central Codess registry, normally `~/.codess/`.
+- write access to the machine store, normally `~/.codess/` (see
+  [Two `.codess` Directories](#two-codess-directories)).
 
 SQLite support is supplied by Python. The `zstandard` package is installed as a
 runtime dependency for bounded raw-object capture.
+
+### Two `.codess` Directories
+
+Codess writes to two directories that share a name and hold different things.
+Both appear in every operation below, so it is worth separating them once.
+
+| | Project depo `<project>/.codess` | Machine store `~/.codess` |
+|---|---|---|
+| Holds | The Project's working stores, its current pointer, ingest state, and the last report | Published store sets, one per Project, plus receipts, reports, retention records, raw capture, and the machine id |
+| Scope | One Project | One machine |
+| Selected by | `--dir` | `--store` (`--registry` is the older spelling and still works) |
+| Removable | Yes -- deleting it costs a re-ingest | Yes, but it holds the only copy of every published store |
+
+A Project's `current.json` **points into the machine store**: the working store
+sits beside the checkout, and the published store the pointer selects is
+central. They are not copies of each other.
+
+**Why the machine store grows, and what bounds it.** Each publication writes a
+complete new store set rather than a delta, so a Project ingested repeatedly
+accumulates one full copy per run.
+
+`CODESS_KEEP_SNAPSHOTS` bounds that: it counts snapshots *besides* the
+current one, defaults to **2**, and **0 keeps every snapshot**. Trimming runs
+after the new snapshot is published, so an interruption leaves more snapshots
+than asked for rather than none -- the failure that matters is a Project with no
+readable store, and this ordering cannot produce it. The oldest are removed
+first, and a directory that will not delete is reported rather than raised.
+
+Set 0 when auditing a sequence of rebuilds, where every intermediate store is
+evidence. Raise it where a rollback further back than one publication is worth
+the disk.
+
+This bounds accumulation from here on; it does not reclaim what a machine has
+already retained. Run `codess storage report` for the split between current and
+superseded, and `codess storage prune` to apply a retention plan to the rest.
+
+**Two files hold the Project lists, and they answer different questions.**
+
+| File | Answers |
+|---|---|
+| `projects.json` | Which Projects exist, their identity, locations, and workspace bindings |
+| `ingested_projects.json` | What has been scanned, ingested, or queried for each path, and when |
+
+The first is keyed by Project identity and is the registry proper; the second is
+keyed by path and records activity. A path can appear in the second without
+being in the first, which is how a directory holding Sessions shows up before it
+is onboarded as a Project.
 
 ## Installation
 
@@ -52,7 +100,7 @@ export CODESS_CC_PROJECTS=/absolute/path/to/claude/projects
 export CODESS_CODEX_SESSIONS=/absolute/path/to/codex/sessions
 export CODESS_CODEX_ARCHIVED_SESSIONS=/absolute/path/to/codex/archived_sessions
 export CODESS_CURSOR_DATA=/absolute/path/to/Cursor/User
-export CODESS_REGISTRY=/absolute/path/to/codess-registry
+export CODESS_STORE_ROOT=/absolute/path/to/machine-store
 ```
 
 Every configured Source root must be absolute. Pointing Codess at copied test
@@ -103,7 +151,7 @@ Move existing stores aside, keeping them:
 # One Project.
 mv /path/to/project/.codess /path/to/project/.codess.old
 
-# Every Project the registry knows about.
+# Every Project the machine store has recorded.
 python - <<'PY'
 import json, shutil
 from pathlib import Path
@@ -115,7 +163,7 @@ for entry in json.loads(registry.read_text())["projects"]:
 PY
 ```
 
-The central registry accumulates an entry per Project ever scanned,
+The Project state file accumulates an entry per Project ever scanned,
 including temporary directories from test runs, and has no retention policy.
 Move it aside as well so the rebuilt list reflects what currently exists:
 
@@ -700,10 +748,35 @@ python tools/decode_audit.py --dir "$PROJECT" --out audit.json
 | `coschema_gate.py` | Is a CoSchema contract change compatible with its declared rank? Fail-closed; this is what `codess schema compare` wraps. |
 | `report_sql_suppressions.py` | Which files currently hold a Ruff `S608` exemption, and does the exemption list still match the code? |
 
+| `deep_audit.py` | What does the whole tool set see, beyond the rules the gate selects? Runs twenty Ruff families one at a time, plus Pylint duplicate detection, Radon complexity, and Vulture, grades each finding, and writes a timestamped log. |
+
 ```bash
 python tools/quality_report.py
 python tools/quality_report.py --skip-tests
 ```
+
+**The two are not interchangeable.** `quality_report.py` is the gate: fast,
+run before a change lands, and it fails when a recorded count rises.
+`deep_audit.py` is a periodic audit: slower, reports findings nobody will act on
+today, and depends on tools that may be absent -- so it says which ones did not
+run, because a missing tool reporting nothing looks exactly like a clean result.
+
+```bash
+python tools/deep_audit.py                          # report and log
+python tools/deep_audit.py --no-log                 # report only
+python tools/deep_audit.py --compare output/audits/deep-audit-<stamp>.json
+```
+
+Findings are graded and each line names the tool that produced it:
+
+| Tier | Meaning |
+|---|---|
+| `DEFECT` | A selected rule reported something; the gate expects zero, so read every one |
+| `DESIGN` | Not wrong today, but the shape that produced past defects here |
+| `GAP` | A tool did not run, so it reported nothing rather than found nothing |
+
+Pylint, Radon, and Vulture are development-only and not runtime dependencies;
+install them when running the audit.
 
 ### Snapshot and Catalog Maintenance
 

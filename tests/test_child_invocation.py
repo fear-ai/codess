@@ -39,7 +39,7 @@ class TestTheCommandIsBuiltOnce:
         assert _flag_value(command, "--dir") == "/w/p"
         assert _flag_value(command, "--source") == "all"
         assert _flag_value(command, "--raw-mode") == "reference"
-        assert _flag_value(command, "--registry") == "/r"
+        assert _flag_value(command, "--store") == "/r"
         assert _flag_value(command, "--min-size") == "0"
 
     def test_several_projects_each_get_a_dir_flag(self) -> None:

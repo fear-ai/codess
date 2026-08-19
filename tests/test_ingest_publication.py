@@ -47,9 +47,9 @@ class Locator:
 
 
 def entry_for(project_path: Path) -> dict:
-    registry_root = project_path.parent / "_registry"
-    registry_root.mkdir(parents=True, exist_ok=True)
-    return ensure_project_binding(registry_root, project_path)
+    store_root = project_path.parent / "_registry"
+    store_root.mkdir(parents=True, exist_ok=True)
+    return ensure_project_binding(store_root, project_path)
 
 
 def make_store(project_path: Path, source_key: str) -> Path:
@@ -321,7 +321,7 @@ def test_no_snapshot_is_made_without_raw_records(tmp_path):
     make_store(project, "cc")
     identity, candidate = publish_snapshot(
         Locator(tmp_path), project, [],
-        raw_store=None, registry_root=tmp_path / "registry",
+        raw_store=None, store_root=tmp_path / "registry",
         project_id="codess:project:x", sources=("cc",), minimum_source_size=0,
         required=True, progress_trace=silent,
     )
@@ -336,7 +336,7 @@ def test_an_unchanged_project_keeps_its_current_snapshot_identity(tmp_path):
     events: list[str] = []
     identity, candidate = publish_snapshot(
         Locator(tmp_path), project, [raw_record(tmp_path / "a.jsonl")],
-        raw_store=None, registry_root=tmp_path / "registry",
+        raw_store=None, store_root=tmp_path / "registry",
         project_id="codess:project:x", sources=("cc",), minimum_source_size=0,
         required=False,
         progress_trace=lambda event, **fields: events.append(event),

@@ -38,7 +38,7 @@ def _normalized_status(stage: str, status: object) -> str | None:
 
 
 def latest_refresh_observations(
-    registry_root: Path,
+    store_root: Path,
     *,
     receipt_limit: int = DEFAULT_RECEIPT_LIMIT,
 ) -> dict[str, dict[str, Any]]:
@@ -49,7 +49,7 @@ def latest_refresh_observations(
     """
     if receipt_limit <= 0:
         raise ValueError("receipt_limit must be positive")
-    reports = registry_root.expanduser().resolve() / "reports"
+    reports = store_root.expanduser().resolve() / "reports"
     if not reports.is_dir():
         return {}
     candidates = []

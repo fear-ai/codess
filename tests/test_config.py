@@ -20,7 +20,7 @@ from codess.config import (
 )
 from codess.project import (
     build_ingest_run_options,
-    resolve_registry_directory,
+    resolve_store_root,
     validate_scan_source_for_cli,
 )
 
@@ -108,14 +108,14 @@ class TestCliOptionsEnvMerge:
     """ENV-backed bools merged in build_*_run_options (monkeypatch config module)."""
 
     def test_ingest_redact_env(self, monkeypatch):
-        monkeypatch.setattr("codess.config.INGEST_REDACT", True)
+        monkeypatch.setattr("codess.config.REDACT", True)
         args = SimpleNamespace(
             stop=False, force=False, min_size=100, debug=False, redact=False
         )
         assert build_ingest_run_options(args)["redact"] is True
 
     def test_ingest_redact_cli_overrides_false_env(self, monkeypatch):
-        monkeypatch.setattr("codess.config.INGEST_REDACT", False)
+        monkeypatch.setattr("codess.config.REDACT", False)
         args = SimpleNamespace(
             stop=False, force=False, min_size=100, debug=False, redact=True
         )
@@ -128,10 +128,10 @@ class TestCliOptionsEnvMerge:
         )
         assert build_ingest_run_options(args)["max_context_content_chars"] == 4096
 
-    def test_ingest_no_resource_limits_disables_context_limit(self):
+    def test_ingest_no_resource_disables_context_limit(self):
         args = SimpleNamespace(
             stop=False, force=False, min_size=100, debug=False, redact=False,
-            no_resource_limits=True, max_context_content_chars=4096,
+            no_resource=True, max_context_content_chars=4096,
         )
         assert build_ingest_run_options(args)["max_context_content_chars"] is None
 
@@ -156,18 +156,18 @@ class TestValidateScanSource:
 
 
 class TestRegistryArgResolution:
-    """``--registry PATH`` vs omitted → ``resolve_registry_directory``."""
+    """``--store PATH`` vs omitted → ``resolve_store_root``."""
 
     def test_omitted_uses_config_registry(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("codess.config.REGISTRY", tmp_path)
-        args = SimpleNamespace(registry=None)
-        assert resolve_registry_directory(args) == tmp_path
+        monkeypatch.setattr("codess.config.STORE_ROOT", tmp_path)
+        args = SimpleNamespace(store_root=None)
+        assert resolve_store_root(args) == tmp_path
 
     def test_explicit_path_overrides(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("codess.config.REGISTRY", tmp_path)
+        monkeypatch.setattr("codess.config.STORE_ROOT", tmp_path)
         other = tmp_path / "other"
-        args = SimpleNamespace(registry=str(other))
-        assert resolve_registry_directory(args) == other
+        args = SimpleNamespace(store_root=str(other))
+        assert resolve_store_root(args) == other
 
 
 # --- closed vocabulary: raw modes -------------------------------------------

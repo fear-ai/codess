@@ -76,7 +76,7 @@ def _project(
         [record],
         raw_store=raw,
         build_policy={"raw_mode": "capture"},
-        registry_root=registry,
+        store_root=registry,
         project_id=binding["project_id"],
     )
     return project, binding["project_id"]

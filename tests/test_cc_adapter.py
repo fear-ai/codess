@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from codess.adapters import cc
 from codess.adapters.cc import (
     SourceCompatibilityError,
     extract_tool_input,
@@ -1286,3 +1287,38 @@ class TestProductStatePartition:
             if subtype in {"context_attachment", "file_history_snapshot"}:
                 assert kind == "content.attachment"
         assert kinds, "no attachment events decoded"
+
+
+class TestTimestampPresence:
+    """Which of the two timestamp positions is read, and why truthiness fails.
+
+    Claude writes the stamp at the top level on most records and inside
+    `message` on some. Choosing between them with `or` discards a legitimate
+    `0` -- a valid epoch value `_parse_timestamp` returns -- and silently reads
+    the nested one instead.
+    """
+
+    def test_zero_is_a_stamp(self):
+        """`0` is 1970, not absence."""
+        record = {"timestamp": 0, "message": {"timestamp": 999}}
+        assert cc._get_timestamp(record) == 0.0
+
+    def test_vacant_falls_through_to_the_message(self):
+        """Absent, null, and empty are all "the vendor said nothing here"."""
+        for vacant in ({}, {"timestamp": None}, {"timestamp": ""}):
+            record = {**vacant, "message": {"timestamp": 999}}
+            assert cc._get_timestamp(record) == 999.0, vacant
+
+    def test_unparseable_does_not_fall_through(self):
+        """A stated but bad value is a finding, not a reason to look elsewhere.
+
+        Falling through would mask it behind the nested stamp and lose the
+        `malformed` diagnostic that says the vendor wrote something unreadable.
+        """
+        record = {"timestamp": "not-a-date", "message": {"timestamp": 999}}
+        opts: dict = {"diagnostics": {}, "field_diagnostics": []}
+        assert cc._get_timestamp(record, opts) is None
+        assert opts["diagnostics"] == {"field_malformed": 1}
+        rows = opts["field_diagnostics"]
+        assert [row["reason_code"] for row in rows] == ["field_malformed"]
+        assert rows[0]["field"] == "event_at"

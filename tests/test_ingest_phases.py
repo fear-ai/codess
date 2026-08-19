@@ -21,7 +21,7 @@ def config(tmp_path, **overrides):
     return IngestConfig(
         options=options,
         sources=("cc", "codex", "cursor"),
-        registry_root=overrides.pop("registry_root", tmp_path / "registry"),
+        store_root=overrides.pop("store_root", tmp_path / "registry"),
         **overrides,
     )
 
@@ -71,9 +71,9 @@ def test_source_selector_is_case_insensitive(tmp_path):
 def test_resolution_returns_roots_and_registry(tmp_path):
     result = _resolve_ingest_request(make_args(dir=str(tmp_path)))
     assert not isinstance(result, int)
-    roots, registry_root, _sources, settings = result
+    roots, store_root, _sources, settings = result
     assert roots and all(isinstance(root, Path) for root in roots)
-    assert isinstance(registry_root, Path)
+    assert isinstance(store_root, Path)
     assert "validate_only" in settings
 
 
@@ -624,7 +624,7 @@ class TestCursorPreflight:
     exception, and the block called `run`'s closure to clean up.
     """
 
-    def _preflight(self, *, registry_root=None, opts=None, **overrides):
+    def _preflight(self, *, store_root=None, opts=None, **overrides):
         from cli.ingest_cmd import (
             IngestConfig,
             IngestOutcome,
@@ -633,14 +633,14 @@ class TestCursorPreflight:
         )
         from codess.cursor_cohort import CursorSelection
 
-        registry_root = registry_root or Path("/nonexistent")
+        store_root = store_root or Path("/nonexistent")
         settings = overrides.pop(
             "settings", {"validate_only": False, "raw_mode": "reference"},
         )
         config = IngestConfig.from_options(
             {**settings, "raw_mode": settings.get("raw_mode", "reference")},
             ["cursor"],
-            registry_root,
+            store_root,
         )
         totals = RunTotals(
             outcome=IngestOutcome(),
@@ -728,7 +728,7 @@ class TestCursorPreflight:
         arguments = {
             "workspace_ids": {tmp_path: {"ws1"}},
             "global_db": database,
-            "registry_root": registry,
+            "store_root": registry,
         }
 
         code, temporary = self._preflight(force=True, **arguments)
@@ -761,7 +761,7 @@ class TestCursorPreflight:
         code, temporary = self._preflight(
             workspace_ids={tmp_path: {"ws1"}},
             global_db=database,
-            registry_root=registry,
+            store_root=registry,
             force=False,
         )
         assert (code, temporary) == (None, None)
@@ -887,7 +887,7 @@ def _ingest_args(project, registry):
     from codess.project import build_parser
 
     return build_parser().parse_args([
-        "ingest", "--dir", str(project), "--registry", str(registry),
+        "ingest", "--dir", str(project), "--store", str(registry),
         "--source", "cc", "--force", "--no-progress",
     ])
 

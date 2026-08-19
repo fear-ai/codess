@@ -731,6 +731,105 @@ than for the value the first write used. The rule that follows is narrow --
 *one recorded event, one clock read* -- and it does not extend to intervals
 or to per-item stamps, where two reads are the point.
 
+## Tooling Evaluated for Structural Defects
+
+Ruff and mypy carry the enforcement; this records what each does *not* see and
+which additional tools were run against this codebase rather than judged from
+their descriptions.
+
+### What Ruff Reaches, and Where It Stops
+
+Twenty-three rule families are selected. Three are deliberately excluded, with
+counts re-measurable by `ruff check src --select <family>`: `ANN` (86, of which
+74 are `Any` in a signature -- the documented rule here, not a defect), `D`
+(197, docstring shape where the convention is explanatory prose), and `COM`
+(520, formatting).
+
+The gap that matters is narrower than the exclusions suggest. Ruff reports a
+name shadowing a **builtin** (`A`) and nothing that reports a local rebound to
+another type in the same scope, which is the defect that actually cost time
+here: `truncated` holding both the bounded text and whether bounding occurred.
+mypy reports each as an `assignment` error, so the two tools are complementary
+and neither alone is sufficient.
+
+### Tools Run, and What Each Found
+
+| Tool | Question it answers | Result here |
+|---|---|---|
+| `vulture` | Is this code reachable? | Nothing at 80% confidence. At 60% it reports `row_factory` assignments and similar attribute writes it cannot see through -- a false-positive class inherent to dynamic attributes, so the lower threshold is not worth running routinely |
+| `radon cc` | Which functions are too branchy to read at once? | Average B (6.8) over 889 blocks, with a short tail at D-F: `query_cmd._typed_output` (72), `ingest_cmd._ingest_project` (65), `query_cmd.run` (59), `scan_cmd.run` (37). These are the decomposition targets, named rather than guessed |
+| `pylint` | What does it see that ruff does not? | One thing, and it is the reason to keep it: `R0801` reports near-identical line blocks across modules, which no ruff rule does. 16 clusters found. Its other classes are covered faster by ruff |
+| `pyreverse` | What depends on what? | Bundled with pylint. Draws the import graph the boundary tests already assert |
+| `black` | Is formatting uniform? | Not installed |
+
+**The two not adopted, with the reasoning rather than the verdict.**
+
+*`black`.* The question is not whether uniform formatting helps -- it does --
+but what adopting it costs against what it would catch. It reformats every
+file, so the next `git blame` on any line attributes it to the reformat, and
+this codebase's comments carry measurements and reasoning that a blame is
+genuinely used to date. Against that: `E501` already bounds line length, `I001`
+already orders imports, and the two families `black` would settle beyond those
+are `COM` (513 of 520 findings are one rule, COM812, trailing comma before a
+closing bracket) and vertical spacing. COM812 is also the rule most likely to
+fight the existing style, which groups related arguments on one line --
+`event, field="tool_input", state=state,` -- where a mandated trailing comma
+per element would explode a three-line call to seven.
+
+**Experiment run.** `ruff format` is installed and `black`-compatible, so it
+answers the question without adopting anything: `ruff format --check src/`
+reports **75 of 83 files would be reformatted**, and `--diff` is **20,077
+lines**. That is larger than any change this repository has made, and it would
+land on every file at once -- so the blame cost is real and the answer is no
+for now. The measurement is what makes it a decision rather than a preference,
+and it is one command to re-run if the tolerance changes.
+
+The narrower option remains open: adopting the formatter for *new* files only,
+where there is no blame to lose, would converge the tree over time without a
+single wide diff.
+
+**What a formatter is actually for**, since the trailing comma is the least of
+it and the reason to keep the question open:
+
+| Capability | Value here |
+|---|---|
+| Deterministic line splitting | One rule for how a long call breaks. Reflow noise stops appearing in diffs, so a review sees the change rather than the rewrap -- the largest of the four |
+| Magic trailing comma | An author-placed trailing comma forces one-argument-per-line, and its absence collapses. That is an explicit per-call control over layout, which the current hand style has no way to express |
+| Quote and string normalization | Removes a class of diff that carries no information |
+| Formatting off the review agenda | Nobody argues about it again, which is worth more than any single rule |
+
+Against those: the measured 20,077-line diff, and that the codebase's own
+grouping style -- related arguments on one line -- is a readability decision a
+formatter would overrule. `ruff format` is already installed and needs no new
+dependency, so this is one command away whenever the tolerance changes.
+
+*`pyreverse`.* Draws a class and package diagram from the import graph. The
+import-boundary test already *asserts* the rules a diagram would let a reader
+check by eye, and an assertion fails on violation while a diagram has to be
+looked at. A generated diagram would still be worth having for the entity and
+module maps in CoPlan, which are currently hand-drawn Mermaid and can therefore
+drift from the code.
+
+**Experiment**: install pylint, run `pyreverse -o mmd src/codess`, and compare
+the generated module graph against CoPlan's hand-drawn one. The finding to look
+for is not a prettier diagram -- it is a dependency the hand-drawn version
+omits, which would say the hand-drawn diagrams need generating rather than
+maintaining.
+
+**A 30-line AST script found what none of them did.** Grouping functions by
+their node-type sequence -- names and constants erased -- reported exactly one
+cluster: `context_content.truncate_content` and `codex._truncate`, structurally
+identical. That consolidation had already been done and documented, and the
+private copy had reappeared in one adapter. Removed, and the detector now
+reports zero clusters.
+
+The lesson is the shape of the check rather than the finding: **duplicate
+detection is cheap when structure is compared and names are ignored**, and it
+catches the case that defeats review -- a body that was consolidated once,
+reintroduced under a different name, and reads as local helper at each site.
+Exact-text comparison found nothing, because the reintroduced copy had a
+different signature and docstring.
+
 ## Observed Process Misses
 
 Specific misses observed during real review and implementation sessions -- in

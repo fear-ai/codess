@@ -597,9 +597,9 @@ def _ingest_cursor(
     ingested, total_events, failures, changed = 0, 0, 0, False
 
     workspace_ids = set(get_cursor_workspace_ids(project_path))
-    if workspace_ids and opts.get("registry_root") and opts.get("project_id") and not opts.get("validate_only"):
+    if workspace_ids and opts.get("store_root") and opts.get("project_id") and not opts.get("validate_only"):
         register_workspace_bindings(
-            Path(opts["registry_root"]), str(opts["project_id"]),
+            Path(opts["store_root"]), str(opts["project_id"]),
             str(opts["location_id"]), workspace_ids,
             source_project_path=proj_str,
         )

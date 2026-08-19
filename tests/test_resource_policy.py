@@ -26,7 +26,7 @@ def _args(**values):
         "debug": False,
         "redact": False,
         "resource_policy": None,
-        "no_resource_limits": False,
+        "no_resource": False,
     }
     defaults.update(values)
     return SimpleNamespace(**defaults)
@@ -123,7 +123,7 @@ def test_precedence_is_file_then_environment_then_command_line(
     assert options["resource_policy"]["origins"]["events_per_session"] == "built-in"
 
 
-def test_no_resource_limits_disables_every_maximum(tmp_path):
+def test_no_resource_disables_every_maximum(tmp_path):
     path = tmp_path / "resources.json"
     path.write_text(json.dumps({
         "format": RESOURCE_POLICY_FORMAT,
@@ -131,7 +131,7 @@ def test_no_resource_limits_disables_every_maximum(tmp_path):
     }), encoding="utf-8")
     options = build_ingest_run_options(_args(
         resource_policy=str(path),
-        no_resource_limits=True,
+        no_resource=True,
     ))
     assert options["max_source_bytes"] is None
     assert options["max_cursor_container_bytes"] is None
@@ -139,7 +139,7 @@ def test_no_resource_limits_disables_every_maximum(tmp_path):
     assert options["max_events_per_session"] is None
     assert options["max_context_content_chars"] is None
     assert set(options["resource_policy"]["origins"].values()) == {
-        "--no-resource-limits"
+        "--no-resource"
     }
 
 

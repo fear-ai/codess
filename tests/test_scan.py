@@ -31,7 +31,7 @@ def _scan_env(base: Path, **extra: str) -> dict:
     """Isolate ``ingested_projects.json`` writes from the developer home."""
     reg = base / "_test_codess_registry"
     reg.mkdir(parents=True, exist_ok=True)
-    return {**os.environ.copy(), "CODESS_REGISTRY": str(reg), **extra}
+    return {**os.environ.copy(), "CODESS_STORE_ROOT": str(reg), **extra}
 
 
 def _write_codex_session(root: Path, project: Path, session_id: str = "session") -> None:
@@ -251,7 +251,7 @@ def test_multi_root_scan_does_not_register_cursor_global_as_project(tmp_path):
     conn.commit()
     conn.close()
     reg = tmp_path / "registry"
-    env = _scan_env(tmp_path, CODESS_CURSOR_DATA=str(cursor), CODESS_REGISTRY=str(reg))
+    env = _scan_env(tmp_path, CODESS_CURSOR_DATA=str(cursor), CODESS_STORE_ROOT=str(reg))
     result = _run(
         ["scan", "--dir", str(first), "--dir", str(second), "--days", "0", "--out", "-"],
         env=env,
@@ -274,7 +274,7 @@ def test_scan_prunes_legacy_cursor_global_pseudo_project(tmp_path):
     }]}))
     result = _run(
         ["scan", "--dir", str(work), "--days", "0", "--out", "-"],
-        env=_scan_env(tmp_path, CODESS_REGISTRY=str(reg)),
+        env=_scan_env(tmp_path, CODESS_STORE_ROOT=str(reg)),
     )
     assert result.returncode == 0
     registry = json.loads((reg / "ingested_projects.json").read_text())
@@ -844,7 +844,7 @@ def test_scan_registry_missing_file_exit(tmp_path):
         CODESS_CURSOR_DATA=str(cursor_base),
     )
     r = _run(
-        ["scan", "--dir", str(work), "--registry", str(reg), "--out", "-"],
+        ["scan", "--dir", str(work), "--store", str(reg), "--out", "-"],
         env=env,
     )
     assert r.returncode == 1
@@ -858,7 +858,7 @@ def test_scan_registry_corrupt_json_exit(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     r = _run(
-        ["scan", "--dir", str(work), "--registry", str(reg), "--out", "-"],
+        ["scan", "--dir", str(work), "--store", str(reg), "--out", "-"],
         env=_scan_env(tmp_path),
     )
     assert r.returncode == 1
@@ -872,7 +872,7 @@ def test_scan_empty_registry_warns_and_outputs_only_header(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     r = _run(
-        ["scan", "--dir", str(work), "--registry", str(reg), "--out", "-"],
+        ["scan", "--dir", str(work), "--store", str(reg), "--out", "-"],
         env=_scan_env(tmp_path),
     )
     assert r.returncode == 0
@@ -893,7 +893,7 @@ def test_scan_dirs_file_without_usable_roots_is_error(tmp_path, contents):
 
 
 def test_scan_merges_registry_without_registry_flag(tmp_path):
-    """Every scan upserts index metrics into CODESS_REGISTRY (isolated in test)."""
+    """Every scan upserts index metrics into CODESS_STORE_ROOT (isolated in test)."""
     work = tmp_path / "work"
     work.mkdir()
     proj = work / "proj"
@@ -995,7 +995,7 @@ def test_scan_registry_filter_and_ref_columns(tmp_path):
             str(work),
             "--days",
             "9999",
-            "--registry",
+            "--store",
             str(reg),
             "--out",
             "-",

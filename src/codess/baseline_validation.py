@@ -909,7 +909,7 @@ def run_query_smoke(
         for name, flags in modes:
             command = [
                 sys.executable, "-m", "main", "query", "--dir",
-                str(query_root), "--registry", str(registry),
+                str(query_root), "--store", str(registry),
             ]
             if snapshot_id is not None:
                 command.extend(["--snapshot-id", snapshot_id])

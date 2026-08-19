@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from codess.config import REGISTRY
+from codess.config import STORE_ROOT
 from codess.fileio import hash_file
 from codess.project_annotations import build_project_annotations
 from codess.project_catalog import (
@@ -68,7 +68,7 @@ def _captured_project(tmp_path: Path) -> tuple[Path, Path, str]:
     )
     create_snapshot(
         project, [store], [record], raw_store=raw,
-        build_policy={"raw_mode": "capture"}, registry_root=registry,
+        build_policy={"raw_mode": "capture"}, store_root=registry,
         project_id=binding["project_id"],
     )
     return project, registry, binding["project_id"]
@@ -119,15 +119,15 @@ def test_project_annotations_reserve_suspect_for_direct_evidence(tmp_path):
 
 
 def test_personal_registry_rejects_ephemeral_project_location(tmp_path):
-    # REGISTRY is resolved once at import time from CODESS_REGISTRY / the
+    # STORE_ROOT is resolved once at import time from CODESS_STORE_ROOT / the
     # real home directory, so this check (identity against the personal
-    # registry) is exercised by passing REGISTRY itself, not by faking
+    # registry) is exercised by passing STORE_ROOT itself, not by faking
     # Path.home() after codess.config has already computed it.
     project = tmp_path / "temporary-project"
     project.mkdir()
 
     with pytest.raises(ValueError, match="ephemeral system location"):
-        ensure_project_binding(REGISTRY, project)
+        ensure_project_binding(STORE_ROOT, project)
 
 
 def test_project_id_survives_a_new_location(tmp_path):
@@ -144,7 +144,7 @@ def test_project_id_survives_a_new_location(tmp_path):
             "binding_format": "codess.project-binding/1",
             "project_id": initial["project_id"],
             "location_id": "provisional",
-            "registry_root": str(registry),
+            "store_root": str(registry),
         })
     )
     rebound = ensure_project_binding(registry, second)
@@ -355,7 +355,7 @@ def test_snapshot_is_central_and_relocation_preserves_query_access(tmp_path):
     result = subprocess.run(
         [
             sys.executable, "tools/retire_project.py", "--project", str(project),
-            "--registry", str(registry), "--new-location", str(replacement),
+            "--store", str(registry), "--new-location", str(replacement),
         ],
         cwd=Path(__file__).resolve().parents[1], env=env,
         capture_output=True, text=True,
@@ -393,7 +393,7 @@ def test_exact_project_id_resolves_central_snapshot_without_mutation(tmp_path):
     result = subprocess.run(
         [
             sys.executable, "-m", "main", "query", "sessions",
-            "--project-id", project_id, "--registry", str(registry),
+            "--project-id", project_id, "--store", str(registry),
         ],
         cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
@@ -443,7 +443,7 @@ def test_saved_project_set_and_all_current_resolve_exact_snapshots(tmp_path):
         result = subprocess.run(
             [
                 sys.executable, "-m", "main", "query", "sessions",
-                *selector, "--registry", str(registry),
+                *selector, "--store", str(registry),
             ],
             cwd=Path(__file__).resolve().parents[1],
             capture_output=True,
@@ -606,7 +606,7 @@ def test_catalog_query_names_project_and_snapshot_on_incompatibility(tmp_path):
     result = subprocess.run(
         [
             sys.executable, "-m", "main", "query", "sessions",
-            "--project-id", project_id, "--registry", str(registry),
+            "--project-id", project_id, "--store", str(registry),
         ],
         cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
@@ -694,7 +694,7 @@ def test_human_session_name_lists_and_opens_current_session(tmp_path):
     listed = subprocess.run(
         [
             sys.executable, "-m", "main", "query", "--sessions",
-            "--project-id", project_id, "--registry", str(registry),
+            "--project-id", project_id, "--store", str(registry),
         ],
         cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
@@ -703,7 +703,7 @@ def test_human_session_name_lists_and_opens_current_session(tmp_path):
     opened = subprocess.run(
         [
             sys.executable, "-m", "main", "query",
-            "--project-id", project_id, "--registry", str(registry),
+            "--project-id", project_id, "--store", str(registry),
             "--session-id", "welcome", "--show", "prompt",
         ],
         cwd=Path(__file__).resolve().parents[1],

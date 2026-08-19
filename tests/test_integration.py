@@ -39,7 +39,7 @@ def test_ingest_invalid_source_is_global_error(tmp_path):
             "bogus",
         ],
         cwd=str(Path(__file__).parent.parent),
-        env={**os.environ, "CODESS_REGISTRY": str(tmp_path / "registry")},
+        env={**os.environ, "CODESS_STORE_ROOT": str(tmp_path / "registry")},
         capture_output=True,
         text=True,
     )
@@ -103,7 +103,7 @@ def test_full_ingest_and_query(durable_tmp_path):
     reg = tmp / "_central_reg"
     reg.mkdir()
     env = os.environ.copy()
-    env["CODESS_REGISTRY"] = str(reg)
+    env["CODESS_STORE_ROOT"] = str(reg)
     env["CODESS_CC_PROJECTS"] = str(projects_dir)
 
     # Run ingest
@@ -157,7 +157,7 @@ def test_cc_ingest_includes_nested_subagent_with_parent_metadata(durable_tmp_pat
 
     env = os.environ.copy()
     env["CODESS_CC_PROJECTS"] = str(projects_dir)
-    env["CODESS_REGISTRY"] = str(tmp / "registry")
+    env["CODESS_STORE_ROOT"] = str(tmp / "registry")
     result = subprocess.run(
         [
             sys.executable,
@@ -227,7 +227,7 @@ def test_cc_force_reingest_replaces_shortened_transcript(durable_tmp_path):
     env = {
         **os.environ,
         "CODESS_CC_PROJECTS": str(projects),
-        "CODESS_REGISTRY": str(tmp_path / "registry"),
+        "CODESS_STORE_ROOT": str(tmp_path / "registry"),
     }
     command = [
         sys.executable, "-m", "main", "ingest",
@@ -281,7 +281,7 @@ def test_codex_ingest_and_query(durable_tmp_path):
     reg = tmp / "_central_reg"
     reg.mkdir()
     env = os.environ.copy()
-    env["CODESS_REGISTRY"] = str(reg)
+    env["CODESS_STORE_ROOT"] = str(reg)
     env["CODESS_CODEX_SESSIONS"] = str(tmp / "codex" / "sessions")
 
     r = subprocess.run(
@@ -333,7 +333,7 @@ def test_codex_force_reingest_replaces_and_empty_removes_session(durable_tmp_pat
     env = {
         **os.environ,
         "CODESS_CODEX_SESSIONS": str(sessions),
-        "CODESS_REGISTRY": str(tmp_path / "registry"),
+        "CODESS_STORE_ROOT": str(tmp_path / "registry"),
     }
 
     def ingest():
@@ -403,7 +403,7 @@ def test_cursor_ingest_and_query(durable_tmp_path):
     reg = tmp / "_central_reg"
     reg.mkdir()
     env = os.environ.copy()
-    env["CODESS_REGISTRY"] = str(reg)
+    env["CODESS_STORE_ROOT"] = str(reg)
     env["CODESS_CURSOR_DATA"] = str(cursor_base)
 
     r = subprocess.run(
@@ -452,7 +452,7 @@ def test_cursor_force_reingest_removes_sessions_deleted_from_source(durable_tmp_
     env = {
         **os.environ,
         "CODESS_CURSOR_DATA": str(cursor_base),
-        "CODESS_REGISTRY": str(tmp_path / "registry"),
+        "CODESS_STORE_ROOT": str(tmp_path / "registry"),
     }
     command = [
         sys.executable, "-m", "main", "ingest",
@@ -556,7 +556,7 @@ def test_cursor_global_ingest_is_scoped_by_composer_headers(durable_tmp_path):
     reg.mkdir()
     env = {
         **os.environ,
-        "CODESS_REGISTRY": str(reg),
+        "CODESS_STORE_ROOT": str(reg),
         "CODESS_CURSOR_DATA": str(cursor_base),
     }
     result = subprocess.run(
@@ -646,7 +646,7 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(durable_tmp_p
         cwd=str(Path(__file__).parent.parent),
         env={
             **os.environ,
-            "CODESS_REGISTRY": str(registry),
+            "CODESS_STORE_ROOT": str(registry),
             "CODESS_CURSOR_DATA": str(cursor_base),
         },
         capture_output=True,
@@ -703,7 +703,7 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(durable_tmp_p
         cwd=str(Path(__file__).parent.parent),
         env={
             **os.environ,
-            "CODESS_REGISTRY": str(registry),
+            "CODESS_STORE_ROOT": str(registry),
             "CODESS_CURSOR_DATA": str(cursor_base),
         },
         capture_output=True,
@@ -724,7 +724,7 @@ def test_cursor_multi_project_capture_reuses_one_consistent_cohort(durable_tmp_p
         cwd=str(Path(__file__).parent.parent),
         env={
             **os.environ,
-            "CODESS_REGISTRY": str(registry),
+            "CODESS_STORE_ROOT": str(registry),
             "CODESS_CURSOR_DATA": str(cursor_base),
         },
         capture_output=True,
@@ -772,7 +772,7 @@ def test_cursor_capture_upgrades_an_unchanged_reference_snapshot(durable_tmp_pat
     ]
     env = {
         **os.environ,
-        "CODESS_REGISTRY": str(registry),
+        "CODESS_STORE_ROOT": str(registry),
         "CODESS_CURSOR_DATA": str(cursor_base),
     }
     reference = subprocess.run(
@@ -814,7 +814,7 @@ def test_incremental_skip_unchanged(durable_tmp_path):
     reg = tmp / "_central_reg"
     reg.mkdir()
     env = os.environ.copy()
-    env["CODESS_REGISTRY"] = str(reg)
+    env["CODESS_STORE_ROOT"] = str(reg)
     env["CODESS_CC_PROJECTS"] = str(projects_dir)
 
     # First ingest

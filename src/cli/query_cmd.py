@@ -19,7 +19,7 @@ from codess.config import (
 from codess.configuration_audit import audit as audit_configurations
 from codess.coverage_report import store_coverage
 from codess.investigation import build_investigation
-from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_registry_directory
+from codess.project import RootsWhenEmpty, resolve_cli_roots, resolve_store_root
 from codess.project_catalog import resolve_project_query_scopes
 from codess.query_api import (
     REQUEST_FORMAT,
@@ -401,11 +401,11 @@ def run(args: argparse.Namespace) -> int:
         print("codess: --id requires --sessions", file=sys.stderr)
         return 1
 
-    registry = resolve_registry_directory(args)
+    registry = resolve_store_root(args)
     requested_project_ids = list(getattr(args, "project_ids", None) or [])
     project_set = getattr(args, "project_set", None)
     all_current = bool(getattr(args, "all_current", False))
-    contract_policy = getattr(args, "snapshot_contract_policy", "exact")
+    contract_policy = getattr(args, "snapshot_policy", "exact")
     explicit_paths = bool(getattr(args, "dirs", None)) or bool(
         getattr(args, "dir_list", None)
     )
@@ -498,18 +498,18 @@ def run(args: argparse.Namespace) -> int:
         if getattr(args, "output_format", "table") == "jsonl":
             return _jsonl_output(
                 scope, args, resolved_roots, limit,
-                resolve_registry_directory(args),
+                resolve_store_root(args),
                 update_registry=not bool(snapshot_id) and not bool(source_tokens),
             )
         if getattr(args, "output_format", "table") == "csv":
             return _csv_output(
                 scope, args, resolved_roots, limit,
-                resolve_registry_directory(args),
+                resolve_store_root(args),
                 update_registry=not bool(snapshot_id) and not bool(source_tokens),
             )
         if getattr(args, "stats", False):
             return _stats(
-                scope, resolved_roots, resolve_registry_directory(args),
+                scope, resolved_roots, resolve_store_root(args),
                 update_registry=not bool(snapshot_id) and not bool(source_tokens),
             )
         if getattr(args, "taxonomy", False):
@@ -912,7 +912,7 @@ def _project_counts(scope: QueryScope, roots: list[Path]) -> dict[str, dict[str,
 
 
 def _merge_stats_into_registry(
-    counts: dict[str, dict[str, int]], roots: list[Path], registry_root: Path,
+    counts: dict[str, dict[str, int]], roots: list[Path], store_root: Path,
 ) -> None:
     for project_path in roots:
         project = str(project_path.resolve())
@@ -921,7 +921,7 @@ def _merge_stats_into_registry(
             merge_query_stats(e, values["sessions"], values["events"])
 
         try:
-            update_project_entry(registry_root, project, mut)
+            update_project_entry(store_root, project, mut)
         except OSError as exc:
             log.warning("Registry update failed for %s: %s", project, exc)
 
@@ -931,7 +931,7 @@ def _jsonl_output(
     args,
     roots: list[Path],
     limit: int | None,
-    registry_root: Path,
+    store_root: Path,
     *,
     update_registry: bool,
 ) -> int:
@@ -960,7 +960,7 @@ def _jsonl_output(
             "events": sum(item["events"] for item in counts.values()),
         })
         if update_registry:
-            _merge_stats_into_registry(counts, roots, registry_root)
+            _merge_stats_into_registry(counts, roots, store_root)
         return 0
     print("codess: JSON Lines prototype currently supports --sessions and --stats", file=sys.stderr)
     return 1
@@ -971,7 +971,7 @@ def _csv_output(
     args,
     roots: list[Path],
     limit: int | None,
-    registry_root: Path,
+    store_root: Path,
     *,
     update_registry: bool,
 ) -> int:
@@ -1009,7 +1009,7 @@ def _csv_output(
             sum(item["events"] for item in counts.values()),
         ]))
         if update_registry:
-            _merge_stats_into_registry(counts, roots, registry_root)
+            _merge_stats_into_registry(counts, roots, store_root)
         return 0
     print("codess: CSV currently supports --sessions and --stats", file=sys.stderr)
     return 1
@@ -1018,7 +1018,7 @@ def _csv_output(
 def _stats(
     scope: QueryScope,
     project_roots: list[Path],
-    registry_root: Path,
+    store_root: Path,
     *,
     update_registry: bool = True,
 ) -> int:
@@ -1030,7 +1030,7 @@ def _stats(
     print(f"Events: {events}")
     if not update_registry:
         return 0
-    _merge_stats_into_registry(counts, project_roots, registry_root)
+    _merge_stats_into_registry(counts, project_roots, store_root)
     return 0
 
 

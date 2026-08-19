@@ -270,7 +270,7 @@ def apply_project(
     published = publish_snapshot(
         project,
         final_snapshot,
-        registry_root=registry,
+        store_root=registry,
         project_id=final.get("project_id"),
     )
     result = {

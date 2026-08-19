@@ -127,13 +127,21 @@ _IS_ENV_TABLE = (
     ("CODESS_RAW_MODE", env_raw_mode, "reference"),
     ("CODESS_CONTENT_POLICY", env_str, None),
     ("CODESS_RESOURCE_POLICY", env_str, None),
-    ("CODESS_REGISTRY", env_expanded_path, str(Path.home() / ".codess")),
+    ("CODESS_STORE_ROOT", env_expanded_path, str(Path.home() / ".codess")),
     ("CODESS_STOP", env_bool, "0"),
     # --- Discovery traversal bounds ---
     # A scan of an unknown tree has to be able to stop. 200,000 directories
     # is far above any real work root -- the development machine's is under
     # 30,000 -- so the budget bounds a pathological input rather than
     # truncating an ordinary one, and 0 disables it.
+    # --- Snapshot retention ---
+    # Each publication writes a complete store set, not a delta, so a Project
+    # ingested repeatedly accumulates one full copy per run. Keeping two prior
+    # snapshots leaves a rollback target and its predecessor while bounding the
+    # depository; 0 keeps every snapshot, which is what an operator auditing a
+    # sequence of rebuilds needs. Superseded snapshots beyond the limit are
+    # removed after the new one is published, never before.
+    ("CODESS_KEEP_SNAPSHOTS", env_int, 2),
     ("CODESS_MAX_SCAN_DIRECTORIES", env_int, 200_000),
     ("CODESS_SCAN_DEADLINE_SECONDS", env_int, 900),
     ("CODESS_NO_HASH", env_bool, "0"),
@@ -222,7 +230,7 @@ AGGREGATORS = frozenset(
 EXCLUDE_REVIEW_DIRS = env_path_list(
     "CODESS_EXCLUDE_REVIEW_DIRS", DEFAULT_EXCLUDE_REVIEW_DIRS
 )
-CODESS_DAYS = _IS_ENV_VALUES["CODESS_DAYS"]
+DAYS = _IS_ENV_VALUES["CODESS_DAYS"]
 
 # --- Store layout ---
 STORE_DIR = ".codess"
@@ -329,7 +337,7 @@ CURRENT_POINTER_FILE = "current.json"
 RAW_MANIFEST_FILE = "raw-manifest.jsonl"
 
 # --- Registry (central ingested_projects.json, default ~/.codess) ---
-REGISTRY = _IS_ENV_VALUES["CODESS_REGISTRY"]
+STORE_ROOT = _IS_ENV_VALUES["CODESS_STORE_ROOT"]
 
 
 def catalog_root() -> Path:
@@ -349,7 +357,7 @@ def catalog_root() -> Path:
     configured = os.environ.get("CODESS_CATALOG")
     if configured:
         return Path(configured).expanduser()
-    return REGISTRY / "catalog"
+    return STORE_ROOT / "catalog"
 
 # --- CLI / logging ---
 VERBOSE = _IS_ENV_VALUES["CODESS_VERBOSE"]
@@ -368,7 +376,7 @@ FORCE = _IS_ENV_VALUES["CODESS_FORCE"]
 SUBAGENT = _IS_ENV_VALUES["CODESS_SUBAGENT"]
 
 # --- Ingest redaction default (CLI --redact ORs on top) ---
-INGEST_REDACT = _IS_ENV_VALUES["CODESS_REDACT"]
+REDACT = _IS_ENV_VALUES["CODESS_REDACT"]
 RAW_MODES = ("observe", "reference", "capture", "seal")
 """How much of a Source's exact bytes a run retains, in increasing degree.
 
@@ -441,6 +449,7 @@ def raw_mode_error(name: str, value: object, *, extra: tuple[str, ...] = ()) -> 
 # Canonicalized here rather than at each reader, so `config.RAW_MODE` is always
 # the stored name and no downstream comparison has to know the alias exists.
 RAW_MODE = canonical_raw_mode(_IS_ENV_VALUES["CODESS_RAW_MODE"])
+KEEP_SNAPSHOTS = _IS_ENV_VALUES["CODESS_KEEP_SNAPSHOTS"]
 MAX_SCAN_DIRECTORIES = _IS_ENV_VALUES["CODESS_MAX_SCAN_DIRECTORIES"]
 SCAN_DEADLINE_SECONDS = _IS_ENV_VALUES["CODESS_SCAN_DEADLINE_SECONDS"]
 STRICT_MAPPING = _IS_ENV_VALUES["CODESS_STRICT_MAPPING"]
@@ -558,21 +567,21 @@ def get_state_path(project_path: Path) -> Path:
     return project_path / STORE_DIR / STATE_FILE
 
 
-def get_stats_path(registry_root: Path | None = None) -> Path:
+def get_stats_path(store_root: Path | None = None) -> Path:
     """Return path to ``ingested_projects.json`` — merged project registry.
 
     Updated by **scan** (index metrics), **ingest** (store counts), and **query**
     (for example, ``--stats``) via ``codess.registry_store``.
     """
-    root = registry_root if registry_root is not None else REGISTRY
+    root = store_root if store_root is not None else STORE_ROOT
     return root / STATS_FILE
 
 
 def validate_config() -> list[str]:
     """Return configuration errors. Empty if configuration is usable."""
     errs = list(_CONFIG_ERRORS)
-    if CODESS_DAYS < 0 or CODESS_DAYS > 3650:
-        errs.append(f"CODESS_DAYS={CODESS_DAYS} out of range [0, 3650]")
+    if DAYS < 0 or DAYS > 3650:
+        errs.append(f"CODESS_DAYS={DAYS} out of range [0, 3650]")
     if MIN_SIZE < 0:
         errs.append(f"CODESS_MIN_SIZE={MIN_SIZE} must be >= 0")
     for name, values in (

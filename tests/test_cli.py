@@ -134,7 +134,7 @@ def test_query_aggregates_multiple_project_roots():
             conn.commit()
             conn.close()
         registry = tmp / "registry"
-        env = {**os.environ, "CODESS_REGISTRY": str(registry)}
+        env = {**os.environ, "CODESS_STORE_ROOT": str(registry)}
         r = _run(
             ["query", "--dir", str(first), "--dir", str(second), "--stats"],
             env=env,
@@ -160,7 +160,7 @@ def test_query_aggregates_multiple_vendor_stores():
             insert_session(conn, f"s{index}", source="test", started_at=1)
             conn.commit()
             conn.close()
-        env = {**os.environ, "CODESS_REGISTRY": str(proj / "registry")}
+        env = {**os.environ, "CODESS_STORE_ROOT": str(proj / "registry")}
         r = _run(["query", "--dir", str(proj), "--stats"], env=env)
         assert r.returncode == 0
         assert "Sessions: 2" in r.stdout
@@ -195,7 +195,7 @@ def test_query_duplicate_session_ids_route_by_global_number():
             )
             conn.commit()
             conn.close()
-        env = {**os.environ, "CODESS_REGISTRY": str(proj / "registry")}
+        env = {**os.environ, "CODESS_STORE_ROOT": str(proj / "registry")}
 
         listed = _run(
             ["query", "--dir", str(proj), "--sessions", "--id"], env=env
@@ -249,7 +249,7 @@ def test_query_scales_beyond_sqlite_attach_limit():
         command = ["query", "--stats"]
         for project in roots:
             command.extend(["--dir", str(project)])
-        env = {**os.environ, "CODESS_REGISTRY": str(tmp / "registry")}
+        env = {**os.environ, "CODESS_STORE_ROOT": str(tmp / "registry")}
 
         r = _run(command, env=env)
 
@@ -272,7 +272,7 @@ def test_query_warns_for_root_without_store_and_counts_it_as_zero():
         conn.commit()
         conn.close()
         registry = tmp / "registry"
-        env = {**os.environ, "CODESS_REGISTRY": str(registry)}
+        env = {**os.environ, "CODESS_STORE_ROOT": str(registry)}
 
         r = _run(
             ["query", "--dir", str(populated), "--dir", str(empty), "--stats"],
@@ -483,7 +483,7 @@ def test_query_can_select_an_exact_retained_snapshot_without_registry_update():
         registry = root / "registry"
         result = _run([
             "query", "--dir", str(project), "--snapshot-id", snapshot.name,
-            "--registry", str(registry), "--stats",
+            "--store", str(registry), "--stats",
         ])
         assert result.returncode == 0
         assert "Sessions: 1" in result.stdout and "Events: 1" in result.stdout
@@ -622,7 +622,7 @@ def test_query_stats():
         shutil.copy(fixture, cc_dir / slug / "s1.jsonl")
         env = os.environ.copy()
         env["CODESS_CC_PROJECTS"] = str(cc_dir)
-        env["CODESS_REGISTRY"] = str(reg)
+        env["CODESS_STORE_ROOT"] = str(reg)
         _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
         r = _run(["query", "--dir", str(proj), "--stats"], env=env)
         assert r.returncode == 0
@@ -745,7 +745,7 @@ def test_cursor_container_limit_is_distinct_from_transcript_limit():
         env = {
             **os.environ,
             "CODESS_CURSOR_DATA": str(cursor_base),
-            "CODESS_REGISTRY": str(root / "registry"),
+            "CODESS_STORE_ROOT": str(root / "registry"),
         }
 
         transcript_limit = _run([
@@ -886,7 +886,7 @@ def test_force_ingest_discards_stale_store_content(durable_tmp_path):
         env={
             **os.environ,
             "CODESS_CC_PROJECTS": str(cc_projects),
-            "CODESS_REGISTRY": str(root / "registry"),
+            "CODESS_STORE_ROOT": str(root / "registry"),
         },
     )
 
@@ -933,7 +933,7 @@ def test_multi_project_reports_isolate_status_and_diagnostics(durable_tmp_path):
         env={
             **os.environ,
             "CODESS_CC_PROJECTS": str(cc_projects),
-            "CODESS_REGISTRY": str(root / "registry"),
+            "CODESS_STORE_ROOT": str(root / "registry"),
         },
     )
 
@@ -1025,7 +1025,7 @@ def test_ingest_validate_uses_real_adapter_without_mutation():
         source_dir.mkdir(parents=True)
         shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source_dir / "s1.jsonl")
         registry = root / "registry"
-        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_REGISTRY": str(registry)}
+        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_STORE_ROOT": str(registry)}
         result = _run(["ingest", "--validate", "--dir", str(project), "--source", "cc", "--min-size", "0"], env=env)
         assert result.returncode == 0, result.stderr
         report = json.loads(result.stdout.strip())
@@ -1052,7 +1052,7 @@ def test_ingest_validate_enforces_source_limit_without_mutation():
         source_dir = cc / path_to_slug(project.resolve())
         source_dir.mkdir(parents=True)
         shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source_dir / "s1.jsonl")
-        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_REGISTRY": str(root / "registry")}
+        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_STORE_ROOT": str(root / "registry")}
         result = _run(["ingest", "--validate", "--stop", "--dir", str(project), "--source", "cc", "--min-size", "0", "--max-source-bytes", "1"], env=env)
         assert result.returncode == 1
         assert "exceeds maximum" in result.stderr
@@ -1071,7 +1071,7 @@ def test_ingest_validate_reports_size_failure_as_possible_misclassification():
         env = {
             **os.environ,
             "CODESS_CC_PROJECTS": str(cc),
-            "CODESS_REGISTRY": str(root / "registry"),
+            "CODESS_STORE_ROOT": str(root / "registry"),
         }
         result = _run([
             "ingest", "--validate", "--dir", str(project), "--source", "cc",
@@ -1095,7 +1095,7 @@ def test_ingest_validate_enforces_event_limit_during_collection():
         source_dir = cc / path_to_slug(project.resolve())
         source_dir.mkdir(parents=True)
         shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source_dir / "s1.jsonl")
-        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_REGISTRY": str(root / "registry")}
+        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_STORE_ROOT": str(root / "registry")}
         result = _run([
             "ingest", "--validate", "--stop", "--dir", str(project),
             "--source", "cc", "--min-size", "0", "--max-events-per-source", "1",
@@ -1120,7 +1120,7 @@ def test_ingest_validate_enforces_session_event_limit_before_publish():
         env = {
             **os.environ,
             "CODESS_CC_PROJECTS": str(cc),
-            "CODESS_REGISTRY": str(root / "registry"),
+            "CODESS_STORE_ROOT": str(root / "registry"),
         }
         result = _run([
             "ingest", "--validate", "--stop", "--dir", str(project),
@@ -1143,7 +1143,7 @@ def test_ingest_validate_content_policy_does_not_touch_live_store():
         source_dir = cc / path_to_slug(project.resolve())
         source_dir.mkdir(parents=True)
         shutil.copy(Path(__file__).parent / "fixtures/sample.jsonl", source_dir / "s1.jsonl")
-        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_REGISTRY": str(root / "registry")}
+        env = {**os.environ, "CODESS_CC_PROJECTS": str(cc), "CODESS_STORE_ROOT": str(root / "registry")}
         before = live_store.stat().st_mtime_ns
         result = _run([
             "ingest", "--validate", "--dir", str(project), "--source", "cc",
@@ -1170,7 +1170,7 @@ def test_routine_ingest_writes_resource_and_evidence_report(durable_tmp_path):
     env = {
         **os.environ,
         "CODESS_CC_PROJECTS": str(cc),
-        "CODESS_REGISTRY": str(root / "registry"),
+        "CODESS_STORE_ROOT": str(root / "registry"),
     }
     result = _run(
         ["ingest", "--dir", str(project), "--source", "cc", "--min-size", "0"],
@@ -1251,7 +1251,7 @@ def test_unchanged_ingest_reuses_snapshot_evidence_summary(durable_tmp_path):
     env = {
         **os.environ,
         "CODESS_CC_PROJECTS": str(cc),
-        "CODESS_REGISTRY": str(root / "registry"),
+        "CODESS_STORE_ROOT": str(root / "registry"),
     }
     first = _run(command, env=env)
     assert first.returncode == 0, first.stderr
@@ -1285,7 +1285,7 @@ def test_candidate_ingest_builds_snapshot_without_publishing_pointers(durable_tm
     env = {
         **os.environ,
         "CODESS_CC_PROJECTS": str(cc),
-        "CODESS_REGISTRY": str(root / "registry"),
+        "CODESS_STORE_ROOT": str(root / "registry"),
     }
     command = [
         "ingest", "--dir", str(project), "--source", "cc",
@@ -1339,7 +1339,7 @@ def test_no_progress_suppresses_live_lines_but_retains_trace(durable_tmp_path):
         env={
             **os.environ,
             "CODESS_CC_PROJECTS": str(cc),
-            "CODESS_REGISTRY": str(root / "registry"),
+            "CODESS_STORE_ROOT": str(root / "registry"),
         },
     )
 
@@ -1405,7 +1405,7 @@ def test_query_vendor_filter_stable_session_id_sequence_and_csv():
         conn.commit()
         conn.close()
         registry = project / "registry"
-        env = {**os.environ, "CODESS_REGISTRY": str(registry)}
+        env = {**os.environ, "CODESS_STORE_ROOT": str(registry)}
 
         sessions = _run([
             "query", "--dir", str(project), "--source", "cursor",

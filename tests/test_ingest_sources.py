@@ -81,9 +81,9 @@ def project_entry(project_path: Path) -> dict:
     exercise the same identity and location record the command layer supplies;
     a hand-written entry would drift from the catalog contract unnoticed.
     """
-    registry_root = project_path.parent / "_registry"
-    registry_root.mkdir(parents=True, exist_ok=True)
-    return ensure_project_binding(registry_root, project_path)
+    store_root = project_path.parent / "_registry"
+    store_root.mkdir(parents=True, exist_ok=True)
+    return ensure_project_binding(store_root, project_path)
 
 
 def make_store(project_path: Path, display: str) -> Path:

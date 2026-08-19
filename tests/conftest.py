@@ -55,7 +55,7 @@ def pytest_configure(config):
 @pytest.fixture(autouse=True)
 def isolate_codess_registry(tmp_path, monkeypatch):
     """No test or subprocess may mutate the operator's personal catalog."""
-    monkeypatch.setenv("CODESS_REGISTRY", str(tmp_path / "codess-registry"))
+    monkeypatch.setenv("CODESS_STORE_ROOT", str(tmp_path / "codess-registry"))
 
 
 @pytest.fixture

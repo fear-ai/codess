@@ -49,7 +49,7 @@ or what blocks it; the queue says that.
 
 ## Open Items
 
-Sixteen items, ordered by identifier. Read the queue for what to do next and
+Ordered by identifier, which is stable. Read the queue for what to do next and
 [Item Detail](#item-detail) for scope and evidence.
 
 | ID | Priority | Status | Work | Blocked by |
@@ -64,11 +64,12 @@ Sixteen items, ordered by identifier. Read the queue for what to do next and
 | W50 | Normal | Planned | Reconcile schema names with defined terminology | Batches with W51 |
 | W51 | Normal | Planned | Resolve source-identity naming and suffix rules | Batches with W50 |
 | W55 | Normal | Planned | Unify text and record parsing across the decode layer | -- |
-| W64 | Normal | Planned | Decide and enforce the typing posture | W04 |
+| W64 | Normal | Planned | Decide and enforce the typing posture | -- |
 | W65 | Normal | Planned | Consolidate remaining relay parameter groups | W04 (partly) |
 | W66 | High | Planned | Unify configuration into one subsystem | -- |
 | W67 | Normal | Planned | Move relay fields into the objects that carry them | -- |
 | W70 | Normal | Planned | Re-partition documentation; remove cross-document redundancy | -- |
+| W72 | Normal | Planned | One Event-record builder per adapter; Cursor has none | -- |
 | W71 | Normal | Planned | Adopt the reporting facility in the command layer | -- |
 
 ## Queue
@@ -81,9 +82,9 @@ not a preference.
 | 1 | **W05** | The only item whose output is evidence about whether the query surface answers real questions rather than machinery that supports them. Needs no rebuild: format-6 stores exist and are audited, so the work starts against current data. |
 | 2 | **W04** | Structural, and coverage reporting states loss against exactly the profiles it enforces -- a report built against unenforced profiles attests to nothing. Baseline 2's substance. |
 | 3 | **W50 + W51** | The naming resolutions format 6 did not carry. Both are wire-format, so they land together as one rebuild or they cost two. |
-| 4 | **W67** | Immediate and mechanical: each relay already has an object to take, and the measurement separating a relay from a builder is written down. Above the configuration work because it is the smaller half of the same problem and does not wait on it. |
-| 5 | **W66** | The largest structural item, and the one whose absence keeps producing the defects above. Below W67 only because `ChildInvocation` already proved the shape on the argv half. |
-| 6 | **W64 + W65** | After W04, which changes the decode boundary a third of the type errors sit behind; deciding the strict-flag set first would decide it against a boundary about to move. W65's record-context cluster is adapter signatures, so consolidating first rewrites them twice. |
+| 4 | **W66** | The largest structural item, and now the prerequisite rather than the sequel: W67's objects are built at the command adapter from values a setting declaration owns, so declaring each setting once must come first or the object's constructor encodes the current duplication. |
+| 5 | **W67** | Follows W66 directly and is mechanical once it lands: each relay already has an object to take, the measurement separating a relay from a builder is written down, and the five shared parameters are the same subset `ChildInvocation` carries. |
+| 6 | **W64 + W65** | W65's record-context cluster is adapter signatures, so consolidating before W04 rewrites them twice. W64 no longer waits on W04 -- what remains after the naming pass is dominated by optional-narrowing, which is what `strict_optional` decides -- but it is cheapest once the signatures have settled. |
 
 **Not queued**, each for a stated reason rather than for lack of room:
 
@@ -175,11 +176,15 @@ either not started or has a stated boundary.
 
 | Work | Stopping point | Item |
 |---|---|---|
-| Naming convention applied codebase-wide | Written and mechanically enforced for the two cases a checker catches: a parameter shadowing a builtin (ruff `A`), and a name rebound to a different type (mypy `assignment`). The subject-word and general-word rules are **not** applied to existing names. | W64 |
+| Naming convention applied codebase-wide | Enforced for the two cases a checker catches, and both now report zero: builtin shadowing (ruff `A`) and a name rebound to a different type (mypy `assignment`). The subject-word and general-word rules are **not** applied to existing names, which is a wide diff with no behavioural content. | W64 |
 | Relay parameter consolidation | `run_ingest` converted as the worked example. Five further relays identified and untouched. | W67 |
 | Configuration unification | Measured and not begun. | W66 |
 | mypy strict flags | The count was reduced by repair rather than reclassification. Which flags to enable is undecided. | W64 |
 | Record-context parameter group | Identified; blocked behind W04 because it changes adapter signatures. | W65 |
+| Docstring summaries (`D205`) | The rule is selected and its 111 findings are a recorded ceiling, not zero. Four docstrings in `field_state` were rewritten as the worked example; the rest fall as files are edited. | -- |
+| Command-layer help text | 74 flags in `admin_cmd` carry no help, and `project.py` documents all of its own. Two were written where a verification step was being disabled; the remaining 72 are untouched, and `parents=` would let one declaration carry one help string to every subcommand. | W66 |
+| Event-record builders | `cursor` has no module-level builder and `cc`/`codex` have sites that bypass theirs. Found by `pylint R0801`, not started. | W72 |
+| Deep audit adoption | `tools/deep_audit.py` runs and logs; nothing yet acts on its DESIGN tier -- 444 `PLR`, 385 `TRY`, 73 `C901`, 16 duplicate clusters are reported and unqueued. | -- |
 
 ## Item Detail
 
@@ -393,8 +398,134 @@ inventory and the rule each method follows.
 | Candidate | Detail |
 |---|---|
 | MCP server split | Implemented twice, in `store._tool_namespace` and `mcp_audit._mcp_candidate`, against the same three vendor spellings |
-| Timestamp parsing | In all three adapters with differing fallbacks, where one bounded parser would serve |
+| Timestamp parsing | Three parsers and three direct `fromisoformat` callers, disagreeing on three input classes -- see below |
 | Codex output header | The only free-text regex carrying decoded fields; keep the regex, move its field table beside the other vendor vocabularies |
+
+**Time is the largest instance, and it is three parsers rather than two.**
+`adapters/cc._parse_timestamp`, `adapters/codex._parse_timestamp`, and
+`cursor_source.parse_timestamp` -- the last imported by `adapters/cursor` --
+plus three further modules calling `datetime.fromisoformat` directly
+(`walk_sessions`, `token_usage`, `refresh_receipts`).
+
+They agree on ISO-8601 and disagree on three input classes:
+
+| Input | `cc` | `codex` | `cursor` |
+|---|---|---|---|
+| `"2026-01-01T00:00:00Z"` | 1767225600000.0 | 1767225600000.0 | 1767225600000.0 |
+| `1700000000` (seconds-scale) | **1700000000.0** | 1700000000000.0 | 1700000000000.0 |
+| `1700000000000` (ms) | 1700000000000.0 | 1700000000000.0 | 1700000000000.0 |
+| `True` | **1.0** | None | None |
+| `"  ...Z  "` (padded) | None | None | **1767225600000.0** |
+| `"1700000000000"` (numeric string) | None | None | None |
+
+`codex` and `cursor` scale a value below `1e12` from seconds to milliseconds and
+reject `bool` before the numeric branch; `cc` does neither, so a seconds-scale
+number is stored a thousand times too small and `True` becomes
+1970-01-01T00:00:00.001. Only `cursor` strips surrounding whitespace. None
+accepts a numeric string, which is a fourth unstated decision rather than an
+agreement.
+
+**The seconds-scale case is reachable in principle.** `fileMtime` is a
+POSIX mtime, which is seconds-scale and therefore below `1e12`;
+`walk_sessions` compares it against a millisecond cutoff. Whether Claude ever
+writes a seconds-valued `timestamp` is not established -- what is established
+is that if one arrived, `cc` would store it unscaled and the other two would
+not.
+
+**No stored data is affected today**: across 141,753 Events carrying a time in
+the current stores, none falls outside 2000-2100, so no vendor has yet supplied
+a shape that triggers the disagreement. The defect is that the answer depends on
+which adapter read the value, and nothing records which behaviour was intended.
+
+**Time fields are more numerous than the parsers suggest**, which is why one
+shared parser is worth more here than in the other parsing clusters: `timestamp`,
+`fileMtime`, `createdAt`, `lastUpdatedAt`, `clientStartTime`, `started_at`,
+`completed_at`, `started_at_ms`, `completed_at_ms`, `occurred_at_ms`,
+`durationMs`, `time_to_first_token_ms`, and `source_mtime` are all read from
+vendor records, in seconds, milliseconds, nanoseconds, and ISO text.
+
+#### Requirements for the Shared Time Normalizer
+
+Each row is a decision the three parsers currently make differently or leave
+unstated. A normalizer that does not answer all of them reproduces the problem
+under one name.
+
+| # | Requirement | Why, and what breaks without it |
+|---|---|---|
+| R1 | Accept ISO-8601 text, epoch seconds, and epoch milliseconds; return Unix milliseconds as `float` | `events.event_at` is `REAL` holding milliseconds, so the return unit is fixed by the store rather than chosen |
+| R2 | A naive ISO string is read as UTC, and that assumption is recorded | All three parsers already do this. Unrecorded, a local-time stamp shifts by the reader's offset with nothing saying it was assumed |
+| R3 | State the seconds/milliseconds boundary as a named constant, not an inline `1e12` | `codex` and `cursor` scale below `1e12`; `cc` does not. The threshold is a decision about which epoch range is plausible and belongs where it can be read |
+| R4 | Reject `bool` before the numeric branch | `True` is an `int` in Python, so `cc` returns `1.0` -- 1970-01-01T00:00:00.001 -- for a flag misread as a time |
+| R5 | Decide numeric strings explicitly | No parser accepts `"1700000000000"` today. That agreement is accidental: three independent omissions, not a stated rule |
+| R6 | Decide surrounding whitespace explicitly | Only `cursor` strips it, so the same padded value parses from one vendor and not another |
+| R7 | Return `None` for every unparseable input; never raise | Callers treat `None` as "no time" and pair it with a field state. An exception would abort a decode over one bad field |
+| R8 | Never infer a time from another value | Codess does not derive time from ordering, adjacency, or file position; the normalizer must not become the place that starts |
+
+**Deliberately out of scope**, because these are the caller's:
+
+- *Which field to read.* `timestamp`, `createdAt`, `clientStartTime`, and the
+  rest are vendor knowledge and stay in the adapters.
+- *What a failure means.* The `field_state` upgrade from `present` to
+  `malformed` needs the expected type, which only the calling parser knows.
+- *Which basis was used.* `events.event_at_basis` records how a time was
+  obtained; that is a mapping decision, not a parsing one.
+
+#### Where It Applies
+
+| Site | Today | After |
+|---|---|---|
+| `adapters/cc._parse_timestamp` | Own implementation, no scaling, accepts `bool` | Calls the normalizer |
+| `adapters/codex._parse_timestamp` | Own implementation, scales, rejects `bool` | Calls the normalizer |
+| `cursor_source.parse_timestamp` | Own implementation, scales, strips whitespace | Calls the normalizer |
+| `walk_sessions` | `fromisoformat` inline on a session index | Calls the normalizer |
+| `token_usage` | `fromisoformat` inline on usage records | Calls the normalizer |
+| `refresh_receipts` | `fromisoformat` inline on receipt text | Calls the normalizer |
+
+The thirteen time-bearing vendor fields -- `timestamp`, `fileMtime`,
+`createdAt`, `lastUpdatedAt`, `clientStartTime`, `started_at`, `completed_at`,
+`started_at_ms`, `completed_at_ms`, `occurred_at_ms`, `durationMs`,
+`time_to_first_token_ms`, `source_mtime` -- are read by those six sites, so
+consolidating the parsers covers all of them without touching field selection.
+
+**One related defect is a naming problem rather than a parsing one, and stays
+with W50/W51**: `sessions.started_at` is `REAL` while
+`processing_runs.started_at` is `TEXT`, so one column name denotes two
+representations. The normalizer does not fix that; a rename does.
+
+#### Validation
+
+- A table of inputs to expected outputs, one row per requirement above,
+  including the three inputs the current parsers disagree on.
+- A test asserting no module outside the normalizer calls `fromisoformat` or
+  defines its own `_parse_timestamp`, in the shape the layer-boundary tests
+  already use -- otherwise a fourth parser appears the way the third did.
+- Re-ingest one Project per vendor and confirm `event_at` values are unchanged,
+  since a parser change that alters stored times is a wire-format change rather
+  than a consolidation.
+
+**Nothing in this is specific to Codess**, which decides where it lives.
+`_parse_timestamp` reads a value that may be ISO text, epoch seconds, or epoch
+milliseconds and returns milliseconds; that is a general problem, and the five
+decisions above are general decisions. The Codess-specific part is only *which
+field to read* and *what a failure means* -- the `field_state` upgrade to
+`malformed`, and the diagnostic that records it.
+
+So the split is: a self-contained normalizer with no Codess import, taking a
+value and a stated contract; and the existing per-adapter code that selects the
+field and reports the outcome. That keeps the vendor knowledge in the adapters
+and makes the normalizer testable against a table of inputs rather than against
+a decoded record.
+
+Whether it becomes a separate distribution is a later question with a higher
+bar -- a published package needs a maintainer and a versioning commitment. The
+first step is the internal module boundary, which is worth having regardless
+and is a precondition for extraction either way.
+
+**Time is the only candidate here with that property.** The MCP server split
+matches three vendor spellings of a prefix, and the Codex output header parses
+one product's free-text block; both are worth consolidating and neither means
+anything outside this codebase. That difference is what makes time worth a
+module rather than a helper function.
 
 **Also assess** whether a library replaces hand-rolled work -- `email.parser` or
 `dateutil` for the timestamp fallbacks -- and whether SQLite's own JSON functions
@@ -413,9 +544,11 @@ complete: every function has a return type and every argument has one.
 **Three decisions.**
 
 1. *Which strict flags to enable.* `disallow_untyped_defs` is within reach.
-   `strict_optional` and `warn_return_any` were deferred to W04 on the grounds that
-   errors concentrate at the decode boundary, which is measurably false -- a
-   majority sit outside it.
+   `strict_optional` and `warn_return_any` were deferred to W04 on the grounds
+   that errors concentrate at the decode boundary, which is measurably false --
+   a majority sit outside it. What remains after the naming and annotation pass
+   is dominated by optional-narrowing, which is exactly what `strict_optional`
+   decides, so this item no longer waits on W04 for its evidence.
 2. *Where `Any` is honest.* One explicit `Any` on the heterogeneous env-value table
    removed 50 spurious errors. The rule wants stating: `Any` at a deliberately
    heterogeneous boundary is documentation, `Any` threaded onward is an escape.
@@ -482,9 +615,280 @@ it should be stated once.
 **Also in scope.** A config file admitted as a source, which no current path
 supports.
 
+**How the duplication arose.** Not by neglect -- by the absence of a mechanism.
+`admin_cmd` builds **40 subparsers** and declares **157 flags inside them**,
+and nothing in the file uses argparse's own `parents=` facility for shared
+options -- verified to do exactly this job: one declaration on a parent parser,
+inherited by every subparser that lists it. So a new subcommand that needs `--registry` gets it the only way the
+surrounding code demonstrates: by writing the line again. Sixteen subcommands
+need it, so the line exists sixteen times. Each addition was locally correct and
+matched its neighbours; the pattern that was being matched is the defect.
+
+That is the same mechanism CoPlan records for the snapshot file literals: a
+module needs one fact, an inline declaration is smaller than a shared-code
+change, and repetition across many small additions produces the duplication
+without any single change being wrong. It predicts where to look next --
+wherever a construct is built dozens of times with no shared helper.
+
+**Argument audit: nothing is obsolete, and that is the finding.** All 172
+distinct destinations are read somewhere in `src/`; none is dead. But the *way*
+they are read splits into two populations:
+
+| Reads via `args.X` | Dests | What it means |
+|---|---|---|
+| 0 | 13 | Reached only through the `settings` bag or `flag_or_env` |
+| 1 | 82 | Read at one call site and passed on |
+| 2 or more | 77 | Read at several sites; the top one is read 25 times |
+
+The thirteen -- `--debug`, `--redact`, `--strict-mapping`, `--subagent`,
+`--validate-only`, `--no-hash`, `--version`, `--session-relation`, and the five
+`--max-*` bounds -- each reach a real consumer, so none should be removed.
+
+**Two options go the other way: read but never set.** `opts` is queried for
+`include_product_state` and `max_external_content_bytes`, and nothing in `src/`
+writes either, so one is always its `True` default and the other always `None`.
+Both have correct fallbacks, so behaviour is right; both are unreachable by an
+operator and invisible as inert to a reader. Declare them in the table or
+delete them -- an undeclared setting that cannot be set is neither. What
+they demonstrate is the cost of the bag: a reader grepping `args.debug` finds
+nothing and concludes the flag is dead, when it is read as `settings["debug"]`
+two layers away. The setting table fixes this as a side effect, since a declared
+setting names its own consumer.
+
+**No flag should be declared twice for the same setting.** The 25 duplicated
+names are all one setting reached from several subcommands, so `parents=`
+removes every one of them without changing a single `--help` line: argparse
+renders an inherited option exactly as a locally declared one. The duplication
+is a source-code fact, not a user-visible one, so the fix is in the declaration
+and the help text is what must stay identical.
+
+One flag previously carried two superseded spellings --
+`--snapshot-contract-policy` and `--snapshot-package-policy` -- and both are
+now gone in favour of `--snapshot-policy`. An alias is only worth keeping where
+a caller's script would break, and neither spelling had reached that status.
+
+**Every `--no-` flag, and what it turns off.** Seven, and they are not one
+family: five disable a check or an output, two invert a default.
+
+| Flag | Command | Disables | Stated |
+|---|---|---|---|
+| `--no-hash` | ingest, query | Snapshot and manifest hash verification on read | Yes, with "recovery/debugging only" |
+| `--no-check` | ingest, query | The released-contract verification | Yes, with "tests and recovery" |
+| `--no-resource` | ingest | Transcript, container, event, and context maximums | Yes |
+| `--no-progress` | ingest | Live progress on stderr, keeping the structured trace | Yes |
+| `--no-propose` | `config discovery` | Reading the work root to propose exclusions | Yes |
+| `--no-record` | `storage report` | Writing the observation | Yes, added |
+| `--no-smoke` | `baseline apply` | The post-apply query check | Yes, added |
+
+Two carried no help at all, and both gate a verification step -- exactly where
+an operator most needs to know what is being skipped. Both are now documented;
+the first four already said what they bypass *and* that a bypass is logged,
+which is the standard.
+
+**The gap is wider than those two.** 74 flags carry no help text, and **every
+one is in `admin_cmd`** -- `project.py` documents all of its own. So the
+administrative surface is undocumented as a class, not by oversight in a few
+places: `--registry`, `--source`, `--force`, `--min-size`, and `--raw-mode` are
+among them, which is the same set the duplication concentrates in. A flag
+declared sixteen times with no help is sixteen chances to write one and none
+taken.
+
+This is what makes `parents=` worth more than the deduplication itself: one
+declaration carries one help string to every subcommand that inherits it, so
+documenting the shared options is a single edit rather than sixteen.
+
+**The naming, settled before the table generates anything.** Three questions,
+and they resolve together.
+
+*First: `.codess` is a depository, not a store or a registry.* It sits beside
+the work it describes, exactly as `.git` does, and holds derived state a tool
+owns rather than content a person edits. `depository`/`depo` parallels
+`repository`/`repo` and is the honest word: a repository holds the work, a
+depository holds what a tool deposited about it. `STORE_DIR = ".codess"` is
+currently named for one of the things inside it -- the stores -- which is the
+same part-for-whole error as calling the directory a registry.
+
+*Second: the two `.codess` directories are not the same kind of thing, and
+neither is config or state.* Measured rather than assumed: the machine-level
+directory is **58 GB, of which 57 GB is `projects/`** -- published store sets,
+one per Project. It is a store first and everything else second.
+
+| | Per-Project `<project>/.codess` | Machine `~/.codess` |
+|---|---|---|
+| Bulk | Working stores and their snapshots | Published store sets, one per Project |
+| Also holds | Current pointer, ingest state, last report | Project catalog, activity index, receipts, reports, retention, raw capture, quarantine, `machine-id` |
+| Scope | One Project | One machine |
+| Lifetime | Deleted with the checkout | Outlives every Project it records |
+
+**The two are not duplicates.** A Project's `current.json` points *into* the
+machine directory: the working store is beside the checkout, and the published
+one the pointer selects is central. `project_catalog.durable_project_root`
+already names that half "durable", which is the distinction the directory names
+do not carry.
+
+So a `config`/`state` name would misdescribe both -- neither is predominantly
+either, and configuration reaches Codess through the environment and flags
+rather than a file in these directories. `depo` fits the per-Project side, where
+a tool deposits what it derived beside the work. For the machine side the honest
+word is the one already in the code: it holds **durable stores**.
+
+| Now | Proposed | Is |
+|---|---|---|
+| `STORE_DIR` (`.codess`) | `PROJECT_DEPO` | The Project depo, beside the work: working stores and a pointer |
+| `REGISTRY` / `registry` / `registry_root` | `DURABLE_STORE` / `store_root` | The machine's durable store, `~/.codess` |
+| `ingested_projects.json` (`STATS_FILE`) | *the activity index* | Per-Project scan/ingest/query timestamps and counts |
+| `projects.json` | *the registry* | Project identity, locations, aliases, workspace bindings |
+| `registry_store` (module) | `activity_index` | Reads and writes the activity index, not the registry |
+| `--registry` | `--store` | Selects the machine's durable store |
+
+**Confirming what "registry" means: central information about every Project and
+its status -- yes, and the two files that hold it are separately justified.**
+
+| File | Keyed by | Holds | Written by |
+|---|---|---|---|
+| `projects.json` | `project_id` | Identity: locations, logical name, path aliases, workspace bindings | Catalog operations only -- onboarding, relocation, retirement |
+| `ingested_projects.json` | `path` | Status: `sources`, `last_scan`, `last_ingestion`, `last_query`, and counts | Every `scan`, `ingest`, and `query` run |
+
+**They are not a split that should be merged.** Three measured reasons:
+
+1. *Different keys, and the difference is the point.* The catalog is keyed by
+   `project_id` and carries a `locations` list, because one Project can be
+   checked out in several places. The status file has **no `project_id` field on
+   any entry** -- it is keyed by path, so it cannot express that model at all.
+   Merging would either force a path-keyed file to grow an identity it does not
+   have, or force identity records to carry per-path activity they do not own.
+2. *Different write cadence.* The status file is written by every scan, ingest,
+   and query -- three commands, every run. The catalog is written only when a
+   Project's identity changes. Merging puts a high-frequency append in the same
+   document as the record that must not be lost, and a crash during one would
+   risk the other.
+3. *Different populations, already.* 32 catalog entries against 31 status
+   entries, and nine paths appear in status with no catalog location --
+   `~/.codex` and `~/.openclaw-repo/workspace` among them, which are directories
+   holding Sessions but never onboarded as Projects. That is correct behaviour:
+   activity is observable before identity is established.
+
+Neither module reads the other's file, so the separation is real in the code and
+not only on disk.
+
+**Naming them.** `ingested_projects.json` is wrong twice over: it is written by
+`scan` and `query` as well as `ingest`, so "ingested" names one of its three
+writers; and its subject is what has happened to a Project, not which Projects
+were ingested. `projects_state.json` fixes both -- the subject is Project state,
+and no writer is privileged. Paired with `projects.json` for identity, the two
+read as what they are.
+
+| Now | Proposed | Is |
+|---|---|---|
+| `projects.json` | `projects.json`, unchanged | The registry: which Projects exist and where |
+| `ingested_projects.json` (`STATS_FILE`) | `projects_state.json` (`PROJECT_STATE_FILE`) | Per-Project status: what was scanned, ingested, queried, and when |
+| `registry_store` (module) | `project_state` | Reads and writes that file |
+
+`STATS_FILE` is also a poor constant name: the file holds timestamps and source
+lists as well as counts, so "stats" describes one column family rather than the
+document.
+
+**How the vendors name theirs, checked rather than assumed.** All three keep a
+per-user home directory of the same shape -- `~/.claude`, `~/.codex`,
+`~/.cursor` -- each mixing configuration, credentials, caches, and session data,
+and none names it in its own documentation. Claude Code additionally supports an
+optional per-directory `.claude`, but it carries *settings* only: this
+repository's holds one file, `settings.local.json`. That is the inverse of the
+split here, where both halves are bulk data. So there is no vendor term to
+borrow, and the two-level split Codess uses is its own.
+
+**"Primary paths" is the wrong label, and one vendor document already does
+better.** CCSchema and CodexSchema head a table row with **Primary paths**,
+which says neither whose paths they are nor what makes them primary -- there is
+no secondary set to contrast with. CursorSchema does not use the row at all: it
+has a section called **Source Scope and Locations** and a table headed **Default
+base**, which name the subject and admit that the value is a default an
+environment variable overrides.
+
+| Now | Proposed | Why |
+|---|---|---|
+| **Primary paths** | **Source locations** | Names the subject -- these are where a vendor's Sources are found. "Source" is the defined entity, so the row inherits its meaning |
+| (Cursor's) **Default base** | **Default base**, unchanged | Already correct: a base that a platform sets and configuration overrides |
+
+Apply the same row to all three vendor documents so a reader comparing them
+reads one heading, and state the override variable in the row as CCSchema
+already does.
+
+*Third: `storage registry-prune` names its object, not its subject, and the
+verb collides.* Two subcommands prune:
+
+| Subcommand | Removes | Because |
+|---|---|---|
+| `storage prune` | Retained snapshots under the depository | Retention policy says they are superseded |
+| `storage registry-prune` | Entries in the Project index | Their Project path no longer exists |
+
+Same verb, different objects, and neither name says which. The second is not
+pruning a registry -- it is removing index entries that no longer refer to
+anything, which is a *reconciliation* against the filesystem rather than a
+retention decision. Proposed:
+
+| Now | Proposed | Reads as |
+|---|---|---|
+| `storage prune` | `storage prune-snapshots` | Apply retention to retained snapshots |
+| `storage registry-prune` | `registry reconcile` | Drop index entries whose Project is gone |
+
+`reconcile` states the subject: the index is being made to agree with the
+filesystem. It also admits the operation's other half honestly -- an entry
+pointing at a moved Project is as stale as one pointing at a deleted Project,
+and a verb meaning "remove" cannot describe fixing it, while a verb meaning
+"agree with what is there" can.
+
+Moving it out of `storage` and under `registry` follows from the first two
+answers: `storage` is about the depository's bytes, and this operation is about
+the index's accuracy.
+
+**How to do it.** Six steps, each leaving the suite green, so the work can stop
+between any two.
+
+| Step | Work | Checked by |
+|---|---|---|
+| 1 | Extend `config`'s existing env table to a **setting table**: one row per setting naming its env var, flag, type, default, and which commands accept it. The table exists and is table-driven already; what it lacks is the flag half. | A test asserts every row is well-formed and no two rows share a flag |
+| 2 | Emit the argparse declarations **from** the table rather than by hand, one helper per command family. | `--help` output is byte-identical before and after, per command |
+| 3 | Resolve the three `--registry` variants into the one the table declares. | Below |
+| 4 | Replace the `getattr(args, ..., None) or CONSTANT` sites with one accessor that applies the stated precedence. | A test covers each precedence pair: flag over env, env over built-in |
+| 5 | State the import-order constraint once, and give the two flags that work around it a supported path. | The `os.environ[...] = "1"` writes in `project.parse_and_run` are gone |
+| 6 | Admit a config file as a source, between built-in and environment. | A file-set value loses to both the env var and the flag |
+
+**Step 3 is a real defect, not a tidy-up.** `--registry` is declared **16
+times** across two modules in three incompatible forms:
+
+| Form | Where | Consumed by |
+|---|---|---|
+| `type=Path, default=REGISTRY` | `admin_cmd`, 14 subcommands | `args.registry` directly, so it must be a `Path` |
+| `type=str, default=None` | `project.py` | `resolve_registry_directory`, which accepts `str \| None` |
+| `type=Path, required=True` | `admin_cmd`, one subcommand | `args.registry` directly |
+
+A caller moving between command families gets a different type from the same
+flag name. The table settles it: declare `Path` with the `REGISTRY` default and
+route every consumer through `resolve_registry_directory`, which already
+normalizes both.
+
+**Step 5, stated exactly.** `config`'s constants resolve at import, which is
+before a flag is parsed. Two flags therefore work around it by writing the
+environment variable their reader observes -- `project.parse_and_run` sets
+`CODESS_NO_CONTRACT_CHECK` and `CODESS_NO_HASH` so `schema_contract` and
+`fileio` see them. Both comments say this correctly; neither is wrong. The
+constraint is that a **leaf module cannot import `config`**, so it reads the
+environment directly and a flag has to reach it that way. The fix is not to
+remove the workaround but to make it the declared mechanism: a setting marked
+as leaf-visible is written to the environment by the resolver, once, instead of
+by two hand-written assignments.
+
+**Scope check.** 257 `add_argument` calls across exactly two files; 152 distinct
+flags of which **25 are declared more than once**; 133 `getattr(args, ...)`
+sites. The duplication is concentrated -- `--registry` 16, `--output` 11,
+`--project-id` 8, `--catalog`/`--source`/`--resource-policy`/`--project` 4 each
+-- so eight names account for more than half of it.
+
 **Evidence to close.** One declaration per setting names its flag, variable,
 default, and type; precedence is stated and tested; no module reads `os.environ`
-for a declared setting; a flag name appears in exactly one module.
+for a declared setting except through the leaf-visible mechanism step 5 defines;
+a flag name appears in exactly one module.
 
 **Precedent.** `ChildInvocation` is the shape for the argv half and is done.
 
@@ -510,9 +914,163 @@ all 19 into its returned dict; an object would name the same fields twice. The
 distinction is measurable -- parameters reaching a literal against parameters
 reaching another call -- and is the rule to apply.
 
+**Proposed structures.** Three, and the partition between them is by *lifetime*
+-- when the value is decided and when it stops being true -- because that is the
+axis the existing structures already use and the one the current dicts blur.
+
+| Structure | Holds | Decided | Mutability | Modelled on |
+|---|---|---|---|---|
+| `RunPolicy` | `registry`, `repo_root`, `min_size`, `raw_mode`, `resource_policy`, `force`, `timeout_seconds`, `source` | Once, before the first Project | `frozen` | `ChildInvocation` |
+| `ProjectRef` | `path`, `project_id`, `location_id`, `index`, `total` | Per loop iteration | `frozen` | `ProjectScope` |
+| `DiscoveryPolicy` | `roots`, `vendor_filter`, `recent_days`, `include_git`, `discover_git`, `max_depth`, `check_remotes`, `max_directories`, `deadline_seconds`, `same_filesystem` | Once, before traversal | `frozen` | `ResourcePolicy` |
+
+**Why these three and not one.** `RunPolicy` and `DiscoveryPolicy` are both
+run-lifetime and could merge, but they have different subjects and different
+consumers: discovery bounds a filesystem walk and is read only by
+`review_project`, while `RunPolicy` describes what an ingest does and is read by
+four modules. Merging them would put a `deadline_seconds` that bounds a walk
+beside a `timeout_seconds` that bounds a child process -- two unrelated bounds
+one field apart, which is the collision the naming rules exist to prevent.
+
+**Verified against what exists, and one is already built.** `ChildInvocation`
+holds `registry`, `repo_root`, `min_size`, `resource_policy`, `force`,
+`raw_mode`, and `timeout_seconds` -- every field `RunPolicy` would carry.
+`refresh_operations._run_project_ingest` takes eight parameters and immediately
+packs seven into a `ChildInvocation`; `refresh_projects` takes seventeen and
+threads them down two layers to do it. So `RunPolicy` should not be a new
+class: the relays should take `ChildInvocation`, which is what `run_ingest`
+already did when it went from eight parameters to one.
+
+That leaves the partition question sharper. `ChildInvocation` currently mixes
+two subjects -- a *policy* (`registry`, `repo_root`, `min_size`, `raw_mode`,
+`force`, `resource_policy`, `timeout_seconds`) and a *target* (`projects`,
+`vendor_selector`, `validate`). The policy half is identical across every
+Project in a run; the target half changes per invocation.
+
+**The two `_run_project_ingest` call sites are the evidence.** Both pass the
+same six policy arguments verbatim, differing only in `validate` and the loop
+variable:
+
+```python
+result = _run_project_ingest(
+    project, validate=True, registry=registry,
+    repo_root=repo_root, min_size=min_size, force=force,
+    resource_policy=resource_policy, timeout_seconds=timeout_seconds,
+)
+```
+
+Six of the eight arguments carry no information at either site -- they restate
+what the enclosing `refresh_projects` was given seventeen parameters earlier.
+With the split, both become `_run_project_ingest(project, policy,
+validate=...)`. Do the split before adding callers, not after.
+
+**Field ownership, checked against the existing structures.**
+
+| Field | Belongs to | Not to | Because |
+|---|---|---|---|
+| `raw_records`, `raw_store`, `content_actions` | `ProjectScope` | `IngestConfig` | Replaced every iteration; a carried-over value attributes one Project's evidence to the next |
+| `outcome`, `diagnostics` | `RunTotals` | `IngestConfig` | Mutated in place; the read-only and mutable halves are deliberately separate |
+| `options`, `sources`, `registry_root` | `IngestConfig` | `RunTotals` | Decided before the first Project and unchanging |
+| `store_path`, `__getitem__` | `StoreLocator` protocol | `IngestConfig` directly | Publication needs two members, so the dependency points into the domain rather than back out |
+| `workspace_ids`, `global_db` | `CursorSelection` | `IngestConfig` | Vendor-specific selection, owned by the module that reads the vendor store |
+
+Each of those five is already correct. The gap is not that the vocabulary is
+wrong; it is that the relays do not use it.
+
+**Build the structure at the origin, not at the relay.** A struct constructed
+inside a relay moves the packing rather than removing it -- the caller still
+passes the fields and the callee still assembles them. Traced to where each
+value comes from, every one of these chains starts in the same place:
+
+| Entry point | Sole non-test caller | Where the values come from |
+|---|---|---|
+| `refresh_projects` (17 params) | `admin_cmd._refresh` | `args.*` and `REPO_ROOT` |
+| `onboard_catalog` (10) | `admin_cmd._catalog_onboard` | `args.*` and `REPO_ROOT` |
+| `apply_project` (12) | `admin_cmd._baseline_apply` | `args.*` and `REPO_ROOT` |
+| `refresh_candidates` (14) | `admin_cmd._catalog_candidates` | `args.*` |
+
+Every value is read off `argparse.Namespace` at one command adapter and then
+threaded down two or three layers unchanged. So the object belongs at that
+adapter: built once from `args`, passed whole, and never unpacked until
+something reads a field.
+
+**Five parameters are shared by all three ingest-side entry points** --
+`registry`, `repo_root`, `source`, `raw_mode`, `resource_policy` -- with
+`min_size` in two of the three and `force`/`timeout_seconds` in one. That
+subset is the object, and it is the same subset `ChildInvocation` already
+carries.
+
+**One packing function already exists and shows the shape.**
+`refresh_projects` accepts nine parameters it uses exactly once each, purely to
+build a `_ResolveArgs` TypedDict and splat it into
+`resolve_refresh_selection`. The TypedDict is right; its construction site is
+not. Built at the command adapter instead, `refresh_projects` loses nine
+parameters and gains one, and the nine names stop appearing in a signature that
+does not read them.
+
+Moving it makes `_ResolveArgs` public, which is the correct consequence rather
+than a cost: a shape two modules pass between them is an interface, and the
+leading underscore currently says it is not. It is already used twice inside
+`refresh_projects`, so the second call site keeps working unchanged.
+
+**What moves up, and what does not.** Values decided by the operator move to
+the adapter. Values *derived* during the run stay where they are derived:
+`plan["projects"]`, the per-Project `project_id` and `location_id`, and the
+receipt path when it is defaulted from a timestamp. The test is whether the
+value exists before the operation starts -- if it does, the adapter owns it.
+
+**This overlaps W66 and should not be done twice.** The same five names are
+redeclared as argparse options per subcommand, which is what W66 measures as
+39 names spelled in more than one module. One declaration producing one object
+answers both: W66 owns where a setting is declared, W67 owns what carries it
+onward, and the object is the seam between them. Doing W67 first with a
+hand-built object would encode the current duplication into a constructor.
+
+**Two anti-patterns to avoid, both already demonstrated here.** Do not convert a
+builder: `codex._base_event` takes 19 parameters and places all 19 into its
+returned dict, so an object would name the same fields twice. And do not add a
+structure whose only member is another structure's fields -- `RunPolicy` was
+proposed above and then withdrawn on exactly that ground.
+
+**How to do it.** Five steps, in this order because each makes the next
+mechanical. Do them after W66's setting table exists, so the object is built
+from one declaration rather than from 25 duplicated ones.
+
+| Step | Work | Checked by |
+|---|---|---|
+| 1 | Split `ChildInvocation` into its policy half (`registry`, `repo_root`, `min_size`, `raw_mode`, `force`, `resource_policy`, `timeout_seconds`) and its target half (`projects`, `vendor_selector`, `validate`). Keep `command()` and `environment()` taking both. | Existing `ChildInvocation` tests pass unchanged; a policy is reusable across two targets |
+| 2 | Build the policy at the four command adapters from the W66 table, and pass it whole. | Each adapter constructs it exactly once |
+| 3 | Convert the relays innermost-first: `_run_project_ingest`, then `refresh_projects`, then `apply_project`, `onboard_catalog`, `refresh_candidates`. | Parameter counts fall; no call site rebuilds what it was handed |
+| 4 | Move `_ResolveArgs` construction to the adapter and make it public. Its nine values are read off `args` and used once each. | `refresh_projects` no longer names those nine |
+| 5 | Re-run the relay census. Anything still forwarding five or more is either converted or recorded as a builder with its measurement. | The census runs as a test -- measured at 216 ms over `src/`, so it costs nothing to keep -- and a new relay fails rather than accumulating |
+
+**Innermost-first is what keeps each step small.** `_run_project_ingest` already
+packs seven of its eight parameters into a `ChildInvocation`, so converting it
+first is a signature change with no body change -- and its two call sites pass
+identical policy arguments, so the caller simplifies in the same edit. Working
+outside-in instead means each layer is converted twice: once to take the object,
+once when the layer below it changes.
+
+**Order these by what they remove, not by size.**
+
+| Relay | Params | Forwarded | Removed by the object |
+|---|---|---|---|
+| `refresh_operations._run_project_ingest` | 8 | 8 | 6 |
+| `refresh_operations.refresh_projects` | 17 | -- | 9 via `_ResolveArgs`, 6 via policy |
+| `baseline_operations.apply_project` | 12 | 10 | 6 |
+| `catalog_operations.onboard_catalog` | 10 | 8 | 5 |
+| `review_project.refresh_candidates` | 14 | 10 | 10 via `DiscoveryPolicy` |
+
+**`refresh_candidates` is the one that needs a new structure.** The other four
+are served by splitting `ChildInvocation`; its ten discovery parameters have no
+existing home, which is what `DiscoveryPolicy` is for. Build it last, so the
+pattern is established before a new type is introduced.
+
 **Evidence to close.** Every relay of five or more parameters takes an object or is
 recorded as a builder; a call site cannot mis-order same-typed arguments; no
-invocation is constructed twice where one would do.
+invocation is constructed twice where one would do; `ChildInvocation`'s policy
+and target halves are separable, or the reason they are not is recorded; the
+relay census runs as a test.
 
 ### W71 -- Adopt the Reporting Facility in the Command Layer
 
@@ -545,6 +1103,51 @@ channel-separation test asserts it rather than the current convention;
 `--output-format jsonl` remains byte-identical on stdout across profiles.
 
 **Cost.** Mechanical per call site, no rebuild. Independent of W04.
+
+### W72 -- The Event Record Shape, Spelled Out Four Times
+
+**Work.** Route every Event construction through one builder per adapter, and
+give Cursor the builder the other two have.
+
+**Found by `pylint --enable=R0801`**, which reports near-identical line blocks
+across modules -- a capability neither ruff nor the structural-duplication test
+has, because the repetition is a *fragment* inside larger functions rather than
+a whole function.
+
+**The evidence.** Sixteen clusters; the sharpest is the common Event field
+block, appearing in all three adapters:
+
+| Site | Shape |
+|---|---|
+| `cc.py:940` | `role`, `content`, `content_len`, `content_ref`, `tool_name`, `tool_input`, `tool_output`, `timestamp` |
+| `codex.py:1520` | the same eight keys, same order |
+| `cursor.py:185` | the same eight keys, same order |
+
+`cc._base_event` and `codex._base_event` exist precisely to prevent this --
+`codex._base_event`'s docstring records that fifteen call sites each wrote the
+same twenty keys inline, 405 lines collapsed into one builder. The clusters are
+the sites that were never converted, plus a third adapter that never got a
+builder: **`cursor.py` has no module-level `_base_event`**, only a nested
+`base_ev` closure introduced later at line 495, so the earlier construction at
+line 178 still spells the record out.
+
+**Remaining clusters, grouped by what they say.**
+
+| Cluster | Modules | Reading |
+|---|---|---|
+| Event field block | `cc`, `codex`, `cursor` | The builder exists and is not universally used |
+| Metrics accumulator (`day`, `events`, `content_characters`, `sessions`, `interactions`) | `orientation_audit`, `query_api` | Two report paths accumulate the same per-day shape; a shared accumulator is the fix |
+| Reporting re-export | `reporting.__init__`, `reporting.api` | The package re-exports its own API; expected and correct |
+| Catalog entry fields | `project_annotations`, `project_catalog`, `refresh_operations` | Three readers of the same catalog row; a typed accessor is the fix, and it is W04's shape one level up |
+| Command preamble | `ingest_cmd`, `query_cmd` | Both resolve roots and store root the same way; W67 territory |
+
+**Evidence to close.** No adapter constructs an Event dict outside its builder;
+Cursor has a module-level builder like the other two; the per-day accumulator
+has one definition; `pylint --enable=R0801` reports only the re-export cluster,
+which is recorded as accepted.
+
+**Cost.** Correctness-neutral, no rebuild. Overlaps W04 (adapter signatures) and
+W67 (command preamble), so it batches with whichever lands first.
 
 ### W70 -- Documentation Partition and Redundancy
 

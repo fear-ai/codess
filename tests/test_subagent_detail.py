@@ -26,7 +26,7 @@ def _run(cmd, env=None, **kw):
 def _scan_env(base: Path, **extra: str) -> dict:
     reg = base / "_test_codess_registry"
     reg.mkdir(parents=True, exist_ok=True)
-    return {**os.environ.copy(), "CODESS_REGISTRY": str(reg), **extra}
+    return {**os.environ.copy(), "CODESS_STORE_ROOT": str(reg), **extra}
 
 
 def test_cc_subagent_vs_main_detailed(capsys):

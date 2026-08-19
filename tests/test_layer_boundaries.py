@@ -13,6 +13,7 @@ at run time is a separate question these do not answer.
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 import pytest
@@ -100,3 +101,37 @@ def test_vendor_sql_stays_in_its_source_access_module():
         if "cursorDiskKV" in text and "FROM cursorDiskKV" in text:
             offenders.append(path.name)
     assert not offenders, f"vendor SQL outside {owners}: {offenders}"
+
+
+def test_no_name_is_rebound_to_a_different_type():
+    """The shadowing class, guarded by a count rather than by review.
+
+    ruff's `A` catches a name shadowing a *builtin* and nothing catches a local
+    rebound to another type in the same scope -- `truncated` holding both the
+    bounded text and whether bounding occurred, `bounded` holding both a
+    `(text, length)` pair and the text. mypy reports each as an `assignment`
+    error, so the count is the guard.
+
+    Recorded as an exact number rather than a ceiling: these were fixed once
+    and silently reverted by a `git checkout` that was restoring something
+    else, and a ceiling would not have noticed. Optional-narrowing errors
+    (`str | None` assigned to `str`) are a different class and are excluded --
+    they belong to the `strict_optional` decision, not to naming.
+    """
+    import subprocess
+
+    repo = Path(__file__).resolve().parent.parent
+    result = subprocess.run(
+        [sys.executable, "-m", "mypy"], cwd=repo,
+        capture_output=True, text=True, check=False, timeout=300,
+    )
+    rebindings = [
+        line for line in result.stdout.splitlines()
+        if "[assignment]" in line
+        and 'variable has type "str"' not in line
+        and "variable has type Module" not in line
+    ]
+    assert rebindings == [], (
+        "a name is rebound to a different type; give the second value its own "
+        "name:\n" + "\n".join(rebindings)
+    )

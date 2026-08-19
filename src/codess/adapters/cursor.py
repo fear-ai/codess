@@ -438,18 +438,18 @@ def _process_composer(
         request_context = request_contexts.pop(bubble_id, None)
         if request_context is not None:
             source_key, value = request_context
-            event = _request_context_event(
+            context_event = _request_context_event(
                 composer_id, bubble_id, source_key, value, source_file,
                 _bubble_timestamp(data), opts,
             )
-            if event is not None:
-                yield composer_id, event
+            if context_event is not None:
+                yield composer_id, context_event
     for bubble_id, (source_key, value) in sorted(request_contexts.items()):
-        event = _request_context_event(
+        context_event = _request_context_event(
             composer_id, bubble_id, source_key, value, source_file, None, opts
         )
-        if event is not None:
-            yield composer_id, event
+        if context_event is not None:
+            yield composer_id, context_event
     request_contexts.clear()
 
 
@@ -572,7 +572,7 @@ def _bubble_to_events(
                 model_info, "modelName"
             )
             if isinstance(selection, str) and selection.strip():
-                metadata = {"model_set": selection.strip()}
+                metadata: dict[str, Any] = {"model_set": selection.strip()}
                 if selection.strip().lower() != "default":
                     metadata["model"] = selection.strip()
                     metadata["configuration_provenance"] = {
@@ -749,13 +749,13 @@ def _bubble_to_events(
                         "application_status": "failed",
                         "result_status_evidence": result_failure,
                     })
-                metadata = json.dumps(metadata_values, separators=(",", ":"))
+                metadata_json = json.dumps(metadata_values, separators=(",", ":"))
                 call = base_ev("tool_call", "tool_call", "assistant", "", 0)
                 call["event_id"] = f"{event_id}:tool-call"
                 call["tool_name"] = str(tool_name or "unknown")
                 call["tool_input"] = structured_json(input_text)
                 call["file_path"] = _tool_file_path(tool_former)
-                call["metadata"] = metadata
+                call["metadata"] = metadata_json
                 call["source_status"] = status
                 call["normalized_status"] = normalized
                 _input_value, input_state = field_state.get_state(
@@ -809,7 +809,7 @@ def _bubble_to_events(
                             # `tool_input`, so the result is parsed on the same terms.
                             # The text projection is bounded and keeps the whole value.
                             result["tool_output_structured"] = _parsed_result(result_value)
-                            result["metadata"] = metadata
+                            result["metadata"] = metadata_json
                             result["source_status"] = status
                             result["normalized_status"] = normalized
                             yield mapped(

@@ -19,15 +19,15 @@ from codess.project_catalog import ensure_project_binding
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", type=Path, required=True)
-    parser.add_argument("--registry", type=Path, required=True)
+    parser.add_argument("--store", dest="store_root", type=Path, required=True)
     parser.add_argument("--new-location", type=Path, required=True)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args(argv)
     try:
         project = args.project.expanduser().resolve()
-        binding = ensure_project_binding(args.registry, project)
+        binding = ensure_project_binding(args.store_root, project)
         receipt = relocate_project(
-            args.registry, binding["project_id"], project, args.new_location
+            args.store_root, binding["project_id"], project, args.new_location
         )
         receipt["receipt_format"] = "codess.project-retirement/1"
         if args.report:

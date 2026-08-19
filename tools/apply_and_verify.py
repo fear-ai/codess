@@ -24,13 +24,13 @@ def main(argv: list[str] | None = None) -> int:
         "--raw-mode", type=canonical_raw_mode, choices=RAW_MODE_CHOICES,
         default="reference",
     )
-    parser.add_argument("--registry", type=Path, required=True)
+    parser.add_argument("--store", dest="store_root", type=Path, required=True)
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--repeat", action="store_true")
     parser.add_argument("--approve-catalog", type=Path)
     parser.add_argument("--min-size", type=int, default=0)
-    parser.add_argument("--no-query-smoke", action="store_true")
+    parser.add_argument("--no-smoke", action="store_true")
     args = parser.parse_args(argv)
     project = args.project.expanduser().resolve()
     try:
@@ -38,12 +38,12 @@ def main(argv: list[str] | None = None) -> int:
             project,
             source=args.source,
             raw_mode=args.raw_mode,
-            registry=args.registry,
+            registry=args.store_root,
             policy_path=args.policy,
             repeat=args.repeat,
             approve_catalog=args.approve_catalog,
             min_size=args.min_size,
-            query_smoke=not args.no_query_smoke,
+            query_smoke=not args.no_smoke,
             catalog_base=args.selection.parent,
             report_path=args.report,
         )

@@ -455,7 +455,7 @@ graph in 5.1-5.3.
 ```mermaid
 flowchart TB
     Parent["Parent codess process\n(baseline_operations, refresh_operations,\ncatalog_operations, baseline_validation)"]
-    Build["Build argv + env\n(python -m main ingest/query ...,\nCODESS_REGISTRY, PYTHONPATH, vendor dirs)"]
+    Build["Build argv + env\n(python -m main ingest/query ...,\nCODESS_STORE_ROOT, PYTHONPATH, vendor dirs)"]
     Child["Child process\npython -m main ...\n(full scan/ingest/query lifecycle)"]
     Wait["subprocess.run(..., timeout=N)\nblocks until exit or timeout"]
     Exit["Child exits\n(normal or killed on timeout)"]
@@ -474,7 +474,7 @@ shape:
 | Concern | Behavior |
 |---|---|
 | Launch | `subprocess.run([sys.executable, "-m", "main", ...], cwd=repo_root, env=env, capture_output=True, text=True, timeout=N)` |
-| Environment | `env = os.environ.copy()` plus explicit overrides -- always `PYTHONPATH` (so the child resolves the same `src/` checkout without an install step) and usually `CODESS_REGISTRY`; vendor-directory env vars (`CODESS_CC_PROJECTS`, `CODESS_CURSOR_DATA`, and similar) are forwarded only by call sites that need a non-default vendor source location, not universally |
+| Environment | `env = os.environ.copy()` plus explicit overrides -- always `PYTHONPATH` (so the child resolves the same `src/` checkout without an install step) and usually `CODESS_STORE_ROOT`; vendor-directory env vars (`CODESS_CC_PROJECTS`, `CODESS_CURSOR_DATA`, and similar) are forwarded only by call sites that need a non-default vendor source location, not universally |
 | IPC | Two channels: **exit status** (`0` accepted, nonzero rejected) and **stdout**, which is either free-form diagnostic text or one JSON document when the child ran in a structured mode (`ingest --validate`, `query` with `--output-format jsonl`); stderr is diagnostic/progress text only, never parsed |
 | Timeout | An explicit `timeout=` is required at every site (3600s for ingest, 120s for the baseline query smoke test, a configurable value for refresh); `subprocess.run` enforces it |
 | Termination and reap | `subprocess.run` is synchronous: it calls `Popen.wait()` internally and does not return control to the caller until the child has exited, so there is no separate reap step and no zombie-process risk from this code. A `timeout` expiring raises `subprocess.TimeoutExpired` -- the Python standard library kills the child (`Popen.kill()`) and waits for it before raising, so the child is not left running or orphaned; only `refresh_operations` catches this exception explicitly (to report a timeout as a structured failure rather than letting it propagate), the other three sites let an uncaught `TimeoutExpired` surface to their own caller |
@@ -1231,7 +1231,13 @@ exceptional, and the standing rule is one of construction discipline rather
 than an outright ban on string composition:
 
 - every bound value reaches SQLite through `execute(sql, params)`'s
-  parameter argument, never through interpolation into the SQL text;
+  parameter argument, never through interpolation into the SQL text. A single
+  parameter is written `(value,)`: the trailing comma is what makes it a tuple,
+  and without it the parentheses are ordinary grouping, so `execute(sql, (pid))`
+  passes the string itself and SQLite binds one parameter per *character* --
+  `Incorrect number of bindings supplied. The current statement uses 1, and
+  there are 3 supplied.` The comma is syntax rather than style, and the rules
+  below about removing a trailing comma do not reach it;
 - SQL text may itself be built from an f-string or concatenation only when
   the interpolated fragment is a `?`-placeholder skeleton (e.g.
   `",".join("?" for _ in values)`), a column or table name drawn from a
@@ -1445,6 +1451,7 @@ establishes source-format support or correctness on current real data.
 | CLI | Packaging entry, argument parsing, dispatch, exit status, and structured rendering | Installed or source-tree command surface |
 | Integration | Scan, ingest, update, query, evidence, and publication across temporary vendor layouts | Several components and filesystem/database boundaries together |
 | Scale and hazard | Large counts, skewed Sessions, oversized records, rollback, and bounded allocation cases | A named resource or failure claim rather than general correctness |
+| Structural | Import boundaries, SQL ownership, duplicate function shapes, and name rebinding | The source tree read as an AST, or a checker run over it. Asserts a property of the code rather than of its behaviour, so it fails on a violation instead of waiting for one to cause a defect |
 
 Tests and fixtures live under `tests/`; contract inputs also come from `schema/`.
 Temporary vendor roots, registries, and Project store sets prevent the automated

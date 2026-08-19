@@ -1520,7 +1520,7 @@ name in the codebase spells the product out:
 
 | Surface | Convention | Count |
 |---|---|---|
-| Environment variables | `CODESS_*` -- `CODESS_REGISTRY`, `CODESS_RAW_MODE`, `CODESS_MAX_EVENTS_PER_SOURCE` | 29 distinct |
+| Environment variables | `CODESS_*` -- `CODESS_STORE_ROOT`, `CODESS_RAW_MODE`, `CODESS_MAX_EVENTS_PER_SOURCE` | 29 distinct |
 | Stored value namespaces | `codess:<kind>:...` -- `codess:session`, `codess:observation`, `codess:workspace` | 10 kinds |
 | Format tags | `codess.<subsystem>/<version>` -- `codess.coschema`, `codess.id/1`, `codess.snapshot/1` | Several |
 | Filesystem | `.codess/` store directory, `~/.codess` registry | Two |
@@ -2380,20 +2380,35 @@ module-level name in the same file. mypy reports all five precisely.
 | Class | Detector | Findings |
 |---|---|---|
 | Shadowing a builtin | ruff `A` | **Zero**, across `src`, `tests`, and `tools`. Selected, so it fails the moment one appears. |
-| Rebinding a name to a different type | mypy `assignment` | **14** genuine cross-type rebindings remain. |
+| Rebinding a name to a different type | mypy `assignment` | **Zero** remain. |
 | Redefining a name outright | mypy `no-redef` | **Zero**. |
 
-The 14 are not evenly spread, and where they sit decides when they are fixed:
-**8 are in the three adapters** (`cc`, `codex`, `cursor`), which is the decode
-boundary W04 rewrites; the remaining 6 are in `config`, `acceptance`,
-`configuration_audit`, and `source_verification`. Fixing the adapter half before
-W04 rewrites those signatures does the work twice, so the count falls as a
-consequence of W04 rather than as an item of its own.
+**The adapter half was deferred to W04 and that was wrong.** The reasoning was
+that W04 rewrites adapter signatures, so fixing rebindings there would be work
+done twice. It does not follow: these are *locals* inside long functions, not
+parameters, and a candidate-record contract does not touch them. Every one was
+a name meaning two things in one scope --
 
-A further 19 `assignment` errors are optional-narrowing (`str | None` assigned
-to `str`) rather than rebinding. They are a different defect class and belong to
-the `strict_optional` decision in W64, not here -- counting them as shadowing
-would overstate this one and understate that one.
+| Name | Meant | And also | In |
+|---|---|---|---|
+| `truncated` | the bounded text | whether bounding occurred | `cc.normalize_user`, `codex.process_file` |
+| `bounded` | a `(text, length)` pair | the bounded text | `codex.process_file` |
+| `metadata` | a metadata mapping | that mapping serialized | `cursor._bubble_to_events` |
+
+-- each renamed to what it holds (`was_truncated`, `context_text`,
+`metadata_json`).
+
+**The rename proved the defect while fixing it.** `metadata` had a second
+consumer 60 lines below the first, and renaming the binding without it raised
+`UnboundLocalError` on six tests. That is what a name carrying two meanings
+costs: a mechanical rename is unsafe, and only the test suite says so.
+
+A separate 19 `assignment` errors are optional-narrowing (`str | None` assigned
+to `str`) rather than rebinding. They belong to the `strict_optional` decision
+in W64 -- counting them here would overstate this and understate that. Five more
+were containers inferred from first use (`values = {}` inferred `dict[str, str]`,
+then given a nested dict); annotating them is not a naming question and removed
+them too. Type errors fell from 107 to 82 across the pass.
 
 **Current enforcement, and what each half covers.** The two mechanisms are
 complementary and neither alone is sufficient:
@@ -2624,6 +2639,53 @@ The general rule: **a timing assertion states a ratio between two measurements
 taken the same way, or a bound loose enough to survive instrumentation.** The
 scale tests were already correct by this rule, asserting a 5 s ceiling on
 operations that take milliseconds.
+
+### Renames That Break Without Failing
+
+A rename that reaches the wrong occurrence produces working code with changed
+behaviour, which no test necessarily covers. Three instances happened while
+renaming `--registry` to `--store`, and each is a distinct mechanism worth
+recognising.
+
+**A flag's destination is inferred, so adding a spelling silently moves it.**
+`--store` alone infers the destination `store`, not `store_root`. Three tools
+kept reading `args.store_root` and began raising `AttributeError`; the CLI
+parsed fine and the failure appeared only at the call. Pinning `dest=`
+explicitly is the fix, and is now done at every renamed site.
+
+**Two flags can share a destination and the later one wins.**
+`tools/demo_model_metrics.py` already had a `--store` naming a store *file*.
+Renaming its `--registry` to `--store` produced two `add_argument` calls on one
+parser writing the same destination, so one silently shadowed the other. The
+machine-store flag there is `--store-root`.
+
+**A constant rename reaches strings that name the environment variable.**
+Renaming the constant `CODESS_DAYS` to `DAYS` also rewrote three operator-facing
+strings, so `--help` began advertising an environment variable named `DAYS`
+that does not exist. The value interpolation `f"{DAYS}-day window"` was correct
+and had to be left alone -- which is the difficulty: the same token is a
+constant in one position and a name in another.
+
+**Swept for the same shapes across the codebase**, since one instance of a
+mechanism is rarely the only one:
+
+| Check | Result |
+|---|---|
+| A flag's inferred destination is never read | 0 |
+| Two flags on one parser sharing a destination | 0 |
+| A mutually-exclusive group colliding with its parent parser | 0 |
+| `getattr(args, ...)` on a destination no flag declares | 0 |
+
+The parser checks are cheap enough to keep, and belong with the other
+mechanical enforcement rather than being re-run by hand after each rename.
+
+**One finding the sweep did surface.** Two options are read from the `opts`
+dictionary that nothing in `src/` ever sets: `include_product_state` (always its
+`True` default) and `max_external_content_bytes` (always `None`, falling back to
+the module constant). Both are override hooks with correct fallbacks rather than
+defects, so behaviour is right; what is wrong is that neither is a declared
+setting, so no operator can reach either and a reader cannot tell they are
+inert. They belong in the setting table W66 defines, or they should go.
 
 ## Real-Source Validation
 

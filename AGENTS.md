@@ -128,3 +128,14 @@ employers, clients, or private projects.
 
 - Do NOT commit to git, add, rename or remove files, push or pull unless explicitly instructed
 - Commit message: present-tense imperative, focus on operational and functional changes
+- NEVER discard uncommitted work: `checkout --`, `restore`, `reset --hard`, and
+  `clean` destroy changes that exist nowhere else, including changes made
+  earlier in the same session that the operator has not reviewed
+- To undo an edit, edit forward, or copy the file aside first and restore from
+  that copy. `stash` is acceptable as temporary storage because it is
+  recoverable; a discard is not
+- When a restore is unavoidable, name the specific files. A path argument
+  (`checkout -- src`) reverts every uncommitted change beneath it, not the one
+  that was wrong
+- Read-only inspection (`status`, `log`, `diff`, `show`, `reflog`) needs no
+  instruction

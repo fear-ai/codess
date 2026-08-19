@@ -31,8 +31,8 @@ from codess.config import (
     MANIFEST_FILE,
     MAX_RECORD_BYTES,
     RAW_MODE_CHOICES,
-    REGISTRY,
     SOURCE_CHOICES,
+    STORE_ROOT,
     canonical_raw_mode,
     catalog_root,
 )
@@ -116,11 +116,11 @@ def _refresh(args: argparse.Namespace) -> int:
     if receipt is None and args.stage != "plan":
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
         receipt = (
-            args.registry.expanduser().resolve()
+            args.store_root.expanduser().resolve()
             / "reports" / f"refresh-{stamp}.json"
         )
     result = refresh_projects(
-        args.registry,
+        args.store_root,
         repo_root=REPO_ROOT,
         stage=args.stage,
         project_references=args.projects,
@@ -167,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="plan is read-only; apply first preflights every selected Project",
     )
     refresh.add_argument(
-        "--registry", type=Path, default=REGISTRY
+        "--store", dest="store_root", type=Path, default=STORE_ROOT
     )
     refresh.add_argument(
         "--source", choices=SOURCE_CHOICES, default="all"
@@ -205,12 +205,12 @@ def build_parser() -> argparse.ArgumentParser:
     _candidate_parser(catalog_commands)
     status = catalog_commands.add_parser("status")
     status.add_argument(
-        "--registry", type=Path, default=REGISTRY
+        "--store", dest="store_root", type=Path, default=STORE_ROOT
     )
     status.set_defaults(handler=_catalog_status)
     annotations = catalog_commands.add_parser("annotations")
     annotations.add_argument(
-        "--registry", type=Path, default=REGISTRY
+        "--store", dest="store_root", type=Path, default=STORE_ROOT
     )
     annotations.add_argument(
         "--baseline-selection", type=Path,
@@ -233,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
     annotations.add_argument("--output", type=Path)
     annotations.set_defaults(handler=_catalog_annotations)
     state = catalog_commands.add_parser("state")
-    state.add_argument("--registry", type=Path, default=REGISTRY)
+    state.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     state.add_argument("--project-id", required=True)
     state.add_argument(
         "--state",
@@ -255,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     decide.set_defaults(handler=_catalog_decide)
     onboard = catalog_commands.add_parser("onboard")
     onboard.add_argument("--catalog", type=Path, required=True)
-    onboard.add_argument("--registry", type=Path, default=REGISTRY)
+    onboard.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     onboard.add_argument("--review-decision", default="approved")
     onboard.add_argument("--source", choices=SOURCE_CHOICES, default="all")
     onboard.add_argument(
@@ -277,12 +277,12 @@ def build_parser() -> argparse.ArgumentParser:
     location_commands = location.add_subparsers(dest="location_command", required=True)
     for name, handler in (("add", _location_add), ("retire", _location_retire)):
         command = location_commands.add_parser(name)
-        command.add_argument("--registry", type=Path, default=REGISTRY)
+        command.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
         command.add_argument("--project-id", required=True)
         command.add_argument("--path", type=Path, required=True)
         command.set_defaults(handler=handler)
     relocate = catalog_commands.add_parser("relocate")
-    relocate.add_argument("--registry", type=Path, default=REGISTRY)
+    relocate.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     relocate.add_argument("--project-id", required=True)
     relocate.add_argument("--from", dest="old_path", type=Path, required=True)
     relocate.add_argument("--to", dest="new_path", type=Path, required=True)
@@ -307,7 +307,7 @@ def build_parser() -> argparse.ArgumentParser:
     freeze.set_defaults(handler=_baseline_freeze)
     recover_pointer = baseline_commands.add_parser("recover-pointer")
     recover_pointer.add_argument("--project", type=Path, required=True)
-    recover_pointer.add_argument("--registry", type=Path, default=REGISTRY)
+    recover_pointer.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     recover_pointer.add_argument("--project-id")
     recover_pointer.set_defaults(handler=_baseline_recover_pointer)
     recover_manifest = baseline_commands.add_parser("recover-manifest")
@@ -329,7 +329,7 @@ def build_parser() -> argparse.ArgumentParser:
     evidence = families.add_parser("evidence")
     evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
     gather = evidence_commands.add_parser("gather")
-    gather.add_argument("--registry", type=Path, default=REGISTRY)
+    gather.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     gather.add_argument("--cursor-db", type=Path, default=CURSOR_DATA / "globalStorage" / "state.vscdb")
     gather.add_argument("--claude-root", type=Path, default=CC_PROJECTS)
     gather.add_argument("--claude-max-files", type=int, default=200)
@@ -358,12 +358,12 @@ def build_parser() -> argparse.ArgumentParser:
     codex_features.set_defaults(handler=_audit_codex_features)
     cursor = audits.add_parser("cursor-features")
     cursor.add_argument("--db", type=Path, default=CURSOR_DATA / "globalStorage" / "state.vscdb")
-    cursor.add_argument("--registry", type=Path, default=REGISTRY)
+    cursor.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     cursor.add_argument("--output", type=Path)
     cursor.set_defaults(handler=_audit_cursor)
     mcp = audits.add_parser("mcp-interactions")
     mcp.add_argument(
-        "--registry", type=Path, default=REGISTRY
+        "--store", dest="store_root", type=Path, default=STORE_ROOT
     )
     mcp.add_argument("--codex-rollout", type=Path, action="append", default=[])
     mcp.add_argument("--include-excerpts", action="store_true")
@@ -371,7 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp.set_defaults(handler=_audit_mcp)
     orientation = audits.add_parser("orientation")
     orientation.add_argument(
-        "--registry", type=Path, default=REGISTRY
+        "--store", dest="store_root", type=Path, default=STORE_ROOT
     )
     orientation.add_argument(
         "--project-id", action="append", default=[]
@@ -404,37 +404,40 @@ def build_parser() -> argparse.ArgumentParser:
     # different things, and reusing one word for both made a reader -- and a type
     # checker -- take the parser for the string.
     set_name = session_commands.add_parser("name")
-    set_name.add_argument("--registry", type=Path, default=REGISTRY)
+    set_name.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     set_name.add_argument("--project-id", required=True)
     set_name.add_argument("--session-id", required=True)
     set_name.add_argument("--name", required=True)
     set_name.set_defaults(handler=_session_name)
     unname = session_commands.add_parser("unname")
-    unname.add_argument("--registry", type=Path, default=REGISTRY)
+    unname.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     unname.add_argument("--project-id", required=True)
     unname.add_argument("--session-id", required=True)
     unname.set_defaults(handler=_session_unname)
     names = session_commands.add_parser("names")
-    names.add_argument("--registry", type=Path, default=REGISTRY)
+    names.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     names.add_argument("--project-id")
     names.set_defaults(handler=_session_names)
 
     storage = families.add_parser("storage")
     storage_commands = storage.add_subparsers(dest="storage_command", required=True)
     report = storage_commands.add_parser("report")
-    report.add_argument("--registry", type=Path, default=REGISTRY)
+    report.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     report.add_argument(
         "--cursor-db", type=Path,
         default=CURSOR_DATA / "globalStorage" / "state.vscdb",
     )
     report.add_argument("--history-dir", type=Path)
-    report.add_argument("--no-record", action="store_true")
+    report.add_argument(
+        "--no-record", action="store_true",
+        help="report the observation without writing it to the store",
+    )
     report.add_argument("--codess-limit-gb", type=float, default=2.0)
     report.add_argument("--cursor-limit-gb", type=float, default=10.0)
     report.add_argument("--output", type=Path)
     report.set_defaults(handler=_storage_report)
     prune = storage_commands.add_parser("prune")
-    prune.add_argument("--registry", type=Path, default=REGISTRY)
+    prune.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     prune.add_argument("--reference-catalog", type=Path, action="append", default=[])
     prune.add_argument("--apply", action="store_true")
     prune.add_argument("--working-archives", action="store_true")
@@ -446,14 +449,14 @@ def build_parser() -> argparse.ArgumentParser:
     prune.add_argument("--output", type=Path)
     prune.set_defaults(handler=_storage_prune)
     registry_prune = storage_commands.add_parser("registry-prune")
-    registry_prune.add_argument("--registry", type=Path, default=REGISTRY)
+    registry_prune.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     registry_prune.add_argument(
         "--apply", action="store_true",
         help="remove the reported entries; without it the run only reports",
     )
     registry_prune.set_defaults(handler=_registry_prune)
     token_validate = storage_commands.add_parser("token-validate")
-    token_validate.add_argument("--registry", type=Path, default=REGISTRY)
+    token_validate.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     token_validate.add_argument("--output", type=Path)
     token_validate.set_defaults(handler=_storage_token_validate)
     return parser
@@ -466,13 +469,17 @@ def _apply_arguments(parser: argparse.ArgumentParser) -> None:
         "--raw-mode", type=canonical_raw_mode, choices=RAW_MODE_CHOICES,
         default="reference",
     )
-    parser.add_argument("--registry", type=Path, required=True)
+    parser.add_argument("--store", dest="store_root", type=Path, required=True)
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--repeat", action="store_true")
     parser.add_argument("--approve-catalog", type=Path)
     parser.add_argument("--min-size", type=int, default=0)
-    parser.add_argument("--no-query-smoke", action="store_true")
+    parser.add_argument(
+        "--no-smoke", action="store_true",
+        help="skip the post-apply query check that confirms the published "
+             "store answers a query",
+    )
     parser.add_argument(
         "--resource-policy",
         type=Path,
@@ -553,14 +560,14 @@ def _catalog_decide(args: argparse.Namespace) -> int:
 
 
 def _catalog_status(args: argparse.Namespace) -> int:
-    report = catalog_readiness(args.registry)
+    report = catalog_readiness(args.store_root)
     _json(report)
     return 0 if report["summary"]["not_query_ready_projects"] == 0 else 1
 
 
 def _catalog_annotations(args: argparse.Namespace) -> int:
     report = build_project_annotations(
-        args.registry,
+        args.store_root,
         baseline_selection=args.baseline_selection,
         reviewed_catalog=args.reviewed,
         large_event_count=args.large_events,
@@ -627,7 +634,7 @@ def _catalog_annotations(args: argparse.Namespace) -> int:
 
 def _catalog_state(args: argparse.Namespace) -> int:
     _json(set_project_selection_state(
-        args.registry,
+        args.store_root,
         args.project_id,
         args.state,
         related_project_id=args.related_project_id,
@@ -638,7 +645,7 @@ def _catalog_state(args: argparse.Namespace) -> int:
 
 def _catalog_onboard(args: argparse.Namespace) -> int:
     result = onboard_catalog(
-        args.catalog, registry=args.registry, repo_root=REPO_ROOT,
+        args.catalog, registry=args.store_root, repo_root=REPO_ROOT,
         decision=args.review_decision, source=args.source, raw_mode=args.raw_mode,
         apply=args.apply, stop_after=args.stop_after, receipt_path=args.receipt,
         resource_policy=args.resource_policy,
@@ -648,17 +655,17 @@ def _catalog_onboard(args: argparse.Namespace) -> int:
 
 
 def _location_add(args: argparse.Namespace) -> int:
-    _json(add_project_location(args.registry, args.project_id, args.path))
+    _json(add_project_location(args.store_root, args.project_id, args.path))
     return 0
 
 
 def _location_retire(args: argparse.Namespace) -> int:
-    _json(retire_location(args.registry, args.project_id, args.path))
+    _json(retire_location(args.store_root, args.project_id, args.path))
     return 0
 
 
 def _catalog_relocate(args: argparse.Namespace) -> int:
-    _json(relocate_project(args.registry, args.project_id, args.old_path, args.new_path))
+    _json(relocate_project(args.store_root, args.project_id, args.old_path, args.new_path))
     return 0
 
 
@@ -680,9 +687,9 @@ def _baseline_validate(args: argparse.Namespace) -> int:
 def _baseline_apply(args: argparse.Namespace) -> int:
     result = apply_project(
         args.project, source=args.source, raw_mode=args.raw_mode,
-        registry=args.registry, policy_path=args.policy, repeat=args.repeat,
+        registry=args.store_root, policy_path=args.policy, repeat=args.repeat,
         approve_catalog=args.approve_catalog, min_size=args.min_size,
-        query_smoke=not args.no_query_smoke, repo_root=REPO_ROOT,
+        query_smoke=not args.no_smoke, repo_root=REPO_ROOT,
         report_path=args.report,
         resource_policy=args.resource_policy,
     )
@@ -748,7 +755,7 @@ def _package_verify(args: argparse.Namespace) -> int:
 def _evidence_gather(args: argparse.Namespace) -> int:
     components = {}
     report = build_evidence_inventory(
-        args.registry, cursor_db=args.cursor_db, claude_root=args.claude_root,
+        args.store_root, cursor_db=args.cursor_db, claude_root=args.claude_root,
         claude_max_files=args.claude_max_files, component_reports=components,
     )
     if args.output:
@@ -789,13 +796,13 @@ def _audit_codex_features(args: argparse.Namespace) -> int:
 
 
 def _audit_cursor(args: argparse.Namespace) -> int:
-    _write_optional(args.output, audit_cursor_features(args.db, load_catalog(args.registry)))
+    _write_optional(args.output, audit_cursor_features(args.db, load_catalog(args.store_root)))
     return 0
 
 
 def _audit_mcp(args: argparse.Namespace) -> int:
     _write_optional(args.output, audit_mcp_interactions(
-        args.registry,
+        args.store_root,
         codex_rollouts=args.codex_rollout,
         include_excerpts=args.include_excerpts,
     ))
@@ -804,7 +811,7 @@ def _audit_mcp(args: argparse.Namespace) -> int:
 
 def _audit_orientation(args: argparse.Namespace) -> int:
     report = audit_orientation(
-        args.registry, project_ids=args.project_id,
+        args.store_root, project_ids=args.project_id,
     )
     _write_optional(args.output, report)
     return 1 if report["summary"]["projects_failed"] else 0
@@ -848,20 +855,20 @@ def _schema_compare(args: argparse.Namespace) -> int:
 
 def _session_name(args: argparse.Namespace) -> int:
     _json(set_session_name(
-        args.registry, args.project_id, args.session_id, args.name
+        args.store_root, args.project_id, args.session_id, args.name
     ))
     return 0
 
 
 def _session_unname(args: argparse.Namespace) -> int:
     _json(remove_session_name(
-        args.registry, args.project_id, args.session_id
+        args.store_root, args.project_id, args.session_id
     ))
     return 0
 
 
 def _session_names(args: argparse.Namespace) -> int:
-    value = load_session_names(args.registry)
+    value = load_session_names(args.store_root)
     if args.project_id:
         value = {
             **value,
@@ -887,7 +894,7 @@ def _baseline_recover_pointer(args: argparse.Namespace) -> int:
 
     try:
         result = recover_current_snapshot(
-            args.project, registry_root=args.registry, project_id=args.project_id,
+            args.project, store_root=args.store_root, project_id=args.project_id,
         )
     except SnapshotError as exc:
         print(f"codess: cannot recover current pointer: {exc}", file=sys.stderr)
@@ -931,7 +938,7 @@ def _storage_report(args: argparse.Namespace) -> int:
     if args.codess_limit_gb <= 0 or args.cursor_limit_gb <= 0:
         raise ValueError("storage size limits must be positive")
     report = build_storage_report(
-        args.registry,
+        args.store_root,
         cursor_db=args.cursor_db,
         history_dir=args.history_dir,
         record=not args.no_record,
@@ -953,7 +960,7 @@ def _registry_prune(args: argparse.Namespace) -> int:
     """
     from codess.registry_store import prune_stale_entries
 
-    result = prune_stale_entries(args.registry, dry_run=not args.apply)
+    result = prune_stale_entries(args.store_root, dry_run=not args.apply)
     _json(result)
     return 0
 
@@ -965,14 +972,14 @@ def _storage_prune(args: argparse.Namespace) -> int:
     ]
     result = (
         apply_retention_plan(
-            args.registry, reference_catalogs=catalogs,
+            args.store_root, reference_catalogs=catalogs,
             receipt_path=args.receipt,
             include_working_archives=args.working_archives,
             allow_large_comparison_revisions=args.keep_comparison_revisions,
         )
         if args.apply else
         build_retention_plan(
-            args.registry, reference_catalogs=catalogs,
+            args.store_root, reference_catalogs=catalogs,
             include_working_archives=args.working_archives,
             allow_large_comparison_revisions=args.keep_comparison_revisions,
         )
@@ -982,7 +989,7 @@ def _storage_prune(args: argparse.Namespace) -> int:
 
 
 def _storage_token_validate(args: argparse.Namespace) -> int:
-    stores, _ = all_store_paths(args.registry.expanduser().resolve())
+    stores, _ = all_store_paths(args.store_root.expanduser().resolve())
     paths = source_paths(stores, "openai.codex")
     result = validate_codex_token_usage(paths)
     _write_optional(args.output, result)
