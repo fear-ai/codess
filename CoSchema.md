@@ -387,6 +387,35 @@ Exactly one name spans two groups, and it is the collision: `started_at` is
 source-reported `REAL` in `sessions` and `tool_invocations`, and
 Codess-recorded `TEXT` in `processing_runs`. No other name is ambiguous.
 
+**The two representations are both correct, and the name is what is wrong.**
+They differ because the values answer different questions and carry different
+guarantees:
+
+| | `sessions.started_at` | `processing_runs.started_at` |
+|---|---|---|
+| Who observed it | The vendor | Codess |
+| Type | `REAL`, Unix milliseconds | `TEXT`, RFC 3339 UTC, `NOT NULL` |
+| Nullable | Yes -- a vendor may record no time | No -- Codess always knows when it ran |
+| Derived from | `MIN(events.event_at)`, materialized | The clock at the start of the run |
+| Compared against | Other vendor instants, for ordering and `--since` | Other Codess runs, for provenance |
+
+A source-reported time must stay numeric because it is a *reported value*: it
+arrives in epoch form, it is compared and aggregated across hundreds of
+thousands of Events, and it may be absent, so a nullable `REAL` preserves both
+the arithmetic and the vendor's silence. Converting it to text would impose a
+precision and an offset the vendor never stated.
+
+A Codess-recorded time must stay textual because it is a *provenance
+statement*: it is read by a person auditing what ran, it is never aggregated,
+and RFC 3339 carries its own offset so the record is unambiguous outside this
+database. Storing it as an epoch number would make a receipt unreadable and
+invite comparison against vendor instants that were measured by a different
+clock.
+
+So the representations should not be unified. What should change is the name:
+one identifier denoting two units in one schema is the defect, and the fix is
+to name the group in the column rather than to force one type on both.
+
 **Nineteen columns is too many, and counting what each holds shows why.**
 The vendors supply almost one time between them: every Claude and Codex
 record carries `timestamp`, and Codex adds `started_at`/`completed_at` on a

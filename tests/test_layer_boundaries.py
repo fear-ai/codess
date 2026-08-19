@@ -135,3 +135,100 @@ def test_no_name_is_rebound_to_a_different_type():
         "a name is rebound to a different type; give the second value its own "
         "name:\n" + "\n".join(rebindings)
     )
+
+
+def _module_level_imports(path: Path) -> set[str]:
+    """Every module `path` imports at import time.
+
+    Only depth-0 statements in the file body count. An import inside a
+    function body runs when that function is called, which is after every
+    module has loaded, so it cannot participate in an import-time cycle --
+    and deferring one is how this codebase breaks the two cycles it has.
+    """
+    names: set[str] = set()
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            names.add(node.module)
+        elif isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+    return names
+
+
+def _internal_module_names() -> dict[str, Path]:
+    """Every importable module under `src/`, keyed by its dotted name."""
+    modules: dict[str, Path] = {}
+    for path in sorted(SRC.rglob("*.py")):
+        parts = path.relative_to(SRC).with_suffix("").parts
+        name = ".".join(parts[:-1]) if parts[-1] == "__init__" else ".".join(parts)
+        if name:
+            modules[name] = path
+    return modules
+
+
+def test_no_module_level_import_cycle():
+    """The import graph is acyclic at import time.
+
+    Counting every import reports two strongly-connected components -- the
+    `config`/`snapshot` leaf cluster and the `project`/`cli` dispatch cluster.
+    Both are closed only by imports deferred into a function body, which is
+    the mechanism that keeps them loadable: `config` is a leaf 31 modules
+    depend on, and `project` is the console entry point whose job is
+    dispatching to a command adapter.
+
+    So the count worth guarding is the module-level one, whose defensible
+    expected value is zero. A cycle here is a genuine load-order hazard,
+    not a deliberate deferral.
+    """
+    modules = _internal_module_names()
+    graph = {
+        name: {
+            imported for imported in _module_level_imports(path)
+            if imported in modules
+        }
+        for name, path in modules.items()
+    }
+
+    # Tarjan, iterative: the recursive form overflows on a graph this wide.
+    index: dict[str, int] = {}
+    low: dict[str, int] = {}
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    cycles: list[list[str]] = []
+    counter = 0
+
+    for root in graph:
+        if root in index:
+            continue
+        work: list[tuple[str, list[str]]] = [(root, sorted(graph[root]))]
+        while work:
+            name, pending = work[-1]
+            if name not in index:
+                index[name] = low[name] = counter
+                counter += 1
+                stack.append(name)
+                on_stack.add(name)
+            if pending:
+                target = pending.pop()
+                if target not in index:
+                    work.append((target, sorted(graph[target])))
+                elif target in on_stack:
+                    low[name] = min(low[name], index[target])
+                continue
+            if low[name] == index[name]:
+                component = []
+                while True:
+                    member = stack.pop()
+                    on_stack.discard(member)
+                    component.append(member)
+                    if member == name:
+                        break
+                if len(component) > 1:
+                    cycles.append(sorted(component))
+            work.pop()
+            if work:
+                low[work[-1][0]] = min(low[work[-1][0]], low[name])
+
+    assert cycles == [], (
+        "module-level import cycle; defer one edge into the function that "
+        f"needs it: {cycles}"
+    )

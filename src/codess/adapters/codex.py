@@ -5,7 +5,6 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Iterator
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +15,7 @@ from codess.context_content import bound_context_content, truncate_content
 from codess.mapping import annotate_mapping
 from codess.sanitize import sanitize_value
 from codess.tool_result_status import application_failure_evidence
+from codess.units import epoch_milliseconds
 
 log = logging.getLogger(__name__)
 
@@ -153,21 +153,8 @@ def get_session_metadata(path: Path) -> dict:
 
 
 def _parse_timestamp(value: Any) -> float | None:
-    """Normalize Unix seconds/ms or ISO-8601 to Unix milliseconds."""
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        number = float(value)
-        return number * 1000 if number < 1e12 else number
-    if isinstance(value, str):
-        try:
-            dt = datetime.fromisoformat(value)
-        except (TypeError, ValueError):
-            return None
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        return dt.timestamp() * 1000
-    return None
+    """Normalize a Codex time to Unix milliseconds."""
+    return epoch_milliseconds(value)
 
 
 def _extract_text_from_content(content: list) -> str:

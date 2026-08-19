@@ -32,7 +32,7 @@ from codess.codex_source import get_session_files as get_codex_session_files
 from codess.codex_source import session_archive_evidence as get_codex_archive_evidence
 from codess.cursor_cohort import cohort_state_key
 from codess.cursor_source import get_client_version as get_cursor_client_version
-from codess.cursor_source import get_composer_headers
+from codess.cursor_source import get_composer_headers, parse_timestamp
 from codess.cursor_source import get_global_db as get_cursor_global_db
 from codess.cursor_source import get_workspace_dbs as get_cursor_workspace_dbs
 from codess.cursor_source import get_workspace_ids as get_cursor_workspace_ids
@@ -647,13 +647,32 @@ def _ingest_cursor(
                 metadata = json.dumps({
                     "storage": "global", **headers[current_id],
                 })
+            # A composer whose bubbles carry no time still has one: Cursor
+            # records `createdAt` and `lastUpdatedAt` on every header, and
+            # `cursor_source` already reads both. Without this fallback a
+            # Session has no time at any level, so it cannot be ordered or
+            # filtered by `--since` -- observed on two Sessions holding 903
+            # Events between them. `time_basis` distinguishes the two sources
+            # so a reader can tell an Event-derived span from a header-stated
+            # one rather than finding them merged.
+            header = headers[current_id] if headers is not None else {}
+            header_started = parse_timestamp(header.get("created_at"))
+            header_ended = parse_timestamp(header.get("last_updated_at"))
+            started_at = min(timestamps) if timestamps else header_started
+            ended_at = max(timestamps) if timestamps else header_ended
+            if timestamps:
+                time_basis = "event"
+            elif started_at is not None or ended_at is not None:
+                time_basis = "session"
+            else:
+                time_basis = "unknown"
             session = {
                 "id": current_id, "source": "Cursor", "type": "IDE",
                 "release": client_version,
-                "started_at": min(timestamps) if timestamps else None,
-                "ended_at": max(timestamps) if timestamps else None,
+                "started_at": started_at,
+                "ended_at": ended_at,
                 "source_mtime": mtime * 1000,
-                "time_basis": "event" if timestamps else "unknown",
+                "time_basis": time_basis,
                 "project_path": proj_str,
                 "project_id": opts.get("project_id"),
                 "source_cwd": proj_str,

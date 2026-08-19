@@ -30,8 +30,74 @@ Relevant paths under that base:
 `workspace.json` commonly stores `folder` as a `file://` string. Codess also
 accepts an object whose `folder.path` contains the path.
 
-The separate `~/.cursor/projects/<project-slug>/agent-transcripts/` tree is not
-part of the SQLite pipeline and is not currently ingested.
+### Terminal-Agent Storage
+
+Cursor records agent Sessions driven from a terminal (`cursor-agent`, also
+reachable as `cursor agent`) **outside** the SQLite pipeline this document
+otherwise describes. Two locations are observed, and only the second is
+current:
+
+| Path | State |
+|---|---|
+| `~/.cursor/projects/<project-slug>/` | **Current.** Holds `agent-transcripts/`, `agent-tools/`, `terminals/`, `canvases/`, and `mcps/` |
+| `~/.cursor/chats/<workspace-hash>/<agent-uuid>/store.db` | **Historical.** One SQLite database per Session; no longer written |
+
+Neither is ingested. Characterising the current tree is tracked as an open work
+item.
+
+**The historical store is set aside, not decoded.** `chats/` held one SQLite
+database per Session -- a `meta` row of hex-encoded JSON carrying `agentId`,
+`name`, `mode`, `lastUsedModel`, and an epoch-millisecond `createdAt`, plus a
+content-addressed `blobs` table of protobuf messages yielding `role`, typed
+`content[]` parts, and tool calls. Every instance observed was written between
+9 and 12 August 2025 against one model, and nothing under `chats/` has been
+written since while sibling directories have. The decision is to leave it
+undecoded: adapter work would be spent on Sessions no current release produces.
+
+What it establishes is worth keeping. Its designators shared almost nothing
+with `state.vscdb` -- a Session was `agentId` rather than `composerId`, a tool
+carried a `toolName` string rather than a `toolFormerData.tool` numeric enum, a
+message carried `role` plus typed `content[]` parts rather than an integer
+`type`, and no `serverBubbleId` existed, so the duplication described under
+Repetition and Deduplication did not arise. Only `createdAt` in epoch
+milliseconds agreed with this document's vocabulary.
+
+The rule that follows: **a Cursor storage location is read on its own terms.**
+Carrying a field name across from the GUI store is unsafe even within one
+vendor.
+
+**This storage is expired by the vendor.** `~/.cursor/projects/` carries
+zero-byte `.agent-data-cleanup-<YYYY-MM-DD>` sentinels, one per run, whose name
+is their entire content and whose mtime falls the day before the date they
+carry -- so they record that a sweep ran, not what it removed. Eight cover
+recent consecutive days.
+
+The window is not short. Measured across 609 files in 53 project directories:
+196 are under a week old, 185 one to four weeks, 112 one to three months, and
+116 older than three months, with the oldest at roughly six months. So the
+sweep is periodic rather than aggressive, and terminal-agent evidence is not
+about to vanish -- but it is deleted on a schedule Codess does not control,
+which the GUI store's retention does not do.
+
+### Opening a Cursor Store Read-Only
+
+Codess opens vendor databases read-only and does not modify them. Two access
+particulars are established:
+
+- **The GUI stores accept the read-only URI.** `sqlite3.connect("file:<path>?mode=ro",
+  uri=True)` is the form `cursor_source` uses against `state.vscdb`, and the
+  form `README` documents for direct inspection.
+- **The chat stores did not.** Every read-only URI open against
+  `~/.cursor/chats/*/*/store.db` failed with `unable to open database file` --
+  at the vendor path, at a copy outside the repository, and at a copy inside
+  it -- while a plain path open succeeded immediately on all three. The same
+  URI form works against Codess's own stores, so the form alone does not
+  explain it and the trigger is not yet identified.
+
+The consequence for discovery is what makes this worth recording: a store that
+cannot be opened is indistinguishable from a Source that is not present, so an
+open failure must be reported as an unreadable Source rather than counted as
+an absence.
 
 ## Storage Layout
 

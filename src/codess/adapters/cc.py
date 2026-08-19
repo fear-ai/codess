@@ -3,7 +3,6 @@
 import json
 import logging
 from collections.abc import Iterator
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +21,7 @@ from codess.hashing import codess_bytes_hash
 from codess.mapping import annotate_mapping
 from codess.sanitize import apply_sanitization, sanitize_value
 from codess.tool_result_status import application_failure_evidence
+from codess.units import epoch_milliseconds
 
 log = logging.getLogger(__name__)
 
@@ -441,23 +441,13 @@ def _build_tool_map(path: Path) -> dict[str, str]:
 
 
 def _parse_timestamp(ts: Any) -> float | None:
-    """Convert timestamp to Unix ms. Handles float or ISO 8601 string."""
-    if ts is None:
-        return None
-    if isinstance(ts, (int, float)):
-        return float(ts)
-    if isinstance(ts, str):
-        try:
-            # `fromisoformat` parses a `Z` suffix natively since 3.11, which
-            # is the declared floor, so the `+00:00` substitution five sites
-            # carried is removable duplication rather than a compatibility need.
-            dt = datetime.fromisoformat(ts)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=UTC)
-            return dt.timestamp() * 1000
-        except (ValueError, TypeError):
-            pass
-    return None
+    """Convert a Claude timestamp to Unix milliseconds.
+
+    Claude writes ISO-8601 strings today; the numeric paths the normalizer
+    handles are a guard against a format change rather than a shape real data
+    reaches.
+    """
+    return epoch_milliseconds(ts)
 
 
 def _get_timestamp(record: dict, opts: dict | None = None) -> float | None:

@@ -716,6 +716,39 @@ The `codess` command is the supported interface. The scripts under `tools/`
 are development and diagnosis aids that are not installed as commands and are
 run with the repository's Python. They are grouped here by what they answer.
 
+### Where a Measurement Is Read From
+
+A figure that describes the current state is read from a producer, not from a
+document: prose goes stale silently while a producer is re-run. This is the
+quick reference for which producer answers what, and which of them fails a
+build rather than merely reporting.
+
+| Producer | Location | Holds | Gated |
+|---|---|---|---|
+| `tools/quality_report.py` | `schema/quality-baseline.json` | Lint and type counts per rule and category, against recorded ceilings | **Yes** -- exits nonzero when a count rises |
+| `pytest` | -- | Pass and fail counts | **Yes** -- via the same report |
+| Refresh receipts | Registry, per Project | Ingest rate, Event counts, per-stage seconds | No |
+| `~/.codess/projects/*/current.json` | Registry | Published Project count, snapshot sizes and identity | No |
+| `tools/deep_audit.py` | Run output | Design-tier findings: `PLR`, `TRY`, `C901`, duplicate clusters | No |
+| `tools/field_coverage.py` | Run output | Which columns are empty, and for which vendors | Optional -- `--fail-on-gap` |
+| `tools/decode_audit.py` | Run output | Classification and relation consistency | **Yes** -- exits nonzero on any inconsistency |
+| `tools/value_survey.py` | Run output | Columns carrying no information, in six classes | No |
+
+**The gated ones are the durable record.** A count written into a document is
+strictly weaker than a baseline file, because the file fails the build when it
+drifts and the prose does not. Accept a new ceiling deliberately:
+
+```bash
+python tools/quality_report.py            # report and compare
+python tools/quality_report.py --accept   # record a new ceiling, and say why
+```
+
+**What a document should carry instead.** A count belongs in a work item only
+where it bounds the work -- which fields a mapping must decide, how many call
+sites a rule must reach -- because that is what tells a finished item from an
+unfinished one. A count that reports a moment belongs to a producer above, and
+the document names the producer.
+
 ### Decode and Evidence Audits
 
 These read ingested stores or vendor Sources and report structure, counts, and

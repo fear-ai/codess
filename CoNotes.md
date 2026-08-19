@@ -1070,6 +1070,31 @@ being changed, explicitly, every time either changes, even when a
 precedent for the distinction already exists elsewhere in the same
 document."
 
+#### A Delegation Written Without the Import It Required
+
+**Miss:** Consolidating three timestamp parsers onto one shared normalizer, the
+delegating body was written into all three modules but the `from codess.units
+import epoch_milliseconds` line was added to only two. The suite failed 43 tests
+with `NameError: name 'epoch_milliseconds' is not defined`, surfacing not at
+collection but at ingest, inside a subprocess, where the error arrived as
+`source.failed ... error_type=NameError` in progress output rather than as a
+traceback.
+
+This is the mirror of the entry below: there an autofix removed an import an
+edit needed, here an edit needed an import nobody added. The common shape is
+that *the set of modules an edit touches and the set whose imports it changes
+are the same set*, and treating them as one list is what keeps them equal.
+
+Consolidation makes the inverse error likely too, and it occurred in the same
+change: removing the last user of `datetime` from three modules left three
+unused imports, which the quality gate caught as a lint rise from 172 to 180.
+
+**Prompt that would have caught it:** "When a change replaces a local
+implementation with a call to a shared one, enumerate the modules first and
+treat adding the import and deleting the body as one edit per module -- then
+run the suite and the quality gate, because the first finds the module you
+forgot to import into and the second finds the module you forgot to clean up."
+
 #### An Automatic Import Fix Removing an Import the Same Edit Had Just Required
 
 **Miss:** Adding a type annotation and running `ruff --fix --select F401` in the

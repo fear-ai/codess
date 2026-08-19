@@ -27,7 +27,6 @@ import logging
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +39,7 @@ from codess.config import (
 from codess.fileio import open_readonly, quote_identifier
 from codess.hashing import codess_digest
 from codess.helpers import local_path_from_uri
+from codess.units import EPOCH_SECONDS_FLOOR, epoch_milliseconds
 
 log = logging.getLogger(__name__)
 
@@ -92,28 +92,21 @@ def quoted_column(columns: dict[str, str], name: str) -> str | None:
 
 
 def parse_timestamp(value: Any) -> float | None:
-    """Return a plausible Cursor timestamp as Unix milliseconds."""
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
+    """Return a plausible Cursor timestamp as Unix milliseconds.
+
+    Cursor bubbles carry values that are not times at all -- small counters and
+    enum codes sit in fields a reader might take for stamps -- so this adds a
+    plausibility floor the shared normalizer deliberately does not impose: a
+    numeric value below `EPOCH_SECONDS_FLOOR` is rejected rather than scaled.
+    Scaling it would manufacture a 1970s instant from a counter.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         number = float(value)
-        if number >= 1e12:
-            return number
-        if number >= 1e9:
-            return number * 1000
-        return None
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not stripped:
+        if number != number or number in (float("inf"), float("-inf")):
             return None
-        try:
-            dt = datetime.fromisoformat(stripped)
-        except (TypeError, ValueError):
+        if number < EPOCH_SECONDS_FLOOR:
             return None
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        return dt.timestamp() * 1000
-    return None
+    return epoch_milliseconds(value)
 
 
 def open_bubble_rows(

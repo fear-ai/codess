@@ -17,7 +17,10 @@ here.
 **A count here bounds work.** A figure appears only where it
 bounds the work -- which functions a change touches, how many call sites a rule
 must reach -- so it can be re-derived from the code and used to tell a finished
-item from an unfinished one. Each states how it was obtained. Figures that only
+item from an unfinished one. Each states how it was obtained, because a figure
+whose basis is unstated cannot be checked: `admin_cmd`'s undocumented flags are
+76 by distinct name and 142 by declaration, and an item citing neither basis
+matches neither measurement. Figures that only
 report a moment, such as a current error total, are not recorded here: they are
 read from `tools/quality_report.py` when needed, because a number written down
 is wrong by the next change and cannot close an item. No item carries a duration
@@ -43,6 +46,7 @@ which are checkable.
 | **Needs decision** | Blocked on a judgment, not on effort. The unanswered question is named on the item. Doing the work first would encode the wrong answer. |
 | **Postponed** | Deliberately outside the current phase. The reason is recorded on the item. |
 | **Withdrawn** | Examined and rejected. Retained so the reasoning is not rediscovered. |
+| **Closed** | Work complete and its rule recorded. The row is retained only because an open item continues or depends on it, and is removed once that item closes. |
 
 Priority states how much an item matters. It does not say when the work happens
 or what blocks it; the queue says that.
@@ -72,8 +76,12 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W71 | Normal | Planned | Adopt the reporting facility in the command layer | -- |
 | W72 | Normal | Planned | One Event-record builder per adapter; Cursor has none | -- |
 | W73 | High | Planned | Resolve or close the fifteen open vendor decode gaps CoPlan records | -- |
-| W74 | High | Planned | Cursor Session times dropped; unread populated fields; two vendor facts to record | -- |
-| W75 | Normal | Planned | Harness experiments for conditions no stored data records | Feeds W55, W73, W74 |
+| W74 | High | Planned | Cursor Session times dropped; unread populated fields; two vendor facts to record | Retrieved-reference policy split to W79 |
+| W75 | Normal | Postponed | Harness experiments for conditions no stored data records | Execution deferred; restart criteria on the item |
+| W76 | Normal | Postponed | Characterise current Cursor terminal-agent storage; the decoded store is obsolete | Restart criteria on the item |
+| W77 | Normal | Withdrawn | Time module -- W55 already specifies it | -- |
+| W78 | Low | Closed | Guard the module-level import graph against cycles | -- |
+| W79 | Normal | Postponed | Content policy for retrieved, attacker-influenced Artifact references | Needs a retrieval-bearing corpus |
 
 ## Queue
 
@@ -89,40 +97,56 @@ not a preference.
 | 5 | **W67** | Follows W66 directly and is mechanical once it lands: each relay already has an object to take, the measurement separating a relay from a builder is written down, and the five shared parameters are the same subset `ChildInvocation` carries. |
 | 6 | **W64 + W65** | W65's record-context cluster is adapter signatures, so consolidating before W04 rewrites them twice. W64 no longer waits on W04 -- what remains after the naming pass is dominated by optional-narrowing, which is what `strict_optional` decides -- but it is cheapest once the signatures have settled. |
 
-### Execution Rounds
+### Next Two Sprints
 
-The queue orders items; this groups them into sessions that can each finish. A
-round is sized to leave the suite green and the store readable at its end.
+The queue orders items by dependency and rebuild cost; this names the next two
+sessions and what closes each. A sprint is sized to leave the suite green and
+the store readable at its end, and is chosen on what is decided-and-unapplied
+or shares a rebuild rather than on queue rank.
 
-**Round 1 -- evidence, no store change.** W75 first: eight harness conditions,
-one session per vendor, producing observations three other items are waiting on.
-Then W05's named investigations, which need no rebuild because format-6 stores
-exist. Nothing here writes a column, so nothing blocks.
+**Sprint 1 -- the Cursor field pass, no store change.** W74.5a's map decisions:
+the nine `context` leaves, the `richText` mentions, `thinking`/`thinkingStyle`/
+`thinkingDurationMs`, `turnDurationMs`/`timingInfo`, `errorDetails`,
+`codeBlocks`, `requestId`/`usageUuid` as separate columns, `lastTerminalCwd`,
+`symbolLinks`/`fileLinks`, and `todos`. These add Event metadata and Artifact
+references rather than columns, so they land without a format change and the
+suite is the whole retest. W72's Cursor Event-record builder folds in, since
+these edits touch exactly the sites that lack one. W70 documentation runs
+alongside, per the standing rule.
 
-**Round 2 -- the Cursor field pass.** W74.5a's nine map decisions plus the
-`context` leaves, `webCitations`, and the `richText` mentions. These add Event
-metadata and Artifact references rather than columns, so they land without a
-format change. W74.1 (Session times) belongs here too: it fills
-`sessions.started_at`, which already exists. Retest is the null-count query
-recorded on the item.
+*Why first:* it is the largest body of decided-and-unapplied work in the list --
+every decision is written and none is applied -- and it needs neither a rebuild
+nor evidence from anything else. W79 is deliberately excluded so the policy
+question cannot hold up the other 33 fields.
 
-**Round 3 -- one wire-format change, batched.** W50 + W51 naming, W74.3's
-`duplicate_of` reference, and `tokenCount` retention for all three vendors.
-Every one needs a column or a rename, and the rebuild is paid once per format
-regardless of how many. Batching them is the whole argument; splitting costs
-three rebuilds.
+*Ends when:* the suite is green, the field-coverage tool reports the mapped
+fields populated, and each unmapped field carries a recorded reason.
 
-**Round 4 -- structure.** W66 then W67, in that order for the reason the queue
-states. W72's remaining adapter clusters fold in, since they touch the same
-signatures.
+**Sprint 2 -- one wire-format change, batched.** W50 + W51 naming, W74.3's
+`duplicate_of` reference, and `tokenCount` retention for all three vendors. Each
+needs a column or a rename, and the rebuild is paid once per format regardless
+of how many land together -- that is the entire argument, and splitting them
+costs three rebuilds of 30 Projects.
 
-**Round 5 -- enforcement.** W04's five steps, now that W75 has settled what the
-adapters must accept. W64 and W65 follow, since W04 moves the boundary they
-would otherwise be decided against.
+*Also closed by this sprint:* W74.1's corpus verification. The header fallback
+is written and covered by the suite, but the two Sessions of 86 that carry no
+`started_at` stay null until their Projects are reingested, which this sprint
+does anyway.
 
-**Continuous, not a round.** W70 (documentation partition), W71 (reporting
-adoption), and W73's fifteen decode gaps, which are individually small and each
-belong to whichever round touches their vendor.
+*Ends when:* the format is installed, every Project is reingested and
+republished, the null-`started_at` count for Cursor Sessions is zero, and a
+`--since` query returns the previously untimed Session.
+
+**Why not W05 or W04 in these two.** The queue ranks W05 first and W04 second,
+and both remain correct for the queue's purpose, which is ordering by dependency
+and rebuild cost. These sprints are chosen on a different axis: what is decided
+and unapplied, and what shares a rebuild. W05 produces evidence rather than
+consuming it and can start at any point; W04 rewrites adapter signatures, so
+running it before Sprint 1 would mean editing the Cursor adapter twice.
+
+**Continuous, not a sprint.** W70 (documentation partition), W71 (reporting
+adoption), and W73's decode gaps, which are individually small and each belong
+to whichever sprint touches their vendor.
 
 **Not queued**, each for a stated reason rather than for lack of room:
 
@@ -135,8 +159,8 @@ belong to whichever round touches their vendor.
 | **W43** | Withdrawn on inspection. Retained so the analysis is not repeated. |
 | **W55** | Correctness-neutral, so it batches with anything and blocks nothing. |
 | **W73** | Fifteen gaps in six groups; each belongs to the round that touches its vendor rather than to a round of its own. |
-| **W74** | Three findings settled, four open. The two touching the store are in round 3; the rest are round 2. |
-| **W75** | Round 1, and the only item that produces evidence rather than consuming it. |
+| **W74** | W74.1 closed in code; the field mapping is Sprint 1 and `duplicate_of` is Sprint 2, since it needs a column. |
+| **W75** | Postponed. Designed and segregated into machine and human parts; restarts when a dependent item needs an observation. |
 | **W70** | Documentation only, and continuous enough that queuing it would imply an end date it does not have. Do it alongside whatever item touches a document. |
 
 ## Dependencies and Batching
@@ -222,10 +246,17 @@ either not started or has a stated boundary.
 | Configuration unification | Measured and not begun. | W66 |
 | mypy strict flags | The count was reduced by repair rather than reclassification. Which flags to enable is undecided. | W64 |
 | Record-context parameter group | Identified; blocked behind W04 because it changes adapter signatures. | W65 |
-| Docstring summaries (`D205`) | The rule is selected and its 111 findings are a recorded ceiling, not zero. Four docstrings in `field_state` were rewritten as the worked example; the rest fall as files are edited. | -- |
-| Command-layer help text | 74 flags in `admin_cmd` carry no help, and `project.py` documents all of its own. Two were written where a verification step was being disabled; the remaining 72 are untouched, and `parents=` would let one declaration carry one help string to every subcommand. | W66 |
+| Docstring summaries (`D205`) | The rule is selected and its findings are a recorded ceiling, not zero. Four docstrings in `field_state` were rewritten as the worked example; the rest fall as files are edited. | -- |
+| Command-layer help text | 76 distinct flag names in `admin_cmd` carry no help; `project.py` documents all of its own. Two were written where a verification step was being disabled; `parents=` would carry one declaration to every subcommand. | W66 |
 | Event-record builders | `cursor` has no module-level builder and `cc`/`codex` have sites that bypass theirs. Found by `pylint R0801`, not started. | W72 |
-| Deep audit adoption | `tools/deep_audit.py` runs and logs; nothing yet acts on its DESIGN tier -- 444 `PLR`, 385 `TRY`, 73 `C901`, 16 duplicate clusters are reported and unqueued. | -- |
+| Deep audit adoption | `tools/deep_audit.py` runs and logs; nothing yet acts on its DESIGN tier. Counts are read from the tool rather than recorded here. | -- |
+| Time parsing consolidation | The three adapter parsers delegate to `units.epoch_milliseconds`, which answers R1-R8. The three inline `fromisoformat` callers -- `walk_sessions`, `token_usage`, `refresh_receipts` -- are untouched, and no check yet prevents a fourth parser appearing. | W55 |
+| Cursor Session times | **Closed in code, unverified against the corpus.** The header fallback is written and the suite covers it; the 2 Sessions of 86 that carry no `started_at` are still null in the published stores, because closing them needs the reingest that W74.3's column change also needs. | W74.1 |
+| Cursor field mapping | 34 populated bubble fields are dropped with no recorded reason; every decision is written and none is applied. The retrieved-reference policy is split out so the other 33 need not wait. | W74.5a, W79 |
+| `duplicate_of` reference | Decided and not built. Needs a column, so it batches with the next wire-format change rather than landing alone. | W74.3 |
+| Mechanical enforcement | Import boundaries, SQL ownership, module-level cycles, rejection vectors, and subprocess coverage each have a check. Mapping-profile conformance over emitted fixtures does not. | W04 |
+| Terminal-agent storage | The obsolete `chats/` store is characterised; the current `~/.cursor/projects/` tree is identified and not examined. | W76 |
+| Harness conditions | Designed, segregated into machine and human parts, and not run. | W75 |
 
 ## Item Detail
 
@@ -618,12 +649,30 @@ inventory and the rule each method follows.
 plus three further modules calling `datetime.fromisoformat` directly
 (`walk_sessions`, `token_usage`, `refresh_receipts`).
 
+**One of the three disagreements is now closed.** `cc` returned a seconds-scale
+number unchanged, so it landed in 1970 in a column CoSchema defines as
+milliseconds and read as a duration a thousand times too short; it also
+accepted `True` as a number, since `isinstance(True, int)` holds. Both are
+fixed, because a decoder disagreeing with the schema's stated unit is a
+conformance defect rather than a consolidation question. The remaining
+disagreements are what this item consolidates.
+
+Claude writes ISO-8601 strings today -- no numeric timestamp appears in any
+Session on the development machine -- so the fix guards a format change rather
+than a path real data reaches.
+
+**A test sentinel is a timestamp too.** A test asserting which of two positions
+is read used `999` as the nested value, which the scale rule then correctly
+multiplied. It is now a millisecond-scale constant, so the test exercises
+position selection alone. A fixture number that is not a plausible value of its
+own field will be reinterpreted by any rule that later reads it.
+
 They agree on ISO-8601 and disagree on three input classes:
 
 | Input | `cc` | `codex` | `cursor` |
 |---|---|---|---|
 | `"2026-01-01T00:00:00Z"` | 1767225600000.0 | 1767225600000.0 | 1767225600000.0 |
-| `1700000000` (seconds-scale) | **1700000000.0** | 1700000000000.0 | 1700000000000.0 |
+| `1700000000` (seconds-scale) | 1700000000000.0 | 1700000000000.0 | 1700000000000.0 |
 | `1700000000000` (ms) | 1700000000000.0 | 1700000000000.0 | 1700000000000.0 |
 | `True` | **1.0** | None | None |
 | `"  ...Z  "` (padded) | None | None | **1767225600000.0** |
@@ -685,12 +734,29 @@ under one name.
 
 | Site | Today | After |
 |---|---|---|
-| `adapters/cc._parse_timestamp` | Own implementation, no scaling, accepts `bool` | Calls the normalizer |
-| `adapters/codex._parse_timestamp` | Own implementation, scales, rejects `bool` | Calls the normalizer |
-| `cursor_source.parse_timestamp` | Own implementation, scales, strips whitespace | Calls the normalizer |
+| `adapters/cc._parse_timestamp` | **Delegates** to `units.epoch_milliseconds` | Done |
+| `adapters/codex._parse_timestamp` | **Delegates** to `units.epoch_milliseconds` | Done |
+| `cursor_source.parse_timestamp` | **Delegates**, keeping its plausibility floor | Done |
 | `walk_sessions` | `fromisoformat` inline on a session index | Calls the normalizer |
 | `token_usage` | `fromisoformat` inline on usage records | Calls the normalizer |
 | `refresh_receipts` | `fromisoformat` inline on receipt text | Calls the normalizer |
+
+**The three parsers are consolidated; the three inline callers are not.**
+`units.epoch_milliseconds` answers R1 through R8 and the adapters delegate to
+it. `units` was already the home for representation with no Codess import,
+which is what R-scope requires of the normalizer.
+
+**One vendor difference survived, and deliberately.** Cursor rejects a numeric
+value below `EPOCH_SECONDS_FLOOR` rather than scaling it, because Cursor bubbles
+carry counters and enum codes in fields a reader might take for stamps -- `999`
+and `0` are values it must refuse, while `cc` and `codex` read a small number as
+seconds. That floor is now a named constant applied by the caller, so the
+difference is stated rather than emergent from three separate implementations.
+
+**Consolidation removed the last `datetime` use from three modules**, leaving
+unused imports the quality gate caught as a lint rise. The gate is the reason
+this was noticed rather than committed: a consolidation that deletes the only
+caller of an import leaves the import behind.
 
 The thirteen time-bearing vendor fields -- `timestamp`, `fileMtime`,
 `createdAt`, `lastUpdatedAt`, `clientStartTime`, `started_at`, `completed_at`,
@@ -827,7 +893,7 @@ it should be stated once.
 supports.
 
 **How the duplication arose.** Not by neglect -- by the absence of a mechanism.
-`admin_cmd` builds **40 subparsers** and declares **157 flags inside them**,
+`admin_cmd` builds **42 subparsers** and declares **158 flags inside them**,
 and nothing in the file uses argparse's own `parents=` facility for shared
 options -- verified to do exactly this job: one declaration on a parent parser,
 inherited by every subparser that lists it. So a new subcommand that needs `--registry` gets it the only way the
@@ -896,7 +962,7 @@ an operator most needs to know what is being skipped. Both are now documented;
 the first four already said what they bypass *and* that a bypass is logged,
 which is the standard.
 
-**The gap is wider than those two.** 74 flags carry no help text, and **every
+**The gap is wider than those two.** 76 distinct flag names carry no help text, and **every
 one is in `admin_cmd`** -- `project.py` documents all of its own. So the
 administrative surface is undocumented as a class, not by oversight in a few
 places: `--registry`, `--source`, `--force`, `--min-size`, and `--raw-mode` are
@@ -1503,7 +1569,12 @@ path.
 **Work.** Four findings from reading vendor data rather than stores. Grouped
 because each is small and three touch the Cursor adapter.
 
-**1. Cursor Session times are extracted and then dropped.** `cursor_source`
+**1. Cursor Session times are extracted and then dropped. Closed.** The
+fallback is in `ingest_sources`: where a composer's bubbles carry no time, the
+Session takes `created_at` and `last_updated_at` from the header
+`cursor_source` already reads, and `time_basis` records `session` rather than
+`event` so a header-stated span is distinguishable from an Event-derived one.
+The finding that motivated it, for the re-measurement that confirms the fix: `cursor_source`
 reads `created_at` and `last_updated_at` from every composer header -- present
 on all 66 on the development machine -- and `adapters/cursor` never references
 either. Scan *does* use them, for the time-range row CursorSchema documents, so
@@ -1666,7 +1737,7 @@ reason**:
 | `symbolLinks`, `fileLinks` | 443 / 209 | JSON strings naming a symbol or file | **Map** | Explicit references to Artifacts, which the schema has a place for |
 | `todos` | 10 | JSON strings of task text | **Map** | Small, structured, and content a reader would search for |
 | `context` | 1,184 | nested containers, mostly empty | **Map the populated leaves** | Nine leaves do carry values: `terminalFiles` (153), `fileSelections` (20), `externalLinks` (5), `composers` (36), `selections`, `selectedImages`, `terminalSelections`. Those are Artifact and context references the store has a place for. The outer container is mostly empty; the leaves are not |
-| `webCitations` | 4 | `{"title": …, "url": "https://github.com/…"}` | **Map, with a content caution** | Title and URL, which is exactly an Artifact. Four instances define the shape completely. **But this is the first field carrying a URL and a label that a model retrieved rather than a person typed**, so both are attacker-influenced in a way a file path is not: a title can carry markup or a prompt-injection payload, and a URL can point anywhere. See the caution below |
+| `webCitations` | 4 | `{"title": …, "url": "https://github.com/…"}` | **Map**; policy is W79 | Title and URL, which is exactly an Artifact. Four instances define the shape completely. It is the first field carrying a URL and a label a model retrieved rather than a person typed, so escaping, redaction, and the no-fetch boundary are decided by W79 rather than here |
 | `tokenCount` | 19,999 | `{"inputTokens": 0, "outputTokens": 0}` | **Retain always** | Non-zero on 627 of 30,000. Retained regardless: an explicitly recorded zero is evidence the vendor reported no usage, which is not the same as the field being absent, and the distinction is exactly what a usage question needs. Applied to all three vendors, not only Cursor |
 | `conversationState` | 21,606 | base64, decodes to binary | **Record presence, size, digest** | Median length **1** and 95th percentile 1 -- almost every instance is a single character -- with a maximum of 57,101 and 21 MB total. Retaining the bytes stores an undecodable blob; retaining nothing loses the observation that it exists and how large it is. Presence, byte length, and a digest are queryable and bounded |
 | `capabilityType`, `capabilityStatuses` | 11,454 / 8,457 | `15`; nine phase names, all empty | **Record presence, document vocabulary** | The vocabulary is in CursorSchema. The values are numeric enums with no published meaning, so decoding them would be a guess; recording that they were present with which values is not |
@@ -1677,29 +1748,12 @@ reason**:
 | `serviceStatusUpdate`, `statusUpdates`, `skipRendering` | 1 / 4 / 10 | a UI message; `{}`; `false` | **Record presence only** | `serviceStatusUpdate` is a product notice addressed to the operator rather than evidence about the work; `statusUpdates` holds `{}` wherever it appears; `skipRendering` is `false` on all ten. Presence is the finding |
 | `promptDryRunInfo`, `attachedFileCodeChunksMetadataOnly` | 32 / 498 | UI tooltips; chunk metadata | **Record presence and size** | Context-assembly detail rather than the assembled context. Presence and size say whether a bubble had context trimmed |
 
-**A caution the retrieved-content fields raise.** `webCitations` -- and
-`externalLinks` inside `context`, and any `mention` resolving to a URL -- carry
-text and locations a model fetched from the open web. Three consequences the
-existing content policy does not yet cover, because until now the content it
-bounded was authored locally:
-
-- *A title is untrusted text.* It reaches a report or a terminal unescaped
-  today. The existing control-character and ANSI stripping in `sanitize` covers
-  the terminal case; markup and prompt-injection payloads reaching a downstream
-  consumer are not covered.
-- *A URL is not evidence that it is safe to visit.* Codess does not fetch, and
-  must not start; storing the string is right, and any consumer that follows one
-  is making its own decision. That boundary should be stated where the field is
-  documented rather than assumed.
-- *A URL can carry a secret.* A query string with a token is exactly what
-  `redact` exists for, and the redaction patterns should be checked against URL
-  shapes rather than assumed to cover them.
-
-The resolution is not to drop the field -- retrieved references are real
-evidence about what informed a response. It is to route these through the
-content policy on the same terms as message text, and to record in CoSchema that
-an Artifact URI from a retrieval is attacker-influenced where one from a file
-path is not. Scoped with the mapping work in round 2.
+**The retrieved-content fields raise a policy question, and it is W79's.**
+`webCitations`, `context.externalLinks`, and any `mention` resolving to a URL
+carry text and locations a model fetched from the open web, which the content
+policy does not currently distinguish from locally-authored text. Mapping them
+is in scope here; deciding how a retrieved reference is escaped, redacted, and
+documented is not, and waiting on that decision would hold the other 33 fields.
 
 **How the decisions were made, revised.** The first pass excluded eleven groups
 and three of those exclusions were wrong on the evidence:
@@ -1864,39 +1918,304 @@ recorded vendor fact.
 
 ### W75 -- Harness Experiments for Unrecorded Conditions
 
-**Work.** Reproduce named conditions against live harnesses and record what each
-writes. Stored data contains only what was written, so a question about a
-condition nobody has triggered cannot be answered by reading more of it.
+**Status: Postponed.** Designed and not run. The design is recorded because it
+is the part that decays -- which condition answers which question, and what
+counts as an answer -- while the running is an afternoon whenever a dependent
+item needs one.
 
-**Why an item rather than a note.** Six open questions across W73, W74, and W55
-all reduce to "does the vendor record this", and each is cheap to settle and
-impossible to settle by inspection. Grouping them means one session with three
-harnesses answers several at once.
+**Work.** Reproduce named conditions against live harnesses and record what
+each writes. Stored data contains only what was written, so a question about a
+condition nobody has triggered cannot be answered by reading more of it. The
+valuable outcome is frequently negative: *triggered and absent* closes a
+question permanently, and is the finding inspection cannot produce.
 
-| Condition | Question | Feeds |
+**Why one item.** Six open questions across W73, W74, and W55 reduce to "does
+the vendor record this". Each is cheap alone and they share one harness, so
+running them together costs little more than running any one.
+
+#### W75.1 Goal and Deliverable
+
+The goal is not a document; it is a decision unblocked. Each condition below
+names the item waiting on it, and closes by producing one row:
+
+| Deliverable | Form |
+|---|---|
+| Observation record | Condition, vendor, harness version, what was triggered, which fields changed, and their values -- including the fields that did **not** change |
+| Disposition | For the item waiting: *map it*, *record presence only*, or *declined, no source evidence* |
+| Fixture | Where a shape is new, a redacted vendor record added to `schema/coschema/fixtures/` |
+
+An observation that records only populated fields is half an answer. The
+absent field is what closes a gap as declined.
+
+#### W75.2 Machine Part
+
+Scriptable end to end, with no operator present. All three harnesses expose a
+non-interactive mode: `claude -p`, `codex exec`, and `cursor-agent -p`
+(reachable also as `cursor agent`). Each run uses a fresh Project directory so
+the vendor writes are isolated, then scans, ingests, and reads the named
+fields.
+
+| Condition | Vendor | Question | Feeds |
+|---|---|---|---|
+| Abort a turn mid-stream | Codex | Is `turn_aborted` the only abort evidence, and is a partial result written? | W73 duplicate-envelope |
+| Abort a turn mid-stream | Claude | 1,058 `lifecycle.vendor` Events carry no abort kind -- is one produced? | W73 lifecycle |
+| Force a tool failure | Cursor | Does `errorDetails` populate beyond the five observed, and does `toolFormerData.status` distinguish it? | W74.5a |
+| Run a turn with no tool call | Cursor | Is a local bubble still written without a `serverBubbleId`? | W74.3 |
+| Leave a composer idle across a session boundary | Cursor | Does `last_updated_at` advance with no new bubbles? | W74.1 |
+| Run one turn through the terminal agent | Cursor | Does `~/.cursor/chats` gain a store, and do its fields match the GUI store's? | W76 |
+
+The last is new and belongs to the machine part precisely because
+`cursor-agent` is scriptable: it is how W76's decoder gets a fixture whose
+provenance is known.
+
+**Steps, once per condition.** Create the scratch Project; run the harness
+non-interactively; trigger the condition (for an abort, terminate the process
+mid-stream); `codess scan` and `codess ingest --dir`; read the named vendor
+fields directly from the vendor store; record populated *and* absent.
+
+#### W75.3 Human Part
+
+Two conditions need a person because the trigger is a GUI affordance with no
+command equivalent. They are segregated here so that no one waits on a machine
+run to produce them, and so a session that has an operator present knows
+exactly what to do while they are there.
+
+| Condition | Steps | Record | Feeds |
+|---|---|---|---|
+| Deny a tool permission | Open the Project in Cursor; issue a prompt that requires a tool needing approval; when the dialog appears, choose **deny**; end the turn | `toolFormerData.userDecision` value, and whether any `capabilityStatuses` phase fired alongside it | W74.6 |
+| Interrupt a turn mid-stream | Open the Project in Cursor; issue a prompt producing a long response; press stop while output is streaming | Whether `capabilityStatuses` gains entries, whether `statusUpdates` becomes non-empty, and whether the partial text is retained | W74.6, lifecycle vocabulary |
+
+**Before the operator starts**, capture the composer's current bubble count and
+header `lastUpdatedAt`; **after**, re-read both. Without the before-value a
+changed field cannot be attributed to the condition.
+
+**Whether the human part is needed at all is itself a question.** If the
+terminal agent records a denied permission the same way the GUI does, the
+machine part covers it and these two conditions close without an operator.
+Establish that first: it is one scripted run, and it may retire this section.
+
+#### W75.4 Cross-Reference
+
+What each waiting item gets, and why it cannot get it by reading:
+
+| Item | Needs | Why inspection fails |
 |---|---|---|
-| Interrupt a Cursor turn mid-stream | Does `capabilityStatuses` gain entries, or `statusUpdates` become non-empty? | W74.6, the lifecycle vocabulary |
-| Force a Cursor tool failure | Does `errorDetails` populate beyond the 5 observed, and does `toolFormerData.status` distinguish it? | W74.5a |
-| Run a Cursor turn with no tool call | Is the local bubble still written without a `serverBubbleId`, or is that tool-specific? | W74.3, the duplicate mechanism |
-| Deny a Cursor tool permission | Is `userDecision` the only record, or does a phase fire? | W74.6 |
-| Abort a Codex turn | Is `turn_aborted` the only abort evidence, and is a partial result written? | W73 duplicate-envelope group |
-| Abort a Claude turn | Claude has 1,058 `lifecycle.vendor` Events and no abort kind -- is one produced? | W73 parentage/lifecycle |
-| Leave a Cursor composer idle across a session boundary | Does `last_updated_at` advance without new bubbles? | W74.1, Session times |
-| Emit a Claude timestamp in seconds | Does any vendor produce the seconds-scale value the three parsers disagree on? | W55 R3 |
+| W73 lifecycle | Whether Codex and Claude emit an abort kind | No stored Session on the machine was aborted |
+| W74.1 | Whether `last_updated_at` advances without bubbles | Requires a controlled idle interval |
+| W74.3 | Whether a no-tool turn writes a local-only bubble | The 4,053 observed groups are all tool bubbles |
+| W74.5a | The `errorDetails` shape beyond one cause | Five samples, all `HTTP 504` |
+| W74.6 | Whether a permission phase fires | `capabilityStatuses` is present but empty in stored data |
+| W76 | A fixture with known provenance | The seven stores are all one model, one month |
 
-**Method.** Each run is a fresh Project directory so the vendor writes are
-isolated, followed by a scan and ingest, followed by reading the vendor store
-directly for the fields named above. Record the observation whether or not the
-field populated: "triggered and absent" is the finding that closes a question,
-and is the one an inspection cannot produce.
+W55's seconds-scale question has left this item: CoSchema already defines the
+unit, so a decoder disagreeing with it was a conformance defect rather than an
+open question. It is fixed, and W77 owns the consolidation.
 
-**Evidence to close.** Each condition has a recorded observation naming what the
-vendor wrote, and each dependent question above is answered or reclassified as
-not-reproducible with the reason.
+#### W75.5 Restart Criteria
 
-**Cost.** One session per harness. No code change; the output is evidence that
-unblocks decisions in three other items.
+Reopen when any one becomes true, not on a schedule:
 
+1. **A W74.5a mapping decision is observed to be wrong.** Specifically: a
+   `normalized_status` derived from `toolFormerData.status` disagrees with a
+   retained `errorDetails` on real data. Checkable by query. Until then both
+   are mapped and retained, which is correct under either answer -- the same
+   argument W74.3 makes for `duplicate_of`.
+2. **W73's lifecycle or duplicate-envelope group reaches a decision** that
+   needs abort evidence.
+3. **W76's decoder needs a fixture** whose provenance is known rather than
+   inferred from seven same-version stores.
+4. **An operator is working in Cursor anyway** and can trigger W75.3 at near-zero
+   marginal cost.
+
+**Cost.** One session per harness for the machine part; minutes of operator
+time for the human part, if it survives criterion in W75.3. No code change; the
+output is evidence that unblocks decisions in four other items.
+
+### W76 -- The Cursor Terminal-Agent Storage
+
+**Status: Postponed.** The store that was decoded is obsolete. What replaced it
+is identified but not characterised, and characterising it is the work.
+
+**What was decoded, and why it is set aside.** `~/.cursor/chats/<workspace-hash>/
+<agent-uuid>/store.db` holds complete terminal-agent Sessions: a `meta` row of
+hex-encoded JSON carrying `agentId`, `name`, `mode`, `lastUsedModel`, and a
+`createdAt` in epoch milliseconds, plus a content-addressed `blobs` table whose
+protobuf messages yield `role`, typed `content[]` parts, and tool calls.
+Measured: 7 stores, 1,870 blobs, 236 messages, 219 `tool-call`, 126 `text`, 123
+`reasoning`.
+
+It is **not a current format**. Every store dates from 9-12 August 2025, every
+one records `gpt-5`, and no file anywhere under `chats/` has been written since.
+The directory itself has not been touched since August 2025 while its siblings
+have. Decoding it would spend adapter work on Sessions no current Cursor
+release produces.
+
+**Where the terminal agent writes now.** `~/.cursor/projects/<project-slug>/`,
+last written 18 August 2026, holding five subtrees:
+
+| Subtree | Apparent content |
+|---|---|
+| `agent-transcripts/<uuid>/` | Per-Session transcript directories |
+| `agent-tools/<uuid>.txt` | Per-invocation tool output as plain text |
+| `terminals/` | Terminal session records |
+| `canvases/` | Generated `.canvas.tsx` artifacts |
+| `mcps/` | MCP server records |
+
+CursorSchema already names this tree as outside the SQLite pipeline. That note
+predates the observation that it is now the *only* place terminal-agent
+Sessions land.
+
+**The vendor is pruning it.** `~/.cursor/projects/` carries
+`.agent-data-cleanup-2026-08-<dd>` markers for eleven consecutive recent days,
+so this storage is actively expired by Cursor rather than retained
+indefinitely. That is a decode consideration and a Codess capability argument
+at once: evidence Codess does not ingest promptly may not survive, which is
+the opposite of the GUI store's behaviour and worth stating before any adapter
+is written.
+
+**Work, when it restarts.** Characterise the `projects/` tree the way the two
+vendor stores were characterised: which files carry Session identity, message
+sequence, tool evidence, and time; whether a transcript is self-describing or
+needs the workspace store to interpret; what the cleanup markers actually
+remove. Then decide whether it is a third Cursor Source or an extension of the
+existing one.
+
+#### Preserving It Before Expiry
+
+**What the markers say, and what they do not.** `.agent-data-cleanup-<date>`
+files are zero bytes; the name is the entire content and the mtime is the day
+before the date carried. They record that a sweep ran, not what it removed, so
+nothing on disk states which Sessions were deleted or on what rule.
+
+**The window is wide enough that this is not urgent.** Across 609 files in 53
+project directories: 196 under a week old, 185 one to four weeks, 112 one to
+three months, 116 older than three months, oldest roughly six months. A sweep
+that leaves six-month-old files is periodic, not aggressive.
+
+**Archiving the whole tree is cheap.** 89 MiB total -- `agent-tools` 56 MiB,
+`agent-transcripts` 30 MiB, `terminals` 1.8 MiB, `canvases` 996 KiB, `mcps`
+924 KiB. That is under 4% of the 2,333 MiB the published stores already
+occupy, so a copy costs less than one Project's store set.
+
+**Preservation is not ingestion, and separating them is the point.** A copy
+made before a decoder exists is only useful if it is faithful and dated: the
+raw-evidence path already does exactly this, with content-addressed objects,
+recorded observation time, and a manifest. Preferred order:
+
+1. **Copy first, decode later.** Use the existing raw capture rather than
+   inventing a second archival mechanism -- the observation record is what
+   makes a later decode auditable, and a hand-made copy has no provenance.
+2. **Record the sweep boundary.** Retain the marker names alongside the copy;
+   they are the only evidence of when the vendor pruned, and a gap in a
+   transcript sequence is otherwise unexplainable.
+3. **Do not treat a copy as a Source.** An archived tree ingested as if it were
+   live would attribute vendor-deleted Sessions to the present, which is the
+   opposite of what the raw path is for.
+
+Archiving does not need this item to be started, and is the one part of it
+worth doing before the tree is characterised.
+
+#### Vendor Scale and Format, Into One Searchable Representation
+
+The reason the designator table matters is that a query must not need to know
+which Cursor storage a Session came from. CoSchema's existing convention
+answers this and no new mechanism is required: **a normalized column carries
+the common value, a paired `source_*` column carries what the vendor said, and
+`metadata` JSON carries the rest.** Applied to the two Cursor formats:
+
+| Vendor field | Format and scale | Common representation | Why that column |
+|---|---|---|---|
+| `createdAt` (chats), `createdAt` (bubbles) | Epoch ms, and ISO-8601 text on bubbles | `events.event_at` `REAL` ms via `units.epoch_milliseconds` | The store fixes the unit; the normalizer is the only place scale is decided |
+| `createdAt`/`lastUpdatedAt` (headers) | Epoch ms | `sessions.started_at`/`ended_at`, `time_basis='session'` | A header-stated span must stay distinguishable from an Event-derived one |
+| `agentId` / `composerId` | UUID / opaque id | `sessions.id`, plus `session_entity_id` derived | One identity column; the vendor spelling is a Source fact, not a query key |
+| `toolName` string / `toolFormerData.tool` numeric enum + `name` | String vs integer enum | `tool_invocations.tool_name` normalized; the integer retained in `metadata` | A numeric enum with no published meaning is recorded, not interpreted |
+| `role` + `content[].type` / integer `type` | Typed parts vs `1`=user `2`=assistant | `events.actor_kind`, `content_role`, `event_kind` | The vocabularies already exist; the integer is a source value |
+| `toolFormerData.status` / `errorDetails` | Vendor strings | `source_status` verbatim, `normalized_status` derived | The pairing the schema already uses everywhere |
+| `lastUsedModel` / per-bubble `modelInfo` | Session-level vs Event-level | `model_name_exact` verbatim, parts derived where resolvable | An unrecognized name leaves derived values null rather than guessed |
+| blob SHA-256 / `bubbleId` UUID | Content address vs assigned id | `source_record_locator` | Both are locators into vendor storage; neither is a common identity |
+
+**What this buys.** A `--tool-name Read` or `--since` query spans both formats
+without naming either, because the common columns hold comparable values and
+the scale question was answered once. What it does not do is erase the
+difference: `source_record_type`, `source_status`, and `metadata` still state
+which format a row came from, so a result can say what it is resting on.
+
+**The one genuine gap.** The two formats disagree on where the model is
+recorded -- Session-level in `chats`, Event-level in bubbles. A Session-level
+value maps cleanly; the reverse does not, since per-Event models cannot be
+collapsed to one without losing a Session that switched. Record the
+Session-level value as observed evidence and leave per-Event models where they
+are.
+
+**Restart criteria.** Any one:
+
+1. A terminal-agent Session is observed under `~/.cursor/projects/` for a
+   Project already ingested, so a comparison against the GUI store is possible.
+2. Cursor reasoning evidence is wanted and the GUI `thinking` mapping in W74.5a
+   proves insufficient.
+3. The cleanup markers are shown to remove evidence a reader needed, which
+   makes prompt ingestion a requirement rather than a convenience.
+
+**What the obsolete store still establishes**, and the reason this item retains
+it rather than deleting the measurement:
+
+- Cursor has recorded terminal-agent Sessions in a form entirely unlike the GUI
+  store, so a second Cursor format is a demonstrated pattern rather than a
+  hypothetical.
+- Its designators shared almost nothing with `state.vscdb`: `agentId` against
+  `composerId`, a `toolName` string against a `toolFormerData.tool` numeric
+  enum, `role` plus typed `content[]` against an integer `type`, and no
+  `serverBubbleId` at all. Only `createdAt` in epoch milliseconds agreed. A
+  successor format should be read on its own terms rather than by assuming the
+  GUI vocabulary carries across.
+- A read-only URI open (`file:<path>?mode=ro`) failed against these files at
+  three separate locations while a plain path open succeeded, and the trigger
+  was never identified. Recorded in CursorSchema, because a store that cannot
+  be opened is indistinguishable from a Source that is absent.
+
+### W79 -- Retrieved References Are Attacker-Influenced
+
+**Status: Postponed.** Lifted out of the Cursor field mapping so that mapping
+can land without waiting on a policy question, and because the corpus that
+would validate a policy does not exist yet: four instances.
+
+**Work.** State, and enforce, how Codess treats an Artifact reference a model
+retrieved rather than a person typed.
+
+**The distinction the content policy does not yet make.** Everything the policy
+bounds today was authored locally -- a file path, a command, a message. Cursor's
+`webCitations` (4 instances), `context.externalLinks` (5), and `richText`
+`mention` nodes resolving to a URL carry a title and a location fetched from the
+open web. Three consequences:
+
+- *A title is untrusted text.* `sanitize` strips control characters and ANSI,
+  which covers a terminal. Markup or a prompt-injection payload reaching a
+  downstream consumer is not covered.
+- *A URL is not evidence it is safe to visit.* Codess does not fetch and must
+  not start. Storing the string is right; a consumer that follows one is making
+  its own decision, and that boundary should be documented where the field is
+  rather than assumed.
+- *A URL can carry a secret.* A query string with a token is what `redact`
+  exists for, and the redaction patterns should be checked against URL shapes
+  rather than assumed to cover them.
+
+**Not a reason to drop the field.** A retrieved reference is real evidence about
+what informed a response. The resolution is to route these through the content
+policy on the same terms as message text, and to record in CoSchema that an
+Artifact URI from a retrieval is attacker-influenced where one from a file path
+is not.
+
+**Restart criteria.** Any one:
+
+1. A corpus carries enough retrieved references to characterise the shapes --
+   nine instances across three fields cannot establish what a title may contain.
+2. A consumer exists that renders Artifact titles or follows Artifact URIs,
+   which is what makes the escaping question concrete rather than theoretical.
+3. Redaction is audited against URL shapes and found not to cover a token in a
+   query string.
+
+**Cost.** A policy decision plus its enforcement, both small. The reason it is
+not done now is that the evidence to decide it well is four records.
 
 ## Maintenance Directions
 

@@ -1289,6 +1289,12 @@ class TestProductStatePartition:
         assert kinds, "no attachment events decoded"
 
 
+# A millisecond-scale stamp, so the assertions test which position is read
+# rather than the seconds-to-milliseconds scaling `_parse_timestamp` applies
+# below 1,000,000,000,000. A small sentinel would exercise both at once.
+NESTED_STAMP = 1_700_000_000_000
+
+
 class TestTimestampPresence:
     """Which of the two timestamp positions is read, and why truthiness fails.
 
@@ -1300,14 +1306,14 @@ class TestTimestampPresence:
 
     def test_zero_is_a_stamp(self):
         """`0` is 1970, not absence."""
-        record = {"timestamp": 0, "message": {"timestamp": 999}}
+        record = {"timestamp": 0, "message": {"timestamp": NESTED_STAMP}}
         assert cc._get_timestamp(record) == 0.0
 
     def test_vacant_falls_through_to_the_message(self):
         """Absent, null, and empty are all "the vendor said nothing here"."""
         for vacant in ({}, {"timestamp": None}, {"timestamp": ""}):
-            record = {**vacant, "message": {"timestamp": 999}}
-            assert cc._get_timestamp(record) == 999.0, vacant
+            record = {**vacant, "message": {"timestamp": NESTED_STAMP}}
+            assert cc._get_timestamp(record) == float(NESTED_STAMP), vacant
 
     def test_unparseable_does_not_fall_through(self):
         """A stated but bad value is a finding, not a reason to look elsewhere.
@@ -1315,7 +1321,7 @@ class TestTimestampPresence:
         Falling through would mask it behind the nested stamp and lose the
         `malformed` diagnostic that says the vendor wrote something unreadable.
         """
-        record = {"timestamp": "not-a-date", "message": {"timestamp": 999}}
+        record = {"timestamp": "not-a-date", "message": {"timestamp": NESTED_STAMP}}
         opts: dict = {"diagnostics": {}, "field_diagnostics": []}
         assert cc._get_timestamp(record, opts) is None
         assert opts["diagnostics"] == {"field_malformed": 1}

@@ -131,10 +131,10 @@ fail the check until they are closed or explained.
 | Finding | Impact | Related work |
 |---|---|---|
 | Runtime mapping conformance | Released profiles do not govern every emitted vendor candidate uniformly | W04 |
-| Query path fragmentation | Query-contract parity is incomplete; the fixed reports now have a domain home but remain outside the typed executor by design | W05, W13 |
+| Query path fragmentation | Query-contract parity is incomplete; the fixed reports now have a domain home but remain outside the typed executor by design | W05 |
 | Ancillary unbounded reads | Resolved: persisted tool output is refused above a bound *before* the read, the worktree digest records size and mtime past 32 MB, and the raw manifest is streamed | Closed |
 | Project identity fallback | Direct library writes can create unrelated provisional Project IDs | W14 |
-| Test observability | Child-process scan and ingest paths are not attributed by ordinary coverage | W13 |
+| Test observability | Resolved: `tests/conftest.py` starts coverage in child processes, so scan and ingest are attributed to their modules | Closed |
 | Configuration fragmentation | 172 flags, 83 environment variables, and 39 names spelled in more than one module; a default is decided in up to four places with no stated precedence | W66 |
 | Relay parameter groups | Five functions forward eight or more parameters that exist only to reach another call | W67 |
 | Operational reporting fragmentation | Resolved: one event contract, three gates, five sinks, and per-sink levels so retention and display are independent | Closed |
@@ -519,7 +519,7 @@ number would not identify them, since the shape is ours. They are superseded
 observations awaiting re-ingest, and `verify_store_identity` refuses them on
 `application_id` before any mapping check runs.
 
-Query-contract parity is part of **W13**. Checked-in JSON schemas and the
+Query-contract parity is part of **W05**. Checked-in JSON schemas and the
 hand-written runtime validator do not merely risk drifting independently —
 verified during a later review pass that every `schema/*-v1.json` and
 `schema/*-contract.json` file declaring `"$schema":
@@ -649,7 +649,10 @@ available, since canonical ordering cannot move to a declarative schema and
 action-dependent validity should not. Pydantic has neither limitation but
 would let the JSON files drift from a generated class. Neither trade is
 worth making while the runtime validator is correct and covered by vectors.
-The architecture and coverage portions of W13 remain open.
+The architecture and coverage checks this section calls for are now built:
+import boundaries, SQL ownership, rejection vectors, and subprocess
+attribution each have a test. Query-contract parity remains open and belongs
+to W05.
 
 `tests/fixtures/validate_request_vectors.json` and
 `tests/test_validate_request_vectors.py` supply the correctness baseline any
@@ -879,11 +882,12 @@ separately as **W35** (Postponed).
 
 ### Test Observability
 
-Subprocess coverage is tracked by **W13**. CLI integration tests execute scan and
-ingest in child processes, so ordinary branch coverage cannot attribute those
-paths and cannot locate their untested branches reliably. Subprocess coverage
-or directly tested domain coordinators should supply that evidence while the
-installed-interface subprocess tests remain in place.
+**Resolved.** CLI integration tests execute scan and ingest in child
+processes, so ordinary branch coverage attributed none of it -- `scan_cmd`
+reported 0% against 53 tests that run it. `tests/conftest.py` sets
+`COVERAGE_PROCESS_START` and places a `sitecustomize` on `PYTHONPATH` for the
+children, active only when the parent is already measuring, so the installed-
+interface subprocess tests stay in place and are now attributed.
 
 ### Operational Reporting
 
@@ -3125,25 +3129,30 @@ same point in start-up.
 
 
 
-**Status: Postponed.** The test layout matches the intended validation
-layers, but file names alone do not prove architectural compliance. Every
-check below is nonetheless a consequence of work that is itself incomplete,
-so building the enforcement first would fix the current structure in place
-and require rework as those items land. Each is therefore recorded against
-its owning item and revisited when that item completes, rather than tracked
-as separate work:
+**The import graph is guarded, not reviewed.** A module-level cycle count has
+a defensible expected value of zero, so it is a check rather than a
+measurement. `tests/test_layer_boundaries.py` builds the graph from depth-0
+imports only and asserts no strongly-connected component.
+
+Counting *every* import instead reports two components -- the `config`/`snapshot`
+leaf cluster and the `project`/`cli` dispatch cluster -- and both are closed
+solely by imports deferred into a function body. That is the mechanism holding
+the layering, not a violation of it: `config` is a leaf 31 modules depend on and
+cannot import `snapshot` at load time, and `project` is the console entry point
+whose job is dispatching to a command adapter. So the module-level count is the
+one worth asserting, and the deferred edges are the reason it is zero.
+
+Verified by injecting `import codess.snapshot` at module level in `config` and
+confirming the failure names all eight modules of the cluster. The first
+injection attempt silently failed to apply and the check passed against
+unmodified source; a check confirmed only by a passing run is not confirmed.
+
+**What remains unbuilt, and who owns it.**
 
 | Mechanical check | Owning item |
 |---|---|
-| Import-boundary test for adapter, source, store, query, and CLI layers | W13; a module-level import-cycle count has a defensible expected value of zero and is the cheapest half (experiments/structural-analysis-tools.md) |
-| SQL-ownership check recognizing the narrow focused-audit exception | W13; the boundary changes have supplied it, so every module holding SQL is now a source-access, query, or store module |
-| Module-level import-cycle count, expected zero | W13; measured at zero today, with all 15 apparent cycles running through deliberate deferred imports (experiments/structural-analysis-tools.md) |
 | Mapping-profile conformance over every emitted adapter fixture | W04 |
-| Query-request vectors covering every rejection path, with a check that no path lacks a vector | W13 |
 | Transaction-failure tests at each source replacement and publication edge | Unowned: the publication identity these would test is settled, so the check can be built |
-| Subprocess-aware coverage for scan and ingest, keeping installed CLI integration tests | W13 |
-| Operational-event contract, channel-separation, privacy, and error-boundary tests | Satisfied: `tests/test_reporting.py` and `tests/test_progress.py`, with stdout verified byte-identical across profiles |
-| Small real-Source validation per changed vendor decoder, extended to a multi-vendor Project only when common classification or query behavior changes | Satisfied: every Project the machine holds, zero classification inconsistencies |
 
 Coverage percentage is supporting evidence, not an acceptance criterion by
 itself. Completion depends on the named failure, boundary, and use case being

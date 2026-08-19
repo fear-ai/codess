@@ -1660,10 +1660,13 @@ recognize: the number describes where coverage was collected, not what the
 suite ran.
 
 **Collecting the child processes** needs `coverage`'s own subprocess support --
-a `.pth` file on the path calling `coverage.process_startup()`, `parallel =
-True`, and `COVERAGE_PROCESS_START` pointing at that configuration, then
-`coverage combine`. Wiring this into the ordinary invocation is W13; until it
-is, read a command-module percentage as unmeasured rather than as untested.
+`parallel = True`, `COVERAGE_PROCESS_START` pointing at the configuration, and
+`coverage combine`. This is wired into the ordinary invocation: `tests/conftest.py`
+sets the variable and places a `sitecustomize` on `PYTHONPATH` for the children,
+active only when the parent is already measuring. A `sitecustomize` rather than
+the documented `.pth`, because a `.pth` must be written into site-packages and a
+checkout must not modify the machine it runs on; Python imports both at the same
+point in start-up.
 
 ### 11.3 Validation Sequence
 
@@ -1727,9 +1730,10 @@ Operational reporting is **built but not adopted**, and the distinction
 matters: `codess.reporting` implements the contract -- gates, event structure,
 sinks, profiles, privacy -- and is exercised by its own tests, while the
 command layer still writes status through the facilities it was built to
-replace. Measured across `src/`: 8 `reporting.*` call sites against 43
-`print(file=sys.stderr)` calls and 63 direct `sys.stderr` writes, all in the
-four command modules.
+replace. The imbalance is the point rather than its exact size: `reporting.*`
+call sites number in the low tens against roughly sixty direct `sys.stderr`
+writes, all in the four command modules. Re-derive with a grep over `src/`
+before acting, since the figure moves as adoption proceeds.
 
 The stdout half is correct and should not change: a `print()` carrying a
 requested result is the result channel, which is what lets `--output-format
@@ -1795,7 +1799,7 @@ consuming program can read stdout alone.
 |---|---|
 | **W04** | A shared candidate-record contract enforced at the decode boundary, so every vendor is held to the same released profile rather than to whatever its adapter emits. |
 | **W05** | Predicates and reconstruction reviewed against real investigations, so the query surface is known to answer the questions asked of it. |
-| **W13** | Mechanical enforcement of the architecture and contract paths, so the boundaries this document asserts are checked rather than described. |
+| **Mechanical enforcement** | The architecture and contract paths are checked rather than described. Import boundaries, SQL ownership, module-level import cycles, request-rejection vectors, and subprocess coverage attribution each have a test; mapping-profile conformance over emitted fixtures is the remaining piece and belongs to W04. |
 
 **Order within the baseline.** W04 comes first: coverage reporting states loss
 against exactly the profiles W04 enforces, so a report built before that
