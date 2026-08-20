@@ -332,6 +332,48 @@ def _composer_headers(
     }
 
 
+def _headerless_composers(conn: sqlite3.Connection) -> dict[str, dict]:
+    """Composers holding bubbles that `composerHeaders` does not list.
+
+    Cursor keeps three indexes of the same composers and they do not agree.
+    `composerHeaders` is the smallest; global `composerData:` rows outnumber it,
+    and the workspace `composer.composerData` index covers a third set. A
+    Session reachable only from an index nothing reads is not decoded at all --
+    measured on the development machine, 107 composers hold bubbles without a
+    header, and the workspace fallback recovers 75 of them.
+
+    This recovers the remainder from the global `composerData:` row, which
+    states `composerId`, `createdAt`, and the composer's own settings. It states
+    no `workspaceId`, so a Project binding has to come from elsewhere; that is
+    why these are returned separately rather than merged into the header read,
+    and why `selection_source` records where each came from.
+    """
+    if not table_columns(conn, "cursorDiskKV"):
+        return {}
+    recovered: dict[str, dict] = {}
+    for key, value in conn.execute(
+        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'"
+    ):
+        composer_id = str(key).split(":", 1)[1] if ":" in str(key) else None
+        if not composer_id or value is None:
+            continue
+        try:
+            data = json.loads(value)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        recovered[composer_id] = {
+            "workspace_id": None,
+            "created_at": data.get("createdAt"),
+            "last_updated_at": data.get("lastUpdatedAt"),
+            "is_archived": bool(data.get("isArchived")),
+            "is_subagent": bool(data.get("isSubagent")),
+            "selection_source": "global.composerData",
+        }
+    return recovered
+
+
 def _composer_settings(conn: sqlite3.Connection, composer_ids: set[str]) -> dict[str, dict]:
     """Interaction settings each named composer states in `composerData`.
 
@@ -384,6 +426,35 @@ def _composer_settings(conn: sqlite3.Connection, composer_ids: set[str]) -> dict
                 # unknown model, so it is retained as the selection and withheld as one.
                 if name.strip().casefold() != "default":
                     observed["model"] = name.strip()
+            # `selectedModels` states parameters beside the model id. A speed
+            # parameter is the one the name does not always carry: `composer-2`
+            # and `composer-2-fast` are distinct names, but a composer may set
+            # `fast` on a model whose name does not say so, and reading only the
+            # name would lose it.
+            selected = model_config.get("selectedModels")
+            if isinstance(selected, list):
+                for entry in selected:
+                    if not isinstance(entry, dict):
+                        continue
+                    parameters = entry.get("parameters")
+                    if not isinstance(parameters, list):
+                        continue
+                    for parameter in parameters:
+                        if not isinstance(parameter, dict):
+                            continue
+                        identifier = parameter.get("id")
+                        value = parameter.get("value")
+                        # The vendor writes the value as a string, so `"true"`
+                        # is the assertion and anything else is not: `false`
+                        # appears and must not set the tier.
+                        if identifier == "fast" and str(value).casefold() == "true":
+                            observed["speed"] = "fast"
+                        # `store` already reads `effort` into
+                        # `reasoning_effort`, and the name does not always
+                        # carry it: only the `*-high-*` aliases encode a
+                        # strength, while a composer may set one on any model.
+                        elif identifier == "effort" and isinstance(value, str) and value.strip():
+                            observed["effort"] = value.strip()
         if observed:
             settings[composer_id] = observed
     return settings
@@ -398,6 +469,13 @@ def get_composer_headers(
     try:
         with closing(connect_readonly(db_path)) as conn:
             headers = _composer_headers(conn, workspace_ids)
+            if workspace_ids is None:
+                # Only when the caller asked for every composer: a
+                # `composerData:` row states no workspace, so it cannot be
+                # filtered by one and including it under a workspace selection
+                # would widen that selection silently.
+                for composer_id, recovered in _headerless_composers(conn).items():
+                    headers.setdefault(composer_id, recovered)
             try:
                 settings = _composer_settings(conn, set(headers))
             except sqlite3.Error as exc:

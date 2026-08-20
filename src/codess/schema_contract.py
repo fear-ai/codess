@@ -24,7 +24,7 @@ DDL_PATH = PACKAGE_ROOT / "sqlite" / "schema.sql"
 MAPPINGS_ROOT = REPO_ROOT / "schema" / "mappings"
 
 FORMAT_ID = "codess.coschema"
-FORMAT_VERSION = 6
+FORMAT_VERSION = 7
 APPLICATION_ID = 0x434F4445
 # Derived from FORMAT_VERSION rather than restated. Codess never migrates a
 # store: a format change is a rebuild from the vendor Sources, because the store
@@ -391,8 +391,16 @@ def require_store(conn: sqlite3.Connection, *, write: bool) -> int:
         )
     supported = SUPPORTED_WRITE_FORMATS if write else SUPPORTED_READ_FORMATS
     if version not in supported:
+        # The remedy is stated because the refusal is expected after an
+        # upgrade, not exceptional: Codess never migrates a store, so a store
+        # written under an older format is recomputed from its vendor Sources
+        # rather than altered. A reader who is told only the version mismatch
+        # has no way to know that reingest is the whole procedure.
         raise UnsupportedStoreError(
-            f"unsupported CoSchema format {version}; supported={sorted(supported)}"
+            f"unsupported CoSchema format {version}; supported={sorted(supported)}. "
+            "This store predates the installed contract and is not migrated: "
+            "rebuild it with `codess ingest --dir <project> --force`, which "
+            "recomputes the store from the vendor Sources and republishes it."
         )
     meta = store_metadata(conn)
     if meta.get("format_id") != FORMAT_ID or int(meta.get("format_version", -1)) != version:

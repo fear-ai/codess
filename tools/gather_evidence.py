@@ -26,7 +26,7 @@ def main() -> int:
     args = parser.parse_args()
     components = {}
     report = build_evidence_inventory(
-        args.store_root, cursor_db=args.cursor_db, claude_root=args.claude_root,
+        args.store, cursor_db=args.cursor_db, claude_root=args.claude_root,
         claude_max_files=args.claude_max_files, component_reports=components,
     )
     if args.component_dir:

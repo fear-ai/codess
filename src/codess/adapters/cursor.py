@@ -33,7 +33,31 @@ _MAPPED_BUBBLE_FIELDS = frozenset({
     "type", "text", "createdAt", "timingInfo", "serverBubbleId",
     "toolFormerData", "toolResults", "modelInfo", "conversationSummary",
     "contextWindowStatusAtCreation",
+    # Reasoning. Codex maps its equivalent to `message.reasoning_summary` and
+    # produces thousands of Events; without these a reader comparing reasoning
+    # across vendors sees Cursor as having none, which is false.
+    "thinking", "thinkingStyle", "thinkingDurationMs",
+    # The only measured durations Cursor records. `timingInfo` above is already
+    # read for a timestamp fallback, so the shape is proven.
+    "turnDurationMs",
+    # A recorded failure is what a tool-result status should reflect.
+    "errorDetails",
+    # Artifact and context references the store has a place for.
+    "lastTerminalCwd", "symbolLinks", "fileLinks", "todos", "codeBlocks",
+    "context",
+    # A request and its response are a Model Turn edge; mapping them to one
+    # column would erase the direction. `requestId` appears only on user
+    # bubbles and `usageUuid` only on assistant bubbles, never both.
+    "requestId", "usageUuid",
 })
+
+# Nine leaves inside `context` carry values; the outer container is mostly
+# empty, which is why reading its top level found nothing. Each names an
+# Artifact or a context reference.
+_CONTEXT_LEAVES = (
+    "terminalFiles", "fileSelections", "externalLinks", "composers",
+    "selections", "selectedImages", "terminalSelections",
+)
 _PROGRESS_ROWS = 1000
 _PROGRESS_SECONDS = 5.0
 
@@ -111,6 +135,140 @@ def _context_window_metadata(data: dict) -> dict:
         values["context_observation_provenance"] = (
             "bubble.contextWindowStatusAtCreation"
         )
+    return values
+
+
+def _reasoning_metadata(data: dict) -> dict:
+    """Cursor's per-bubble reasoning, under the names the other vendors use.
+
+    Codex records the same evidence as `message.reasoning_summary`. Naming it
+    the same way here is what lets one query compare reasoning across vendors;
+    keeping Cursor's spelling would make the comparison a per-vendor special
+    case.
+    """
+    values: dict = {}
+    # `thinking` is an object, not a string: `text` carries the reasoning and
+    # `redactedThinking` marks a chunk the vendor withheld. Reading it as a
+    # string drops every instance silently, which is what the first version of
+    # this function did -- measured at 3,546 bubbles on the development machine.
+    thinking = data.get("thinking")
+    if isinstance(thinking, dict):
+        text = thinking.get("text")
+        if isinstance(text, str) and text.strip():
+            values["reasoning_summary"] = text
+        if thinking.get("redactedThinking"):
+            # The vendor states that reasoning existed and was withheld, which
+            # is not the same as none being produced.
+            values["reasoning_redacted"] = True
+        if thinking.get("isLastThinkingChunk") is not None:
+            values["reasoning_final_chunk"] = bool(
+                thinking.get("isLastThinkingChunk")
+            )
+    elif isinstance(thinking, str) and thinking.strip():
+        values["reasoning_summary"] = thinking
+    style = data.get("thinkingStyle")
+    if style is not None and not isinstance(style, (dict, list)):
+        values["reasoning_style"] = style
+    duration = data.get("thinkingDurationMs")
+    if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+        values["reasoning_duration_ms"] = duration
+    return values
+
+
+def _duration_metadata(data: dict) -> dict:
+    """The only durations Cursor measures, in milliseconds as the name states."""
+    values: dict = {}
+    turn = data.get("turnDurationMs")
+    if isinstance(turn, (int, float)) and not isinstance(turn, bool):
+        values["turn_duration_ms"] = turn
+    timing = data.get("timingInfo")
+    if isinstance(timing, dict):
+        for source_name, target in (
+            ("clientStartTime", "client_start_time"),
+            ("clientEndTime", "client_end_time"),
+            ("clientSettleTime", "client_settle_time"),
+            ("clientRpcSendTime", "client_rpc_send_time"),
+        ):
+            value = timing.get(source_name)
+            if value is not None and not isinstance(value, (dict, list)):
+                values[target] = value
+    return values
+
+
+def _error_metadata(data: dict) -> dict:
+    """A vendor-recorded failure, retained verbatim beside any mapped status.
+
+    The shape is established from few instances, so the whole object is kept
+    rather than projected into columns a later sample would contradict.
+    """
+    details = data.get("errorDetails")
+    if not isinstance(details, dict) or not details:
+        return {}
+    return {"source_error_details": details}
+
+
+def _reference_metadata(data: dict) -> dict:
+    """Artifact and context references Cursor states directly.
+
+    `context` is walked rather than read at its top level: the container is
+    mostly empty and its populated leaves are where the references are.
+    """
+    values: dict = {}
+    cwd = data.get("lastTerminalCwd")
+    if isinstance(cwd, str) and cwd.strip():
+        values["terminal_cwd"] = cwd.strip()
+    for source_name, target in (
+        ("symbolLinks", "symbol_links"),
+        ("fileLinks", "file_links"),
+        ("todos", "todos"),
+        ("codeBlocks", "code_blocks"),
+    ):
+        value = data.get(source_name)
+        if isinstance(value, list) and value:
+            values[target] = value
+    context = data.get("context")
+    if isinstance(context, dict):
+        leaves = {
+            name: context[name] for name in _CONTEXT_LEAVES
+            if isinstance(context.get(name), list) and context[name]
+        }
+        if leaves:
+            values["context_references"] = leaves
+    return values
+
+
+def _turn_edge_metadata(data: dict) -> dict:
+    """The request/response identifiers, kept apart because they differ.
+
+    `requestId` appears only on user bubbles and `usageUuid` only on assistant
+    bubbles, and no bubble carries both. They correlate across adjacent
+    bubbles, so one identifies a request and the other its response -- mapping
+    them to a single column would erase that direction.
+    """
+    values: dict = {}
+    request = data.get("requestId")
+    if isinstance(request, str) and request.strip():
+        values["source_request_id"] = request.strip()
+    usage = data.get("usageUuid")
+    if isinstance(usage, str) and usage.strip():
+        values["source_usage_id"] = usage.strip()
+    return values
+
+
+def _bubble_evidence(data: dict) -> dict:
+    """Every mapped-but-uncolumned bubble value, as one metadata dict.
+
+    Grouped so a bubble is enriched the same way wherever an Event is built:
+    the alternative is four call sites that drift apart, which is how
+    `contextWindowStatusAtCreation` came to be merged at three of them and not
+    the fourth.
+    """
+    values: dict = {}
+    for extract in (
+        _context_window_metadata, _reasoning_metadata, _duration_metadata,
+        _error_metadata, _reference_metadata, _turn_edge_metadata,
+    ):
+        values.update(extract(data))
     return values
 
 
@@ -666,7 +824,7 @@ def _bubble_to_events(
             event, field="prompt_origin", state=field_state.ABSENT,
             source_field="bubble.origin",
         )
-        _merge_metadata(event, _context_window_metadata(data))
+        _merge_metadata(event, _bubble_evidence(data))
         yield mapped(event, "cursor.bubble")
         return
 
@@ -688,8 +846,48 @@ def _bubble_to_events(
                 "assistant_message", "response", "assistant",
                 truncated, content_len,
             )
-            _merge_metadata(response, _context_window_metadata(data))
+            _merge_metadata(response, _bubble_evidence(data))
             yield mapped(response, "cursor.bubble")
+
+        # Reasoning is its own Event, because Cursor never puts it beside a
+        # response: measured over 40,000 bubbles, every one carrying `thinking`
+        # has empty `text`, so the response branch above emits nothing for them
+        # and the reasoning would be lost with the bubble. Codex already emits
+        # `message.reasoning_summary` for the same evidence, so a cross-vendor
+        # reasoning query needs no per-vendor case.
+        reasoning = _reasoning_metadata(data)
+        summary_text = reasoning.get("reasoning_summary")
+        if isinstance(summary_text, str) and summary_text.strip():
+            processed = apply_processing(
+                summary_text, opts, vendor="Cursor",
+                record_type="bubble.thinking",
+                event_kind="message.reasoning_summary", phase="pre",
+            )
+            if processed and processed.strip():
+                bounded, reasoning_len = truncate_content(
+                    processed, TRUNCATE_RESPONSE
+                )
+                # `retained` rather than reassigning `bounded`: post-processing
+                # may refuse the body and return `None`, which is a different
+                # type from the bounded text, and a second name keeps both
+                # readable and checkable.
+                retained = apply_processing(
+                    bounded, opts, vendor="Cursor",
+                    record_type="bubble.thinking",
+                    event_kind="message.reasoning_summary", phase="post",
+                )
+                if retained is not None:
+                    think_ev = base_ev(
+                        "assistant_message", "reasoning_summary", "assistant",
+                        retained, reasoning_len,
+                    )
+                    think_ev["event_id"] = f"{event_id}:reasoning"
+                    think_ev["event_kind"] = "message.reasoning_summary"
+                    think_ev["actor_kind"] = "model"
+                    think_ev["content_role"] = "reasoning"
+                    think_ev["origin_kind"] = "model_generated"
+                    _merge_metadata(think_ev, _bubble_evidence(data))
+                    yield mapped(think_ev, "cursor.reasoning")
 
         summary_value = data.get("conversationSummary")
         if isinstance(summary_value, str) and summary_value.strip():
@@ -744,7 +942,7 @@ def _bubble_to_events(
                     ):
                         if summary.get(key) is not None:
                             metadata[key] = summary[key]
-                    metadata.update(_context_window_metadata(data))
+                    metadata.update(_bubble_evidence(data))
                     compact["metadata"] = json.dumps(
                         metadata, separators=(",", ":")
                     )

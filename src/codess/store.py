@@ -1723,8 +1723,76 @@ def replace_session_events(
         _record_tool(conn, event, row_id)
         _record_artifact(conn, event, row_id)
         _link_specialized_content(conn, row_id)
+    _record_session_model_evidence(conn, session_id)
     if prune:
         prune_unreferenced_records(conn)
+
+
+def _record_session_model_evidence(conn: sqlite3.Connection, session_id: str) -> None:
+    """Fill the Session's model basis and switch count from its Model Turns.
+
+    Runs after the turns exist, because both values are read from them.
+
+    **The count is the research value.** `session_model_count` is the number of
+    distinct models that served the Session, so a model-switch question is a
+    predicate rather than a join and a grouped count -- and a Session that
+    changed model mid-way is findable, which is the population such a question
+    is usually about.
+
+    **The basis keeps a derived value honest.** Where the vendor stated a
+    Session-level model, that stands and the basis is `vendor`. Where it stated
+    none, the first model observed to serve a turn is recorded with the basis
+    `initial_event`, so the column answers "which model did this Session start
+    with" without ever claiming the vendor said so. Claude records the model per
+    assistant record and never as a Session header, so every one of its Sessions
+    takes this path; without the basis the two claims would be indistinguishable
+    in one column.
+
+    A derived value is not a summary: for a Session that switched, the initial
+    model is one of several and `session_model_count` is what says so.
+    """
+    row = conn.execute(
+        "SELECT session_model_param_id FROM sessions WHERE id=?", (session_id,),
+    ).fetchone()
+    if row is None:
+        return
+    stated = row["session_model_param_id"]
+    distinct = conn.execute(
+        """
+        SELECT COUNT(DISTINCT mt.model_param_id)
+        FROM model_turns mt
+        WHERE mt.session_id=? AND mt.model_param_id IS NOT NULL
+        """,
+        (session_id,),
+    ).fetchone()[0]
+    if stated is not None:
+        conn.execute(
+            "UPDATE sessions SET session_model_basis='vendor', session_model_count=? "
+            "WHERE id=?",
+            (distinct, session_id),
+        )
+        return
+    initial = conn.execute(
+        """
+        SELECT mt.model_param_id
+        FROM model_turns mt
+        WHERE mt.session_id=? AND mt.model_param_id IS NOT NULL
+        ORDER BY mt.sequence_no
+        LIMIT 1
+        """,
+        (session_id,),
+    ).fetchone()
+    if initial is None:
+        conn.execute(
+            "UPDATE sessions SET session_model_count=? WHERE id=?",
+            (distinct, session_id),
+        )
+        return
+    conn.execute(
+        "UPDATE sessions SET session_model_param_id=?, "
+        "session_model_basis='initial_event', session_model_count=? WHERE id=?",
+        (initial[0], distinct, session_id),
+    )
 
 
 def prune_unreferenced_records(conn: sqlite3.Connection) -> None:

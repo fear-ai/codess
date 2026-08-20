@@ -213,7 +213,7 @@ def audit_store(path: Path) -> dict[str, object]:
             report["diagnostics"] = {
                 f"{row[0]}/{row[1]}": int(row[2])
                 for row in conn.execute(
-                    "SELECT reason_code, level, COUNT(*) FROM mapping_diagnostics "
+                    "SELECT reason_code, granularity, COUNT(*) FROM mapping_diagnostics "
                     "GROUP BY 1,2 ORDER BY 3 DESC LIMIT 20"
                 )
             }

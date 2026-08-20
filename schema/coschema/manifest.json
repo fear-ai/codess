@@ -4,7 +4,7 @@
   "files": {
     "contract": {
       "path": "schema/coschema/contract.json",
-      "sha256": "3a9b6b51603e29324acdcde29445aaa8890157b9bb40a82b9fab85d79d8dbc7c"
+      "sha256": "1cad281c52300ba94831753555ced26dedaac81c0d02eda672e046028c1a4387"
     },
     "fixture_compatibility_store_meta_v2": {
       "path": "schema/coschema/fixtures/compatibility/store-meta-v2.json",
@@ -64,11 +64,11 @@
     },
     "sqlite_schema": {
       "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "09be77f0dbc319f759d9eb225c58047c5aff1368d1a2fa55b58582e6b623880d"
+      "sha256": "a4d25f99110aac5554340973b16a113813faba96bc0e2f6a92042c8b8f951510"
     }
   },
   "format_id": "codess.coschema",
-  "format_version": 6,
+  "format_version": 7,
   "reader_compatibility": {
     "legacy_read": [
       1

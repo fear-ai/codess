@@ -125,6 +125,29 @@ the API and is the only value a reader can compare against vendor
 documentation. The decomposed columns are filled beside it, never in place of
 it, and a name Codess cannot resolve leaves them null rather than guessed.
 
+**Two model levels, answering two questions.** `sessions.session_model_param_id`
+and `model_turns.model_param_id` are not a value and its summary; they answer
+different questions and neither is derived from the other:
+
+| Level | Question it answers | Populated by |
+|---|---|---|
+| `sessions.session_model_param_id` | What was this Session *configured* with | The vendor's own Session-level statement, where one exists |
+| `model_turns.model_param_id` | Which model *served* this turn | Per-turn evidence, overriding the Session default |
+
+The Session value seeds turn resolution rather than summarizing it: a turn with
+no stated model inherits it, and a turn that states one overrides it. So a
+Session-level null is not a decode gap. Claude records the model per assistant
+record and never as a Session header, so all of its Sessions carry null here
+while every one of its Model Turns carries a model -- the true answer is that
+the vendor states no Session-level model, and CoSchema's rule that an unstated
+value stays null applies directly.
+
+**Query the turn level for cross-vendor model comparison**, because that is the
+level all three vendors populate. Sessions do change model mid-way -- measured
+at 17 of 415 Sessions carrying more than one distinct model across their turns
+-- so a Session-level answer would be wrong for exactly the population a
+comparison question is usually about.
+
 **Vendor releases are recorded, never gated.** Each Session stores the
 harness version observed in its source records (`sessions.harness_version`,
 with `sessions.release` for the product release where the vendor supplies

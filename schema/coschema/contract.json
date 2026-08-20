@@ -1,6 +1,6 @@
 {
   "format_id": "codess.coschema",
-  "format_version": 6,
+  "format_version": 7,
   "application_id": 1129268293,
   "compatibility_policy": {
     "unknown_change": "manual_review",
@@ -341,6 +341,15 @@
           "type": "reference",
           "nullable": true,
           "target": "model_params"
+        },
+        "session_model_basis": {
+          "type": "vocabulary",
+          "nullable": true,
+          "vocabulary": "session_model_basis"
+        },
+        "session_model_count": {
+          "type": "integer",
+          "nullable": true
         },
         "metadata": {
           "type": "json_extension",
@@ -1287,6 +1296,10 @@
       "retired",
       "missing",
       "unknown"
+    ],
+    "session_model_basis": [
+      "vendor",
+      "initial_event"
     ]
   }
 }

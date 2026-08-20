@@ -1675,17 +1675,26 @@ For a change:
 1. inspect the exact source shape and distinguish absent, malformed,
    unsupported, and valid field states;
 2. state the mapping and retained source evidence;
-3. run focused unit, contract, adapter, store, or query tests;
-4. run the complete automated suite;
-5. exercise the smallest real Project containing the affected source shape;
-6. add one Project for each additional adapter changed;
-7. use a multi-source Project for common classification or query behavior;
-8. use a large or skewed Project only for the scale claim being made; and
-9. for any decode, classification, or mapping change, run
-   `tools/decode_audit.py` over the Projects exercised in steps 5 to 7 and
-   confirm it exits zero.
+3. run `ruff check` and `mypy` over the changed files **before** any test;
+4. run focused unit, contract, adapter, store, or query tests;
+5. run the complete automated suite;
+6. exercise the smallest real Project containing the affected source shape;
+7. add one Project for each additional adapter changed;
+8. use a multi-source Project for common classification or query behavior;
+9. use a large or skewed Project only for the scale claim being made; and
+10. for any decode, classification, or mapping change, run
+    `tools/decode_audit.py` over the Projects exercised in steps 6 to 8 and
+    confirm it exits zero.
 
-Step 9 is what makes the classification claim re-checkable rather than
+**Step 3 precedes step 4 because a static defect is cheap to find and expensive
+to find late.** An undefined name is reported by both checkers in about a
+second, naming the file and the line. The same defect reaching the suite is
+reported by whichever test happened to execute that path -- and where the path
+runs in an ingest subprocess, it arrives as `source.failed ... error_type=...`
+in progress output, with no file, no line, and no traceback. Observed: a missing
+import surfaced as 43 failing tests rather than one linter line.
+
+Step 10 is what makes the classification claim re-checkable rather than
 observed once. The audit is content-free, so it can run over whatever real
 Projects a developer has locally, and its nine invariants fail the run rather
 than reporting a number nobody compares. `tools/quality_report.py` covers the

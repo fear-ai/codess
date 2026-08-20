@@ -82,6 +82,14 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W77 | Normal | Withdrawn | Time module -- W55 already specifies it | -- |
 | W78 | Low | Closed | Guard the module-level import graph against cycles | -- |
 | W79 | Normal | Postponed | Content policy for retrieved, attacker-influenced Artifact references | Needs a retrieval-bearing corpus |
+| W80 | High | Closed | Read `composerData.modelConfig` for every composer, not only headered ones | -- |
+| W81 | Normal | Postponed | Cursor Artifact evidence in adjacent key spaces: patch graphs, checkpoints, file snapshots | Restart criteria on the item |
+| W82 | High | Closed | Tools carry unchecked SQL; a renamed column broke the mandated audit silently | -- |
+| W83 | High | Postponed | Early-access release readiness | B1 is the owner's decision; restart criteria on the item |
+| W84 | Low | Postponed | Characterise `selectedModels` parameters beyond `fast` and `effort` | Both observed ids are mapped; no third has appeared |
+| W85 | Normal | Postponed | 98 Cursor composers decode but no Project can claim them | Retention boundary established; binding still needs a validated signal |
+| W86 | High | Planned | Skipped and refused records are counted but not attributed | -- |
+| W87 | Normal | Planned | Group the test corpus by subsystem; find superseded and uncovered cases | -- |
 
 ## Queue
 
@@ -104,45 +112,49 @@ sessions and what closes each. A sprint is sized to leave the suite green and
 the store readable at its end, and is chosen on what is decided-and-unapplied
 or shares a rebuild rather than on queue rank.
 
-**Sprint 1 -- the Cursor field pass, no store change.** W74.5a's map decisions:
-the nine `context` leaves, the `richText` mentions, `thinking`/`thinkingStyle`/
+**Sprint 1 -- the wire-format change.** W50 + W51 naming, W74.3's `duplicate_of`
+reference, and `tokenCount` retention for all three vendors. Each needs a column
+or a rename, so they land together.
+
+*Also closed here:* W74.1's corpus verification. The header fallback is written
+and covered by the suite, but the two Sessions of 86 carrying no `started_at`
+stay null until their Projects are reingested, which this sprint does anyway.
+
+*Why first:* these are the changes that have been waiting on a format, and the
+naming resolutions are wire-format decisions that every later item reads
+through. Doing the field mapping first would mean mapping into column names
+W50 and W51 then rename.
+
+*The rebuild is a step, not an obstacle.* Install the contract, `codess ingest
+--force` each Project, republish: on the order of minutes of machine time for
+the current corpus, once per format regardless of how many columns changed.
+Batching is worth doing because it is free to do, not because a rebuild needs
+avoiding.
+
+*Ends when:* the format is installed, every Project is reingested and
+republished, the Cursor null-`started_at` count is zero, and a `--since` query
+returns the previously untimed Session.
+
+**Sprint 2 -- the Cursor field pass.** W74.5a's map decisions: the nine
+`context` leaves, the `richText` mentions, `thinking`/`thinkingStyle`/
 `thinkingDurationMs`, `turnDurationMs`/`timingInfo`, `errorDetails`,
 `codeBlocks`, `requestId`/`usageUuid` as separate columns, `lastTerminalCwd`,
 `symbolLinks`/`fileLinks`, and `todos`. These add Event metadata and Artifact
-references rather than columns, so they land without a format change and the
-suite is the whole retest. W72's Cursor Event-record builder folds in, since
-these edits touch exactly the sites that lack one. W70 documentation runs
-alongside, per the standing rule.
+references, so the suite is the whole retest. W72's Cursor Event-record builder
+folds in, since these edits touch exactly the sites that lack one.
 
-*Why first:* it is the largest body of decided-and-unapplied work in the list --
-every decision is written and none is applied -- and it needs neither a rebuild
-nor evidence from anything else. W79 is deliberately excluded so the policy
-question cannot hold up the other 33 fields.
+*Why second:* it is the largest body of decided-and-unapplied work in the list,
+and it lands against column names Sprint 1 has settled. W79 is excluded so a
+policy question decided by four records cannot hold up the other 33 fields.
 
-*Ends when:* the suite is green, the field-coverage tool reports the mapped
-fields populated, and each unmapped field carries a recorded reason.
+*Ends when:* the suite is green, `field_coverage.py` reports the mapped fields
+populated, and each unmapped field carries a recorded reason.
 
-**Sprint 2 -- one wire-format change, batched.** W50 + W51 naming, W74.3's
-`duplicate_of` reference, and `tokenCount` retention for all three vendors. Each
-needs a column or a rename, and the rebuild is paid once per format regardless
-of how many land together -- that is the entire argument, and splitting them
-costs three rebuilds of 30 Projects.
-
-*Also closed by this sprint:* W74.1's corpus verification. The header fallback
-is written and covered by the suite, but the two Sessions of 86 that carry no
-`started_at` stay null until their Projects are reingested, which this sprint
-does anyway.
-
-*Ends when:* the format is installed, every Project is reingested and
-republished, the null-`started_at` count for Cursor Sessions is zero, and a
-`--since` query returns the previously untimed Session.
-
-**Why not W05 or W04 in these two.** The queue ranks W05 first and W04 second,
-and both remain correct for the queue's purpose, which is ordering by dependency
-and rebuild cost. These sprints are chosen on a different axis: what is decided
-and unapplied, and what shares a rebuild. W05 produces evidence rather than
+**Why not W05 or W04 in these two.** The queue ranks them 1 and 2 and stays
+correct for its purpose, which is ordering by dependency. These sprints are
+chosen on what is decided and unapplied. W05 produces evidence rather than
 consuming it and can start at any point; W04 rewrites adapter signatures, so
-running it before Sprint 1 would mean editing the Cursor adapter twice.
+running it before the Cursor field pass would mean editing that adapter twice.
 
 **Continuous, not a sprint.** W70 (documentation partition), W71 (reporting
 adoption), and W73's decode gaps, which are individually small and each belong
@@ -165,20 +177,18 @@ to whichever sprint touches their vendor.
 
 ## Dependencies and Batching
 
-**W50 and W51 must land together.** Both rename stored columns, and each alone
-owes a full rebuild of every Project from vendor Sources -- Codess never migrates
-a store, because the store is a projection and the way to change a projection is
-to recompute it. Landing them separately costs two rebuilds for one result.
+**W50 and W51 land together.** Both rename stored columns, and Codess never
+migrates a store -- the store is a projection, and the way to change a
+projection is to recompute it. Landing them together is simply tidier than
+recomputing twice for one result.
 
-**What a rebuild costs.** A wire-format change is not an `ALTER TABLE`.
+**What a rebuild is.** A wire-format change is not an `ALTER TABLE`.
 `require_store` accepts only the current format, for reading as well as writing,
-so every `.codess` store on a machine is unreadable by the new code until its
-Project is reingested. Concretely: install the new contract, `codess ingest
---force` every Project, republish -- once per Project on the machine, regardless
-of how many columns the format changed. That is the argument for batching: the
-cost scales with the number of Projects and not with the size of the change, so a
-change that is ready should not wait, and a change that is not ready should not
-force the batch to wait for it.
+so a store is unreadable by the new code until its Project is reingested:
+install the contract, `codess ingest --force` each Project, republish. The cost
+scales with Project count rather than with the size of the change, which is why
+batching is worth doing -- but it is minutes of machine time, so a change that
+is ready should not wait for one that is not.
 
 ### Corpus Baseline
 
@@ -229,9 +239,15 @@ absence produced a defect:
 2. **Finish a kind before starting another.** The recurring defect is a change
    of one kind exposing an unrelated one and both being pursued at once -- which
    is how a rename reached a call site it should not have.
-3. **Run `tools/quality_report.py` before declaring a kind complete.** It gates
+3. **Run `ruff check` and `mypy` on the changed files before running tests.**
+   A name error is a static fact: both checkers name the file and line in a
+   second, while the suite reports the same defect as whichever test executed
+   the path -- and inside an ingest subprocess, as a `source.failed` progress
+   line with no location at all.
+4. **Run `tools/quality_report.py` before declaring a kind complete.** It gates
    ruff and mypy against recorded ceilings and has caught regressions the test
-   suite did not.
+   suite did not. It already runs the three in the right order: ruff, mypy,
+   then pytest.
 
 ### Stopping Points
 
@@ -2140,12 +2156,12 @@ the scale question was answered once. What it does not do is erase the
 difference: `source_record_type`, `source_status`, and `metadata` still state
 which format a row came from, so a result can say what it is resting on.
 
-**The one genuine gap.** The two formats disagree on where the model is
-recorded -- Session-level in `chats`, Event-level in bubbles. A Session-level
-value maps cleanly; the reverse does not, since per-Event models cannot be
-collapsed to one without losing a Session that switched. Record the
-Session-level value as observed evidence and leave per-Event models where they
-are.
+**Where the model is recorded differs by format, and the schema already has
+the answer.** See [Session and Event Model Evidence](#session-and-event-model-evidence)
+below: `chats` states one model per Session, bubbles state one per Event, and
+CoSchema carries both levels rather than choosing. The chat store's
+`lastUsedModel` becomes `sessions.session_model_param_id`; per-bubble
+`modelInfo` stays on the Model Turn.
 
 **Restart criteria.** Any one:
 
@@ -2216,6 +2232,730 @@ is not.
 
 **Cost.** A policy decision plus its enforcement, both small. The reason it is
 not done now is that the evidence to decide it well is four records.
+
+### W80 -- The Cursor Model Is Recorded, and Mostly Not Read
+
+**Work.** Resolve a Cursor Session's model from `composerData.modelConfig` for
+every composer, not only for the composers that have a header row.
+
+**The defect.** `session_model_param_id` is filled from header metadata, and
+headers exist for **66** composers while `composerData:` rows exist for
+**159**. Measured over those 159, `modelConfig` is present on every one and
+`modelName` states a real model on **134**:
+
+| Value | Composers |
+|---|---|
+| `composer-1.5` | 56 |
+| `default` | 25 |
+| `composer-2` | 15 |
+| `composer-2.5` | 13 |
+| `composer-2-fast` | 12 |
+| `composer-1` | 11 |
+| `grok-4.5` | 8 |
+| `cursor-grok-4.5-high-fast` | 6 |
+| `composer-2.5-fast` | 5 |
+| `grok-4.6` | 4 |
+| `claude-4.6-sonnet-medium-thinking` | 3 |
+| `claude-4.6-opus-high-thinking` | 1 |
+
+`default` is the absence of a choice rather than a model named "default", and
+`store` already refuses it -- that rule stands. The other 134 are exact model
+names Codess is not reading.
+
+**`selectedModels` is a second shape on 37 composers**, carrying
+`{"modelId": "composer-2.5", "parameters": [{"id": "fast", "value": "true"}]}`.
+That names a model *and* a speed parameter, which is `speed_tier` evidence the
+name alone does not always carry.
+
+**What the timeline shows, and what it cannot.** 44 of 86 ingested Cursor
+Sessions carry no model. Grouped by start day, **37 of the 44 fall on a single
+day, 2026-02-25**, against one or two on every other day. The no-model Sessions
+have a median of 43 Events against 129 for the rest and a median span of 0.4
+minutes against 1.2, so they are smaller and shorter but not empty -- none has
+zero Events. A 37-on-one-day concentration against a flat background is a bulk
+write, matching the replay mechanism already recorded for tool bubbles, rather
+than a property of short Sessions.
+
+**Version cannot be ruled in or out from the store**, and reading `release` as
+evidence would be a mistake this item should not repeat. Every Cursor Session
+reports `3.16.17` because Cursor writes one current client version for the
+whole store and `get_client_version` attests the version *observed at read
+time*, not the version a Session ran under -- the function says so. So a
+uniform `release` across Sessions spanning February to August is an artifact of
+how the value is obtained, not a finding. Establishing whether the 2026-02-25
+Sessions were written by a different release needs vendor-side evidence the
+store does not carry.
+
+**Closed, and the fix found a larger defect than the one it was filed for.**
+`_composer_settings` was called with `set(headers)`, so settings were read only
+for composers `composerHeaders` lists. The header table is the *smallest* of
+three indexes Cursor keeps: 66 headers against 166 global `composerData:` rows,
+and **107 composers hold bubbles with no header at all**, carrying 75,473
+bubbles between them. The workspace `composer.composerData` fallback already
+recovered 75 of those; the remaining 32 were reachable from no index Codess
+read.
+
+`_headerless_composers` now recovers a composer from its global `composerData:`
+row. Measured after the change, `get_composer_headers` returns **164 composers
+against 66**, and **134 carry a model** where 32 did.
+
+**A recovered composer is not attributed to a Project, and must not be.** A
+`composerData:` row states no `workspaceId`, and checking all 98 for any
+workspace, folder, cwd, or root-path field found **none** -- one carries context
+file references, which is not a binding. Ingest selects composers by workspace,
+so recovery is applied only when the caller asks for every composer and is
+skipped under a workspace filter; admitting an unbound composer there would
+widen the selection silently and attribute a Session to a Project on no
+evidence. That boundary is the reason ingested Session counts did not move:
+what improved is the evidence carried by the Sessions that *are* bound, and
+Cursor Event volume rose from 135,327 to 156,138 on reingest.
+
+**What remains open, as its own question rather than as this item.** 98
+composers hold decodable bubbles that no Project can claim. Attributing them
+needs an identity source that does not exist in the global store -- a workspace
+index that lists them, or vendor evidence binding a composer to a folder. Until
+one is found the honest state is that they are visible and unattributed, which
+is what `selection_source` records.
+
+**`selectedModels` remains unmapped.** 37 composers carry
+`{"modelId": ..., "parameters": [{"id": "fast", "value": "true"}]}`, which names
+a speed parameter the model name does not always carry. It belongs with
+`speed_tier` and is small; it did not land here because the model-name path was
+the defect and this is an addition.
+
+### W81 -- Cursor Artifact Evidence in Adjacent Key Spaces
+
+**Work.** Decide, per key space, whether Cursor's file-change records become
+Artifact evidence.
+
+**What is there.** `cursorDiskKV` holds 444,476 rows and Codess reads two key
+spaces (`bubbleId:`, `composerData:`). The unread ones carry file evidence:
+
+| Key space | Rows | Holds | First reading |
+|---|---|---|---|
+| `agentKv:blob:` | 209,951 | **A second complete message corpus** -- see below | 77,721 message-shaped blobs |
+| `checkpointId:` | 7,718 | `files`, `activeInlineDiffs`, `newlyCreatedFolders`, `nonExistentFiles` | Names files per checkpoint: 1,321 file references in a 500-row sample |
+| `codeBlockDiff:` | 1,417 | `newModelDiffWrtV0`, `originalModelDiffWrtV0` | A diff pair per code block |
+| `ofsContent:` | 789 | File content keyed by composer and `file://` URI | **586 distinct file URIs**; the key alone is an Artifact reference |
+| `messageRequestContext:` | 678 | Harness context per message request | Already documented as separate; not decoded |
+| `inlineDiff:` | 545 | Inline diff state | -- |
+| `patch-graph:` | 354 | `fileUri`, `patches`, `provenance`, `version` | **162 distinct file URIs**, with `provenance.spans` naming an owner per span |
+
+#### What `agentKv` Actually Holds
+
+Every key is `agentKv:blob:<sha256>`, content-addressed like the terminal-agent
+store. Of the rows examined, **77,721 are complete conversation messages** in a
+shape the bubble tables do not use:
+
+```json
+{"id": "...", "role": "assistant", "content": [{"type": "tool-call", ...}],
+ "providerOptions": {"cursor": {"requestId": "6c743a9e-..."}}}
+```
+
+| Measure | Value |
+|---|---|
+| Roles | `tool` 47,372, `assistant` 26,072, `user` 4,254, **`system` 23** |
+| Content part types | `tool-call` 47,672, `tool-result` 47,372, `text` 26,541, `reasoning` 4,733, `redacted-reasoning` 3,736 |
+| Distinct `requestId` values | 3,762, of which **2,740 also appear on bubbles** |
+
+**Three things here exist nowhere else in what Codess decodes.**
+
+1. **The system prompt.** The 23 `system` messages carry the harness prompt
+   itself (`"You are an AI coding assistant, powered by Composer..."`). No
+   other Cursor structure records it, and it is the evidence that says what the
+   model was instructed to do.
+2. **`redacted-reasoning` as a content type**, 3,736 instances. The bubble
+   `thinking.redactedThinking` flag says reasoning was withheld; this says so as
+   a first-class content part.
+3. **`tool-result` beside `tool-call` in one message stream.** The bubble format
+   splits these across records joined by `toolCallId`; here they are sequential
+   parts of one conversation.
+
+**It joins to what is already decoded.** 2,740 of 3,762 `requestId` values
+appear on bubbles Codess already reads, so these messages attach to known
+Sessions rather than forming an unattributable pool. The 1,022 that do not are
+the interesting remainder: either Sessions whose bubbles were pruned, or
+requests that never produced one.
+
+**Recommended handling, and the reason for each part.**
+
+| Part | Treatment | Why |
+|---|---|---|
+| `system` messages | **Map**, as `message.context` with `origin_kind` harness-injected | Small, bounded, and the only record of the instruction the model received |
+| `reasoning` / `redacted-reasoning` | **Map** alongside the bubble reasoning already decoded | Same evidence class, and the redaction flag is a distinct fact from absence |
+| `tool-call` / `tool-result` | **Do not map as new Events; use to verify** | The bubbles already produce these Events, and mapping both would double-count every tool interaction. The value is as a cross-check on pairing, which is a decode-audit question rather than a store one |
+| `user` / `assistant` text | **Do not map** | Duplicates bubble text for the 2,740 joinable requests; retaining both would double the searchable corpus for no new evidence |
+| Binary blobs | **Record presence and size only** | Leading bytes are `0a...`, so protobuf, but the schema is unpublished. Decoding it would be a guess, and the bodies are unbounded content the resource policy governs |
+
+**The rule this follows** is the one already applied to `toolResults` and
+`conversationState`: a duplicate of something already carried is not evidence,
+and an undecodable blob is recorded by presence rather than retained whole. What
+makes `system` and the reasoning parts different is that nothing else carries
+them.
+
+**Bounded, not exempt.** At a median 879 bytes and a maximum of 11 MB, these
+blobs are unbounded content and belong under the same resource policy as
+message text.
+
+**`patch-graph` provenance is the notable one.** Each meta row carries spans of
+the form `{"start": 1, "end": 19, "owner": "<uuid>"}`, so the vendor records
+*which agent turn owns which line range of a file*. Nothing in CoSchema
+currently carries per-span authorship, and it is exactly the evidence an
+"what did the model actually change" question wants.
+
+**Bounded by the content policy, not exempt from it.** `ofsContent` and
+`agentKv` are file bodies, so they are unbounded content and belong under the
+same resource bounds as message text. The references -- URIs, span owners,
+checkpoint file lists -- are small and are the part worth mapping first.
+
+**Status: Postponed.** The survey is done and the handling is decided per key
+space; what is not done is the mapping. It waits because none of it is
+correctness work -- every key space here is evidence Codess does not carry, not
+evidence it carries wrongly -- and because two of the decisions depend on
+questions other items own.
+
+**Restart criteria.** Any one:
+
+1. **A reader needs the system prompt.** The 23 `system` messages in `agentKv`
+   are the only record of what the model was instructed to do, and no other
+   Cursor structure carries it. A question about harness behaviour cannot be
+   answered without them.
+2. **Per-span authorship is wanted.** `patch-graph.provenance` states which
+   turn owns which line range of a file. This is the highest-value item here
+   and the one with no equivalent anywhere in CoSchema.
+3. **W85 needs a Project binding** and a key space here supplies a path per
+   composer -- `checkpointId:` names files and `ofsContent:` keys carry
+   `file://` URIs, so this survey may resolve that item as a side effect.
+4. **The content policy is extended to retrieved references** (W79), which is
+   the decision `ofsContent` and `agentKv` blob bodies wait on, since both are
+   unbounded file content rather than references.
+
+**Evidence to close.** Each key space above is either mapped, or recorded as
+declined with a reason, per the standing rule that a populated field dropped
+without a stated reason is a defect.
+
+### W82 -- Tools Carry Unchecked SQL
+
+**Work.** Bring the `tools/` SQL under the same checking the library's SQL has.
+
+**The defect, and how it surfaced.** `decode_audit.py` queried
+`mapping_diagnostics.level`. That column was renamed to `granularity` in
+format 6 -- deliberately, because `level` reads as an ordering and made summing
+its values look meaningful. The tool was never updated, so **the audit that
+CoPlan's validation sequence mandates for every decode change had been failing
+at runtime**, and nothing reported it.
+
+**Why no checker caught it.** Not a linter gap: SQL in a string is opaque to
+ruff and mypy, and the column exists only in the DDL. The real gap is test
+coverage -- `decode_audit.py` has **no test**, and of 23 scripts in `tools/`
+only two are executed by the suite at all. Five hold SQL against store tables
+(`decode_audit`, `demo_model_metrics`, `field_coverage`, `value_survey`,
+`workload_bench`), and a rename reaches none of them.
+
+A scan for other stale references found three apparent hits and all three are
+false positives -- a loop variable in `coschema_gate`, and prose in
+`refresh_schema_manifest` and `reporting_bench`. So the fixed instance was the
+only live one, which is luck rather than a property to rely on.
+
+**Options.** A smoke test per SQL-bearing tool over a fixture store is the
+cheapest and would have caught this. A stricter alternative parses each tool's
+SQL and checks every named column against the DDL, which also catches a query
+whose rows are never exercised. The first is proportionate; the second is what
+a second occurrence would justify.
+
+**Closed.** `tests/test_tools_smoke.py` ingests the Claude fixture and runs
+each SQL-bearing tool against the resulting store, asserting no traceback and
+that the audit's report carries its sections. Verified by reintroducing the
+`level` query and confirming two tests fail, then restoring.
+
+A second bug surfaced while checking the others: `gather_evidence.py` read
+`args.store_root` where the flag defines `args.store`, so it raised
+`AttributeError` on every invocation and had never run. Fixed; it now reports
+across 90 stores. The two defects share a cause -- a script nothing executes
+fails only for the person who needed it.
+
+Not covered by the smoke test: `demo_model_metrics` and `workload_bench`
+require arguments a fixture cannot supply cheaply, and `coschema_gate` compares
+two contract files rather than reading a store. Recorded rather than silently
+excluded.
+
+### W83 -- Early-Access Release Readiness
+
+**Work.** Close what stands between the current state and a build another
+person can install, run, and report against.
+
+**The distinction that orders this.** A blocker prevents an outside user from
+succeeding at all; a gap makes their report hard to act on; everything else is
+work that can proceed after publication. Only the first two are release scope.
+
+#### Blockers
+
+| # | Blocker | Why it stops a release |
+|---|---|---|
+| B1 | **No `LICENSE` file, and no author or project URL in `pyproject.toml`** | Nobody can lawfully use, fork, or evaluate it, and a package index will not accept it. **Open: the licence terms are the owner's decision, not an engineering default.** `CHANGELOG.md` is written, so the release-notes half of this is done |
+| B2 | ~~README announces `v0.0.1`; the package is `0.3.0`~~ | **Closed.** README now names `codess.__version__` and `codess --version` as authoritative and links `CHANGELOG.md`, so the version is stated in one place rather than restated in prose that drifts |
+| B3 | ~~Stale formats are unreadable and the message does not say what to do~~ | **Closed.** `UnsupportedStoreError` now names the remedy -- rebuild with `codess ingest --dir <project> --force` -- and says why a migration is not offered. Nine store sets on this machine remain at formats 3 and 4; they belong to Projects whose paths no longer exist |
+| B4 | ~~Tools carry unchecked SQL~~ | **Closed** with W82: every SQL-bearing tool now runs against an ingested store in the suite |
+
+#### Gaps That Make a Report Hard to Act On
+
+| # | Gap | Consequence |
+|---|---|---|
+| G1 | ~~No `CHANGELOG`~~ | **Closed.** `CHANGELOG.md` records format 7 and the decode, correctness, and check changes in this version, and states the rebuild procedure a format change requires |
+| G2 | **Command-layer help text is absent on 76 distinct `admin_cmd` flags** (W66) | The interface is self-describing for `project.py` and silent for the administrative half, so a tester guesses |
+| G3 | **Operational reporting is built and not adopted** (W71) | Status and errors still reach stderr through direct writes at each call site, so what a tester can capture depends on which module produced it |
+| G4 | **Coverage reporting attests against unenforced profiles** (W04) | A completeness claim is only as good as the contract behind it; today it states loss against profiles no decode boundary enforces |
+
+#### Explicitly Not Release Scope
+
+Stated so the list does not grow by assumption. **W16, W17** -- no consumer has
+asked. **W66, W67, W64, W65** -- internal structure a tester never observes.
+**W75, W76, W79, W81** -- evidence and decode breadth, not correctness of what
+already ships. **W05** is the interesting exclusion: running real
+investigations would raise confidence, but it is a quality activity rather than
+a gate, and early access is itself a way of obtaining that evidence from more
+than one machine.
+
+#### What Is Already Sound
+
+Recorded so the remaining list is read as short rather than as a summary of
+everything. Decode is validated against real Sessions from all three vendors
+with no classification inconsistency; the suite is green and lint, type, and
+test counts are gated against recorded ceilings; publication is transactional
+and verified; no private path or operator identity appears in tracked files,
+and the discovery lists are environment-configurable rather than fixed to one
+machine; `.codess/` and `.env*` are excluded from version control.
+
+**Status: Postponed.** Three of four blockers are closed. B1 is not an
+engineering task: the licence terms are the owner's decision, and choosing one
+by default would be picking a legal posture on their behalf. Everything else
+here is a gap rather than a blocker, so the item waits on that single answer
+rather than on work.
+
+**Restart criteria.** Either:
+
+1. **The licence is chosen**, at which point B1 is a `LICENSE` file plus the
+   `license`, `authors`, and `urls` fields `pyproject.toml` currently omits --
+   an afternoon, not a project.
+2. **A specific tester is identified**, which would make G1 to G4 concrete:
+   what that person needs to file a usable report decides which of the four
+   matter, rather than the list deciding it in advance.
+
+**Evidence to close.** A person on another machine installs from a clean
+checkout, runs the README quick start against their own vendor data, and can
+state which revision they ran and where to report what they find.
+
+### W84 -- The Rest of the `selectedModels` Parameter Space
+
+**Status: Postponed.** Both parameter ids that appear are mapped. What remains
+is a question about a shape no observation has produced.
+
+**What is settled.** `modelConfig.selectedModels` holds one entry per composer
+-- 37 composers, every one with exactly one entry -- carrying parameters beside
+the model id. Two ids appear and both now map:
+
+| Parameter | Composers | Values | Maps to |
+|---|---|---|---|
+| `fast` | 34 | `"true"` 31, `"false"` 3 | `speed_tier`, only on `"true"` |
+| `effort` | 19 | `"high"` 19 | `reasoning_effort` |
+
+Values are strings, so `"false"` is a stated value rather than an assertion and
+must not set a tier -- a test covers that case because it is the one a later
+edit gets wrong.
+
+**What is open.** Whether other parameter ids exist, and whether `effort`
+takes values other than `high`. One machine's composers show one value, which
+establishes the shape and not the vocabulary. A vocabulary guessed from a
+single value would be worse than none.
+
+**Restart criteria.** Any one:
+
+1. A parameter id other than `fast` or `effort` is observed, which the mapping
+   silently ignores today.
+2. `effort` is seen with a value other than `high`, which would establish
+   whether it is a free string or a closed vocabulary worth checking.
+3. A Cursor model-comparison question needs effort or speed as a predicate
+   across a corpus wider than one machine.
+
+**Cost.** Small. The reader already walks the parameter list; an unmapped id is
+one branch. It is postponed because the branch would be written against no
+evidence.
+
+### W85 -- Composers No Project Can Claim
+
+**Status: Postponed.** Not for lack of effort but for lack of evidence: the
+identity these Sessions would need is not in the store.
+
+**What is established.** 98 composers hold decodable bubbles and a global
+`composerData:` row, and `composerHeaders` does not list them. Codess now reads
+them -- `get_composer_headers` returns 164 composers against the previous 66 --
+so they are visible, carry their settings, and 134 of the recovered set state a
+model.
+
+**Why they are not ingested.** A `composerData:` row states no `workspaceId`.
+Checked across all 98 for any `workspaceId`, `workspace`, `folder`, `cwd`,
+`rootPath`, or `projectPath` field: **none present**. One carries context file
+references, which names files a Session touched rather than the Project it
+belongs to, and treating that as a binding would be the path-and-content
+inference the design refuses.
+
+Ingest selects composers by workspace, so these are excluded there. The
+exclusion is deliberate and is enforced in code: recovery applies only when the
+caller asks for every composer, never under a workspace filter, because
+admitting an unbound composer to a workspace selection would attribute a
+Session to a Project on no evidence.
+
+**So the honest state is: visible and unattributed.** `selection_source`
+records `global.composerData` on each, which is what lets a reader tell an
+unattributed composer from an absent one.
+
+#### Binning the 98, and What It Established
+
+Correlation was run rather than assumed, and it answered the *why* even though
+it did not produce a binding.
+
+**The separation is temporal and total.** Grouping every `composerData:` row by
+whether a header exists:
+
+| Set | Count | `_v` values | `createdAt` range |
+|---|---|---|---|
+| Headered | 61 | 14, 16, 17 | 2026-03-26 .. 2026-08-17 |
+| Orphaned | 98 | 9, 13, 14 | 2025-08-09 .. 2026-03-20 |
+
+**Zero orphans fall after the earliest header**, and the two ranges do not
+overlap by a single day -- orphans end 2026-03-20, headers begin 2026-03-26.
+The one shared `_v` value, 14, splits on the same boundary: orphaned `_v=14`
+composers run 2026-02-16 to 2026-03-20, headered `_v=14` run 2026-04-10 to
+2026-05-01.
+
+**So `composerHeaders` is a retention window, not an index of what exists.**
+The vendor prunes header rows on age while retaining the `composerData:` row
+and every bubble. That reframes the item: these Sessions are not missing an
+identity Codess failed to read, they are older than the index that would carry
+it. It also predicts the shape will recur -- today's headered composers become
+tomorrow's orphans -- which makes reading `composerData:` a durable fix rather
+than a one-time recovery.
+
+**Other attributes bin them but do not discriminate.** Mode is `agent` 82 /
+`chat` 16, model is `composer-1.5` 56 / `default` 22 / `composer-1` 11 and a
+tail, bubble counts run 2 to 12,209 with a median of 65 and 75,273 in total.
+None of these correlates with a Project; they describe the population.
+
+#### Path Correlation Was Tested and Failed
+
+Absolute paths do appear in bubble content -- 7 of 10 sampled composers carry
+them -- so the obvious inference is available. It was validated against the
+headered composers, where the workspace and therefore the folder are known:
+
+| Rule | Correct | Wrong | Abstained | Precision |
+|---|---|---|---|---|
+| Most frequent path prefix | 23 | 15 | 10 | 61% |
+| Most frequent path restricted to known Project roots | 2 | 27 | 19 | 6% |
+| Same, requiring 70% dominance | 2 | 2 | 44 | 50% |
+
+Restricting candidates to known Project roots made it *worse*, which is the
+informative result: the paths a Session mentions are dominated by files it
+read, and a Session commonly reads outside its own Project -- a sibling
+repository, a vendored tree, a home-directory config. Requiring dominance
+raises precision to 50% only by abstaining on 44 of 48.
+
+**A rule that is wrong half the time cannot bind a Session to a Project**,
+because a wrong binding is indistinguishable from a right one in the result and
+propagates into every query that selects by Project. This is not a prohibition
+on inference -- correlation established the retention finding above -- it is a
+measured rejection of *this* correlation at *this* precision.
+
+**What would resolve it**, in order of how much evidence each requires:
+
+1. **A workspace index that lists them.** The workspace
+   `composer.composerData` fallback already recovers 75 of the 107 headerless
+   composers; the remaining ones may appear in a workspace database not
+   currently searched, which is checkable.
+2. **Vendor evidence binding a composer to a folder.** A key space not yet
+   read -- `checkpointId:` names files, `ofsContent:` keys carry `file://`
+   URIs -- may carry a path per composer. That is W81's survey and would answer
+   this as a side effect.
+3. **An operator-stated binding.** The Project catalog already accepts approved
+   source links for renamed and remote identities, so a reviewed manual binding
+   is a supported mechanism rather than a new one.
+
+**Restart criteria.** Any one of the three above yields a binding, or an
+operator asks to attribute a specific composer through the catalog.
+
+**On inference generally.** Nothing forbids correlating or matching values --
+the retention finding above was obtained exactly that way, and the design's
+rule is narrower than "no inference": CoSchema forbids treating *timestamp
+proximity, adjacency, or textual resemblance* as proof of a **relationship**
+between records. A Project binding derived from a measured, validated signal
+would be admissible if it recorded how it was obtained; `session_model_basis`
+is the precedent, where a derived value is carried beside a column stating that
+it was derived.
+
+What is rejected here is the specific path rule, on its measured precision
+rather than on principle. Any replacement needs the same treatment: validated
+against the headered composers, where ground truth exists, and carrying a basis
+column so a reader can exclude derived bindings from a query.
+
+### W86 -- Skipped and Refused Records Are Counted but Not Attributed
+
+**Work.** Make what a decode discarded queryable and attributable, not a
+transient stderr line.
+
+**The mechanism exists and is not the problem.** Every discard routes through a
+counter -- `_diagnostic(opts, "known_ignored_records")` for a skipped record
+type, `_record_refused` for a refused one -- and ingest prints the totals:
+
+```
+ingest diagnostics: malformed=0 ignored=4898 empty_sources=0 failed_sources=0
+unsupported=0 known_ignored=21580 filtered=0 external_content=0 ...
+```
+
+**The volume is why this matters.** One Project reports 21,580
+`known_ignored` records and 4,898 `ignored`; another 5,580 and 2,881. These are
+not edge cases, they are a substantial fraction of what the vendor wrote.
+
+**Three specific gaps.**
+
+1. **The totals are not stored.** `mapping_diagnostics` holds only four reason
+   codes across the whole corpus -- `field_absent` 41,521, `field_empty` 7,810,
+   `missing_tool_call_id` 1,075, `field_null` 17 -- all *field*-granularity. Not
+   one record-level discard is persisted, so a store cannot answer "what did
+   this decode drop" after the run that produced it has scrolled away.
+2. **The counters do not say which type.** `known_ignored=21580` aggregates six
+   record types (`progress`, `file-history-snapshot`, `file-history-delta`,
+   `queue-operation`, `last-prompt`, `system`) into one number. A vendor that
+   starts writing meaning into `progress` records would move this total and
+   nothing would say which type moved.
+3. **A skip is not distinguished from a bound.** `ignored` and `filtered` and
+   `unsupported` are separate counters, but a reader cannot tell a record
+   dropped because Codess does not map its type from one dropped because it
+   exceeded a resource bound -- and those need different responses.
+
+**Silent skips, measured.** A static scan of the ten discovery and decode
+modules found **126 `continue`/bare-`return` sites with no diagnostic, log, or
+progress call within six lines**, concentrated in `adapters/codex.py` (38),
+`cursor_source.py` (28), `adapters/cc.py` (17), and `adapters/cursor.py` (15).
+Most are ordinary type guards -- `if not isinstance(block, dict): continue` --
+and counting those would be noise. The scan does not separate the two, which is
+the first piece of work: classify each site as a **type guard** (no record is
+lost, nothing to report) or a **content decision** (a populated value is
+dropped, which needs a counter).
+
+**Evidence to close.** Record-level discards reach `mapping_diagnostics` with a
+reason code naming the record type; a query can report what a store dropped and
+why; and each of the 126 sites is classified, with a counter added wherever a
+populated value is discarded.
+
+**Why this is High.** Coverage reporting states what a store mapped and missed.
+Today it can name missed *fields* precisely and missed *records* only in
+aggregate, so the completeness claim is weaker than it reads.
+
+### W87 -- The Test Corpus, Grouped and Assessed
+
+**Work.** Group the suite by subsystem, retire what is superseded, and close the
+gaps the grouping exposes.
+
+**The corpus.** 68 files, 1,506 test functions, 27,298 lines:
+
+| Subsystem | Files | Tests | Lines |
+|---|---|---|---|
+| store | 9 | 320 | 5,725 |
+| *unclassified* | 21 | 311 | 5,356 |
+| adapter | 4 | 257 | 3,951 |
+| cli | 5 | 175 | 4,294 |
+| source-access | 6 | 109 | 1,503 |
+| query | 4 | 85 | 2,111 |
+| reporting | 2 | 80 | 902 |
+| identity | 3 | 54 | 542 |
+| policy | 5 | 49 | 841 |
+| audit-tools | 5 | 39 | 549 |
+| integration | 4 | 27 | 1,524 |
+
+**The largest finding is the second row.** 21 files and 311 tests do not group
+under any subsystem the architecture names -- `test_acceptance`,
+`test_naming`, `test_structural_duplication`, `test_units`, and eighteen
+others. Some are genuinely cross-cutting; others are a module's tests filed
+under the module's name rather than its layer. Until they are classified, no
+statement about per-subsystem coverage is trustworthy.
+
+**Weakest attention, by module size against tests naming the module.** A ratio,
+not a coverage percentage -- it says where to look, not what is untested:
+
+| Module | Lines | Tests naming it |
+|---|---|---|
+| `refresh_receipts` | 119 | **0** |
+| `mcp_audit` | 395 | 4 |
+| `storage_report` | 310 | 3 |
+| `token_usage` | 394 | 5 |
+| `retention` | 450 | 6 |
+| `ingest_review` | 135 | 2 |
+
+`refresh_receipts` is named by no test at all, and it is the module the corpus
+baseline reads its ingest-rate evidence from.
+
+**What is healthy, and worth stating so the list is read as short.** Zero
+skipped or `xfail` tests -- nothing is parked. No test references a removed
+construct: the `ProgressTrace` hit is the test asserting its removal, and the
+`level` and `contract_digest` hits are unrelated words or the current
+`contract_digest` field.
+
+**Ten duplicated test names across files** -- `test_empty` six times,
+`test_absent` six, `test_relative` four. Harmless to pytest, and a real cost
+when a failure is read from a summary line: `test_absent` names neither what is
+absent nor which subsystem noticed. These are within-file names that would
+benefit from the subject they test.
+
+**Evidence to close.** Every test file is classified to a subsystem; the
+unclassified 21 are either reassigned or the grouping gains a category that
+honestly describes them; `refresh_receipts` has tests; and the duplicated names
+state their subject.
+
+### Store Fit as Time Series and as Log Records
+
+Assessed because two questions keep arriving in different forms -- "can this
+feed a dashboard" and "can this go into Splunk" -- and they have different
+answers.
+
+#### What the Store Already Satisfies
+
+Measured on one populated Cursor store of 84,395 Events:
+
+| Property | Observed | Why it matters |
+|---|---|---|
+| Timestamp coverage | **100%** of Events carry `event_at` | A record with no time is not a log line |
+| Ordering agreement | **0 Events** out of time order within a Session when read by `sequence_no` | Sequence and time do not contradict, so either may be the sort key |
+| Sub-second precision | 84,304 of 84,395 carry sub-second values | Millisecond resolution, not second-truncated |
+| Time index | `idx_events_event_at` exists, partial on non-null | A range scan is indexed |
+| Low-cardinality dimensions | `event_kind` 6, `actor_kind` 4, `tool_name` 24 | These are exactly the fields a log platform facets on |
+| Stable identity | `event_entity_id` derived from vendor-stated facts | Re-ingesting the same Session on another machine yields the same identity, so a re-index does not duplicate |
+| Line-oriented export | `--output-format jsonl` already exists | The transport a log platform expects |
+
+So the shape is a good fit: a wide, timestamped, low-cardinality-dimensioned
+event table with stable identities and a JSON Lines export already built.
+
+#### What Does Not Fit, and Should Not Be Made To
+
+**Timestamps are not unique.** 25,707 of 33,879 distinct timestamps are shared
+by more than one Event. Anything that assumes a timestamp identifies a record
+-- a naive dedup, a time-keyed join -- is wrong here. `event_entity_id` is the
+identity; `event_at` is a measurement. This is normal for machine-generated
+events and is stated because it is the mistake an operator makes first.
+
+**The store is a projection, not an append log.** Codess replaces a Source
+transactionally and republishes; it never appends. A log platform that tails a
+growing file will see wholesale replacement. The correct integration is a
+periodic export of a bounded query, not a tail.
+
+**Retention is the vendor's, not Codess's.** Events exist because a vendor
+retained them, and a vendor prunes on its own schedule. A dashboard built over
+this will show history changing under it, and that is the data, not a defect.
+
+**Codess is not a metrics store.** No counters, no pre-aggregation, no
+retention tiers, no downsampling. A question like "tool failures per hour" is a
+`GROUP BY` over an indexed range and answers fine at this scale; it is not
+served from a rollup and there is no plan for one.
+
+#### Recommendation
+
+**Export, do not become.** The store is already close enough to a log record
+that a Splunk, Loki, or ClickHouse integration is an export script over the
+existing typed query -- `--output-format jsonl`, a `--since` bound, and the
+result identity as the deduplication key. Nothing in the schema needs to change
+for that.
+
+**What would need adding is small and should wait for a requester.** A log
+platform typically wants a single flat record per line with the Session and
+Project fields denormalized onto it, rather than the joins the relational form
+requires. That is a projection concern, and building it before a consumer
+states its field list is how a system acquires an interface nobody uses -- the
+standing rule that already defers the external-interface items.
+
+**What should not be built** is a second write path that emits events to a
+platform as they are decoded. It would double the failure modes of ingest,
+couple a local investigation tool to a remote service, and contradict the data
+safety boundary: these records carry prompts, source code, and credentials, and
+publication is an explicit reviewed act rather than a side effect of decoding.
+
+### Session and Event Model Evidence
+
+Where a vendor records the model differs by format, and a query that asks "which
+model did this work use" must not need to know which. This inventories what each
+level currently holds, states the alternatives, and records the decision.
+
+#### What Is Populated Today
+
+Measured across the 30 published Project store sets:
+
+| Vendor | Sessions | With Session model | Model Turns | With turn model | Events | With turn link |
+|---|---|---|---|---|---|---|
+| Claude | 351 | **0** | 5,972 | 5,972 | 16,615 | 5,972 |
+| Codex | 22 | 22 | 10,607 | 10,607 | 84,862 | 44,281 |
+| Cursor | 86 | 32 | 2,878 | 2,644 | 135,327 | 70,261 |
+
+Two facts decide the question. **Turn-level coverage is near total** -- every
+Claude and Codex Model Turn carries a model, and 92% of Cursor's do. **Session-level
+coverage is vendor-dependent**: Codex states it on every Session, Cursor on 37%,
+and Claude on none, because Claude records the model per assistant record and
+never as a Session header.
+
+`sessions.session_model_param_id` is not a summary of the turns. It is the
+*default that seeds turn resolution*: `_prepare_event_groups` reads it as
+`current_model_param_id` and each turn overrides it where the vendor states one.
+So a Session-level value answers "what was this Session configured with", and a
+turn-level value answers "what actually served this turn". They are different
+questions and the second is not derivable from the first.
+
+#### How Often They Would Disagree
+
+Sessions carrying more than one distinct model across their turns:
+
+| Vendor | Sessions with turn models | Exactly one model | More than one |
+|---|---|---|---|
+| Claude | 351 | 346 | **5** (2 with two, 3 with three) |
+| Codex | 22 | 16 | **6** (5 with two, 1 with three) |
+| Cursor | 42 | 36 | **6** (5 with two, 1 with three) |
+
+**17 of 415 Sessions use more than one model** -- 4%. Small, and not
+negligible: a Session that escalated from a fast model to a reasoning one is
+exactly the case a comparison question is asked about, so the 4% is the
+interesting population rather than noise to round away.
+
+#### Alternatives
+
+| # | Approach | What it costs |
+|---|---|---|
+| A1 | **Session-level only.** One model column per Session; drop turn models | Erases the 17 multi-model Sessions and cannot answer which model served a given Event. Claude would report nothing, since it states no Session model |
+| A2 | **Event-level only.** Drop `session_model_param_id`; resolve every model from its turn | Loses the vendor's own Session-level statement, which Codex makes explicitly. A configured model that never served a turn becomes unrecorded, and the seeding default disappears, so a turn with no stated model resolves to null rather than to the Session's configuration |
+| A3 | **Both levels, populated independently** (current) | Two columns to keep consistent, and a reader must know which one answers their question |
+| A4 | **Both levels, with Session derived from turns where the vendor states none** | Would fill Claude's 351 nulls, but by computing a value the vendor never asserted -- and for the 5 multi-model Claude Sessions there is no single correct answer to compute |
+| A5 | **Both levels, plus a stored per-Session model set** | Answers "which models appear in this Session" without a join, at the cost of a denormalized column that can disagree with the turns it summarizes |
+
+#### Recommendation
+
+**Keep A3, and document which level answers which question.** The reasons are
+measured rather than stylistic:
+
+1. **The levels are not redundant.** Session-level is the configured default,
+   turn-level is what served. Codex populates both and they are not always
+   equal; collapsing them (A1 or A2) discards a distinction the vendor drew.
+2. **Turn coverage is already near total**, so the Event-side question is
+   answerable today for all three vendors. Nothing needs building for it.
+3. **A4 is the tempting one and should be refused.** Deriving a Session model
+   from its turns would fill 351 Claude nulls, which looks like an improvement
+   until the 5 multi-model Sessions force a choice the evidence does not
+   support -- first turn, most frequent, or last. CoSchema's standing rule is
+   that a value the vendor did not state stays null rather than being inferred,
+   and this is exactly that case. A null here is the true answer: Claude does
+   not record a Session-level model.
+4. **A5 is premature.** The join answers it, and no measured query is slow for
+   this reason. Revisit if one is.
+
+**What to change is documentation, not structure.** CoSchema should state the
+two levels' distinct meanings where it currently states neither, so a reader
+does not take `session_model_param_id` for a summary. Cross-vendor model
+comparison should query the turn level, because that is the level all three
+vendors populate; the Session level is evidence about configuration and is
+absent for Claude by vendor design rather than by decode gap.
 
 ## Maintenance Directions
 

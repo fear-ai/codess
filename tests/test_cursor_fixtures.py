@@ -177,3 +177,127 @@ def test_building_twice_over_one_path_is_safe(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM cursorDiskKV").fetchone()[0] == 2
     finally:
         conn.close()
+
+
+class TestHeaderlessComposerRecovery:
+    """A composer with bubbles but no header row is still a Session.
+
+    Cursor keeps three indexes of the same composers and they disagree. On the
+    development machine 107 composers hold bubbles that `composerHeaders` does
+    not list, and the whole of a Session reachable only from an unread index is
+    lost -- not a field, the Session.
+    """
+
+    def _store(self, tmp_path, *, header_ids=(), data_ids=()):
+        db = tmp_path / "state.vscdb"
+        conn = sqlite3.connect(db)
+        create_bubble_table(conn)
+        create_header_table(conn)
+        for composer_id in header_ids:
+            conn.execute(
+                "INSERT INTO composerHeaders"
+                "(composerId, workspaceId, createdAt, lastUpdatedAt,"
+                " isArchived, isSubagent) VALUES (?,?,?,?,?,?)",
+                (composer_id, "ws-1", 1_700_000_000_000, 1_700_000_100_000, 0, 0),
+            )
+        for composer_id in data_ids:
+            put_records(conn, {
+                f"composerData:{composer_id}": {
+                    "composerId": composer_id,
+                    "createdAt": 1_700_000_200_000,
+                    "unifiedMode": "agent",
+                    "modelConfig": {"modelName": "composer-2.5", "maxMode": False},
+                },
+            })
+        conn.commit()
+        conn.close()
+        return db
+
+    def test_a_composer_known_only_from_composer_data_is_recovered(self, tmp_path):
+        """The recovered header states where it came from."""
+        db = self._store(tmp_path, header_ids=("headered",), data_ids=("orphan",))
+        headers = get_composer_headers(db)
+        assert set(headers) == {"headered", "orphan"}
+        assert headers["orphan"]["selection_source"] == "global.composerData"
+        assert headers["headered"]["selection_source"] == "composerHeaders"
+
+    def test_a_recovered_composer_carries_its_stated_model(self, tmp_path):
+        """`modelConfig.modelName` reaches the Session it belongs to.
+
+        Settings were previously read only for composers that had a header, so
+        a recovered Session would arrive with no model even though the vendor
+        recorded one.
+        """
+        db = self._store(tmp_path, data_ids=("orphan",))
+        headers = get_composer_headers(db)
+        assert headers["orphan"]["model"] == "composer-2.5"
+        assert headers["orphan"]["interaction_mode"] == "agent"
+
+    def test_selected_model_parameters_reach_their_settings(self, tmp_path):
+        """`selectedModels` carries settings the model name need not state.
+
+        Two parameter ids appear: `fast`, which the name encodes only for the
+        `*-fast` aliases, and `effort`, which no Cursor model name encodes at
+        all. A composer may set either on a model whose name says nothing, so
+        reading the name alone loses them.
+        """
+        db = tmp_path / "state.vscdb"
+        conn = sqlite3.connect(db)
+        create_bubble_table(conn)
+        create_header_table(conn)
+        put_records(conn, {
+            "composerData:speedy": {
+                "composerId": "speedy",
+                "modelConfig": {
+                    "modelName": "composer-2.5",
+                    "selectedModels": [
+                        {"modelId": "composer-2.5",
+                         "parameters": [{"id": "fast", "value": "true"}]},
+                    ],
+                },
+            },
+            "composerData:plain": {
+                "composerId": "plain",
+                "modelConfig": {
+                    "modelName": "composer-2.5",
+                    "selectedModels": [
+                        {"modelId": "composer-2.5",
+                         "parameters": [{"id": "fast", "value": "false"}]},
+                    ],
+                },
+            },
+            "composerData:thinker": {
+                "composerId": "thinker",
+                "modelConfig": {
+                    "modelName": "composer-2.5",
+                    "selectedModels": [
+                        {"modelId": "composer-2.5",
+                         "parameters": [{"id": "effort", "value": "high"}]},
+                    ],
+                },
+            },
+        })
+        conn.commit()
+        conn.close()
+        headers = get_composer_headers(db)
+        assert headers["speedy"]["speed"] == "fast"
+        # `"false"` is a stated value, not an assertion: it must not set a tier.
+        assert "speed" not in headers["plain"]
+        assert headers["thinker"]["effort"] == "high"
+
+    def test_the_header_table_wins_where_both_indexes_name_a_composer(self, tmp_path):
+        """A header is authoritative; recovery fills gaps rather than overriding."""
+        db = self._store(tmp_path, header_ids=("both",), data_ids=("both",))
+        headers = get_composer_headers(db)
+        assert headers["both"]["selection_source"] == "composerHeaders"
+        assert headers["both"]["workspace_id"] == "ws-1"
+
+    def test_a_workspace_selection_does_not_admit_unbound_composers(self, tmp_path):
+        """A `composerData:` row states no workspace, so it cannot satisfy one.
+
+        Admitting it under a workspace filter would widen that selection
+        silently, attributing a Session to a Project on no evidence.
+        """
+        db = self._store(tmp_path, header_ids=("headered",), data_ids=("orphan",))
+        headers = get_composer_headers(db, workspace_ids={"ws-1"})
+        assert set(headers) == {"headered"}

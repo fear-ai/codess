@@ -1070,6 +1070,30 @@ being changed, explicitly, every time either changes, even when a
 precedent for the distinction already exists elsewhere in the same
 document."
 
+#### A Renamed Column Broke a Mandated Audit, Unnoticed for a Format
+
+**Miss:** `mapping_diagnostics.level` was renamed to `granularity` in CoSchema
+format 6, deliberately and with the reason recorded. `tools/decode_audit.py`
+still queried `level`, so the audit that CoPlan's validation sequence mandates
+after every decode change had been failing at runtime -- and the failure was
+invisible because nothing runs that tool except a developer typing it.
+
+**Why no checker caught it.** SQL in a string is opaque to ruff and mypy, and
+the column name exists only in the DDL. The gap is coverage, not linting:
+`decode_audit.py` has no test, and of 23 scripts in `tools/` the suite executes
+two. Five hold SQL against store tables, so a column rename reaches none of
+them.
+
+A scan for other stale references turned up three apparent hits, all false
+positives -- a loop variable, and two mentions in prose. The single live
+instance was luck, not a property to rely on.
+
+**Prompt that would have caught it:** "A rename of a stored column is not
+complete when the library compiles. Grep the whole repository for the old name
+-- `tools/`, fixtures, and documentation included -- because SQL in a string is
+invisible to every checker, and a script nothing executes fails only for the
+person who needed it."
+
 #### A Delegation Written Without the Import It Required
 
 **Miss:** Consolidating three timestamp parsers onto one shared normalizer, the
@@ -1080,6 +1104,15 @@ collection but at ingest, inside a subprocess, where the error arrived as
 `source.failed ... error_type=NameError` in progress output rather than as a
 traceback.
 
+**Both checkers already catch this, and neither had been run.** Verified by
+removing the import again: ruff reports `F821 Undefined name` and mypy reports
+`name-defined`, each in under a second, and `F` is a selected family. The miss
+was an ordering one, not a tooling gap -- the suite was run first, so a defect
+two static checkers would have named instantly was instead found by 43 failing
+tests, and found badly: it surfaced inside an ingest subprocess as
+`source.failed ... error_type=NameError` in progress output rather than as a
+traceback naming the file and line.
+
 This is the mirror of the entry below: there an autofix removed an import an
 edit needed, here an edit needed an import nobody added. The common shape is
 that *the set of modules an edit touches and the set whose imports it changes
@@ -1089,11 +1122,10 @@ Consolidation makes the inverse error likely too, and it occurred in the same
 change: removing the last user of `datetime` from three modules left three
 unused imports, which the quality gate caught as a lint rise from 172 to 180.
 
-**Prompt that would have caught it:** "When a change replaces a local
-implementation with a call to a shared one, enumerate the modules first and
-treat adding the import and deleting the body as one edit per module -- then
-run the suite and the quality gate, because the first finds the module you
-forgot to import into and the second finds the module you forgot to clean up."
+**Prompt that would have caught it:** "After an edit that changes which names a
+module uses, run `ruff check` on the changed files *before* the test suite. A
+name error is a static fact: the linter names the file and line in a second,
+while the suite reports it as a subprocess failure with no location."
 
 #### An Automatic Import Fix Removing an Import the Same Edit Had Just Required
 

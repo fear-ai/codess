@@ -221,6 +221,7 @@ capture. Storage deletion remains a reviewed maintenance operation.
 
 | Document or area | Focus |
 |---|---|
+| [Changelog](CHANGELOG.md) | What changed per version, and the rebuild a CoSchema format change requires |
 | [Codess](Codess.md) | Problem, solution, product capabilities, terminology, boundaries, and longer-term vision |
 | [Operations](Operations.md) | Installation, source locations, normal execution, diagnosis, and maintenance commands |
 | [Functional Design](Designs.md) | Decided functional behavior, rationale, invariants, and explicitly optional directions |
@@ -241,9 +242,14 @@ capture. Storage deletion remains a reviewed maintenance operation.
 
 ## Release Notes
 
-### v0.0.1 — Initial Three-Vendor Prototype
+The authoritative version is `codess.__version__`, reported by `codess
+--version`; [CHANGELOG](CHANGELOG.md) records what changed between versions.
+The notes below describe the capabilities established by the initial
+three-vendor pre-release and carried forward since.
 
-Codess v0.0.1 is the first integrated pre-release of a local investigation
+### Initial Three-Vendor Prototype
+
+Codess is a pre-release local investigation
 system for coding-assistant Sessions. It converts locally retained records
 from Claude Code, Codex, and Cursor into regular, provenance-preserving stores
 that can be searched individually or together.

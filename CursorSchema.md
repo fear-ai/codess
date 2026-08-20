@@ -146,6 +146,71 @@ parent composer/session is not consistently available, so
 `parent_session_id` remains NULL instead of being inferred from time, content,
 or workspace proximity.
 
+### Adjacent Key Spaces
+
+`cursorDiskKV` holds far more than the two key spaces Codess decodes. Recorded
+because a reader estimating coverage from the bubble tables alone will
+overstate it: of 444,476 rows, `bubbleId:` and `composerData:` are the decoded
+share.
+
+| Key space | Rows | Holds |
+|---|---|---|
+| `bubbleId:` | 210,152 | Conversation bubbles -- decoded |
+| `agentKv:` | 209,951 | Content blobs, mixed plain text and binary -- not decoded |
+| `composer:` | 11,616 | Composer state -- not decoded |
+| `checkpointId:` | 7,718 | `files`, `activeInlineDiffs`, `newlyCreatedFolders`, `nonExistentFiles` per checkpoint |
+| `codeBlockDiff:` | 1,417 | `newModelDiffWrtV0` and `originalModelDiffWrtV0` per code block |
+| `ofsContent:` | 789 | File content keyed by composer and `file://` URI; 586 distinct URIs |
+| `messageRequestContext:` | 678 | Harness context assembled per message request |
+| `inlineDiff:` | 545 | Inline diff state |
+| `patch-graph:` | 354 | `fileUri`, `patches`, `provenance`, `version`; 162 distinct file URIs |
+| `composerData:` | 166 | Session settings -- partly decoded |
+
+**`patch-graph` records per-span authorship.** Its `provenance.spans` entries
+take the form `{"start": 1, "end": 19, "owner": "<uuid>"}`, so the vendor
+states which turn owns which line range of a file. CoSchema carries no
+equivalent today.
+
+**Cursor keeps three indexes of the same composers, and they disagree.**
+`composerHeaders` is the smallest at 66 rows; global `composerData:` holds 166;
+and each workspace database keeps its own `composer.composerData` list.
+Measured on one machine, **107 composers hold bubbles that `composerHeaders`
+does not list**, carrying 75,473 bubbles between them.
+
+| Index | Rows | States a workspace | Read by Codess |
+|---|---|---|---|
+| `composerHeaders` | 66 | Yes | Yes, authoritative |
+| Workspace `composer.composerData` | 94 composers | Implicitly, by which database holds it | Yes, as a fallback |
+| Global `composerData:` | 166 | **No** | Yes, for settings and as a last-resort recovery |
+
+Reading all three raises composer coverage from 66 to 164, of which 134 state
+an exact model name in `modelConfig.modelName`.
+
+**A globally-recovered composer cannot be attributed to a Project.** Its
+`composerData:` row states no `workspaceId`, and no folder, cwd, or root-path
+field appears on any of the 98 checked. Codess therefore admits these only when
+a caller asks for every composer, and never under a workspace selection: a
+Session bound to a Project on no evidence would be an inference, not a decode.
+`selection_source` records which index each composer came from.
+
+**`modelConfig.selectedModels` carries parameters the model name need not
+state.** An entry takes the form
+`{"modelId": "composer-2.5", "parameters": [{"id": "fast", "value": "true"}]}`.
+Measured over 37 composers, each holding exactly one entry, two parameter ids
+appear:
+
+| Parameter | Composers | Observed values | Mapped to |
+|---|---|---|---|
+| `fast` | 34 | `"true"` 31, `"false"` 3 | `speed_tier`, only on `"true"` |
+| `effort` | 19 | `"high"` 19 | `reasoning_effort` |
+
+Values are strings, so `"false"` is a stated value rather than an assertion and
+does not set a tier. Neither parameter is reliably encoded in the model name:
+`composer-2` and `composer-2-fast` are distinct names, but a composer may set
+`fast` on a model whose name says nothing, and **no Cursor model name encodes
+effort at all**. Whether other parameter ids or other `effort` values exist is
+not established from one machine.
+
 ### `ItemTable`
 
 Most rows are editor/workbench state and are ignored. One workspace-local row,

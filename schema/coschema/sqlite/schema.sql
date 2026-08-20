@@ -3,7 +3,7 @@
 -- This file contains only the SQLite layout, constraints, and access paths.
 
 PRAGMA application_id = 1129268293; -- 0x434F4445, "CODE"
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE store_meta (
@@ -118,6 +118,16 @@ CREATE TABLE sessions (
   archive_state TEXT CHECK (archive_state IN ('active','archived','unknown') OR archive_state IS NULL),
   archive_source TEXT,
   session_model_param_id INTEGER REFERENCES model_params(id),
+  -- How `session_model_param_id` was obtained. 'vendor' is a Session-level
+  -- statement the vendor made; 'initial_event' is the first model observed to
+  -- serve a turn, recorded where the vendor states none. The two are different
+  -- claims and a query comparing configuration must be able to exclude the
+  -- second.
+  session_model_basis TEXT CHECK (session_model_basis IN ('vendor','initial_event') OR session_model_basis IS NULL),
+  -- Distinct models observed across the Session's Model Turns. 1 for almost
+  -- every Session; greater than 1 identifies a model switch without a join,
+  -- which is the population a model-comparison question is usually about.
+  session_model_count INTEGER CHECK (session_model_count IS NULL OR session_model_count >= 0),
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
 
   -- Read compatibility for the legacy flat query surface. These are
