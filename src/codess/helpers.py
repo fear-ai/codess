@@ -32,8 +32,10 @@ start because a policy has a trailing comma is not.
 """
 
 
-def _load_discovery_policy() -> tuple[frozenset[str], tuple[str, ...], dict[str, str]]:
-    """Read the pruned names, pruned prefixes, and documented exceptions."""
+def _load_discovery_policy() -> tuple[
+    frozenset[str], tuple[str, ...], dict[str, str], tuple[tuple[str, ...], tuple[str, ...]],
+]:
+    """Read the pruned names, prefixes, documented exceptions, and backup names."""
     configured = os.environ.get("CODESS_DISCOVERY_POLICY")
     path = Path(configured).expanduser() if configured else DISCOVERY_POLICY_PATH
     try:
@@ -49,7 +51,12 @@ def _load_discovery_policy() -> tuple[frozenset[str], tuple[str, ...], dict[str,
         traversed = {
             str(k): str(v) for k, v in document.get("traversed_on_purpose", {}).items()
         }
-        return frozenset(names), prefixes, traversed
+        backup_group = document.get("backup_conventions") or {}
+        backups = (
+            tuple(str(n) for n in backup_group.get("exact", ())),
+            tuple(str(n) for n in backup_group.get("prefix", ())),
+        )
+        return frozenset(names), prefixes, traversed, backups
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         log.warning(
             "cannot load discovery policy from %s (%s); using the released set", path, exc
@@ -64,13 +71,17 @@ def _load_discovery_policy() -> tuple[frozenset[str], tuple[str, ...], dict[str,
                     ),
                     tuple(str(p).casefold() for p in document.get("pruned_prefixes", ())),
                     {str(k): str(v) for k, v in document.get("traversed_on_purpose", {}).items()},
+                    (
+                        tuple(str(n) for n in (document.get("backup_conventions") or {}).get("exact", ())),
+                        tuple(str(n) for n in (document.get("backup_conventions") or {}).get("prefix", ())),
+                    ),
                 )
             except (OSError, ValueError):
                 pass
-        return frozenset(), (), {}
+        return frozenset(), (), {}, ((), ())
 
 
-TRAVERSAL_PRUNE_DIRS, TRAVERSAL_PRUNE_PREFIXES, TRAVERSED_ON_PURPOSE = (
+TRAVERSAL_PRUNE_DIRS, TRAVERSAL_PRUNE_PREFIXES, TRAVERSED_ON_PURPOSE, BACKUP_CONVENTIONS = (
     _load_discovery_policy()
 )
 """Directory names never traversed, matched case-folded against each segment.
@@ -255,9 +266,14 @@ def is_excluded(p: Path, work_root: Path | None = None) -> bool:
         return False
     if is_under_pruned_directory(p, root):
         return True
-    if "/OLD/" in rel or rel.startswith("OLD/"):
+    # Backup-copy conventions come from the discovery policy rather than from
+    # this module: they are directory *names*, portable across machines, and a
+    # tree using different ones replaces the list without editing code.
+    segments = Path(rel).parts
+    exact_names, prefix_names = BACKUP_CONVENTIONS
+    if any(segment in exact_names for segment in segments):
         return True
-    if "/Save" in rel or rel.startswith("Save"):
+    if any(segment.startswith(prefix_names) for segment in segments if prefix_names):
         return True
     # Match on path segments rather than a root-relative prefix: the same
     # directory must be excluded whether it is reached as `<group>/<tree>`

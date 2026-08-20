@@ -90,6 +90,8 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W85 | Normal | Postponed | Composers older than the header retention window are unattributed by design | Handling can improve; the condition itself is vendor retention |
 | W86 | High | Planned | Skipped and refused records are counted but not attributed | -- |
 | W87 | Normal | Planned | Group the test corpus by subsystem; find superseded and uncovered cases | -- |
+| W88 | Normal | Planned | Cursor KV decode: classify by content kind before parsing | -- |
+| W89 | Normal | Planned | Path inclusion and exclusion belong in the discovery policy file | -- |
 
 ## Queue
 
@@ -554,9 +556,63 @@ Project identities for one repository; re-ingesting a Project that already has
 a catalog entry reuses that entry; and a path carrying a reviewed disposition
 is never claimed by a new Project without the operator being told.
 
+#### Disposition of the Nine Duplicates
+
+**The question that decides it is whether the vendor Sources still exist**, not
+which store is newer. Checked per store, by testing whether each recorded
+`source_uri` is still a file on disk:
+
+| Store | Format | Sources | Still on disk | Vanished | Events |
+|---|---|---|---|---|---|
+| A | 4 | 154 | 32 | **122** | 29,161 |
+| B | 3 | 8 | 0 | **8** | 7,398 |
+| Other seven | 3-4 | 1-4 each | all | 0 | 20,663 |
+
+**Only two of nine hold evidence that cannot be regenerated.** 130 vendor
+source files no longer exist -- Claude prunes its own transcripts -- so those
+two stores are the last remaining record of 36,559 Events. The other seven
+duplicate what the current Sources still produce and can be discarded.
+
+**Disposition:**
+
+1. **Seven stores: dump.** Their Sources are intact, the current format-7 store
+   already holds the same evidence, and retaining an unreadable copy of
+   reproducible data costs disk for nothing.
+2. **Two stores: archive, do not dump.** Retain outside the active registry,
+   where they are not queried and not carried forward by a format change.
+3. **Restore the `worktree` relation** the new Project lost.
+
+**This corrects an earlier over-broad claim on this item**, which recommended
+retaining all nine on the strength of one measurement. Applying the same test
+to the rest showed seven were reproducible. The rule that survives is narrower
+and checkable: **a superseded store is retained only where a recorded Source no
+longer exists**, which is a query rather than a judgement.
+
+#### Archive Rather Than Retain In Place
+
+Keeping unreadable stores in the active registry has three costs and no
+benefit: `require_store` refuses them, so they answer no query; they are
+counted in registry size and in every inventory; and each format change invites
+the question again.
+
+**The shape.** An archival area outside `~/.codess/projects`, holding the store
+directory as-is plus a manifest stating why it was kept -- which Sources
+vanished, when, and which current Project superseded it. Nothing reads it
+automatically; recovering evidence from it is a deliberate act.
+
+**What makes this safe to do now.** The evidence for keeping a store is
+recorded as data (the vanished-source count) rather than as a memory, so the
+decision is re-checkable. Without that, archiving is indistinguishable from
+losing track of something.
+
+**Then start afresh.** With the two archived and seven dumped, the active
+registry holds only format-7 stores built under current rules, and the next
+format change costs one reingest per live Project rather than a decision per
+stale one.
+
 **Cost.** Independent: no item blocks it and none waits on it. The nine
-duplicates on this machine are recoverable through the existing catalog
-operations rather than needing a migration.
+duplicates are annotated through existing catalog operations rather than needing
+a migration.
 
 ### W16 -- External Investigation Interfaces
 
@@ -2709,7 +2765,7 @@ string against a bare path fails on the scheme rather than the path.
 **Correction 2: the project-boundary rule was not applied.** Discovery already
 holds the rule that answers most of these failures: `project_boundary` walks
 upward to the nearest ancestor holding `.git` and stops there. A path under
-`Zero400/contrib` or `zerowallet400/src` is not evidence of a separate Project;
+a repository's own subdirectory is not evidence of a separate Project;
 it is the same repository seen from inside. Ranking raw path prefixes ignored
 this and let a subdirectory outrank its own root.
 
@@ -2748,7 +2804,7 @@ Checked against the filesystem rather than assumed:
 |---|---|
 | `ZeroPerf` picked as `Zero400`, x3 | **The same repository.** `ZeroPerf/.git` is a file reading `gitdir: …/Zero400/.git/worktrees/ZeroPerf`, and both report origin `zerocurrencycoin/Zero`. A linked worktree, which the Project catalog already has a `worktree` state for |
 | `Zero400` picked as `ZeroPerf` | The same, in the other direction |
-| `zerowallet400` picked as `ZKs/SevenSeas` | `ZK/ZKs` holds third-party OSS clones -- `bitcoin-src`, `BLAKE3`, `blockbook` -- which are not development Projects and belong in the scan exclusion list, as does `Spank/sOSS`. `zerowallet400` is the wallet repository and has no `.git`, so the collapse could not reach it either |
+| A repository picked as a neighbour under a vendored-clone container | The container held third-party clones read for reference, which are not development Projects and belong in the scan exclusion list. The true repository's directory had since been removed from the machine, so no `.git` was reachable to collapse to |
 
 **Re-measured with three rules -- skip remote, resolve each path to its shared
 repository rather than its worktree, exclude OSS containers:**
@@ -2760,16 +2816,17 @@ repository rather than its worktree, exclude OSS containers:**
 | Unresolved | 15 |
 
 The 15 unresolved are honest abstentions, not hidden errors: 8 composers carry
-no path evidence at all, and 7 resolve to no repository -- `zerowallet400` is
-not a git repository, and some local Sessions reference `/home/ubuntu/...`
-paths from remote work.
+no path evidence at all, and 7 resolve to no repository -- some name a
+directory that has since been removed from the machine, and some local Sessions
+reference remote-host paths from work done over SSH.
 
 **What this changes.** Path correlation is not weak; the three rules applied to
 it were wrong. Two were already implemented elsewhere in the system --
 `project_boundary` stops at a repository, and the catalog carries a `worktree`
 relation -- and the third is a configuration list that ships empty by design.
 `CODESS_EXCLUDE_REVIEW_DIRS` and `CODESS_AGGREGATORS` are unset on this
-machine, which is why `ZK/ZKs` was treated as candidate Projects.
+machine, which is why a container of vendored clones was treated as candidate
+Projects.
 
 **The measurement lesson worth keeping:** three successive corrections each
 moved the result -- 61%, then 81%, then 100% of resolved cases -- and each was
@@ -2784,9 +2841,10 @@ binding rule should have. Two cautions before it is used to write anything:
   right about these repositories, not that the rule generalises. A repository
   layout without worktrees or vendored OSS would exercise none of the
   corrections that produced this result.
-- **The exclusions are operator configuration, not facts.** `ZK/ZKs` is OSS
-  *because the operator says so*; nothing in the directory distinguishes a
-  vendored clone from a Project. So the rule's precision is bounded by whether
+- **The exclusions are operator configuration, not facts.** A container of
+  vendored clones is third-party *because the operator says so*; nothing in the
+  directory distinguishes a clone read for reference from a Project under
+  development. So the rule's precision is bounded by whether
   `CODESS_EXCLUDE_REVIEW_DIRS` is set correctly, which makes it a reviewed
   binding by construction.
 
@@ -2899,13 +2957,51 @@ Naming them separates a decoder defect from a vendor fact.
 | Challenge | Observed | How it presents | Handling |
 |---|---|---|---|
 | **Null value** | 41 bubbles, 7 composerData | Key exists, value is `NULL` | Count it; the vendor wrote a placeholder |
-| **Not JSON at all** | 132,207 `agentKv` rows | Binary protobuf under a key space that also holds JSON | Classify by key space first, not by parse attempt |
+| **Not JSON at all** | 132,207 `agentKv` rows | Several encodings under one key space -- see below | Classify by key space and by content sniff, not by a parse attempt |
 | **Valid JSON, wrong shape** | 0 in decoded spaces | Parses to a list or scalar where a dict is expected | Count separately from a parse failure |
-| **Index disagreement** | 107 composers | `composerHeaders`, workspace and global `composerData` each list a different set | Read all, record `selection_source` |
-| **Retention skew** | 98 composers | An index prunes on age while the data it indexes is kept | A data condition, not a gap |
+| **Index disagreement** | 107 composers | Three indexes list three different composer sets -- see below | Read all, record `selection_source` |
+| **Retention skew** | 98 composers | An index prunes on age while the data it indexes is kept -- see below | A data condition, not a gap |
 | **Identity absent** | 98 composers | The record states no workspace, so no Project can claim it | Admit without a binding, never infer one |
 | **Bulk rewrite** | 4,053 groups, 37 Sessions | A sync re-writes records that already exist, with new identities | Advisory `duplicate_of`, do not delete |
-| **Scheme-wrapped path** | 9 workspaces | `vscode-remote://` wrapping both remote and local paths | Skip initially; the host is stated and can be mapped later |
+| **Scheme-wrapped path** | 9 workspaces | `vscode-remote://` wrapping both remote and local paths | Refuse as a Project location; bind by approved source link |
+
+**Index disagreement, concretely.** Cursor maintains three lists of the same
+composers and no two agree:
+
+| Index | Composers | States a workspace |
+|---|---|---|
+| `composerHeaders` table | 66 | Yes |
+| Workspace `composer.composerData` | 94 | Implicitly, by which database holds it |
+| Global `composerData:` keys | 166 | No |
+
+107 composers hold bubbles that `composerHeaders` omits. The disagreement is
+not corruption -- each index is internally consistent -- so a decoder that
+trusts one index reports a smaller corpus than exists and cannot tell that it
+did.
+
+**Retention skew, concretely.** The disagreement above is not random; it is
+temporal. Headered composers were created 2026-03-26 to 2026-08-17 with `_v`
+14, 16, 17. Orphaned ones were created 2025-08-09 to 2026-03-20 with `_v` 9,
+13, 14. **The ranges do not overlap by a single day.** So `composerHeaders` is
+a retention window: the vendor prunes header rows on age while keeping the
+`composerData:` row and every bubble. It looks like missing data and is
+retained data with a pruned index.
+
+**Non-JSON content, and whether text is reviewed.** Yes -- the sniff
+distinguishes four kinds, measured over 30,000 `agentKv` blobs:
+
+| Kind | Rows | What it is |
+|---|---|---|
+| Valid JSON | 10,977 | Conversation messages |
+| Not UTF-8 | 17,197 | Protobuf; leading bytes `0a…` |
+| Plain text, printable | 1,603 | **File contents** -- a Markdown project brief, a `wp-config.php`, a `.gitmodules` listing |
+| Mostly binary but decodable | 223 | Protobuf carrying readable embedded paths |
+
+The plain-text rows matter because they are not decode failures at all: they
+are file bodies stored verbatim, and treating them as malformed JSON would
+count real content as an error. A content sniff on the first bytes -- `{`/`[`
+for JSON, a UTF-8 decode with a printable ratio for text, otherwise binary --
+separates the three cheaply and before any parse is attempted.
 
 **The first two are why a parse failure must name its key space.** An
 unparseable `agentKv` row is expected and an unparseable `bubbleId` row would
@@ -3120,6 +3216,118 @@ source identifiers applies here.
 criteria above; the unclassified 21 are reassigned or the grouping gains a
 category that honestly describes them; the thin modules named above have tests;
 and new test names state an outcome.
+
+### W88 -- Cursor KV Decode by Content Kind
+
+**Work.** Classify a `cursorDiskKV` value by what it is before attempting to
+parse it, and count each kind.
+
+**Why the current order is wrong.** Decode tries `json.loads` and treats a
+failure as a skip. That conflates three unrelated facts, measured over 30,000
+`agentKv` blobs:
+
+| Kind | Rows | What it is | Today |
+|---|---|---|---|
+| Valid JSON | 10,977 | Conversation messages | Decoded |
+| Not UTF-8 | 17,197 | Protobuf, leading bytes `0a…` | "Parse failure" |
+| Plain printable text | 1,603 | **File contents** -- a Markdown brief, a `wp-config.php`, a `.gitmodules` listing | "Parse failure" |
+| Mostly binary, decodable | 223 | Protobuf with readable embedded paths | "Parse failure" |
+
+**The plain-text rows are the finding.** They are not malformed anything; they
+are file bodies stored verbatim under a key space that also holds JSON. Calling
+them a parse error counts real content as a defect, and the count is the only
+signal an operator has.
+
+**The sniff is cheap and must precede the parse.** First byte `{` or `[` means
+attempt JSON; a successful UTF-8 decode with a high printable ratio means text;
+otherwise binary. This costs a few bytes per row against a full parse attempt
+per row, so it is faster than what it replaces as well as more accurate.
+
+**What each kind should produce.**
+
+| Kind | Treatment |
+|---|---|
+| JSON | Decode as now |
+| Text | Record presence, byte length, and a digest; the body is unbounded content the resource policy governs |
+| Binary | Record presence, byte length, and the leading bytes; do not guess the schema |
+| JSON that fails to parse | **This** is the error class, and it should be rare enough to be loud |
+
+**Evidence to close.** A parse failure in a decoded key space is distinguishable
+from binary and text content; each kind carries its own count; and the counts
+appear per key space, so an unparseable `bubbleId` row is separable from an
+expected `agentKv` blob.
+
+**Depends on** W86's reason codes, which supply the counters this would fill.
+
+### W89 -- Path Rules Belong in the Discovery Policy
+
+**Work.** Move path-based inclusion and exclusion into the checked-in discovery
+policy file, where the directory-name rules already live.
+
+**Where the rules are today**, which is three places:
+
+| Rule | Location | Editable how |
+|---|---|---|
+| Pruned directory names (`.git`, `node_modules`, caches) | `schema/discovery-policy.json` | **A file**, with an `editing_note` and a `security_note` |
+| Broad system roots refused (`/tmp`, `/var`, `/usr`, `/Users`, 25 entries) | `helpers._BROAD_TRAVERSAL_ROOTS` | Python constant, not configurable |
+| Ephemeral locations refused (`/private/var/folders`, `/tmp`) | `helpers._EPHEMERAL_LOCATION_PREFIXES` | Python constant, not configurable |
+| Backup conventions (`OLD`, `Save`) | `schema/discovery-policy.json` | **A file**, with per-name match rules |
+| Grouping directories (`AGGREGATORS`) | Environment variable | `CODESS_AGGREGATORS`, ships empty |
+| Third-party trees (`EXCLUDE_REVIEW_DIRS`) | Environment variable | `CODESS_EXCLUDE_REVIEW_DIRS`, ships empty |
+
+**Progress is real and partial.** The redesign did produce a policy file, and
+it is the right shape: checked in, versioned by `policy_format`, carrying its
+own editing and security notes, and reported by `tools/setup_discovery.py`
+rather than only documented. What it covers is directory *names*. Everything
+keyed to a *path* -- the two lists an operator most needs to set -- stayed in
+environment variables, and the two refusal lists stayed compiled in.
+
+**The defect this produced is measured.** Both path lists ship empty, so on an
+unconfigured machine a container of third-party clones is ranked as candidate
+Projects. That is not a wrong default -- shipping one derived from a single
+tree would be worse -- it is that the setting has no durable home, so
+configuring it means exporting a variable that a later shell forgets.
+
+#### Four Scenarios, Four Different Rules
+
+The current split -- some rules compiled in, some in a file, some in the
+environment -- is not organised by *who decides*, which is why it satisfies
+none of the cases well. Sorting by that instead:
+
+| Scenario | Who decides | Changes how often | Belongs in |
+|---|---|---|---|
+| **System-wide, per platform** | Codess | Per release | Compiled in. `/tmp`, `/var`, `/usr` are not traversal roots on any Unix, and `%APPDATA%` behaves differently on Windows. An operator has no useful opinion here, and a wrong edit breaks discovery |
+| **Ecosystem convention** | Codess, extensible | Per release, plus local additions | The released policy file. `node_modules`, `.venv`, `target`, `__pycache__` are generated everywhere; `OLD` and `Save` are kept-aside copies. Portable *names*, and a tree with different conventions replaces the list |
+| **Development environment layout** | The operator | Once per machine, then rarely | **A machine-local policy file** -- which does not exist today. "This container groups repositories", "this tree holds vendored clones" is a durable fact about one machine, and an environment variable is the wrong home for a durable fact |
+| **Individual preference** | The operator | Per invocation | Command flags and environment. "Exclude this tree for this run" is a scope decision, not a layout fact |
+
+**The third row is the gap.** Both `CODESS_AGGREGATORS` and
+`CODESS_EXCLUDE_REVIEW_DIRS` are machine layout expressed as environment
+variables, so the judgment lives in a shell profile or nowhere. Measured
+consequence: on this machine both were unset, and a container of vendored
+clones was ranked as candidate Projects.
+
+**Reasonable defaults with fast clean ingest, then tuning.** The four rows
+suggest the sequence rather than one answer:
+
+1. **Ship with rows one and two populated.** Platform roots and ecosystem
+   conventions are safe defaults because they are not one tree's names -- which
+   is exactly why the current empty path lists are *not* a counterexample to
+   shipping defaults.
+2. **Discover row three, do not guess it.** `tools/setup_discovery.py` already
+   proposes candidates from the operator's own tree; what is missing is a file
+   for it to propose *into*.
+3. **Leave row four to flags**, where a per-run scope decision belongs.
+
+**What should not move.** The broad-root and ephemeral-location refusals stay
+compiled in: they are safety rails rather than preferences, and a file an
+operator edits is the wrong home for a rule whose purpose is refusing a
+mistake. Documenting them in the policy file as read-only is worthwhile; making
+them editable is not.
+
+**Evidence to close.** A machine's inclusion and exclusion judgment survives a
+new shell; `tools/setup_discovery.py` proposes into that file; and the
+compiled-in refusals are documented in the same place without becoming editable.
 
 ### Store Performance Baseline
 

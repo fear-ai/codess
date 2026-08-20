@@ -739,6 +739,30 @@ The `codess` command is the supported interface. The scripts under `tools/`
 are development and diagnosis aids that are not installed as commands and are
 run with the repository's Python. They are grouped here by what they answer.
 
+### Project Inventory
+
+`catalog/inventory/project-inventory.csv` is a per-Project reference row,
+generated rather than maintained. It answers the questions that decide whether
+a store is still needed:
+
+| Column | Answers |
+|---|---|
+| `path`, `dir_exists` | Does the Project directory still exist on this machine |
+| `is_git_repo`, `worktree` | Is it a repository, and is it a linked worktree of another |
+| `coschema_format` | Is the store readable by the installed contract |
+| `sessions`, `events`, `store_bytes` | What it holds and what it costs |
+| `sources_total`, `sources_on_disk`, `sources_vanished` | **Whether the vendor Sources still exist** |
+| `disposition`, `commentary` | The catalog state, and why the row matters |
+
+**`sources_vanished` is the column that decides retention.** A store whose
+Sources are all present duplicates evidence the current Sources still produce;
+a store with vanished Sources is the last remaining record of them. That
+distinction is a query rather than a judgement, which is what makes it
+re-checkable after the person who made the call has forgotten it.
+
+The file carries absolute paths from one machine, so it is generated locally
+and excluded from version control by the `*.csv` rule.
+
 ### Where a Measurement Is Read From
 
 A figure that describes the current state is read from a producer, not from a

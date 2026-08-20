@@ -82,6 +82,32 @@ class TestBackupExclusion:
     def test_an_old_directory_is_excluded(self):
         assert is_excluded(Path("/w/group/OLD/project"), Path("/w"))
 
+    def test_backup_names_come_from_the_policy(self):
+        """The conventions are policy data, not constants in this module.
+
+        A machine using different backup names replaces the list without
+        editing code, which is the property that keeps one tree's conventions
+        out of the released source.
+        """
+        from codess.helpers import BACKUP_CONVENTIONS
+        exact, prefix = BACKUP_CONVENTIONS
+        assert "OLD" in exact
+        assert "Save" in prefix
+
+    def test_lowercase_old_is_a_real_name(self):
+        """Matching is case-sensitive, so an ordinary directory survives.
+
+        `old` in lowercase is a name a project legitimately uses; only the
+        shouted `OLD` is the kept-aside-copy convention. Case-folding here
+        excluded real Projects from discovery.
+        """
+        assert not is_excluded(Path("/w/group/old/project"), Path("/w"))
+
+    def test_save_matches_as_a_prefix(self):
+        """`Save2` and `Saved` are the same convention as `Save`."""
+        assert is_excluded(Path("/w/group/Save2/project"), Path("/w"))
+        assert is_excluded(Path("/w/group/Saved/project"), Path("/w"))
+
     def test_a_save_directory_is_excluded(self):
         assert is_excluded(Path("/w/group/Save/project"), Path("/w"))
 

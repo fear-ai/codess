@@ -79,6 +79,56 @@ sweep is periodic rather than aggressive, and terminal-agent evidence is not
 about to vanish -- but it is deleted on a schedule Codess does not control,
 which the GUI store's retention does not do.
 
+### Remote Workspace Handling
+
+Cursor records a workspace opened over SSH as a URI rather than a path, and
+Codess **refuses it as a Project location**. The refusal is implemented in
+`local_path_from_uri`: a URI with any scheme other than `file`, or a `file`
+URI with a non-empty authority other than `localhost`, returns no path, so the
+workspace never matches a Project directory.
+
+**The shape, decoded.** One authority appears on the development machine:
+
+```
+vscode-remote://ssh-remote%2B7b22686f73744e616d65223a226c617a75227d/home/ubuntu/Work/Spank/spLogs
+                ^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                scheme     percent-encoded hex of {"hostName":"lazu"}  path on that host
+```
+
+The authority is `ssh-remote` plus a `+` (as `%2B`) and a hex-encoded JSON
+object naming the host. So the host **is** stated and recoverable; what is
+absent is any evidence that the remote path corresponds to a local Project.
+
+**Two shapes appear, and the second is the hazard.**
+
+| Shape | Count | Meaning |
+|---|---|---|
+| `…/home/ubuntu/...` | 7 | A tree that exists only on the remote host |
+| `…/Users/walter/...` | 2 | A path that **also exists locally**, under the same ssh authority |
+
+The second is why a path alone cannot decide. The same absolute string denotes
+a local directory and a remote one; only the authority separates them, and a
+rule that strips the scheme before comparing would bind remote Sessions to a
+local Project silently. That is the specific error the current refusal
+prevents.
+
+**What is lost, measured.** Nine remote workspaces hold **8 composers and
+17,994 bubbles**. They are decoded like any other composer -- nothing about
+being remote affects bubble decode -- but they reach no Project through
+workspace matching, so they are ingested only if an operator approves a source
+link.
+
+**The supported route is an approved source link**, not a relaxed rule.
+`get_workspace_ids` reads `.codess/source-links.json` and admits a workspace id
+whose link is `approved`, which is how a renamed or remote identity is bound by
+review rather than by inference. A remote workspace therefore has a path into a
+Project; it requires a person to state which Project.
+
+**Claude and Codex do not present this.** Every Claude Session on the
+development machine records a local `cwd`; no record carries a `/home/...`
+path. Remote handling is a Cursor concern because Cursor is the only vendor
+here that stores a workspace URI.
+
 ### Opening a Cursor Store Read-Only
 
 Codess opens vendor databases read-only and does not modify them. Two access

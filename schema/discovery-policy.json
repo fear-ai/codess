@@ -2,29 +2,107 @@
   "policy_format": "codess.discovery-policy/1",
   "description": "Directory names never traversed during discovery, and the names deliberately traversed despite looking skippable. Names, not paths: a name is portable across machines, a path is not. Replace or extend with CODESS_DISCOVERY_POLICY.",
   "pruned": {
-    "version_control": [".bzr", ".git", ".hg", ".svn", ".codess"],
-    "editor_state": [".fleet", ".idea", ".metadata", ".settings", ".vs", ".vscode"],
+    "version_control": [
+      ".bzr",
+      ".git",
+      ".hg",
+      ".svn",
+      ".codess"
+    ],
+    "editor_state": [
+      ".fleet",
+      ".idea",
+      ".metadata",
+      ".settings",
+      ".vs",
+      ".vscode"
+    ],
     "caches": [
-      ".cache", ".ccache", ".direnv", ".eggs", ".gradle", ".m2",
-      ".mypy_cache", ".npm", ".nox", ".nuget", ".parcel-cache",
-      ".pnpm-store", ".pyenv", ".pytest_cache", ".ruff_cache",
-      ".sass-cache", ".stack-work", ".terraform", ".tox", ".turbo",
-      ".yarn", "__pycache__", "cache"
+      ".cache",
+      ".ccache",
+      ".direnv",
+      ".eggs",
+      ".gradle",
+      ".m2",
+      ".mypy_cache",
+      ".npm",
+      ".nox",
+      ".nuget",
+      ".parcel-cache",
+      ".pnpm-store",
+      ".pyenv",
+      ".pytest_cache",
+      ".ruff_cache",
+      ".sass-cache",
+      ".stack-work",
+      ".terraform",
+      ".tox",
+      ".turbo",
+      ".yarn",
+      "__pycache__",
+      "cache"
     ],
     "build_output": [
-      ".build", ".next", ".nuxt", ".output", ".parcel", "bazel-bin",
-      "bazel-out", "bazel-testlogs", "bin", "build", "coverage", "debug",
-      "deriveddata", "dist", "obj", "out", "output", "packages", "release",
-      "target", "x64", "x86"
+      ".build",
+      ".next",
+      ".nuxt",
+      ".output",
+      ".parcel",
+      "bazel-bin",
+      "bazel-out",
+      "bazel-testlogs",
+      "bin",
+      "build",
+      "coverage",
+      "debug",
+      "deriveddata",
+      "dist",
+      "obj",
+      "out",
+      "output",
+      "packages",
+      "release",
+      "target",
+      "x64",
+      "x86"
     ],
     "dependencies": [
-      "bower_components", "jspm_packages", "node_modules", "pods",
-      "site-packages", "vendor", "web_modules"
+      "bower_components",
+      "jspm_packages",
+      "node_modules",
+      "pods",
+      "site-packages",
+      "vendor",
+      "web_modules"
     ],
-    "virtual_environments": [".env", ".venv", ".virtualenv", "env", "venv", "virtualenv"],
-    "transient": ["downloads", "logs", "temp", "tmp", "uploads"]
+    "virtual_environments": [
+      ".env",
+      ".venv",
+      ".virtualenv",
+      "env",
+      "venv",
+      "virtualenv"
+    ],
+    "transient": [
+      "downloads",
+      "logs",
+      "temp",
+      "tmp",
+      "uploads"
+    ]
   },
-  "pruned_prefixes": ["cmake-build-"],
+  "pruned_prefixes": [
+    "cmake-build-"
+  ],
+  "backup_conventions": {
+    "exact": [
+      "OLD"
+    ],
+    "prefix": [
+      "Save"
+    ],
+    "note": "Directory-name conventions for a kept-aside copy. A path segment matching one of these is excluded from Project candidacy: the tree below it is a copy of work that lives elsewhere, so admitting it would report one Project twice. Matching is case-sensitive and split by rule -- `OLD` matches a segment exactly, `Save` matches a segment that starts with it (`Save`, `Save2`, `Saved`). Case-sensitivity is deliberate: a directory named `old` in ordinary lowercase is a real name, not a backup marker."
+  },
   "traversed_on_purpose": {
     "assets": "checked-in images, fonts, and fixtures",
     "conf": "checked-in configuration, under a second spelling",
