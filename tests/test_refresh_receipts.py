@@ -53,18 +53,18 @@ def receipt(project_id, *, stage="apply", status="passed", completed_at=None,
 class TestWhatIsRead:
     """A receipt is admitted only when it states the released format."""
 
-    def test_an_absent_reports_directory_yields_no_observations(self, tmp_path):
+    def test_absent_reports_directory(self, tmp_path):
         """A store that has never refreshed is not an error."""
         assert latest_refresh_observations(tmp_path) == {}
 
-    def test_a_receipt_of_another_format_is_refused(self, tmp_path):
+    def test_foreign_format_refused(self, tmp_path):
         """`receipt_format` is the gate, so an unrelated JSON file is skipped."""
         body = receipt("p1")
         body["receipt_format"] = "something.else/9"
         write_receipt(tmp_path, "refresh-a.json", body)
         assert latest_refresh_observations(tmp_path) == {}
 
-    def test_unreadable_json_is_skipped_rather_than_raising(self, tmp_path):
+    def test_unreadable_json_skipped(self, tmp_path):
         """One corrupt receipt must not hide every other Project's result."""
         (tmp_path / "reports").mkdir()
         (tmp_path / "reports" / "refresh-bad.json").write_text("{not json",
@@ -72,13 +72,13 @@ class TestWhatIsRead:
         write_receipt(tmp_path, "refresh-good.json", receipt("p1"))
         assert set(latest_refresh_observations(tmp_path)) == {"p1"}
 
-    def test_a_status_outside_the_vocabulary_yields_no_observation(self, tmp_path):
+    def test_status_outside_vocabulary(self, tmp_path):
         """Only `passed` and `failed` map; anything else is not an outcome."""
         write_receipt(tmp_path, "refresh-a.json",
                       receipt("p1", status="cancelled"))
         assert latest_refresh_observations(tmp_path) == {}
 
-    def test_a_nonpositive_limit_is_rejected(self, tmp_path):
+    def test_nonpositive_limit_rejected(self, tmp_path):
         """Reading zero receipts would report "never refreshed" for everything."""
         with pytest.raises(ValueError):
             latest_refresh_observations(tmp_path, receipt_limit=0)
@@ -87,7 +87,7 @@ class TestWhatIsRead:
 class TestWhichObservationWins:
     """Several receipts can describe one Project; one of them is current."""
 
-    def test_the_later_completion_wins(self, tmp_path):
+    def test_later_completion_wins(self, tmp_path):
         """Recency is decided by the stated completion, not by file order."""
         write_receipt(tmp_path, "refresh-old.json",
                       receipt("p1", completed_at="2026-01-01T00:00:00+00:00",
@@ -98,7 +98,7 @@ class TestWhichObservationWins:
         observed = latest_refresh_observations(tmp_path)
         assert observed["p1"]["snapshot_id"] == "new"
 
-    def test_apply_outranks_preflight_at_the_same_instant(self, tmp_path):
+    def test_apply_outranks_preflight(self, tmp_path):
         """Both stages can complete together; apply is the one that changed a store.
 
         Without the stage rank the winner would depend on iteration order, and
@@ -116,7 +116,7 @@ class TestWhichObservationWins:
         assert observed["p1"]["stage"] == "apply"
         assert observed["p1"]["status"] == "refresh_applied"
 
-    def test_a_failure_is_an_observation_rather_than_an_absence(self, tmp_path):
+    def test_failure_is_observed(self, tmp_path):
         """A failed refresh is what a reader most needs to see."""
         write_receipt(tmp_path, "refresh-a.json",
                       receipt("p1", status="failed",
@@ -125,7 +125,7 @@ class TestWhichObservationWins:
         assert observed["p1"]["status"] == "refresh_failed"
         assert observed["p1"]["result_status"] == "failed"
 
-    def test_the_file_time_stands_in_for_an_unstated_completion(self, tmp_path):
+    def test_file_time_fallback(self, tmp_path):
         """A receipt with no stated time still orders, by when it was written."""
         write_receipt(tmp_path, "refresh-old.json",
                       receipt("p1", snapshot_id="old"), mtime=1_000_000)
@@ -134,7 +134,7 @@ class TestWhichObservationWins:
         observed = latest_refresh_observations(tmp_path)
         assert observed["p1"]["snapshot_id"] == "new"
 
-    def test_each_project_is_observed_independently(self, tmp_path):
+    def test_projects_observed_independently(self, tmp_path):
         """One receipt covering several Projects yields one row each."""
         body = receipt("p1", completed_at="2026-06-01T00:00:00+00:00")
         body["plan"]["projects"].append({"project_id": "p2", "source": "codex",

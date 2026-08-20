@@ -127,9 +127,32 @@ empty value means an empty list, which is how a tree with no grouping
 directories says so -- `CODESS_AGGREGATORS=''` makes every directory a
 candidate Project.
 
-Set these when scanning an unfamiliar tree. The defaults describe one
-developer's layout, so on another machine they may both group directories
-that are Projects and scan trees that should be skipped.
+**Both ship empty**, so an unconfigured machine treats every directory as a
+candidate Project and excludes nothing. That is deliberate -- a shipped list
+derived from one tree misclassifies directories on every other machine -- but
+it means these are the first two settings to establish on a new machine, not an
+optional refinement.
+
+**What belongs in each, by the question it answers:**
+
+| Setting | Answers | Typical entries |
+|---|---|---|
+| `CODESS_AGGREGATORS` | Which directories only *hold* Projects and are not Projects themselves | A container grouping several repositories under one topic |
+| `CODESS_EXCLUDE_REVIEW_DIRS` | Which trees hold code that is not this operator's work | Vendored or cloned third-party sources, read for reference |
+
+**A vendored clone is indistinguishable from a Project by inspection.** Both are
+directories with a `.git` and a remote; nothing on disk says which one the
+operator develops. So the exclusion list is where that judgment lives, and
+leaving it empty does not mean "no exclusions apply" -- it means the judgment
+has not been recorded. Measured consequence on an unconfigured machine: a
+directory of third-party clones read for reference was ranked as a candidate
+Project for Sessions belonging to a repository beside it.
+
+**A linked git worktree is a related Project, not a separate one.** Where a
+repository has worktrees, each has its own directory and its own `.git` *file*
+pointing at the shared repository. Discovery treats each as a boundary, which
+is correct for locating Sessions; relating them is a catalog operation --
+`state: worktree` with `--related-project-id` naming the parent.
 
 ## Regenerating After a Schema or Package Change
 

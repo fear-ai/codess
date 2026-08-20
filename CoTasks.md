@@ -60,7 +60,7 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 |---|---|---|---|---|
 | W04 | High | Planned | Shared candidate-record contract, enforced at the decode boundary | -- |
 | W05 | High | Planned | Run named real investigations against the query surface | -- |
-| W14 | Normal | TODO | Require or mark Project identity for direct library writes | -- |
+| W14 | High | Planned | Require or mark Project identity; duplicates override reviewed dispositions | -- |
 | W16 | Normal | Postponed | Evaluate external investigation interfaces | No consumer |
 | W17 | Normal | Postponed | Expand cross-Project analysis inputs | Baseline 2 |
 | W35 | Low | Postponed | Resolve the validation-fixture inventory | -- |
@@ -87,7 +87,7 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W82 | High | Closed | Tools carry unchecked SQL; a renamed column broke the mandated audit silently | -- |
 | W83 | High | Postponed | Early-access release readiness | B1 is the owner's decision; restart criteria on the item |
 | W84 | Low | Postponed | Characterise `selectedModels` parameters beyond `fast` and `effort` | Both observed ids are mapped; no third has appeared |
-| W85 | Normal | Postponed | 98 Cursor composers decode but no Project can claim them | Retention boundary established; binding still needs a validated signal |
+| W85 | Normal | Postponed | Composers older than the header retention window are unattributed by design | Handling can improve; the condition itself is vendor retention |
 | W86 | High | Planned | Skipped and refused records are counted but not attributed | -- |
 | W87 | Normal | Planned | Group the test corpus by subsystem; find superseded and uncovered cases | -- |
 
@@ -523,10 +523,40 @@ data rather than regenerating it.
 
 **Work.** Require or explicitly mark Project identity for direct library writes.
 
-**Evidence to close.** Separate vendor stores cannot silently create unrelated
-Project identities for one repository.
+**Reproduced, with dates.** The registry now holds **nine paths claimed by two
+Projects each**, and every duplicate was created on one day by repeated
+`codess ingest --dir <path> --force` runs against Projects that already had a
+catalog entry:
 
-**Cost.** Independent: no item blocks it and none waits on it.
+| Path | Existing entry | Duplicate created |
+|---|---|---|
+| `ZK/ZeroPerf` | 2026-07-29, state `worktree` | 2026-08-20 |
+| `Code/Misses` | 2026-07-30 | 2026-08-20 |
+| `Spank/spank-rs` | 2026-07-29 | 2026-08-20 |
+| `WP/wp`, `WP/wpages`, `WP/harduw` | 2026-07-17 to 07-29 | 2026-08-20 |
+| `Code/SWEmore`, `Code/wisw`, `Claw/setpack` | 2026-07-17 to 07-29 | 2026-08-20 |
+
+**The ZeroPerf case shows the consequence precisely.** Its 2026-07-29 entry
+carries a reviewed disposition -- `state: worktree`, `relation_kind:
+worktree_of`, `related_project_id` naming Zero400, and a note reading "Legacy
+duplicate Project for the Zero400 linked worktree; retain historical evidence
+but exclude broad selection." A new unmarked Project for the same path
+**recreates exactly the duplicate that disposition exists to suppress**, and
+carries none of the review that settled it.
+
+So the defect is not only that identity is inferred rather than required: an
+inferred identity **overrides a reviewed one silently**. A reviewed decision
+that a later run can undo without saying so is worse than no decision, because
+the operator has no reason to re-check it.
+
+**Evidence to close.** Separate vendor stores cannot silently create unrelated
+Project identities for one repository; re-ingesting a Project that already has
+a catalog entry reuses that entry; and a path carrying a reviewed disposition
+is never claimed by a new Project without the operator being told.
+
+**Cost.** Independent: no item blocks it and none waits on it. The nine
+duplicates on this machine are recoverable through the existing catalog
+operations rather than needing a migration.
 
 ### W16 -- External Investigation Interfaces
 
@@ -2581,10 +2611,18 @@ single value would be worse than none.
 one branch. It is postponed because the branch would be written against no
 evidence.
 
-### W85 -- Composers No Project Can Claim
+### W85 -- Composers Older Than Their Index
 
-**Status: Postponed.** Not for lack of effort but for lack of evidence: the
-identity these Sessions would need is not in the store.
+**Status: Postponed. This is a data condition, not a defect.** Cursor prunes
+`composerHeaders` on age while retaining `composerData:` and every bubble, so a
+composer older than the retention window has no header. Codess reads it, states
+where it came from, and does not attribute it to a Project -- which is the
+correct handling of a Session whose binding the vendor no longer records, not a
+failure to decode one.
+
+The item stays open because the *handling* can improve -- these Sessions are
+currently visible only to a caller that asks for every composer -- not because
+something is broken.
 
 **What is established.** 98 composers hold decodable bubbles and a global
 `composerData:` row, and `composerHeaders` does not list them. Codess now reads
@@ -2608,6 +2646,23 @@ Session to a Project on no evidence.
 **So the honest state is: visible and unattributed.** `selection_source`
 records `global.composerData` on each, which is what lets a reader tell an
 unattributed composer from an absent one.
+
+**Rounding out the handling.** Three things would make this condition
+first-class rather than merely non-fatal, in increasing order of cost:
+
+1. **Report it.** A scan or coverage line stating "98 composers hold bubbles
+   older than the header retention window" turns an invisible condition into an
+   observation. Nothing currently says the number.
+2. **Name the condition in the store.** A Session admitted without a workspace
+   would need a binding basis -- the `session_model_basis` pattern -- so a
+   query could include or exclude unbound Sessions deliberately. This is the
+   change that would let them be ingested at all.
+3. **Offer the operator a binding.** The Project catalog already accepts
+   approved source links for renamed and remote identities, so a reviewed
+   manual binding needs no new mechanism, only a way to list the candidates.
+
+None of these requires guessing a Project, which is the property that makes the
+condition safe to expose.
 
 #### Binning the 98, and What It Established
 
@@ -2641,29 +2696,103 @@ than a one-time recovery.
 tail, bubble counts run 2 to 12,209 with a median of 65 and 75,273 in total.
 None of these correlates with a Project; they describe the population.
 
-#### Path Correlation Was Tested and Failed
+#### Path Correlation, After Applying Two Known Rules
 
-Absolute paths do appear in bubble content -- 7 of 10 sampled composers carry
-them -- so the obvious inference is available. It was validated against the
-headered composers, where the workspace and therefore the folder are known:
+The first two measurements were both wrong, in different ways, and the
+corrections are the finding.
 
-| Rule | Correct | Wrong | Abstained | Precision |
-|---|---|---|---|---|
-| Most frequent path prefix | 23 | 15 | 10 | 61% |
-| Most frequent path restricted to known Project roots | 2 | 27 | 19 | 6% |
-| Same, requiring 70% dominance | 2 | 2 | 44 | 50% |
+**Correction 1: remote ground truth was compared as text.** Nine of 29
+workspaces record their folder as `vscode-remote://ssh-remote%2B<hex>/...`. The
+authority decodes to `{"hostName":"lazu"}` -- one remote host. Comparing that
+string against a bare path fails on the scheme rather than the path.
 
-Restricting candidates to known Project roots made it *worse*, which is the
-informative result: the paths a Session mentions are dominated by files it
-read, and a Session commonly reads outside its own Project -- a sibling
-repository, a vendored tree, a home-directory config. Requiring dominance
-raises precision to 50% only by abstaining on 44 of 48.
+**Correction 2: the project-boundary rule was not applied.** Discovery already
+holds the rule that answers most of these failures: `project_boundary` walks
+upward to the nearest ancestor holding `.git` and stops there. A path under
+`Zero400/contrib` or `zerowallet400/src` is not evidence of a separate Project;
+it is the same repository seen from inside. Ranking raw path prefixes ignored
+this and let a subdirectory outrank its own root.
 
-**A rule that is wrong half the time cannot bind a Session to a Project**,
-because a wrong binding is indistinguishable from a right one in the result and
-propagates into every query that selects by Project. This is not a prohibition
-on inference -- correlation established the retention finding above -- it is a
-measured rejection of *this* correlation at *this* precision.
+**Applying both -- skip remote workspaces, collapse every observed path to its
+git root -- on the 40 local composers:**
+
+| Outcome | Count |
+|---|---|
+| Correct | 21 |
+| Wrong | 5 |
+| No path evidence | 8 |
+| No git root resolvable | 6 |
+
+**81% precision on the cases that resolve**, against 67% for raw prefixes. The
+improvement came from rules the system already states, not from a new signal.
+
+**Why remote workspaces are skipped rather than mapped.** They are a distinct
+condition, not a harder version of the same one:
+
+| Remote shape | Count | What it is |
+|---|---|---|
+| `/home/ubuntu/...`, no local counterpart | 7 | A tree that exists only on the remote host |
+| `/Users/walter/...` under the ssh authority | 2 | A path that **also exists locally** -- a mirror of remote logs |
+
+The second shape is the labeling confusion: the same absolute path denotes a
+local directory and a remote one, and nothing in the composer says which the
+Session meant. Skipping remote workspaces initially is the right first step --
+it removes a class that needs host identity to resolve, and the host is stated
+in the authority, so the mapping can be built later from vendor evidence rather
+than guessed.
+
+**The 5 remaining failures were all rule defects, not correlation defects.**
+Checked against the filesystem rather than assumed:
+
+| Case | What it actually is |
+|---|---|
+| `ZeroPerf` picked as `Zero400`, x3 | **The same repository.** `ZeroPerf/.git` is a file reading `gitdir: …/Zero400/.git/worktrees/ZeroPerf`, and both report origin `zerocurrencycoin/Zero`. A linked worktree, which the Project catalog already has a `worktree` state for |
+| `Zero400` picked as `ZeroPerf` | The same, in the other direction |
+| `zerowallet400` picked as `ZKs/SevenSeas` | `ZK/ZKs` holds third-party OSS clones -- `bitcoin-src`, `BLAKE3`, `blockbook` -- which are not development Projects and belong in the scan exclusion list, as does `Spank/sOSS`. `zerowallet400` is the wallet repository and has no `.git`, so the collapse could not reach it either |
+
+**Re-measured with three rules -- skip remote, resolve each path to its shared
+repository rather than its worktree, exclude OSS containers:**
+
+| Outcome | Count |
+|---|---|
+| Correct | **25** |
+| Wrong | **0** |
+| Unresolved | 15 |
+
+The 15 unresolved are honest abstentions, not hidden errors: 8 composers carry
+no path evidence at all, and 7 resolve to no repository -- `zerowallet400` is
+not a git repository, and some local Sessions reference `/home/ubuntu/...`
+paths from remote work.
+
+**What this changes.** Path correlation is not weak; the three rules applied to
+it were wrong. Two were already implemented elsewhere in the system --
+`project_boundary` stops at a repository, and the catalog carries a `worktree`
+relation -- and the third is a configuration list that ships empty by design.
+`CODESS_EXCLUDE_REVIEW_DIRS` and `CODESS_AGGREGATORS` are unset on this
+machine, which is why `ZK/ZKs` was treated as candidate Projects.
+
+**The measurement lesson worth keeping:** three successive corrections each
+moved the result -- 61%, then 81%, then 100% of resolved cases -- and each was
+a defect in the *rule* rather than in the data. A correlation reported before
+the domain rules are applied measures the rules, not the correlation.
+
+**Where this leaves the item.** On the validation set the rule is now correct
+on every case it resolves and abstains on the rest, which is the shape a
+binding rule should have. Two cautions before it is used to write anything:
+
+- **The set is small and one machine's.** 25 resolved cases prove the rules are
+  right about these repositories, not that the rule generalises. A repository
+  layout without worktrees or vendored OSS would exercise none of the
+  corrections that produced this result.
+- **The exclusions are operator configuration, not facts.** `ZK/ZKs` is OSS
+  *because the operator says so*; nothing in the directory distinguishes a
+  vendored clone from a Project. So the rule's precision is bounded by whether
+  `CODESS_EXCLUDE_REVIEW_DIRS` is set correctly, which makes it a reviewed
+  binding by construction.
+
+Both point the same way: propose candidates for the operator to confirm through
+the catalog, which is the third resolution path below and needs no new
+mechanism.
 
 **What would resolve it**, in order of how much evidence each requires:
 
@@ -2731,20 +2860,140 @@ not edge cases, they are a substantial fraction of what the vendor wrote.
    dropped because Codess does not map its type from one dropped because it
    exceeded a resource bound -- and those need different responses.
 
-**Silent skips, measured.** A static scan of the ten discovery and decode
-modules found **126 `continue`/bare-`return` sites with no diagnostic, log, or
-progress call within six lines**, concentrated in `adapters/codex.py` (38),
-`cursor_source.py` (28), `adapters/cc.py` (17), and `adapters/cursor.py` (15).
-Most are ordinary type guards -- `if not isinstance(block, dict): continue` --
-and counting those would be noise. The scan does not separate the two, which is
-the first piece of work: classify each site as a **type guard** (no record is
-lost, nothing to report) or a **content decision** (a populated value is
-dropped, which needs a counter).
+#### Skip Sites, Classified
 
-**Evidence to close.** Record-level discards reach `mapping_diagnostics` with a
-reason code naming the record type; a query can report what a store dropped and
-why; and each of the 126 sites is classified, with a counter added wherever a
-populated value is discarded.
+A static scan of the seven decode and source-access modules found 149
+`continue`/bare-`return` sites. Classifying them by the condition that guards
+each is what separates noise from a real gap:
+
+| Class | Count | Needs a counter? |
+|---|---|---|
+| Type or shape guard (`isinstance`, `is None`, empty) | 72 | **No.** No record is lost; a malformed *shape* is a different event from a discarded record |
+| Already recorded | 26 | No -- these route through `_diagnostic` or `_record_refused` |
+| Unclassified by the scan | 32 | Unknown -- multi-line conditions the regex could not read |
+| Exception swallow | 10 | **Yes.** A parse failure discards a record the vendor wrote |
+| Value or kind decision | 9 | **Yes.** `type != "assistant"`, `item_type not in (...)` -- a populated record dropped on its kind |
+
+**The exception swallows are measurable and small.** Reading every row of the
+decoded Cursor key spaces directly:
+
+| Key space | Rows | Silently skipped |
+|---|---|---|
+| `bubbleId:` | 210,152 | **41** (null value) |
+| `composerData:` | 166 | **7** (null value) |
+| `checkpointId:` | 7,718 | 0 |
+| `messageRequestContext:` | 678 | 0 |
+
+**48 records, all null-valued, none unparseable.** That is the useful shape of
+the answer: the swallow paths *are* reached, at a rate of 0.02%, and every
+instance is a vendor row with no value rather than a decoder that failed to
+read one. A counter would have said so without this investigation, which is the
+argument for adding one.
+
+#### Challenge Taxonomy for KV Interpretation
+
+The Cursor key-value store is one table holding a dozen unrelated record
+shapes, so the failure classes are not the same as a line-oriented transcript's.
+Naming them separates a decoder defect from a vendor fact.
+
+| Challenge | Observed | How it presents | Handling |
+|---|---|---|---|
+| **Null value** | 41 bubbles, 7 composerData | Key exists, value is `NULL` | Count it; the vendor wrote a placeholder |
+| **Not JSON at all** | 132,207 `agentKv` rows | Binary protobuf under a key space that also holds JSON | Classify by key space first, not by parse attempt |
+| **Valid JSON, wrong shape** | 0 in decoded spaces | Parses to a list or scalar where a dict is expected | Count separately from a parse failure |
+| **Index disagreement** | 107 composers | `composerHeaders`, workspace and global `composerData` each list a different set | Read all, record `selection_source` |
+| **Retention skew** | 98 composers | An index prunes on age while the data it indexes is kept | A data condition, not a gap |
+| **Identity absent** | 98 composers | The record states no workspace, so no Project can claim it | Admit without a binding, never infer one |
+| **Bulk rewrite** | 4,053 groups, 37 Sessions | A sync re-writes records that already exist, with new identities | Advisory `duplicate_of`, do not delete |
+| **Scheme-wrapped path** | 9 workspaces | `vscode-remote://` wrapping both remote and local paths | Skip initially; the host is stated and can be mapped later |
+
+**The first two are why a parse failure must name its key space.** An
+unparseable `agentKv` row is expected and an unparseable `bubbleId` row would
+be a decoder defect, and today both would increment the same counter.
+
+#### Partial Ingestion on a Parse Error
+
+Currently a record that fails to parse is skipped whole. Two better options,
+and the reason for preferring the second:
+
+1. **Retain the raw bytes.** The raw-evidence path already stores
+   content-addressed objects, so an unparseable record could be captured for
+   later inspection rather than discarded. This is right for a *rare* failure
+   and wrong for a common one -- 132,207 binary `agentKv` rows would become
+   132,207 raw objects.
+2. **Record presence, size, and key space; retain bytes only above a stated
+   rarity.** The count answers "is this happening"; the bytes answer "what is
+   it", and only the second needs storage. Since the measured rate in decoded
+   key spaces is 48 in 218,714 -- 0.02% -- retention is affordable there and
+   would be ruinous in `agentKv`, which is the argument for keying the decision
+   to the key space rather than to the error.
+
+**What must not happen is a partial *record*.** Ingesting the fields that
+parsed from a truncated JSON object would produce a Session whose content is
+silently incomplete, which is worse than an absent one because nothing marks
+it. Partial ingestion is acceptable at the *record* boundary -- skip this
+record, keep the Session -- and not within a record.
+
+**How to separate common, rare, and wrong.** The three need different
+treatments and the counter design should make them distinguishable:
+
+- **Common and reasonable** -- a known ignored record type, a shape guard. High
+  volume, stable proportion. Expected; worth a total, not an alert.
+- **Rare but valid** -- 48 null rows in 218,000. Worth naming so that a change
+  in the rate is visible, since a jump from 48 to 48,000 means the vendor
+  changed something.
+- **Wrong** -- an unparseable value in a key space that should always parse.
+  Zero today. This is the class that should be loud, and it is currently
+  indistinguishable from the other two.
+
+The distinction is a *reason code*, not a severity: `record_null`,
+`record_unparseable`, and `record_kind_not_mapped` are three different facts
+about the vendor, and collapsing them into `ignored` is what makes the current
+total unactionable.
+
+#### Reason and Condition Codes, Bounded by Ingest Cost
+
+**The design constraint is that `mapping_diagnostics` is written one row per
+finding.** It holds 50,423 rows for field-level findings across the corpus, and
+record-level discards are an order larger -- one Project alone reports 21,580
+`known_ignored`. Writing a row per discarded record would roughly double the
+diagnostic table for evidence that is identical 21,580 times over, and it would
+do it inside the ingest transaction.
+
+**So the codes are aggregated, not per-record.** One row per
+`(source, reason_code, record_kind)` per Source, carrying a count:
+
+| Reason code | Condition | Granularity |
+|---|---|---|
+| `record_kind_not_mapped` | The record type is in `SKIP_TYPES` or an equivalent list | `record` |
+| `record_null` | The vendor row exists with no value | `record` |
+| `record_unparseable` | The value is present and does not decode | `record` |
+| `record_refused_bound` | A resource bound rejected it before the read | `record` |
+| `record_refused_content` | The content policy refused the body | `record` |
+
+The `record_kind` column carries the vendor's own name for what was dropped --
+`progress`, `file-history-snapshot` -- so the six types currently summed into
+`known_ignored` become six countable facts.
+
+**Cost, stated in the terms that decide it.** Aggregation makes the write count
+proportional to *distinct kinds per Source* rather than to records: on the
+measured corpus that is single digits per Source against tens of thousands of
+records. The counting itself is a dictionary increment already performed by
+`_diagnostic`; what is added is one flush per Source at the end of decode,
+inside the transaction that already exists. No per-record SQL, no second pass
+over the data.
+
+**What this buys coverage reporting.** Today a store can say a *field* was
+absent and can say only that 21,580 records were "known ignored". With these
+codes it can state what kind of record was dropped and under which condition,
+which is the difference between "this decode is incomplete" and "this decode
+declined 4,898 `progress` records and refused 2 for exceeding a bound".
+
+**Evidence to close.** Record-level discards reach `mapping_diagnostics` as
+aggregated rows carrying a reason code and the vendor's record kind; the
+ingest-time cost is one flush per Source rather than one write per record; a
+query reports what a store dropped and why; and the 51 sites classified above
+as exception swallows or value decisions each increment a counter.
 
 **Why this is High.** Coverage reporting states what a store mapped and missed.
 Today it can name missed *fields* precisely and missed *records* only in
@@ -2783,15 +3032,25 @@ not a coverage percentage -- it says where to look, not what is untested:
 
 | Module | Lines | Tests naming it |
 |---|---|---|
-| `refresh_receipts` | 119 | **0** |
+| `refresh_receipts` | 119 | **0** → 10 |
+| `tool_result_status` | 84 | 3 → 34 |
 | `mcp_audit` | 395 | 4 |
 | `storage_report` | 310 | 3 |
 | `token_usage` | 394 | 5 |
 | `retention` | 450 | 6 |
 | `ingest_review` | 135 | 2 |
 
-`refresh_receipts` is named by no test at all, and it is the module the corpus
-baseline reads its ingest-rate evidence from.
+**Two are closed.** `refresh_receipts` was named by no test at all, and it is
+the module the corpus baseline reads its ingest-rate evidence from;
+`tests/test_refresh_receipts.py` now covers format gating, corrupt-receipt
+tolerance, the status vocabulary, recency, the apply-outranks-preflight rank,
+and failure-as-observation. `tests/test_tool_result_status.py` covers what
+counts as explicit failure evidence and -- the harder half -- what is
+deliberately not searched, since a detector that read prose would mark
+successful work as failed. Both were mutation-tested: inverting the stage rank
+and loosening the empty-`error` rule each fail the test that asserts them.
+
+Four remain, and `retention` at 450 lines against 6 mentions is the largest.
 
 **What is healthy, and worth stating so the list is read as short.** Zero
 skipped or `xfail` tests -- nothing is parked. No test references a removed
@@ -2805,10 +3064,116 @@ when a failure is read from a summary line: `test_absent` names neither what is
 absent nor which subsystem noticed. These are within-file names that would
 benefit from the subject they test.
 
-**Evidence to close.** Every test file is classified to a subsystem; the
-unclassified 21 are either reassigned or the grouping gains a category that
-honestly describes them; `refresh_receipts` has tests; and the duplicated names
-state their subject.
+#### Matching Criteria Beyond the Filename
+
+Grouping by name alone put 21 files in "other". These criteria describe what a
+test file *does*, and cut across the name:
+
+| Criterion | Files | What it identifies |
+|---|---|---|
+| Touches SQLite directly | 30 | Store-shaped tests, wherever they are filed |
+| Runs a subprocess | 13 | The installed-CLI surface; these are integration regardless of filename |
+| Uses `tmp_path` | most | Filesystem-dependent; distinguishes unit from pure-function tests |
+| Declares a fixture | few | Shared setup, so a change there reaches several tests |
+| Asserts with `pytest.raises` | -- | Error-path coverage, which is where thin modules are thinnest |
+| Uses `parametrize` | -- | Vector-driven; `test_helpers` has 18, most files have none |
+| Has no test class | 39 | Flat files, where grouping is by convention rather than structure |
+
+Cross-referencing these against the filename grouping is what would reassign
+the 21: `test_snapshot_raw` touches SQLite 14 times and belongs with store;
+`test_admin_operations` runs 7 subprocesses and belongs with CLI integration.
+
+**Docstring coverage is 35%** -- 544 of 1,516 tests. That is the gap that makes
+a failure summary hard to read, more than the name itself: a name states the
+subject, a docstring states why the behaviour is required.
+
+#### Test Names
+
+**Measured.** Median 6 words; 179 names of two words or fewer; **46% contain a
+verb stating an outcome**.
+
+The short names are the problem, and they cluster: `test_bash`, `test_read`,
+`test_edit`, `test_empty`, `test_none`, `test_progress`. Each names a *subject*
+with no claim about it, so a failure line says which input was involved and
+nothing about what should have happened.
+
+**The improvement is a stated outcome, not a longer name.** Existing good
+examples from this suite show the shape:
+
+| Current | Better | Why |
+|---|---|---|
+| `test_empty` | `test_an_empty_transcript_yields_no_events` | Says the expected result |
+| `test_zero_limit` | `test_a_zero_limit_is_rejected` | Says the decision |
+| `test_bash` | `test_a_bash_call_records_its_command` | Says what is retained |
+| `test_absent` | `test_an_absent_field_stays_null_rather_than_defaulting` | Says the rule, which is the durable part |
+
+The convention worth adopting: **subject, verb, outcome** -- readable as a
+sentence, and failing usefully in a summary line. It applies to new tests
+immediately and to existing ones as their files are edited, which is the same
+rule the `D205` docstring baseline already follows.
+
+**Not proposed:** renaming all 179 in one pass. It is a wide diff with no
+behavioural content, and the same argument that defers the naming sweep for
+source identifiers applies here.
+
+**Evidence to close.** Every test file is classified to a subsystem using the
+criteria above; the unclassified 21 are reassigned or the grouping gains a
+category that honestly describes them; the thin modules named above have tests;
+and new test names state an outcome.
+
+### Store Performance Baseline
+
+Measured before adding stored records, so a later change has something to
+regress against. Two layers, because they answer different questions.
+
+**Synthetic workloads** (`tools/workload_bench.py`, scale size):
+
+| Workload | Rows | Seconds | Per row |
+|---|---|---|---|
+| `ingest/scale` store write | 20,000 | 0.543 | **27.2 us** |
+| `ingest/correctness` store write | 50 | 0.029 | 582 us |
+| `cursor/scale` bubble selection | 200 | 0.0013 | 6.4 us |
+
+The correctness size is dominated by fixed overhead, which is why the scale
+size is the figure to compare. Cursor selection is flat between a 200-bubble
+and a 20,000-bubble container -- the index range scan does not degrade with
+container size, which is the property that workload exists to check.
+
+**Real-corpus ingest**, three Projects spanning the size range:
+
+| Project | Events | Store MiB | Seconds | Per event |
+|---|---|---|---|---|
+| Largest | 89,288 | 621 | 122.5 | **1,371 us** |
+| Median | 2,650 | 15 | 17.1 | 6,442 us |
+
+**The 50x gap between 27 us and 1,371 us is the useful number.** The synthetic
+workload measures the store write alone; real ingest also decodes vendor
+records, hashes content, applies bounds, and publishes a verified snapshot. So
+a store-write optimisation has at most 2% of end-to-end ingest to win, and the
+cost of adding a stored record is bounded by the same proportion -- which is
+what makes the aggregated reason-code design affordable.
+
+The median Project's higher per-event cost is fixed overhead over a small
+corpus, not a scaling problem: publication and verification cost roughly the
+same regardless of Event count.
+
+**Query, on the largest store (89,288 Events):**
+
+| Query | Seconds |
+|---|---|
+| `overview` | 0.24 |
+| `sessions` | 0.23 |
+| `events --event-kind tool.result --status failed --limit 200` | 0.23 |
+| `search --text error --limit 200` | 0.22 |
+
+Flat at roughly 0.23 s, and the variation between a full-store summary and a
+bounded predicate is within noise -- process start and store open dominate. A
+query change that moved any of these past about half a second would be visible;
+below that, this baseline cannot distinguish improvements.
+
+**What this baseline does not cover.** Cross-Project queries over many store
+sets, the publication stage in isolation, and memory under concurrent access.
+Each is a separate workload and none is currently measured.
 
 ### Store Fit as Time Series and as Log Records
 

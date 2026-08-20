@@ -213,7 +213,7 @@ class TestHeaderlessComposerRecovery:
         conn.close()
         return db
 
-    def test_a_composer_known_only_from_composer_data_is_recovered(self, tmp_path):
+    def test_composer_data_recovery(self, tmp_path):
         """The recovered header states where it came from."""
         db = self._store(tmp_path, header_ids=("headered",), data_ids=("orphan",))
         headers = get_composer_headers(db)
@@ -221,7 +221,7 @@ class TestHeaderlessComposerRecovery:
         assert headers["orphan"]["selection_source"] == "global.composerData"
         assert headers["headered"]["selection_source"] == "composerHeaders"
 
-    def test_a_recovered_composer_carries_its_stated_model(self, tmp_path):
+    def test_recovered_composer_model(self, tmp_path):
         """`modelConfig.modelName` reaches the Session it belongs to.
 
         Settings were previously read only for composers that had a header, so
@@ -233,7 +233,7 @@ class TestHeaderlessComposerRecovery:
         assert headers["orphan"]["model"] == "composer-2.5"
         assert headers["orphan"]["interaction_mode"] == "agent"
 
-    def test_selected_model_parameters_reach_their_settings(self, tmp_path):
+    def test_selected_model_parameters(self, tmp_path):
         """`selectedModels` carries settings the model name need not state.
 
         Two parameter ids appear: `fast`, which the name encodes only for the
@@ -285,14 +285,14 @@ class TestHeaderlessComposerRecovery:
         assert "speed" not in headers["plain"]
         assert headers["thinker"]["effort"] == "high"
 
-    def test_the_header_table_wins_where_both_indexes_name_a_composer(self, tmp_path):
+    def test_header_table_wins(self, tmp_path):
         """A header is authoritative; recovery fills gaps rather than overriding."""
         db = self._store(tmp_path, header_ids=("both",), data_ids=("both",))
         headers = get_composer_headers(db)
         assert headers["both"]["selection_source"] == "composerHeaders"
         assert headers["both"]["workspace_id"] == "ws-1"
 
-    def test_a_workspace_selection_does_not_admit_unbound_composers(self, tmp_path):
+    def test_workspace_excludes_unbound(self, tmp_path):
         """A `composerData:` row states no workspace, so it cannot satisfy one.
 
         Admitting it under a workspace filter would widen that selection

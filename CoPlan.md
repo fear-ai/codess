@@ -1560,7 +1560,68 @@ is:
 pytest -q
 ```
 
-#### 11.1.1 Test Naming
+#### 11.1.1 Suite Shape and Utilization
+
+Measured rather than asserted, so a claim about coverage can be checked. The
+census is re-derivable by counting `def test_` and file properties under
+`tests/`.
+
+**Scale:** 70 files, 1,545 test functions, roughly 27,000 lines.
+
+**By subsystem**, grouped by what the file exercises rather than by its name:
+
+| Subsystem | Files | Tests |
+|---|---|---|
+| Store | 9 | 320 |
+| Adapter | 4 | 257 |
+| CLI | 5 | 175 |
+| Source access | 6 | 109 |
+| Query | 4 | 85 |
+| Reporting | 2 | 80 |
+| Identity | 3 | 54 |
+| Policy | 5 | 49 |
+| Audit tools | 6 | 70 |
+| Integration | 4 | 27 |
+| Unclassified by filename | 21 | 311 |
+
+**The unclassified fifth is the honest part of this table.** 21 files group
+under no subsystem the architecture names, so any per-subsystem coverage claim
+is provisional until they are reassigned. Filename is the weakest of the
+available criteria; these are stronger and cut across it:
+
+| Criterion | Files | What it identifies |
+|---|---|---|
+| Opens SQLite directly | 30 | Store-shaped, wherever filed |
+| Runs a subprocess | 13 | The installed-command surface: integration regardless of name |
+| Declares a fixture | few | Shared setup, so an edit reaches several tests |
+| Uses `parametrize` | few | Vector-driven; `test_helpers` has 18, most files have none |
+| Uses `pytest.raises` | -- | Error-path coverage |
+| Has no test class | 39 | Flat files, grouped by convention rather than structure |
+
+**Method.** Every test builds its own inputs -- temporary vendor roots,
+registries, and Project store sets -- so the suite cannot read or mutate live
+Claude Code, Codex, or Cursor data. Vendor databases are constructed by shared
+builders (`tests/cursor_fixtures.py`) rather than restated per module, which is
+what keeps a vendor-shape change from becoming a search-and-replace. Nothing is
+skipped: the suite has zero `skip` and zero `xfail` markers, so a passing run
+means every test ran.
+
+**Verification standard.** A check is confirmed by watching it fail, not by
+watching it pass. The import-cycle guard, the tools-SQL smoke test, and the
+refresh-receipt stage rank were each verified by reintroducing the defect they
+exist to catch and confirming the failure named it. A test that has never
+failed has not been shown to test anything.
+
+**Known thin areas**, by module size against tests naming the module:
+`retention` (450 lines, 6), `token_usage` (394, 5), `mcp_audit` (395, 4), and
+`storage_report` (310, 3). The ratio locates candidates; it is not a coverage
+percentage and does not prove those paths untested.
+
+**Docstring coverage is 35%** -- 544 of 1,545 tests. Since the convention puts
+the reasoning in the docstring and only the subject in the name, this is where
+the explanation is missing rather than where the testing is.
+
+#### 11.1.2 Test Naming
 
 **A test name identifies; the docstring explains.** The name answers "which
 test failed" from a one-line pytest summary. The reasoning -- why the
@@ -1595,14 +1656,30 @@ complete. Applying this to `tests/test_helpers.py` brought its longest name
 from 56 characters to 38 and its median from 47 to 17, without losing a
 distinction -- the removed words were all restating what the assertions do.
 
-**This is the house style, not an isolated slip.** 592 of 1018 test names
-(58%) carry a prose connective, and the repository median is 47 characters,
-so length does not by itself identify the problem -- the flagged example was
-unremarkable by length and a full sentence by construction. Renaming every
-file at once would be a large diff touching no behavior; the convention
-applies to new and edited tests, and a file being changed for other reasons
-is the occasion to bring its names along, as `test_helpers.py`,
-`test_field_state.py`, and `test_snapshot_raw.py` were here.
+**This is the house style, not an isolated slip.** Measured over the current
+suite: the median name is 6 words, 702 names run to 7 words or more, and 179
+are 2 words or fewer. Neither extreme is right for the same reason -- a
+sentence-shaped name repeats what the assertions already say, and a bare noun
+(`test_empty`, `test_bash`) names an input without naming its subject.
+
+**The target is a short noun phrase naming the subject under test**, not a
+sentence and not a bare word:
+
+| Too long | Too short | Preferred |
+|---|---|---|
+| `test_an_empty_error_field_is_not_evidence` | `test_empty` | `test_empty_error_field` |
+| `test_a_status_outside_the_vocabulary_yields_no_observation` | -- | `test_status_outside_vocabulary` |
+| `test_the_file_time_stands_in_for_an_unstated_completion` | -- | `test_file_time_fallback` |
+| -- | `test_empty` | `test_empty_transcript` |
+
+`test_zero_limit` is already correct: two words that name the subject exactly.
+The rule is not a word count, it is whether the name identifies the case.
+
+Renaming every file at once would be a large diff touching no behavior; the
+convention applies to new and edited tests, and a file being changed for other
+reasons is the occasion to bring its names along, as `test_helpers.py`,
+`test_field_state.py`, `test_snapshot_raw.py`, and the four files added or
+edited most recently were here.
 
 **A stale name is worse than a verbose one.** Four tests cited design
 identifiers `A14`, `A16`, `D17`, and `D18` that appear in no document in the

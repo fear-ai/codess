@@ -68,7 +68,7 @@ def ingested_project(durable_tmp_path):
 
 
 @pytest.mark.parametrize("tool", SQL_BEARING_TOOLS)
-def test_a_sql_bearing_tool_runs_against_a_current_store(tool, ingested_project):
+def test_sql_bearing_tool_runs(tool, ingested_project):
     """The tool's statements parse against the schema this version writes."""
     project_path, env = ingested_project
     result = subprocess.run(
@@ -82,7 +82,7 @@ def test_a_sql_bearing_tool_runs_against_a_current_store(tool, ingested_project)
     )
 
 
-def test_the_decode_audit_reports_every_store_it_read(ingested_project):
+def test_decode_audit_report_sections(ingested_project):
     """The audit produces its structured report, not merely a zero exit.
 
     A tool that fails to read a store can still exit zero with empty counts, so
