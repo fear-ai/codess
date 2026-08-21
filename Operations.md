@@ -739,6 +739,135 @@ The `codess` command is the supported interface. The scripts under `tools/`
 are development and diagnosis aids that are not installed as commands and are
 run with the repository's Python. They are grouped here by what they answer.
 
+### When the Schema Manifest Needs Refreshing
+
+`schema/manifest.json` records a SHA-256 per released schema file, and
+`tools/refresh_schema_manifest.py` recomputes them. It is separate from a
+snapshot's `manifest.json`, which describes one store set -- the names collide
+and the roles do not.
+
+**Observed cases, from this repository's own history:**
+
+| Circumstance | What happens without a refresh | Observed |
+|---|---|---|
+| A CoSchema format bump | Every store read fails with `format_version mismatch`, including stores just written | Yes -- format 6 to 7. The DDL, the contract, the constant, *and* the manifest each needed updating, and missing the manifest failed 289 tests |
+| A contract file edited without a format change | The write gate warns that the recorded `contract_digest` differs | Yes -- adding a vocabulary |
+| A fixture or policy file edited | The released-package check reports a digest mismatch | Yes -- adding `backup_conventions` to the discovery policy |
+| A comment-only edit to a schema file | Same as above: the digest covers bytes, not meaning | Expected, not yet observed |
+
+**The workflow that avoids the trap:** edit the schema file, run
+`tools/refresh_schema_manifest.py`, then run the suite. Refreshing *after* the
+suite means reading a failure whose cause is the manifest rather than the
+change, which is how a five-minute edit becomes an hour.
+
+`PRAGMA user_version` in the DDL is a fourth place the format number appears
+and is the one most easily missed: it is what stamps a newly written store, so
+a format bump that misses it writes stores labelled with the old number while
+the code refuses them.
+
+**Resilience implication.** The digests are what let a store state which
+contract produced it, so a store written under an edited-but-unrefreshed
+contract is *detectable* rather than silently divergent. The cost is that the
+manifest is a second thing to keep current, and nothing but the test suite
+enforces it. A pre-commit check that fails when a `schema/` file is newer than
+the manifest would close that, and does not exist.
+
+### Assessing Snapshots for Deletion
+
+**Two tools, and why both exist.** `codess storage report` answers *how much*;
+`tools/snapshot_inventory.py` answers *which, and is it safe*. They are not
+duplicates and neither subsumes the other:
+
+| | `storage report` | `snapshot_inventory.py` |
+|---|---|---|
+| Scope | Whole registry, plus raw store and vendor stores | Per snapshot |
+| Reports | Allocated and logical bytes, file counts, page utilization, current vs superseded totals, deltas against the previous observation | Snapshot identity, per-store Session and Event counts, format, lineage, Session date range, and a deletion recommendation |
+| Records an observation | Yes, dated, for trend comparison | No, it is read-only reporting |
+| Answers "reclaim 5,146,054,656 bytes" | Yes | No |
+| Answers "which of these eight may I delete" | No | Yes |
+
+The command reports `superseded: {allocated_bytes: 5146054656, files: 295}` and
+names no snapshot. That aggregate is the right answer to a capacity question
+and cannot answer a deletion question, because deleting requires knowing what
+each individual generation holds.
+
+**Why the assessment is a `tools/` script rather than a command.** Three
+reasons, in the order they matter:
+
+1. **It reads snapshots the installed contract refuses.** `require_store`
+   accepts only the current format for reading as well as writing, so a
+   command built on the store layer cannot open a superseded snapshot at all.
+   The inventory reads `manifest.json` instead, which is plain JSON and
+   format-independent -- that is precisely what makes a superseded generation
+   describable by software that cannot read it.
+2. **Its output is a prompt for judgment, not a result.** `SUBSET` is a
+   recommendation; equal counts are strong evidence and not proof of equal
+   content. The supported command surface returns results a program can act
+   on, and a recommendation is not one.
+3. **Deletion is deliberately not automated here.** `storage prune` exists and
+   is the reviewed operation. Splitting assessment from action means a wrong
+   assessment costs a re-read rather than data.
+
+**Workflow.** Assess, read, then act:
+
+```bash
+python tools/snapshot_inventory.py --ranges     # what is there, what is safe
+codess storage report                           # what it costs, recorded dated
+codess storage prune                            # the reviewed removal
+```
+
+**Resilience implications.** Reading the manifest rather than the store is what
+keeps the registry legible after a format change: a machine that upgrades
+mid-project can still enumerate, size, and date every generation it holds
+without downgrading anything. The cost is that the manifest and the store can
+in principle disagree -- the manifest carries a SHA-256 per store precisely so
+that disagreement is detectable, and a manifest that does not match its store
+is a finding rather than a rounding error.
+
+The failure mode this leaves open: a snapshot whose `manifest.json` is missing
+or unreadable is invisible to the inventory, and would be reported only by the
+byte-level `storage report`. Running both is what closes it, which is the
+reason the workflow above lists them in that order rather than choosing one.
+
+
+
+Publication writes a new snapshot and repoints `current.json`, so superseded
+generations accumulate. `tools/snapshot_inventory.py` reports what each holds
+and which are safe to remove.
+
+```bash
+python tools/snapshot_inventory.py                 # counts and recommendation
+python tools/snapshot_inventory.py --ranges        # add Session date ranges
+python tools/snapshot_inventory.py --csv out.csv   # machine-readable
+```
+
+**Most of the assessment costs no database open.** The snapshot manifest
+already records per-store row counts, a SHA-256 per store, byte size,
+`created_at`, and `parent_snapshot_id` -- so volume, lineage, and identity are
+read from JSON. Only the Session date range opens a store, which is why
+`--ranges` is opt-in.
+
+**The recommendation, and what it is not.** A superseded snapshot is reported
+`SUBSET` when the current snapshot holds at least as many Sessions and Events
+**in every store**. Compared per store rather than in total, because a total
+hides the case where one store lost rows while another gained more -- which is
+exactly where deleting would lose evidence. Equal counts are strong evidence
+and not proof of equal content, so the tool recommends and the operator
+deletes.
+
+**Read the date range before deleting anything that is not a plain subset.**
+Counts alone can mislead: two stores for one Project were found holding 154
+Sessions/29,161 Events and 343 Sessions/7,653 Events, which reads as the second
+superseding the first. Their ranges are 2026-05-28 to 07-30 and 2026-07-29 to
+08-02 -- **four days of overlap and two months held only by the older store**,
+because the vendor had pruned its own transcripts in between. The range is what
+made that visible.
+
+**What the tool does not decide.** Whether the vendor Sources still exist is a
+Project-level question answered by `sources_vanished` in the Project inventory
+below. A snapshot whose Sources are intact can be rebuilt; one whose Sources
+have been pruned cannot, whatever its counts say.
+
 ### Project Inventory
 
 `catalog/inventory/project-inventory.csv` is a per-Project reference row,

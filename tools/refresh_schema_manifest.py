@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from codess.fileio import hash_file  # noqa: E402
+from codess.schema_contract import FORMAT_VERSION  # noqa: E402
 
 MANIFEST_PATH = ROOT / "schema/coschema/manifest.json"
 
@@ -38,6 +39,18 @@ def main(argv: list[str] | None = None) -> int:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     files = manifest.get("files", {})
     stale: list[str] = []
+
+    # Derived from the constant that declares it. As a hand-edited field it was
+    # the one a format bump missed, and the resulting mismatch surfaced on every
+    # store read rather than naming the manifest. `--check` reports; the default
+    # run rewrites the field, like every other stale entry here.
+    if manifest.get("format_version") != FORMAT_VERSION:
+        stale.append("format_version")
+        print(
+            f"{'stale' if args.check else 'updated'}: format_version "
+            f"{manifest.get('format_version')} -> {FORMAT_VERSION}"
+        )
+        manifest["format_version"] = FORMAT_VERSION
     for role, entry in sorted(files.items()):
         path = ROOT / entry["path"]
         if not path.is_file():

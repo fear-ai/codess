@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import platform
 import uuid
 from datetime import UTC, datetime
@@ -20,6 +21,8 @@ from codess.fileio import write_json_atomic
 from codess.hashing import codess_canonical_hash
 from codess.helpers import ephemeral_project_location_reason
 from codess.identity import location_id
+
+log = logging.getLogger(__name__)
 
 CATALOG_FORMAT = "codess.project-catalog/1"
 PROJECT_BINDING_FORMAT = "codess.project-binding/1"
@@ -119,17 +122,43 @@ def _resolve_project_id(
     finally a new identity. The catalog search matters when a binding file
     was deleted but the catalog still records the Project -- reminting there
     would split one Project's history across two identities.
+
+    **A minted identity is reported.** The binding lives inside the Project
+    directory, so it is lost whenever that directory is cleaned, re-cloned, or
+    restored from a copy predating it -- and a lost binding is
+    indistinguishable from a Project never ingested. Minting then produces a
+    second Project for one path, which is silent in every list and carries none
+    of the review the first entry may have accumulated. Nine such duplicates
+    were created on this machine in one session before anything said so.
     """
     project_id = binding.get("project_id") if binding else None
-    if project_id:
-        return str(project_id)
-    for entry in entries_by_id.values():
+    claimants = [
+        str(entry["project_id"])
+        for entry in entries_by_id.values()
         if any(
             location.get("path") == resolved_path
             for location in entry.get("locations", [])
-        ):
-            return str(entry["project_id"])
-    return f"codess:project:{uuid.uuid4()}"
+        )
+    ]
+    if project_id:
+        others = [claimed for claimed in claimants if claimed != str(project_id)]
+        if others:
+            log.warning(
+                "project binding names %s while the catalog records %s for %s: "
+                "one path now has several Projects",
+                project_id, ", ".join(sorted(others)), resolved_path,
+            )
+        return str(project_id)
+    if claimants:
+        return claimants[0]
+    minted = f"codess:project:{uuid.uuid4()}"
+    log.warning(
+        "no retained binding and no catalog entry for %s: minting %s. If this "
+        "Project was ingested before, its binding was lost and its history "
+        "will split across two identities",
+        resolved_path, minted,
+    )
+    return minted
 
 
 def _merged_locations(

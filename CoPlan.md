@@ -953,6 +953,348 @@ into a Project store set. Published sets are also retained in the central
 registry so query and evidence access do not depend entirely on the checkout.
 This layout does not change the logical entities exposed to query.
 
+#### 8.1.1 Registry Snapshot Layout
+
+The registry keeps **generations**, not one store per Project:
+
+```text
+~/.codess/projects/<project-id>/
+├── current.json                       pointer: which generation is live
+└── snapshots/
+    ├── <timestamp>-coschema<N>-<digest>/
+    │   ├── manifest.json              counts, digests, sizes, lineage
+    │   ├── manifest.json.bak
+    │   ├── raw-manifest.jsonl         raw-evidence observations
+    │   ├── sessions_cc.db
+    │   ├── sessions_codex.db
+    │   └── sessions_cursor.db
+    ├── <newer generation>/
+    └── archive/                       retained deliberately, never current
+        └── <generation>/
+            └── archive-note.json      why it was kept
+```
+
+**Publication writes a new directory and repoints `current.json`.** Nothing is
+overwritten, so an interrupted conversion leaves the previous generation live
+rather than a half-written store. That is what makes replacement transactional
+without a database transaction spanning the whole ingest.
+
+**The snapshot name carries three facts** -- creation instant, CoSchema format,
+and a content digest -- so a directory listing alone answers which generations
+exist, which format each is, and whether two are identical:
+
+```
+20260820T072320.663752Z-coschema7-5ea564bf15abd238
+^^^^^^^^^^^^^^^^^^^^^^^ ^^^^^^^^^ ^^^^^^^^^^^^^^^^
+created (UTC, sortable) CoSchema  content digest
+```
+
+**Versioning is layered, and the layers move independently.** Five identifiers
+appear in the manifest, and conflating them is the mistake to avoid:
+
+| Identifier | Example | Changes when | Forces a rebuild |
+|---|---|---|---|
+| `snapshot_format` | `codess.snapshot/1` | The snapshot *directory* layout changes | No -- a reader can migrate the wrapper |
+| `format_version` | `7` | A stored column is added, renamed, or retyped | **Yes** -- `require_store` refuses other formats for reading as well as writing |
+| `contract_digest` | `f19623df…` | Any released contract file changes, including without a format bump | No, but a write under a different digest is reported |
+| `decoder_version` / `validator_version` | `0.2` | Decode or validation behaviour changes without a schema change | No -- but two snapshots at one format can differ in what they decoded |
+| `software_version` + `software_revision` | `0.3.0`, `20e3dc9b…+worktree` | Every commit | No |
+
+**Why `decoder_version` matters even though it forces nothing.** Two snapshots
+can share `format_version` and hold different Events, because the decoder
+learned to map a field between them. That is the ordinary case during
+development -- the three generations retained for one Project on 2026-08-20
+hold 89,288, 89,601, and 89,685 Events at the same format 7 for exactly this
+reason. So a same-format comparison is a comparison of decoders, and the
+manifest is where that is visible.
+
+**Date and version are tied by construction**: the name begins with a sortable
+UTC instant and `created_at` repeats it in RFC 3339, so a directory listing is
+chronological without parsing and a program reads the precise value without
+parsing a filename.
+
+**What the name deliberately omits** is the software revision, which would make
+directory names unstable across every commit while adding nothing a manifest
+read does not answer. The rule: the name carries what a *listing* must answer;
+the manifest carries what a *reader* must answer.
+
+#### 8.1.2 DDL and Contract: Which Is Authoritative
+
+`schema.sql` and `contract.json` describe the same store and neither is
+primary. They are authoritative for different questions, and the relationship
+is a two-way check rather than a derivation:
+
+| Question | Authority | Read by |
+|---|---|---|
+| What does a new store physically contain | `schema.sql` | `store.create` executes it verbatim |
+| What must a store logically contain | `contract.json` | `validate_database_contract` |
+| Which SQLite types and indexes | `schema.sql` alone | The contract states it defers these |
+| Which entities, fields, identities, vocabularies | `contract.json` alone | Consumers that never import Python |
+
+**At runtime the DDL wins, because it is what runs.** `conn.executescript(load_ddl())`
+creates the tables; nothing builds a table from the contract. So a column that
+exists in the contract and not the DDL simply does not exist in the store.
+
+**The contract's authority is that the DDL is checked against it**, in both
+directions: every contracted entity and field must appear in the database, and
+every table and column in the database must be contracted or explicitly
+excluded as a physical-compatibility detail. A column added to the DDL and not
+the contract is reported as `uncontracted`; one added to the contract and not
+the DDL as `missing column`. Neither can drift silently, which is what makes
+two files tolerable.
+
+**Why not generate one from the other.** Generating the DDL from the contract
+would put SQLite types, `CHECK` constraints, and partial indexes into a JSON
+document that exists to be readable without SQLite. Generating the contract
+from the DDL would require parsing SQL to recover intent the SQL does not
+state -- which field is an identity, which vocabulary a column draws from. The
+two-way check keeps each file in the language that suits it and makes
+disagreement a test failure rather than a discovery.
+
+#### When the Contract Is Checked, and What Happens
+
+`require_store(conn, write=...)` is the single gate, called on every store open
+-- `store.connect` for reading, `store.create` and every write path for
+writing. It runs five checks in order, and each failure is distinct:
+
+| Check | Applies | On failure |
+|---|---|---|
+| `application_id` matches | read and write | `not a Codess store` |
+| `PRAGMA user_version` is a supported format | read and write | Refuses, naming the rebuild command |
+| `store_meta` agrees with the SQLite identity | read and write | `store_meta disagrees with SQLite format identity` |
+| `contract_digest` matches the released files | **write only** | Refuses unless `CODESS_NO_CONTRACT_CHECK=1`, which warns and records the override |
+| `validate_database_contract` two-way layout | read and write, current format only | Lists every missing, uncontracted, or unenforced column |
+
+**Reading is deliberately more permissive than writing.** A store whose digest
+differs was produced under different rules, and *extending* it would mix
+records written under two contracts in one table -- which is unrecoverable
+without knowing which row came from which. Reading it answers a question about
+what was recorded then, which the digest difference does not invalidate.
+
+**The layout check is the two-way one**, and it runs on every open rather than
+only at creation, because a store can be modified outside Codess.
+
+**Three uses of `schema.sql`, and only one executes it.**
+
+| Use | Where | What it establishes |
+|---|---|---|
+| Executed to create a store | `store.create` -> `conn.executescript(load_ddl())` | The physical layout, and `PRAGMA user_version` stamps the format |
+| Hashed as a released file | `contract_digest`, role `sqlite_schema` | Which contract produced a store |
+| Compared against the constant | `load_ddl` | That the stamp it will write matches the declared format |
+
+The third is new and exists because the first two cannot catch a stale
+`user_version`: executing it writes the wrong stamp successfully, and hashing
+it succeeds because the file is internally consistent. Only a comparison
+against `FORMAT_VERSION` detects it, and `load_ddl` runs that before
+`contract_digest` so the message names the file rather than reporting a hash.
+
+**Both files are released under one digest.** `contract_digest` folds
+`schema.sql`, `contract.json`, and the four mapping files together, so a store
+records which set produced it.
+
+#### 8.1.3 Where the Format Number Lives
+
+Four files carry the CoSchema format number. That is more than can be held in
+agreement by attention, and the current state is an improvement rather than a
+resolution -- W94 owns reducing it.
+
+| Location | Read by | Kept current by |
+|---|---|---|
+| `schema_contract.FORMAT_VERSION` | Everything | It is the declaration |
+| `schema/coschema/manifest.json` | `load_manifest`, `snapshot`, `snapshot_inventory` | `refresh_schema_manifest.py`, when run |
+| `schema/coschema/sqlite/schema.sql` | Executed; stamps `PRAGMA user_version` | Compared by `load_ddl`, which fails on drift |
+| `schema/coschema/contract.json` | Declarative only; no code reads the field | Compared by `load_contract`, which fails on drift |
+
+**Each is justified differently, and one is not justified at all.**
+
+- **The manifest's** is consumed: `snapshot.py` copies it into every snapshot
+  manifest and compares it when reading one. It cannot simply be deleted.
+- **The DDL's** must stay literal, because the script is executed verbatim as a
+  digest-verified released file and cannot carry a substitution.
+- **The contract's** is read by no code. It exists so a consumer that never
+  imports Python can tell which format the contract describes -- a real reason,
+  and one that should be stated rather than assumed.
+
+**Warning scenarios, stated because they were not.**
+
+| Drift | Detected by | Message |
+|---|---|---|
+| Manifest stale | `load_manifest`, on any store open | `CoSchema manifest format_version mismatch` -- names the manifest |
+| Manifest stale, before any open | `refresh_schema_manifest.py --check` | `stale: format_version 6 -> 7`, exit 1 |
+| DDL stale | `load_ddl`, at store creation | `DDL user_version 6, declared CoSchema 7: update schema.sql` |
+| Contract stale | `load_contract`, on any contract read | `contract format_version 6, declared CoSchema 7: update contract.json` |
+
+All four are now compared against the declaration. The contract's field is read
+by no other code -- it exists for a consumer that never imports Python -- which
+is why a wrong value there was worse than an absent one: the only reader was
+the one with no way to check.
+
+#### How Drift Is Detected
+
+**Two layers, and they answer different questions.**
+
+*At use* -- each restatement is compared where it is read, so a stale value
+fails whatever operation touches it:
+
+| Layer | Fires on | Names |
+|---|---|---|
+| `load_manifest` | Any store open | The manifest |
+| `load_ddl` | Store creation | The DDL |
+| `load_contract` | Any contract read | The contract |
+
+This is what caught the format-7 bump: not reasoning, and not a check that ran
+on purpose. 289 tests failed on `CoSchema manifest format_version mismatch`
+because they open stores, and the message named the manifest. The detection was
+real but incidental -- had no test opened a store, nothing would have reported
+it.
+
+*Before collection* -- `tests/conftest.py` checks the released package in
+`pytest_configure`, so a stale file stops the run before a single test executes:
+
+| Condition | Message |
+|---|---|
+| A stated format disagrees | `declared CoSchema 7, manifest.json states 6: run tools/refresh_schema_manifest.py` |
+| A released file's digest is stale | `hash mismatch for schema/coschema/contract.json …: run tools/refresh_schema_manifest.py` |
+
+Each names the file and the remedy for *that* file -- the manifest is
+regenerated, the DDL and contract are edited -- and the remedies are
+deduplicated when several are stale at once.
+
+Measured against the alternative: editing `contract.json` without refreshing
+its digest produced **391 failures and 38 collection errors** in 39 seconds.
+The same edit now produces one message in under a second.
+
+`CODESS_NO_CONTRACT_CHECK=1` still bypasses the digest half, because the
+recovery case it exists for -- reading a store whose released files are no
+longer reconstructible -- is exactly when a developer needs the suite to run.
+
+*Directly* -- `tests/test_refresh_schema_manifest.py::TestFormatNumberAgreement`
+asserts the four agree as ordinary tests, so the property is stated where a
+reader looks for it rather than only enforced by a hook.
+
+**What is still manual.** `refresh_schema_manifest.py` writes the correction and
+only when someone runs it. The suite now says *that* a file is stale and which
+one; running the tool is the operator's step. A pre-commit hook would move
+detection earlier still, and is W94's remainder.
+
+**Where a check belongs, and where it does not.** The agreement test costs
+microseconds and runs with every suite, which is the right place. A global scan
+or a large ingest is the wrong place: by then a store has already been written
+with whatever stamp the DDL carried, and the check would report a condition it
+is too late to act on cheaply. The rule is that a released-file check belongs
+before the first write, not during it.#### 8.1.4 Manifest Contents
+
+Every snapshot carries `manifest.json` recording, per store: row counts for all
+20 tables, a SHA-256 over the file, and its byte size. Alongside them:
+`created_at`, `parent_snapshot_id`, `format_version`, `contract_digest`,
+`decoder_version`, `software_version`, and `sealed`.
+
+**The manifest is the reason assessment is cheap.** Volume, lineage, identity,
+and size are read from JSON without opening a database -- which matters
+because the stores are large and, once a format is superseded, unopenable by
+the installed contract. A superseded snapshot can be described accurately by
+software that cannot read it.
+
+#### 8.1.5 Per-Vendor Store Characteristics
+
+Measured across 29 published Projects:
+
+| Store | Sessions | Events | MiB | Bytes/Event |
+|---|---|---|---|---|
+| `sessions_cc.db` | 375 | 67,796 | 351 | 5,435 |
+| `sessions_codex.db` | 36 | 162,125 | 1,315 | 8,511 |
+| `sessions_cursor.db` | 86 | 156,138 | 1,091 | 7,332 |
+
+**The aggregate is dominated by one Project and must not be read as a vendor
+property.** 343 of the 375 Claude Sessions come from a single Project holding
+7,653 Events -- many very short Sessions -- which drags the Claude
+Events-per-Session figure from a per-Project median of 1,629 down to an
+aggregate 180. Per-Project medians are the comparable figure:
+
+| Store | Projects with data | Median Events per Session |
+|---|---|---|
+| `sessions_cc.db` | 7 | 1,629 |
+| `sessions_codex.db` | 16 | 2,736 |
+| `sessions_cursor.db` | 6 | 1,325 |
+
+On that basis the vendors are far closer than the aggregate suggests, and the
+ordering changes: Codex Sessions are the longest, Cursor the shortest, Claude
+between. What the aggregate does show correctly is that **Codex appears in far
+more Projects (16) than Cursor (6) or Claude (7)** on this machine, so its
+total dominates for reasons of usage rather than of record shape.
+
+**Bytes per Event is the more stable measure**, since it does not depend on how
+a vendor bounds a Session: 5,435 for Claude, 7,332 for Cursor, 8,511 for Codex.
+Codex costs the most per Event, and the `content_objects` and `tool_results`
+counts say why -- 130,934 and 61,156 against Claude's 41,619 and 15,504.
+
+**The consequence for retention holds regardless of which reading is used:** a
+Project's store size is not proportional to its Session count, so "how many
+Sessions does this hold" is a poor proxy for "how much disk will pruning
+reclaim". The manifest's `size` is the direct answer.
+
+**One machine, one corpus -- and the ingested corpus is not the usage.** The
+figures above describe what *reached a store*, which differs from what the
+operator did, because the vendors retain for different periods. Measured at the
+vendor stores rather than at ours:
+
+| Vendor | Retained sources | Span retained | Bytes |
+|---|---|---|---|
+| Claude | 376 transcripts | **2026-07 to 2026-08 only** | 120 MiB |
+| Codex | 28 rollouts | 2025-11 to 2026-08 | 543 MiB |
+| Cursor | 150 composers | 2025-08 to 2026-08 | -- |
+
+**Claude retains roughly two months and Codex ten.** So a store built today
+under-represents Claude usage by however much of it the vendor has already
+pruned, and any statement of the form "this operator used X more than Y" made
+from ingested counts is measuring vendor retention policy at least as much as
+operator behaviour.
+
+This is also why an archived store can be the only record of a period: two
+Projects hold Claude Sessions from 2026-05 that the vendor no longer has.
+
+#### 8.1.6 Retention Policy and Observed Outcomes
+
+`CODESS_KEEP_SNAPSHOTS` bounds how many generations are kept *besides* the
+current one. The policy exists because generations accumulate silently: each
+`ingest --force` adds one, and nothing warns.
+
+**Observed, and the reason the policy needs stating rather than assuming.** A
+registry reached 8.1 GB across 86 snapshots for 30 Projects. Of that, **two
+thirds was superseded generations** of the same data, produced by repeated
+reingests in one session -- each `ingest --force` adds a generation and nothing
+warns.
+
+Pruning the superseded set took the registry to **4.1 GB across 38 snapshots**,
+with zero superseded remaining and no Project losing a queryable Event: every
+removed generation was a strict subset of the current one, verified per store
+rather than in total.
+
+**Three retention classes, and the evidence that separates them:**
+
+| Class | Test | Action |
+|---|---|---|
+| Current | `current.json` names it | Keep |
+| Superseded subset | Current holds at least as many Sessions and Events **in every store** | Prune |
+| Archival | A recorded `source_uri` no longer exists on disk | Move to `snapshots/archive/` with a note |
+
+**The third class is the one that cannot be inferred from counts.** Two
+Projects were found holding stores whose vendor Sources had been pruned by the
+vendor -- 976 and 8 vanished source files. Those stores are the only remaining
+record of what they hold, so they are archived rather than deleted, and the
+`archive-note.json` beside each records the vanished-source count that
+justified it.
+
+**Counts alone mislead, and the date range is the check.** One Project's older
+store holds 154 Sessions and 29,161 Events against a current 343 and 7,653 --
+which reads as superseded until the ranges are compared: 2026-05-28 to 07-30
+against 2026-07-29 to 08-02. Four days of overlap, and two months held only by
+the older store.
+
+**Snapshots under `archive/` are outside the generation count** and are never
+selected as current. They are recovered by inspection, not by query: a store at
+a superseded format is refused for reading as well as writing.
+
 ### 8.2 Transaction Boundaries
 
 A transaction here is one SQLite atomic write unit. Codess begins the unit

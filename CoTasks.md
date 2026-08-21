@@ -92,6 +92,12 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W87 | Normal | Planned | Group the test corpus by subsystem; find superseded and uncovered cases | -- |
 | W88 | Normal | Planned | Cursor KV decode: classify by content kind before parsing | -- |
 | W89 | Normal | Planned | Path inclusion and exclusion belong in the discovery policy file | -- |
+| W90 | High | Planned | Scanned Projects are never ingested unless named again | -- |
+| W91 | High | Planned | One authoritative Project record spanning scanned, ingested, moved, and removed | -- |
+| W92 | Normal | Planned | Event-kind aggregation: most volume is machine traffic, not human work | -- |
+| W93 | Normal | Postponed | Session utilization: report counts and `surface_kind`, not a derived class | Detection settled; inclusion policy undecided |
+| W94 | Normal | Planned | Four files carry the format number; two drift silently | -- |
+| W95 | Low | Planned | Tighten message and comment wording against a worked example | -- |
 
 ## Queue
 
@@ -550,6 +556,39 @@ So the defect is not only that identity is inferred rather than required: an
 inferred identity **overrides a reviewed one silently**. A reviewed decision
 that a later run can undo without saying so is worse than no decision, because
 the operator has no reason to re-check it.
+
+#### Diagnosed
+
+`_resolve_project_id` consults three sources in falling authority: the
+Project's own binding at `<project>/.codess/project.json`, then a catalog entry
+already claiming that exact location, then a new UUID.
+
+**The catalog fallback exists precisely for this case and was never reached.**
+Both duplicate entries record the same `locations[].path`, so the search would
+have matched -- but the binding file returns first, and on this machine the
+binding named the *new* identity. Once minted it is authoritative for every
+later run, which is why re-ingesting nine Projects produced nine duplicates
+once and never again.
+
+**What made the binding wrong is the open question.** It is stored inside the
+Project directory, so it is lost whenever that directory is cleaned, re-cloned,
+or restored from a copy predating it -- and losing it is indistinguishable from
+a Project that has never been ingested. The catalog fallback is the intended
+repair, and it cannot run because a fresh binding is written before anything
+asks whether the catalog already knows the path.
+
+**Two candidate fixes, differing in what they trust.**
+
+1. **Check the catalog before minting, not only when the binding is absent.**
+   A catalog entry claiming this path under a different identity is a conflict
+   to report rather than a race to win. Cheap, and it converts a silent
+   duplicate into a message.
+2. **Keep the authoritative binding in the registry rather than the Project.**
+   The registry survives a working tree being cleaned. The in-project file
+   becomes a convenience copy, and disagreement between the two is detectable
+   rather than decided by whichever is read first.
+
+The first is a guard; the second removes the failure mode. They compose.
 
 **Evidence to close.** Separate vendor stores cannot silently create unrelated
 Project identities for one repository; re-ingesting a Project that already has
@@ -3085,11 +3124,33 @@ codes it can state what kind of record was dropped and under which condition,
 which is the difference between "this decode is incomplete" and "this decode
 declined 4,898 `progress` records and refused 2 for exceeding a bound".
 
+#### Reviewing What an Ingest Reported
+
+The counters are printed and then lost, so nothing reviews them. Two
+observations from one session show what that costs:
+
+| Observed | Reading |
+|---|---|
+| `unsupported=110` on this repository's own ingest | 110 records of a kind no adapter maps. The number names no kind, so whether that is one unmapped type or thirty is unknown |
+| `known_ignored=21317` on the same run | Expected volume, but indistinguishable from a regression that started ignoring a mapped type |
+| `external_content=5, external_errors=1` | A single external-content error. One is exactly the count that gets lost in a scrolled line |
+| `ignored=4898` on another Project | Large, unattributed, and unexplained |
+
+**A per-ingest review needs three things the counters do not supply:** which
+record kind each count refers to, whether the count moved since the previous
+ingest of the same Project, and which counts are expected to be non-zero. The
+first is the reason-code work above. The second needs the counts stored -- a
+per-ingest observation already exists for storage and not for diagnostics. The
+third is a policy statement: `malformed` should be zero, `known_ignored` should
+not, and nothing currently says so.
+
 **Evidence to close.** Record-level discards reach `mapping_diagnostics` as
 aggregated rows carrying a reason code and the vendor's record kind; the
 ingest-time cost is one flush per Source rather than one write per record; a
-query reports what a store dropped and why; and the 51 sites classified above
-as exception swallows or value decisions each increment a counter.
+query reports what a store dropped and why; the 51 sites classified above as
+exception swallows or value decisions each increment a counter; and an ingest
+can be compared against the previous ingest of the same Project so a moved
+count is visible.
 
 **Why this is High.** Coverage reporting states what a store mapped and missed.
 Today it can name missed *fields* precisely and missed *records* only in
@@ -3328,6 +3389,326 @@ them editable is not.
 **Evidence to close.** A machine's inclusion and exclusion judgment survives a
 new shell; `tools/setup_discovery.py` proposes into that file; and the
 compiled-in refusals are documented in the same place without becoming editable.
+
+### W90 -- Scanned but Never Ingested
+
+**Work.** Close the gap between a Project that scan found and a Project that
+ingest ever read.
+
+**How it was found.** This repository's own Sessions were absent from every
+store. `~/.claude/projects` held 10 transcripts and 77 MiB for it, and
+`ingested_projects.json` recorded a scan on 2026-08-17 -- 10 Sessions, 60.5 MiB
+across Claude and Codex -- with **no `last_ingestion` at any point**. Ingesting
+it produced **26 Sessions and 68,655 Events**, making it the second-largest
+Project in the registry.
+
+**It is not one Project.** Eight tracked paths have a `last_scan` and no
+`last_ingestion`, and the same eight are absent from the Project catalog
+entirely. Scan records them; ingest never saw them; the catalog only holds what
+ingest published, so every list derived from the catalog omits them silently.
+
+**The mechanism.** `codess ingest --dir <path>` ingests what it is told.
+Nothing walks the scanned set and asks which members have never been ingested,
+so a Project enters the store only when a person names it. A tool that
+enumerates Projects from the catalog -- which is the obvious way to write one,
+and is what was used here for a full-corpus rebuild -- inherits the omission
+and cannot detect it.
+
+**Why this is High.** Every completeness claim rests on the corpus being what
+the operator thinks it is. A Project scanned and never ingested is invisible to
+coverage reporting, to the corpus baseline, and to any audit, and nothing
+reports the discrepancy. The failure is silent in exactly the way the system is
+otherwise careful to avoid.
+
+**Evidence to close.** A scanned Project that has never been ingested is
+reported; enumerating Projects for a bulk operation draws from the scanned set
+rather than from the catalog, or states that it does not; and the count of
+scanned-but-uningested Projects is queryable.
+
+### W91 -- One Authoritative Project Record
+
+**Work.** Reconcile the three records that describe a Project into one with a
+stated owner, covering Projects that were scanned, ingested, moved, or removed.
+
+**Three records disagree today and nothing reconciles them.**
+
+| Record | Holds | Written by |
+|---|---|---|
+| `ingested_projects.json` | Every path scan saw, with `last_scan`, `last_ingestion`, per-vendor counts | scan and ingest |
+| `projects.json` | The Project catalog: identity, locations, aliases, dispositions | ingest, at publication |
+| `projects/<id>/` | Snapshots and the current pointer | publication |
+
+Measured disagreements on one machine: **9 paths claimed by two Projects each**,
+**8 paths scanned and never ingested** (and therefore absent from the catalog
+entirely), **1 catalogued directory no longer on disk**, and **1 Project with
+no `current.json`**.
+
+**The proliferation question, and why a fourth record is the wrong answer.**
+Adding a unified record without retiring the others produces four descriptions
+and no authority. The design constraint is therefore that one record is
+authoritative *per fact*, not that one record holds everything:
+
+| Fact | Authority | Why not elsewhere |
+|---|---|---|
+| Does this path exist, and is it a repository | The filesystem | Any cached answer is stale the moment a directory moves |
+| Was it scanned, and when | `ingested_projects.json` | Scan is the only writer |
+| Is it a Project, and what is its identity | `projects.json` | Identity must survive a path change, so it cannot be keyed by path |
+| What has been published for it | `projects/<id>/current.json` | The pointer is the publication transaction |
+
+**So the work is reconciliation, not a new store.** What is missing is a
+lifecycle *state* on the catalog entry -- `scanned`, `ingested`, `moved`,
+`removed`, `superseded` -- with the date of the transition, so a Project that
+has left the machine remains a record rather than disappearing from every list.
+The dates already exist across the three records; nothing joins them.
+
+**Correctness follows from writers, not from schema.** Each fact keeps exactly
+one writer. A reconciliation that lets two components write a lifecycle state
+recreates the disagreement it was built to fix, which is what happened with
+Project identity (W14): ingest inferred an identity and silently overrode a
+reviewed one.
+
+**Evidence to close.** A single query answers "every Project this machine has
+known, with what happened to it and when"; each fact in it names its writer;
+and re-ingesting a Project already catalogued updates its entry rather than
+adding one.
+
+**`tools/registry_check.py` is the interim.** It reports the disagreements
+without changing anything, so the reconciliation can be designed against
+measured conditions rather than imagined ones.
+
+### W92 -- Event Kinds: Most Volume Is Machine Traffic
+
+**Work.** Report Event volume by kind and Actor, so a count states what kind of
+activity it measures.
+
+**The measurement that motivates it.** Grouped by `event_kind` and
+`actor_kind` across the corpus:
+
+| Vendor | Events | tool.call + tool.result | message.prompt (human) |
+|---|---|---|---|
+| Claude | 96,957 | 44,226 (**46%**) | not in the top eight |
+| Codex | 162,142 | 115,928 (**71%**) | 6,910 (4%) |
+| Cursor | 161,821 | 129,782 (**80%**) | 4,333 (**3%**) |
+
+**Between 46% and 80% of every store is tool traffic**, and human prompts are
+3-4% of Codex and Cursor. A raw Event count therefore measures how tool-heavy a
+harness is, not how much work a person did -- and the vendors differ enough
+that comparing raw counts across them compares harness design.
+
+Claude's profile differs in a second way: `content.attachment` (9%),
+`state.product` (8%), `harness.setting` (5%), and `session.label` (3%) are
+harness bookkeeping that the other two either do not emit or do not retain.
+
+**Consequence for existing figures.** `content_objects` -- 130,934 for Codex
+against 41,619 for Claude -- is dominated by tool results for the same reason,
+so it is a proxy for tool volume rather than for retained content of interest.
+
+**Evidence to close.** Overview reports Event counts split by kind and Actor;
+any cross-vendor comparison states which kinds it includes; and the corpus
+baseline distinguishes human-authored from machine-generated volume.
+
+### W93 -- Session Utilization: Detection and Disposition
+
+**Status: Postponed for policy, ready for recording.** What each class *means*
+for ingestion, search, and counts is a decision this item does not pre-empt.
+Recording the class costs nothing and is what makes the decision possible.
+
+#### What the 318 Actually Are
+
+Characterized rather than guessed:
+
+| Property | Value |
+|---|---|
+| Session count | 327 with `surface_kind='api'`; 318 hold exactly 9 Events |
+| `metadata.entrypoint` | `sdk-cli` on every one |
+| Distinct prompt openings | **1** -- `"You are an impartial judge reviewing a conversation between…"` |
+| Days spanned | 2: 311 on 2026-07-30, 16 on 2026-07-31 |
+| Models | `claude-sonnet-5` 154, `claude-opus-5` 153, `claude-fable-5` 16 |
+| Tool invocations | 0, across all 327 |
+| `source_cwd` | One Project directory |
+
+So: a **batch evaluation run** -- one scripted prompt issued 327 times across
+two days against three models, each producing a JSON score block. The operator
+identifies it as scripted invocations of an evaluation harness, which the
+evidence matches exactly.
+
+**The vendor states this for Claude, and only for Claude.** `surface_kind`
+separates the batch runs perfectly *within* the Claude store:
+
+| Vendor | `api` | `cli` | `ide` | Derived from |
+|---|---|---|---|---|
+| Claude | **327** (0 with tools) | 202 (170 with tools) | 0 | Record `entrypoint`; `sdk-cli` maps to `api` |
+| Codex | 0 | 28 | 10 | Payload `source` |
+| Cursor | 0 | 0 | 90 | **Nothing -- the vendor profile default** |
+
+**Three corrections to what I claimed.**
+
+1. **`api` appears only in Claude.** No Codex or Cursor Session carries it, so
+   "every `api` Session has no tool use" is a statement about 327 Claude
+   Sessions from one batch run, not a cross-vendor rule.
+2. **Cursor's `surface_kind` is not evidence.** `adapters/cursor` never sets
+   it; every Cursor Session is `ide` because the vendor profile says so. A
+   predicate filtering on it filters on a constant.
+3. **The three vendors derive it from three different fields**, so the values
+   are not comparable in the way one column implies. Claude reads `entrypoint`,
+   Codex reads the payload `source`, Cursor reads nothing.
+
+So `surface_kind` is a reliable discriminator *for Claude batch runs* and
+nothing more. Whether Codex or Cursor can produce a comparable scripted run,
+and how it would appear, is not established -- Codex has an `exec`
+non-interactive mode and Cursor a terminal agent, and neither has been observed
+here.
+
+#### Reframed Again: What Axis Is This
+
+The earlier framing named `tool_invocation_count` as the "what it contains"
+axis and called the combination "development work". Both are wrong, and the
+reason is the same: **a tool invocation is a vendor-mediated event, not a unit
+of work.**
+
+Measured, Cursor records a tool call for 87 of 90 Sessions and Claude for 170
+of 529. That difference is harness design -- Cursor's agent invokes tools for
+operations Claude performs another way -- not a difference in how much work was
+done. A threshold on the count therefore ranks harnesses, not Sessions.
+
+**What can be stated per Session without inventing a comparison:**
+
+| Fact | Field | Comparable across vendors |
+|---|---|---|
+| How the Session was started | `surface_kind` | **No** -- three derivations, one absent |
+| Whether a human typed a prompt | count of `message.prompt` with `actor_kind='human'` | Yes -- the classification is common |
+| Whether the model called tools | `tool_invocation_count` | **No** -- harness-dependent rate |
+| How many Events | `event_count` | **No** -- 5,435 to 8,511 bytes per Event by vendor |
+
+**Only the human-prompt count is comparable**, because Actor classification is
+the part CoSchema normalizes and validates across all three vendors. Everything
+else is a per-vendor measurement that may be compared *within* a vendor.
+
+**So there is no "development work" axis**, and asserting one would repeat the
+error this item was opened to fix. What exists is a set of per-Session counts,
+each with a stated comparability, and one vendor-specific signal that happens
+to isolate a known batch run.
+
+#### Turn-Pattern Digest, Reassessed
+
+The digest is still worth having and for a narrower reason than I gave. It does
+not identify these Sessions -- `surface_kind` does that, more cheaply and with
+vendor authority. What it identifies is a **repeated shape whose cause is not
+yet known**, which is a different and rarer job:
+
+- 296 of the 318 share one exact Event-kind sequence and 22 share another. The
+  22 differ by carrying `state.product` where the 296 carry
+  `content.attachment` -- a real difference in what the harness recorded, on
+  the same scripted prompt.
+- Nothing in `surface_kind` predicts that split. The digest is what surfaced it.
+
+So it belongs as a diagnostic rather than a stored column: computed by an audit
+that asks "which Sessions repeat a shape", not written per row.
+
+#### Project-Level Classes
+
+| Class | Count | Signal |
+|---|---|---|
+| Published with no Sessions | 6 | 0 Events, ~1 MiB of empty store |
+| Single Session, no tool use | 1 | 8 Events, 0 tool calls |
+| Single Session, minimal tool use | ~4 | 63-236 Events |
+
+**A zero must be distinguishable from a failure.** An empty Project consumes a
+catalog entry, a store directory, a snapshot, and a row in every inventory, and
+in those lists it is indistinguishable from a Project whose decode failed. The
+first question a reader asks of a zero is "empty or broken", and nothing
+answers it.
+
+### W94 -- Four Files Carry the Format Number
+
+**Work.** Reduce four declarations of the CoSchema format to one declaration
+and derivations that cannot go stale unnoticed.
+
+**Current state**, after making two of the four checkable:
+
+| Location | Read by code | Drift detected | When |
+|---|---|---|---|
+| `FORMAT_VERSION` | Everything | It is the declaration | -- |
+| `manifest.json` | `load_manifest`, `snapshot` | Yes | On the next store open, or `refresh_schema_manifest.py --check` |
+| `schema.sql` | Executed | Yes | At store creation, naming the file |
+| `contract.json` | Declarative only | Yes | On any contract read |
+
+**The silent gap is closed; one problem remains.** `load_contract` now compares
+the contract's `format_version` against the declaration, so all four locations
+are checked.
+
+**Detection is no longer incidental.** The format-7 bump was caught by 289
+tests failing on `manifest format_version mismatch` -- real detection, but a
+side effect of those tests opening stores. `TestFormatNumberAgreement` now
+asserts the four directly, so a bump that misses a file fails on that file.
+
+**Detection now precedes the suite.** `pytest_configure` checks the four stated
+formats and every released digest before collection, so a stale file stops the
+run in under a second naming the file and its remedy. Measured against the
+alternative: a stale contract digest previously produced 391 failures and 38
+collection errors.
+
+**Correction is still manual**, and one step further out remains: a pre-commit
+hook would move detection from *test run* to *commit*. Four locations with four
+checks, a pre-collection gate, and direct assertions is a defensible state; the
+count itself is what W94 would still reduce.
+
+**Options, with the tradeoff each makes.**
+
+| Option | Reduces to | Cost |
+|---|---|---|
+| Compare `contract.json` in `load_contract` | 4 locations, 3 checked | Smallest change; does not reduce the count |
+| Generate `manifest.json` and `contract.json` at build time | 2 authored | Needs a build step the repository does not have |
+| Add a pre-commit check that all four agree | 4 locations, 4 checked | Catches drift at the edit; another thing to install |
+| Fold the format into one released file both others reference | 2 | A JSON document cannot reference another without a loader; helps `contract.json` only |
+
+**The first is done** -- `load_contract` compares the contract, which closed
+the silent gap for a few lines. **The third is what remains**: a pre-commit
+check moving every detection from "next store open" to "the commit that broke
+it". Neither reduces the count to two, and the honest statement is that four
+locations with four checks is acceptable while four with two was not.
+
+**Evidence to close.** Every file stating the format number is compared against
+the declaration; a stale value fails at the edit rather than at the next store
+open; and the reason each location exists is recorded beside it.
+
+### W95 -- Message and Comment Wording
+
+**Work.** Tighten operator-facing messages and code comments to a stated
+standard, and record the standard with a worked example.
+
+**The standard.** State the observation and the action. Omit the explanation a
+reader does not need at the moment of failure.
+
+**Worked example**, from the DDL version check:
+
+Before -- 4 lines, 2 of explanation the reader did not ask for:
+
+```
+released DDL stamps user_version 6 while the declared CoSchema format is 7;
+update schema.sql to match
+```
+
+After -- the same two facts and the same action:
+
+```
+DDL user_version 6, declared CoSchema 7: update schema.sql
+```
+
+The docstring above it went from 10 lines to 6 by the same rule: the *why* a
+maintainer needs stays, the restatement of what the code does goes.
+
+**Where this applies.** Error messages, log lines, progress events, and code
+comments. Not documentation, where a reader is looking for explanation.
+
+**Why it is Low and not Withdrawn.** No defect follows from a verbose message,
+so nothing forces it. But `require_store`'s unsupported-format message is now
+four lines of prose in an exception, and every error a reader meets is one they
+are meeting while something is already wrong.
+
+**Evidence to close.** The standard is written where a contributor will meet
+it; the messages in `schema_contract` and `store` are revised against it; and
+the example above is retained as the reference.
 
 ### Store Performance Baseline
 

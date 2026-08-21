@@ -129,3 +129,52 @@ class TestAgainstACopiedTree:
             before["files"][role]["path"] == after["files"][role]["path"]
             for role in before["files"]
         )
+
+
+class TestFormatNumberAgreement:
+    """The four files stating the CoSchema format agree with the declaration.
+
+    `FORMAT_VERSION` declares it; the manifest, the DDL's `PRAGMA user_version`,
+    and the contract each restate it. Every restatement is compared at the point
+    it is used -- on a store open, at store creation, on a contract read -- so
+    a stale value is detected, but only when something exercises that path.
+
+    These assert the agreement directly, so a bump that misses a file fails on
+    the file rather than on whichever store operation happened to run first.
+    """
+
+    def test_manifest_states_the_declared_format(self):
+        from codess.schema_contract import FORMAT_VERSION, MANIFEST_PATH
+        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        assert manifest["format_version"] == FORMAT_VERSION, (
+            "run tools/refresh_schema_manifest.py"
+        )
+
+    def test_ddl_stamps_the_declared_format(self):
+        """`PRAGMA user_version` is what labels a newly written store."""
+        import re
+
+        from codess.schema_contract import DDL_PATH, FORMAT_VERSION
+        stamped = re.search(
+            r"PRAGMA\s+user_version\s*=\s*(\d+)",
+            DDL_PATH.read_text(encoding="utf-8"),
+        )
+        assert stamped is not None, "the DDL declares no user_version"
+        assert int(stamped.group(1)) == FORMAT_VERSION
+
+    def test_contract_states_the_declared_format(self):
+        """Read by no code, so only a check keeps it honest."""
+        from codess.schema_contract import CONTRACT_PATH, FORMAT_VERSION
+        contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+        assert contract["format_version"] == FORMAT_VERSION
+
+    def test_the_manifest_hashes_are_current(self):
+        """`--check` reports staleness without writing, and must find none."""
+        result = subprocess.run(
+            [sys.executable, str(TOOL), "--check"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 0, (
+            f"released schema files disagree with the manifest; run "
+            f"tools/refresh_schema_manifest.py\n{result.stdout}"
+        )

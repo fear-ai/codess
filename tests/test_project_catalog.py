@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from codess.config import STORE_ROOT
+from codess.config import PROJECT_FILE, STORE_ROOT
 from codess.fileio import hash_file
 from codess.project_annotations import build_project_annotations
 from codess.project_catalog import (
@@ -1055,3 +1056,68 @@ def test_one_observation_carries_one_timestamp(tmp_path):
         location["observed_at"] for location in entry["locations"]
     }
     assert len(stamps) == 1
+
+
+class TestLostBindingIsReported:
+    """A minted identity says so, because a silent one splits a Project.
+
+    The binding lives inside the Project directory, so it is lost whenever that
+    directory is cleaned, re-cloned, or restored from a copy predating it. The
+    catalog search exists to recover from that and is only reached when the
+    binding is absent -- so a *stale* binding wins, and one path acquires a
+    second Project carrying none of the first one's review. Nine such
+    duplicates were created on one machine in a single session before anything
+    reported it.
+    """
+
+    def test_minting_warns(self, tmp_path, caplog):
+        """The first ingest of a Project mints, and says which identity."""
+        registry = tmp_path / "registry"
+        project = tmp_path / "proj"
+        project.mkdir()
+        with caplog.at_level(logging.WARNING):
+            binding = ensure_project_binding(registry, project)
+        assert binding["project_id"].startswith("codess:project:")
+        assert any("minting" in record.message for record in caplog.records)
+
+    def test_a_retained_binding_does_not_warn(self, tmp_path, caplog):
+        """The ordinary path is silent; only a new identity is news."""
+        registry = tmp_path / "registry"
+        project = tmp_path / "proj"
+        project.mkdir()
+        ensure_project_binding(registry, project)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            ensure_project_binding(registry, project)
+        assert not [r for r in caplog.records if "minting" in r.message]
+
+    def test_a_lost_binding_recovers_from_the_catalog(self, tmp_path, caplog):
+        """Deleting the binding must not mint: the catalog still knows the path."""
+        registry = tmp_path / "registry"
+        project = tmp_path / "proj"
+        project.mkdir()
+        first = ensure_project_binding(registry, project)
+        (project / ".codess" / PROJECT_FILE).unlink()
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            second = ensure_project_binding(registry, project)
+        assert second["project_id"] == first["project_id"]
+        assert not [r for r in caplog.records if "minting" in r.message]
+
+    def test_a_binding_disagreeing_with_the_catalog_warns(self, tmp_path, caplog):
+        """A stale binding wins by design; the disagreement is reported."""
+        registry = tmp_path / "registry"
+        project = tmp_path / "proj"
+        project.mkdir()
+        first = ensure_project_binding(registry, project)
+        binding_path = project / ".codess" / PROJECT_FILE
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        binding["project_id"] = "codess:project:00000000-0000-0000-0000-000000000000"
+        binding_path.write_text(json.dumps(binding), encoding="utf-8")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            second = ensure_project_binding(registry, project)
+        assert second["project_id"] != first["project_id"]
+        assert any(
+            "several Projects" in record.message for record in caplog.records
+        )

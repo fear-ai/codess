@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 from collections.abc import Iterable
 from functools import lru_cache
@@ -194,13 +195,45 @@ def verify_package() -> str:
 
 @lru_cache(maxsize=1)
 def load_contract() -> dict[str, Any]:
+    """The logical contract, checked against the declared format.
+
+    The contract states its own `format_version` for a consumer that never
+    imports Python, and nothing else reads it. That makes a wrong value worse
+    than an absent one: the only reader is the one with no way to check.
+    """
+    contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    stated = contract.get("format_version")
+    if stated != FORMAT_VERSION:
+        raise SchemaContractError(
+            f"contract format_version {stated}, declared CoSchema "
+            f"{FORMAT_VERSION}: update {CONTRACT_PATH.name}"
+        )
     contract_digest()
-    return json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    return contract
 
 
 def load_ddl() -> str:
+    """The released DDL, checked against the declared format.
+
+    `PRAGMA user_version` stamps a newly written store. It stays a literal
+    because the script is executed verbatim and its digest is verified, so it
+    cannot carry a substitution. A bump that misses it writes stores labelled
+    with the previous format that the same code then refuses to read, so the
+    number is checked here rather than left to attention.
+    """
+    ddl = DDL_PATH.read_text(encoding="utf-8")
+    match = re.search(r"PRAGMA\s+user_version\s*=\s*(\d+)", ddl)
+    if match is None:
+        raise SchemaContractError("released DDL declares no user_version")
+    if int(match.group(1)) != FORMAT_VERSION:
+        raise SchemaContractError(
+            f"DDL user_version {match.group(1)}, declared CoSchema "
+            f"{FORMAT_VERSION}: update {DDL_PATH.name}"
+        )
+    # After the version check, so a bump that missed the DDL is reported by
+    # name rather than as a hash mismatch on the same file.
     contract_digest()
-    return DDL_PATH.read_text(encoding="utf-8")
+    return ddl
 
 
 def load_mapping(name: str) -> dict[str, Any]:
