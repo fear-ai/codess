@@ -255,6 +255,36 @@ def _turn_edge_metadata(data: dict) -> dict:
     return values
 
 
+def _record_refused(
+    opts: dict,
+    reason_code: str,
+    *,
+    source_file: str | None = None,
+    bubble_id: str | None = None,
+    record_type: str | None = None,
+) -> None:
+    """Record that one bubble was read and not admitted.
+
+    Mirrors the Claude and Codex recorders: a counter says how many were
+    refused, a persisted row says which. `store` aggregates by reason and
+    record type before writing, so a kind refused thousands of times costs one
+    row carrying the count.
+    """
+    diagnostics = opts.get("diagnostics")
+    if diagnostics is not None:
+        diagnostics[reason_code] = diagnostics.get(reason_code, 0) + 1
+    pending = opts.get("record_diagnostics")
+    if pending is None:
+        return
+    pending.append({
+        "granularity": "record",
+        "reason_code": reason_code,
+        "source_locator": f"bubble:{bubble_id}" if bubble_id else None,
+        "source_file": source_file,
+        "source_record_type": record_type,
+    })
+
+
 def _bubble_evidence(data: dict) -> dict:
     """Every mapped-but-uncolumned bubble value, as one metadata dict.
 
@@ -650,17 +680,18 @@ def _process_composer(
                 and not data.get("conversationSummary")
             )
             if empty_assistant_envelope or not data:
-                diagnostics["known_ignored_records"] = (
-                    diagnostics.get("known_ignored_records", 0) + 1
-                )
                 reason = (
-                    "empty_assistant_envelope_records"
-                    if empty_assistant_envelope else "empty_bubble_records"
+                    "record_empty_assistant_envelope"
+                    if empty_assistant_envelope else "record_empty_bubble"
                 )
-                diagnostics[reason] = diagnostics.get(reason, 0) + 1
+                _record_refused(
+                    opts, reason, source_file=source_file,
+                    bubble_id=bubble_id, record_type=str(data.get("type") or ""),
+                )
             else:
-                diagnostics["ignored_records"] = (
-                    diagnostics.get("ignored_records", 0) + 1
+                _record_refused(
+                    opts, "record_unclassified", source_file=source_file,
+                    bubble_id=bubble_id, record_type=str(data.get("type") or ""),
                 )
         for event in events:
             yield composer_id, event

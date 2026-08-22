@@ -25,7 +25,7 @@ DDL_PATH = PACKAGE_ROOT / "sqlite" / "schema.sql"
 MAPPINGS_ROOT = REPO_ROOT / "schema" / "mappings"
 
 FORMAT_ID = "codess.coschema"
-FORMAT_VERSION = 7
+FORMAT_VERSION = 9
 APPLICATION_ID = 0x434F4445
 # Derived from FORMAT_VERSION rather than restated. Codess never migrates a
 # store: a format change is a rebuild from the vendor Sources, because the store

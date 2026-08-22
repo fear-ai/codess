@@ -1121,3 +1121,42 @@ class TestLostBindingIsReported:
         assert any(
             "several Projects" in record.message for record in caplog.records
         )
+
+
+class TestStateTransitionRecord:
+    """A disposition records the state it left, not only the one it entered.
+
+    Without it, "excluded, always was" and "excluded on this date, previously
+    active" are one value -- and only the second raises the question of what
+    changed and whether it should be revisited.
+    """
+
+    def _catalogued(self, tmp_path):
+        registry = tmp_path / "registry"
+        project = tmp_path / "proj"
+        project.mkdir()
+        binding = ensure_project_binding(registry, project)
+        return registry, binding["project_id"]
+
+    def test_an_initial_state_has_no_previous(self, tmp_path):
+        registry, project_id = self._catalogued(tmp_path)
+        set_project_selection_state(registry, project_id, "candidate")
+        entry = get_project_entry(registry, project_id)
+        assert entry["catalog_disposition"]["state"] == "candidate"
+        assert "previous_state" not in entry["catalog_disposition"]
+
+    def test_a_change_records_what_it_left(self, tmp_path):
+        registry, project_id = self._catalogued(tmp_path)
+        set_project_selection_state(registry, project_id, "candidate")
+        set_project_selection_state(registry, project_id, "excluded")
+        disposition = get_project_entry(registry, project_id)["catalog_disposition"]
+        assert disposition["state"] == "excluded"
+        assert disposition["previous_state"] == "candidate"
+
+    def test_setting_the_same_state_records_no_transition(self, tmp_path):
+        """Re-stating a state is not a change and must not read as one."""
+        registry, project_id = self._catalogued(tmp_path)
+        set_project_selection_state(registry, project_id, "excluded")
+        set_project_selection_state(registry, project_id, "excluded")
+        disposition = get_project_entry(registry, project_id)["catalog_disposition"]
+        assert "previous_state" not in disposition

@@ -97,9 +97,10 @@ _IS_ENV_TABLE = (
     ("CODESS_DAYS", env_int, 365),
     ("CODESS_VERBOSE", env_bool, "0"),
     ("CODESS_DEBUG", env_bool, "0"),
-    ("CODESS_MIN_SIZE", env_int, KB(20)),
+    ("CODESS_MIN_SIZE", env_int, KB(8)),
     ("CODESS_FORCE", env_bool, "0"),
     ("CODESS_SUBAGENT", env_bool, "0"),
+    ("CODESS_CLAUDE_WORKTREES", env_bool, "0"),
     ("CODESS_REDACT", env_bool, "0"),
     ("CODESS_STRICT_MAPPING", env_bool, "0"),
     ("CODESS_MAX_TRANSCRIPT_BYTES", env_int, BUILTIN_MAXIMUMS["transcript_bytes"]),
@@ -367,6 +368,18 @@ DEBUG = _IS_ENV_VALUES["CODESS_DEBUG"]
 
 # --- Ingest ---
 MIN_SIZE = _IS_ENV_VALUES["CODESS_MIN_SIZE"]
+"""Smallest Source file admitted, in bytes.
+
+A *file*-size gate, so a small but complete Session is excluded by it. At 20
+KiB it skipped three Claude transcripts on the development machine -- two
+carrying a real prompt and response, and one subagent transcript whose sibling
+under the same Session was admitted, so one half of a Session was in the store
+and the other was not for no reason but byte count.
+
+8 KiB keeps the guard against a transcript too small to hold an exchange while
+admitting those. It is not zero because a Source below any plausible Session
+size is more likely a truncation or a placeholder than work, and reading each
+one costs an open."""
 
 # --- Vendor feature audits: cap on files scanned per run (evidence.py,
 # vendor_audits.claude_features, vendor_audits.codex_features) ---
@@ -374,6 +387,23 @@ FORCE = _IS_ENV_VALUES["CODESS_FORCE"]
 
 # --- Subagent (CC scan) ---
 SUBAGENT = _IS_ENV_VALUES["CODESS_SUBAGENT"]
+
+# --- Harness-created worktrees ---
+CLAUDE_WORKTREES = _IS_ENV_VALUES["CODESS_CLAUDE_WORKTREES"]
+"""Whether to admit Sessions the harness ran in a worktree it created itself.
+
+Claude Code has written worktrees under `<project>/.claude/worktrees/<name>`
+and run Sessions there. Those directories are the harness's working area rather
+than a place the operator develops: they are created and removed by the tool,
+carry generated names, and are pruned from git without the operator acting.
+One observed here holds 1,350 turns, and its registration outlived its
+directory.
+
+Off by default because such a Session is *about* the parent Project and
+admitting it publishes a second Project whose path will not exist next week.
+Set `CODESS_CLAUDE_WORKTREES=1` to include them, which is the right choice when
+the question being asked is about harness behaviour rather than about the
+repository."""
 
 # --- Ingest redaction default (CLI --redact ORs on top) ---
 REDACT = _IS_ENV_VALUES["CODESS_REDACT"]

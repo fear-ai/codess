@@ -797,7 +797,9 @@ def test_only_skipped_records(durable_tmp_path):
     env["CODESS_CC_PROJECTS"] = str(cc_dir)
     r = _run(["ingest", "--dir", str(proj), "--source", "cc", "--force", "--min-size", "0"], env=env)
     assert r.returncode == 0
-    assert "ignored=2" in r.stderr
+    # Named per record type rather than folded into one `ignored` total: both
+    # records are skipped by kind, so the reason code says which condition.
+    assert "record_kind_not_mapped=2" in r.stderr
     r2 = _run(["query", "--dir", str(proj), "--sessions"], env=env)
     # May or may not have session row (we don't upsert session if 0 events)
     assert r2.returncode == 0
@@ -823,8 +825,15 @@ def test_ingest_malformed_record_reports_aggregate_and_continues(durable_tmp_pat
     )
 
     assert r.returncode == 0
-    assert "malformed=1" in r.stderr
-    assert "failed_sources=0" in r.stderr
+    # The line reports every counter that fired and omits the zeros: a zero for
+    # a condition this run cannot produce reads the same as a zero for one it
+    # can, so absence is the clearer statement. Read from the diagnostics line
+    # itself rather than from all of stderr, which carries other messages.
+    line = next(
+        text for text in r.stderr.splitlines() if "ingest diagnostics:" in text
+    )
+    assert "malformed_records=1" in line
+    assert "failed_sources" not in line
 
 
 def test_ingest_partial_source_failure_continues_and_exits_1(durable_tmp_path):

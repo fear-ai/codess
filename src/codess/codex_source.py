@@ -94,6 +94,48 @@ def session_archive_evidence(path: Path) -> tuple[str, str]:
     return "active", "configured-active-root"
 
 
+THREAD_INDEX_FILE = "session_index.jsonl"
+
+
+def read_thread_names(codex_home: Path | None = None) -> dict[str, str]:
+    """Operator-assigned thread names, keyed by Session id.
+
+    Codex keeps the name the operator gave a thread in `session_index.jsonl`
+    beside the rollouts, and the rollout itself does not carry it. A store
+    built from rollouts alone therefore reports Sessions the operator cannot
+    recognise by their own label -- measured on one machine, 21 of 28 ingested
+    Sessions had a name the store did not hold.
+
+    Named `thread_name` by the vendor and retained as an operator-set label,
+    which is what distinguishes it from Claude's generated `aiTitle`.
+
+    A missing or unreadable index yields no names rather than an error: the
+    label qualifies a Session and its absence must not stop a decode.
+    """
+    home = codex_home or (CODEX_SESSIONS.parent if CODEX_SESSIONS else None)
+    if home is None:
+        return {}
+    path = Path(home) / THREAD_INDEX_FILE
+    if not path.is_file():
+        return {}
+    names: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            identity = entry.get("id")
+            name = entry.get("thread_name")
+            if isinstance(identity, str) and isinstance(name, str) and name.strip():
+                names[identity] = name.strip()
+    except OSError:
+        return {}
+    return names
+
+
 def build_session_index(
     *, cache_path: Path | None = None, include_record_counts: bool = False,
 ) -> list[dict[str, Any]]:

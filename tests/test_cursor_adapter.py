@@ -856,9 +856,8 @@ class TestProcessDb:
         assert list(process_db(db, "/proj", {
             "diagnostics": diagnostics,
         })) == []
-        assert diagnostics.get("ignored_records", 0) == 0
-        assert diagnostics["known_ignored_records"] == 1
-        assert diagnostics["empty_assistant_envelope_records"] == 1
+        assert diagnostics.get("record_unclassified", 0) == 0
+        assert diagnostics["record_empty_assistant_envelope"] == 1
 
     def test_process_db_deduplicates_server_identity_per_composer(self, tmp_path):
         fixture = json.loads(
@@ -874,9 +873,9 @@ class TestProcessDb:
         assert diagnostics["duplicate_records"] == fixture["expected_duplicate_records"]
         # The released fixture's legacy key counts non-emitted envelopes. The
         # decoder now distinguishes this known state from unknown loss.
-        assert diagnostics.get("ignored_records", 0) == 0
+        assert diagnostics.get("record_unclassified", 0) == 0
         assert (
-            diagnostics["known_ignored_records"]
+            diagnostics["record_empty_assistant_envelope"]
             == fixture["expected_ignored_records"]
         )
 

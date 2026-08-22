@@ -188,6 +188,7 @@ diagnostics rather than silent loss.
 erDiagram
     PROJECT ||--o{ PROJECT_LOCATION : has
     PROJECT ||--o{ WORKSPACE_BINDING : has
+    PROJECT o|--o| PROJECT : related_to
     PROJECT o|--o{ SESSION : contains
     SOURCE ||--o{ SOURCE_RECORD : contains
     SOURCE o|--o{ SESSION : supplies
@@ -315,9 +316,31 @@ supplied a row when several stores contribute to one answer.
 
 ### Project
 
-Projects use generated stable identifiers independent of paths. For Git-backed
-work, one repository is one Project. Locations, linked worktrees, workspace
-identifiers, and source-reported paths are observations related to that Project.
+Projects use generated stable identifiers independent of paths.
+
+**A Project is a work area with its own Session history, not a repository.**
+The two usually coincide and deliberately need not. A linked git worktree
+shares a repository with its parent and is a separate Project, because every
+vendor already treats it as one: Claude writes a separate slug directory with
+its own prompt history, Codex records a distinct `cwd`, Cursor a distinct
+workspace. Codess indexes what the vendors recorded, so defining a Project
+against the repository would require joining Sessions the vendors never joined
+and would leave `git` -- which no vendor consults -- deciding what a Session
+belongs to.
+
+The relation between such Projects is recorded rather than implied:
+`related_project_id` names the parent repository's Project, and the two remain
+Projects.
+
+**Locations, workspace identifiers, and source-reported paths are observations
+of one Project.** A Project moved or copied keeps its identity and gains a
+location; a location whose directory is gone is retired rather than deleted, so
+the record states where the work went.
+
+**What is not a Project.** A subdirectory a Session happened to run in -- 4 of
+376 observed transcripts record more than one working directory, all within one
+Project -- and a worktree the harness created for its own use, which is the
+tool's working area rather than the operator's.
 
 ### Source
 

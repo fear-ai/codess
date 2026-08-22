@@ -64,11 +64,21 @@ def check(store_root: Path) -> list[tuple[str, str, str]]:
     scanned = _load(store_root / "ingested_projects.json").get("projects", [])
     catalog = _load(store_root / "projects.json").get("projects", [])
 
+    # A retired location is a path the operator has already accounted for --
+    # typically a Project that moved, where the live path is another location
+    # on the same entry. Reporting it as nested, excluded, or absent would
+    # repeat a finding that has been answered.
     catalog_paths: dict[str, list[dict]] = defaultdict(list)
+    retired: set[str] = set()
     for entry in catalog:
         for location in entry.get("locations") or []:
-            if location.get("path"):
-                catalog_paths[location["path"]].append(entry)
+            path = location.get("path")
+            if not path:
+                continue
+            if location.get("state") == "retired" or location.get("path_obsolete"):
+                retired.add(path)
+                continue
+            catalog_paths[path].append(entry)
 
     # 1. Scanned and never ingested. The corpus silently omits these, and every
     #    list drawn from the catalog inherits the omission.
@@ -82,10 +92,26 @@ def check(store_root: Path) -> list[tuple[str, str, str]]:
                 f"scanned {(record.get('last_scan') or '?')[:10]} and never ingested",
             ))
 
-    # 2. One path claimed by several Projects.
+    # 2. One path claimed by several Projects. An entry retained deliberately --
+    #    a worktree relation, or an archive holding vendor Sources that no longer
+    #    exist -- is a recorded decision rather than a collision, so it is
+    #    reported as a note and only unexplained pairs are errors.
     for path, entries in sorted(catalog_paths.items()):
-        if len(entries) > 1:
-            ids = ", ".join(e["project_id"].rsplit(":", 1)[-1][-12:] for e in entries)
+        if len(entries) <= 1:
+            continue
+        ids = ", ".join(e["project_id"].rsplit(":", 1)[-1][-12:] for e in entries)
+        explained = [
+            e for e in entries
+            if (e.get("catalog_disposition") or {}).get("state")
+            or e.get("selection_state")
+        ]
+        if len(explained) >= len(entries) - 1:
+            findings.append((
+                "NOTE", path,
+                f"{len(entries)} Projects, {len(explained)} with a recorded "
+                f"disposition: {ids}",
+            ))
+        else:
             findings.append(("ERROR", path, f"claimed by {len(entries)} Projects: {ids}"))
 
     # 3. Catalogued directories that no longer exist.

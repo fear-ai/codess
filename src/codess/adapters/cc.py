@@ -205,13 +205,30 @@ def get_session_metadata(path: Path) -> dict:
     a record states none.
     """
     facts: dict[str, str] = {}
+    # Distinct working directories seen while reading the bounded prefix. A
+    # Session is usually one directory and is not guaranteed to be: measured
+    # over 376 real transcripts, four record more than one and one records 21,
+    # all subdirectories of the same Project. The count is over the records
+    # actually read, so it is a floor rather than a total -- which is the
+    # honest value here, since this function reads `MAX_FACT_RECORDS` and not
+    # the file.
+    observed_cwds: set[str] = set()
     for line_num, record, _raw in iter_cc_records(path, warn=False):
         version = record.get("version") or record.get("claudeCodeVersion")
         if version is not None and "harness_version" not in facts:
             facts["harness_version"] = str(version)
         cwd = record.get("cwd")
-        if isinstance(cwd, str) and cwd and "source_cwd" not in facts:
-            facts["source_cwd"] = cwd
+        if isinstance(cwd, str) and cwd:
+            observed_cwds.add(cwd)
+            if "source_cwd" not in facts:
+                facts["source_cwd"] = cwd
+        # Claude writes a generated title on records rather than in a side
+        # index. Generated rather than operator-set, which the basis records:
+        # a reader must not take it for a name the operator chose.
+        title = record.get("aiTitle")
+        if isinstance(title, str) and title.strip() and "session_label" not in facts:
+            facts["session_label"] = title.strip()
+            facts["session_label_basis"] = "vendor_generated"
         entrypoint = record.get("entrypoint")
         if (
             isinstance(entrypoint, str) and entrypoint.strip()
@@ -223,6 +240,8 @@ def get_session_metadata(path: Path) -> dict:
                 facts["surface_kind"] = mapped
         if line_num >= MAX_FACT_RECORDS:
             break
+    if observed_cwds:
+        facts["source_cwd_count"] = str(len(observed_cwds))
     return facts
 
 
@@ -1542,10 +1561,25 @@ def process_file(
                 yield _annotate_source(product_state, record, line_num)
                 _diagnostic(opts, "product_state_records")
             else:
-                _diagnostic(opts, "known_ignored_records")
+                # Refused by configuration rather than by kind, so the reason
+                # names the setting: a reader asking why these are absent needs
+                # to know the answer is a flag, not a decode gap.
+                _record_refused(
+                    opts, "record_product_state_excluded",
+                    source_file=source_file, line_num=line_num,
+                    record_type=str(record.get("type") or ""),
+                )
             continue
         if should_skip(record):
-            _diagnostic(opts, "known_ignored_records")
+            # Named per record type rather than summed. `known_ignored` folded
+            # six types into one total, so a vendor that started writing meaning
+            # into `progress` would move the number with nothing saying which
+            # type moved.
+            _record_refused(
+                opts, "record_kind_not_mapped",
+                source_file=source_file, line_num=line_num,
+                record_type=str(record.get("type") or ""),
+            )
             continue
         rtype = record.get("type")
         debug = opts.get("debug", False)
@@ -1568,17 +1602,20 @@ def process_file(
                     for block in blocks if isinstance(block, dict)
                 )
                 if empty_thinking or block_types == {"fallback"}:
-                    diagnostics["known_ignored_records"] = (
-                        diagnostics.get("known_ignored_records", 0) + 1
-                    )
                     reason = (
-                        "empty_reasoning_state_records"
-                        if empty_thinking else "fallback_state_records"
+                        "record_empty_reasoning_state"
+                        if empty_thinking else "record_fallback_state"
                     )
-                    diagnostics[reason] = diagnostics.get(reason, 0) + 1
+                    _record_refused(
+                        opts, reason,
+                        source_file=source_file, line_num=line_num,
+                        record_type=str(record.get("type") or ""),
+                    )
                 else:
-                    diagnostics["ignored_records"] = (
-                        diagnostics.get("ignored_records", 0) + 1
+                    _record_refused(
+                        opts, "record_unclassified",
+                        source_file=source_file, line_num=line_num,
+                        record_type=str(record.get("type") or ""),
                     )
             for ev in evs:
                 if source_raw is not None:

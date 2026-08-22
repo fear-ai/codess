@@ -251,6 +251,14 @@ def slug_to_path(slug: str) -> Path:
     return Path(slug.replace("-", "/"))
 
 
+HARNESS_WORKTREE_SEGMENTS = frozenset({".claude", "worktrees"})
+"""Path segments marking a worktree the harness created for its own use.
+
+Both must appear: `.claude/worktrees/<name>` is the observed layout, and
+matching on `worktrees` alone would exclude a repository that keeps its own.
+"""
+
+
 def is_excluded(p: Path, work_root: Path | None = None) -> bool:
     """True if path is under backup or review dir.
 
@@ -258,13 +266,21 @@ def is_excluded(p: Path, work_root: Path | None = None) -> bool:
     ``relative_to`` — there is **no** matching CLI flag; pass an explicit scan/ingest
     work root when classifying paths under a different tree.
     """
-    from codess.config import DEFAULT_WORK
+    from codess.config import CLAUDE_WORKTREES, DEFAULT_WORK
     root = work_root or DEFAULT_WORK
     try:
         rel = str(p.relative_to(root))
     except ValueError:
         return False
     if is_under_pruned_directory(p, root):
+        return True
+    # A worktree the harness created for itself, under the Project's own
+    # `.claude`. It is the tool's working area rather than a place the operator
+    # develops -- created and removed by the tool, generated name, pruned from
+    # git without anyone acting -- so admitting it publishes a Project whose
+    # path will not exist next week. `CODESS_CLAUDE_WORKTREES=1` admits them,
+    # for a question about harness behaviour rather than about a repository.
+    if not CLAUDE_WORKTREES and set(p.parts) >= HARNESS_WORKTREE_SEGMENTS:
         return True
     # Backup-copy conventions come from the discovery policy rather than from
     # this module: they are directory *names*, portable across machines, and a

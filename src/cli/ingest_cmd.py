@@ -642,20 +642,18 @@ def _report_ingest_outcome(
         f"Stored: {outcome.overall_sessions} session(s), {outcome.overall_events} event(s)"
     )
     if any(diagnostics.values()):
+        # Every counter that fired, rather than a fixed field list. The line
+        # named eleven keys and nothing else, so a reason code added at the
+        # decode boundary was counted and never printed -- and a zero for a
+        # condition that cannot occur in this run reads the same as a zero for
+        # one that can. Sorted so two runs are comparable line to line.
         print(
             "codess: ingest diagnostics: "
-            f"malformed={diagnostics.get('malformed_records', 0)} "
-            f"ignored={diagnostics.get('ignored_records', 0)} "
-            f"empty_sources={diagnostics.get('empty_sources', 0)} "
-            f"failed_sources={diagnostics.get('failed_sources', 0)} "
-            f"unsupported={diagnostics.get('unsupported_records', 0)} "
-            f"known_ignored={diagnostics.get('known_ignored_records', 0)} "
-            f"filtered={diagnostics.get('filtered_records', 0)} "
-            f"external_content={diagnostics.get('external_content_records', 0)} "
-            f"external_errors={diagnostics.get('external_content_errors', 0)} "
-            f"reviewable_content_failures={diagnostics.get('reviewable_content_failures', 0)} "
-            f"cursor_ambiguous_fallback="
-            f"{diagnostics.get('cursor_ambiguous_fallback_composers', 0)}",
+            + " ".join(
+                f"{name}={count}"
+                for name, count in sorted(diagnostics.items())
+                if count
+            ),
             file=sys.stderr,
         )
 

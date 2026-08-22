@@ -868,6 +868,83 @@ Project-level question answered by `sources_vanished` in the Project inventory
 below. A snapshot whose Sources are intact can be rebuilt; one whose Sources
 have been pruned cannot, whatever its counts say.
 
+### Adjusting a Project's State
+
+Two mechanisms, and the distinction is who decides. **Commands** record an
+operator's judgment in the registry. **Files** carry evidence a Project's own
+directory holds. Nothing infers a state from a path.
+
+#### Commands
+
+| Command | Records |
+|---|---|
+| `codess catalog state --project-id <id> --state <s> [--related-project-id <id>] [--note ...]` | A disposition: `priority`, `candidate`, `deferred`, `excluded`, `needs_review`, `worktree`. `worktree` requires the related Project |
+| `codess catalog location retire --project-id <id> --path <p>` | One location is no longer live; the Project's other locations stand |
+| `codess catalog location add --project-id <id> --path <p>` | A second location for one Project |
+| `codess catalog relocate --project-id <id> --old-path <p> --new-path <q>` | A move, in one step. **Usable before the move as well as after** |
+| `codess catalog lifecycle [--state <s>]` | Reports the derived state per Project; exits nonzero on `scanned` |
+
+**A disposition records what it left.** Setting a state stores
+`previous_state` when it differs from the current one, so "excluded on
+2026-08-20, previously candidate" is distinguishable from "excluded, always
+was". An initial setting has no `previous_state`, and that absence is the
+answer rather than missing data.
+
+#### File-Based Directives
+
+| File | Holds | Written by |
+|---|---|---|
+| `<project>/.codess/project.json` | The Project's identity binding | Ingest, on first observation |
+| `<project>/.codess/source-links.json` | Approved links to vendor Sources whose path or identity does not match -- a renamed workspace, a remote one | The operator |
+| `~/.codess/projects.json` | The catalog: identities, locations, aliases, dispositions | Ingest and the catalog commands |
+| `schema/discovery-policy.json` | Directory names never traversed, and backup conventions | Released; replaceable via `CODESS_DISCOVERY_POLICY` |
+
+**The source-link file is the up-front directive.** It states, before ingest
+runs, that a vendor Source belongs to this Project despite naming another path
+-- which is how a renamed or remote workspace is bound by review rather than by
+inference.
+
+#### What Has No Command Yet
+
+A **purged** Project -- one whose vendor Sources are gone while the Project
+itself is live -- is measurable and unreported, and its store must not be
+deleted without approval. A **copy** is derived and nothing consults it at
+ingest, so a duplicated directory is still ingested twice. Both are tracked as
+open work.
+
+### When a Project Directory Moves
+
+Moving a Project preserves its identity **if the directory moves whole**: the
+binding at `<project>/.codess/project.json` travels with it, and the next
+ingest recognises the Project rather than minting a second one. Observed on a
+real move -- no minting warning, and the catalog recorded both paths as
+locations of one Project.
+
+**What the move does not do is retire the old path.** The catalog keeps it as
+an `active` location, so every check that reads locations keeps reporting a
+directory that is gone. Retire it explicitly:
+
+```bash
+codess catalog location retire --project-id <id> --path <old-path>
+```
+
+After that the location carries `state: retired` and `path_obsolete: true`, and
+both `codess catalog lifecycle` and `tools/registry_check.py` treat it as
+answered: the Project reports `moved` rather than `removed`, and the stale
+path stops appearing as nested, excluded, or absent.
+
+**Why the retirement is manual.** Nothing marks a location obsolete when its
+directory disappears, and nothing should guess: a path absent today is a
+Project that moved, a volume that is unmounted, or a directory deleted on
+purpose, and those have different answers. The tools report the condition; the
+operator states which it was.
+
+**If the directory is copied rather than moved**, both copies carry the same
+binding and both claim one identity. That is the case the guard in
+`_resolve_project_id` reports -- a binding naming an identity the catalog
+records at another path -- and it is why the binding is a cache rather than the
+authority.
+
 ### Project Inventory
 
 `catalog/inventory/project-inventory.csv` is a per-Project reference row,

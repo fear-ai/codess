@@ -1,6 +1,6 @@
 {
   "format_id": "codess.coschema",
-  "format_version": 7,
+  "format_version": 9,
   "application_id": 1129268293,
   "compatibility_policy": {
     "unknown_change": "manual_review",
@@ -292,6 +292,31 @@
         },
         "source_cwd": {
           "type": "text",
+          "nullable": true
+        },
+        "source_cwd_count": {
+          "type": "integer",
+          "nullable": true
+        },
+        "session_label": {
+          "type": "text",
+          "nullable": true
+        },
+        "session_label_basis": {
+          "type": "vocabulary",
+          "nullable": true,
+          "vocabulary": "session_label_basis"
+        },
+        "vendor_group": {
+          "type": "text",
+          "nullable": true
+        },
+        "source_dir_inode": {
+          "type": "integer",
+          "nullable": true
+        },
+        "source_dir_mtime": {
+          "type": "number",
           "nullable": true
         },
         "path_obsolete": {
@@ -1300,6 +1325,10 @@
     "session_model_basis": [
       "vendor",
       "initial_event"
+    ],
+    "session_label_basis": [
+      "vendor_generated",
+      "operator_named"
     ]
   }
 }

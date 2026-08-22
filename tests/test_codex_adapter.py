@@ -192,7 +192,10 @@ class TestProcessFile:
         assert metadata["replacement_history_items"] == 2
         assert metadata["replacement_history_messages_not_duplicated"] == 1
         assert metadata["window_number"] == 3
-        assert diagnostics["known_ignored_records"] == 1
+        # Named for the condition rather than folded into one aggregate:
+        # `known_ignored` summed six unrelated kinds, so a vendor that
+        # started writing meaning into one moved the total silently.
+        assert diagnostics["record_context_compacted"] == 1
 
     def test_modern_fixture_contract(self, tmp_path):
         fixture = Path(__file__).parent / "fixtures" / "codex_modern.jsonl"
@@ -650,7 +653,7 @@ class TestProcessFile:
             ))
             assert len(events) == 0
             assert diagnostics["usage_records"] == 1
-            assert diagnostics["known_ignored_records"] == 1
+            assert diagnostics["record_usage_records"] == 1
         finally:
             path.unlink()
 

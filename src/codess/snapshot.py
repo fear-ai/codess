@@ -259,16 +259,16 @@ def _logical_counts(
     # must not be able to write to it even by mistake.
     conn = open_readonly(path)
     try:
+        # Every table the store has, read from its own catalog rather than
+        # from a list here. The list had drifted to twenty of twenty-four:
+        # `correlation_assertions`, `event_artifacts`, `model_params`, and
+        # `store_meta` were counted nowhere, so a manifest reported a snapshot
+        # as complete while saying nothing about four of its tables -- and a
+        # reader comparing two manifests could not see a table gain or lose
+        # rows. `store_meta` is included deliberately: one row is the expected
+        # value and zero is a finding.
         available = table_names(conn)
-        requested = tuple(only) if only is not None else (
-            "projects", "project_locations", "workspace_bindings", "sources",
-            "sessions", "interactions", "model_turns", "events",
-            "source_records", "content_objects", "event_content",
-            "source_record_content", "tool_result_content", "artifact_content",
-            "processing_runs", "content_derivations",
-            "tool_invocations", "tool_results", "artifacts",
-            "mapping_diagnostics",
-        )
+        requested = tuple(only) if only is not None else tuple(sorted(available))
         return {
             table: int(conn.execute(f"SELECT COUNT(*) FROM {quote_identifier(table)}").fetchone()[0])
             for table in requested if table in available

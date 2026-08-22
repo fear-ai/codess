@@ -3,7 +3,7 @@
 -- This file contains only the SQLite layout, constraints, and access paths.
 
 PRAGMA application_id = 1129268293; -- 0x434F4445, "CODE"
-PRAGMA user_version = 7;
+PRAGMA user_version = 9;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE store_meta (
@@ -102,7 +102,39 @@ CREATE TABLE sessions (
   harness_version TEXT,
   source_id INTEGER REFERENCES sources(id),
   project_id TEXT REFERENCES projects(id),
+  -- The first working directory the Session recorded, and how many distinct
+  -- ones it recorded in total. A Session is usually one directory and is not
+  -- guaranteed to be: measured over 376 Claude transcripts, four record more
+  -- than one and one records 21, all subdirectories of the same Project. The
+  -- count says whether the single value understates the Session without
+  -- storing a list the query surface has no predicate for.
   source_cwd TEXT,
+  source_cwd_count INTEGER CHECK (source_cwd_count IS NULL OR source_cwd_count >= 0),
+  -- The vendor's own label for the Session, and where it came from. Every
+  -- vendor keeps one and none of them keeps it in the transcript: Claude
+  -- writes `aiTitle` on records, Codex an operator-set `thread_name` in
+  -- `session_index.jsonl`, Cursor a `title` in `conversation-search.db`. A
+  -- store built from transcripts alone reports Sessions the operator cannot
+  -- recognise by the name they gave them.
+  --
+  -- Distinct from a Codess alias, which the registry holds: one is the
+  -- vendor's label and one is ours, and a reader asking "which Session was
+  -- that" wants the first. `session_label_basis` says which it is.
+  session_label TEXT,
+  session_label_basis TEXT CHECK (
+    session_label_basis IN ('vendor_generated','operator_named') OR session_label_basis IS NULL
+  ),
+  -- The vendor's own grouping for the Session, where it states one: a Cursor
+  -- conversation branch, a Codex thread. Not a git branch and not a Project --
+  -- a label the vendor groups threads by, retained verbatim.
+  vendor_group TEXT,
+  -- Directory identity as the filesystem states it, recorded at ingest. A path
+  -- is a name and these are the thing named: an inode that persists across a
+  -- rename says the directory is the same one, and an mtime bounds when it was
+  -- last written. Both are POSIX values -- on Windows `st_ino` is not stable,
+  -- so a reader must treat them as evidence rather than as identity.
+  source_dir_inode INTEGER,
+  source_dir_mtime REAL,
   path_obsolete INTEGER NOT NULL DEFAULT 0 CHECK (path_obsolete IN (0,1)),
   -- Materialized MIN/MAX(events.event_at) for the Session. Retained rather
   -- than derived: they carry the indexed `--since`/`--until` predicate and

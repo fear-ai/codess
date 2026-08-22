@@ -1189,6 +1189,15 @@ Every snapshot carries `manifest.json` recording, per store: row counts for all
 `created_at`, `parent_snapshot_id`, `format_version`, `contract_digest`,
 `decoder_version`, `software_version`, and `sealed`.
 
+**Every table is counted, read from the store's own catalog.** The list was
+hardcoded and had drifted to twenty of twenty-four -- `correlation_assertions`,
+`event_artifacts`, `model_params`, and `store_meta` were counted nowhere, so a
+manifest described a snapshot as complete while saying nothing about four of
+its tables, and comparing two manifests could not show one of them gaining or
+losing rows. This is the same drift `store.table_counts` was written to remove,
+reappearing in a second place: two modules had kept their own table lists, at
+eleven and twenty-two names against a DDL declaring twenty-four.
+
 **The manifest is the reason assessment is cheap.** Volume, lineage, identity,
 and size are read from JSON without opening a database -- which matters
 because the stores are large and, once a format is superseded, unopenable by

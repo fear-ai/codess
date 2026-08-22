@@ -455,11 +455,18 @@ def set_project_selection_state(
             raise ValueError(
                 f"related Project is absent from catalog: {related_project_id}"
             )
+    # The state it is leaving, kept beside the state it enters. Without it a
+    # reader cannot tell an initial setting from a transition -- "excluded,
+    # always was" and "excluded on this date, previously active" are different
+    # facts, and only the second raises the question of what changed.
+    previous = (entry.get("catalog_disposition") or {}).get("state")
     entry["selection_state"] = state
     disposition = {
         "state": state,
         "updated_at": datetime.now(UTC).isoformat(),
     }
+    if previous and previous != state:
+        disposition["previous_state"] = previous
     if related_project_id:
         disposition["related_project_id"] = related_project_id
         disposition["relation_kind"] = (

@@ -29,10 +29,15 @@ from codess.adapters.codex import get_session_meta, get_session_metadata
 from codess.adapters.codex import process_file as process_codex_file
 from codess.adapters.cursor import process_db as process_cursor_db
 from codess.codex_source import get_session_files as get_codex_session_files
+from codess.codex_source import read_thread_names
 from codess.codex_source import session_archive_evidence as get_codex_archive_evidence
 from codess.cursor_cohort import cohort_state_key
 from codess.cursor_source import get_client_version as get_cursor_client_version
-from codess.cursor_source import get_composer_headers, parse_timestamp
+from codess.cursor_source import (
+    get_composer_headers,
+    parse_timestamp,
+    read_conversation_labels,
+)
 from codess.cursor_source import get_global_db as get_cursor_global_db
 from codess.cursor_source import get_workspace_dbs as get_cursor_workspace_dbs
 from codess.cursor_source import get_workspace_ids as get_cursor_workspace_ids
@@ -381,6 +386,12 @@ def _ingest_cc(
                     "project_path": str(project_path),
                     "project_id": opts.get("project_id"),
                     "source_cwd": session_facts.get("source_cwd"),
+                    "source_cwd_count": (
+                        int(session_facts["source_cwd_count"])
+                        if session_facts.get("source_cwd_count") else None
+                    ),
+                    "session_label": session_facts.get("session_label"),
+                    "session_label_basis": session_facts.get("session_label_basis"),
                     "parent_session_id": parent_session_id,
                     "session_relation_kind": (
                         direct_lineage.get("session_relation_kind")
@@ -486,6 +497,11 @@ def _ingest_codex(
             opts, "source.start", project=str(project_path.resolve()),
             vendor="Codex", source=str(path.resolve()), source_bytes=st.st_size,
         )
+        # Reset per Source, as the Claude path does: a refusal names the record
+        # it read, so carrying the previous file's list would attribute one
+        # Source's losses to the next.
+        opts["record_diagnostics"] = []
+        thread_names = opts.setdefault("codex_thread_names", read_thread_names())
         session_id, proj_path = get_session_meta(path)
         session_metadata = get_session_metadata(path)
         parent_session_id = session_metadata.pop(
@@ -520,6 +536,12 @@ def _ingest_codex(
                     "project_path": proj_path if proj_path != "." else str(project_path),
                     "project_id": opts.get("project_id"),
                     "source_cwd": proj_path if proj_path != "." else str(project_path),
+                    # The operator's own name for the thread, which the rollout
+                    # does not carry.
+                    "session_label": thread_names.get(session_id),
+                    "session_label_basis": (
+                        "operator_named" if thread_names.get(session_id) else None
+                    ),
                     "archive_state": archive_state,
                     "archive_source": archive_source,
                     "parent_session_id": parent_session_id,
@@ -545,6 +567,7 @@ def _ingest_codex(
                 session=session,
                 events=events_list,
                 session_id=session_id,
+                record_diagnostics=opts.get("record_diagnostics"),
                 after_replace=partial(_record_raw, opts, path, "Codex"),
             )
             changed = True
@@ -628,6 +651,8 @@ def _ingest_cursor(
         retained_characters = retained_utf8_bytes = 0
         source_started = time.monotonic()
         current_started: float | None = None
+        # Reset per Source, as the other two coordinators do.
+        opts["record_diagnostics"] = []
         _progress(
             opts, "cursor.source.start", project=proj_str,
             source=source_file,
@@ -655,6 +680,8 @@ def _ingest_cursor(
             # Events between them. `time_basis` distinguishes the two sources
             # so a reader can tell an Event-derived span from a header-stated
             # one rather than finding them merged.
+            labels = opts.setdefault("cursor_labels", read_conversation_labels())
+            label = labels.get(current_id) or {}
             header = headers[current_id] if headers is not None else {}
             header_started = parse_timestamp(header.get("created_at"))
             header_ended = parse_timestamp(header.get("last_updated_at"))
@@ -676,6 +703,13 @@ def _ingest_cursor(
                 "project_path": proj_str,
                 "project_id": opts.get("project_id"),
                 "source_cwd": proj_str,
+                # Title and grouping the interface shows, which no bubble
+                # carries.
+                "session_label": label.get("session_label"),
+                "session_label_basis": (
+                    "operator_named" if label.get("session_label") else None
+                ),
+                "vendor_group": label.get("vendor_group"),
                 "metadata": metadata,
                 "source_observation": source_observation,
             }
@@ -691,6 +725,7 @@ def _ingest_cursor(
             replace_session_events(
                 conn, session, current_events, session_id=current_id,
                 prune=False,
+                record_diagnostics=opts.get("record_diagnostics"),
             )
             seen.add(current_id)
             largest = max(largest, len(current_events))

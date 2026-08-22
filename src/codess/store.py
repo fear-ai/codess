@@ -676,6 +676,19 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         project_id,
     )
     source_cwd = session.get("source_cwd") or session.get("project_path")
+    # The filesystem's own identity for the directory, read at write time. A
+    # path is a name; the inode is the thing named, so a rename that keeps the
+    # inode is the same directory and a new inode at the same path is not.
+    # POSIX-only: `st_ino` is not stable on Windows, which is why these are
+    # recorded as evidence rather than used as identity.
+    dir_inode = dir_mtime = None
+    if source_cwd:
+        try:
+            stat = Path(source_cwd).stat()
+        except OSError:
+            pass
+        else:
+            dir_inode, dir_mtime = stat.st_ino, stat.st_mtime
     path_obsolete = session.get("path_obsolete")
     if path_obsolete is None:
         path_obsolete = _path_is_obsolete(conn, project_id, source_cwd)
@@ -693,6 +706,12 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         session.get("source_id"),
         project_id,
         source_cwd,
+        session.get("source_cwd_count"),
+        session.get("session_label"),
+        session.get("session_label_basis"),
+        session.get("vendor_group"),
+        dir_inode,
+        dir_mtime,
         int(bool(path_obsolete)),
         started_at,
         session.get("ended_at"),
@@ -715,11 +734,13 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         INSERT INTO sessions(
           id, session_entity_id, observation_id, source_system_id, vendor_session_id, vendor_name,
           harness_name, storage_format, surface_kind,
-          harness_version, source_id, project_id, source_cwd, path_obsolete,
+          harness_version, source_id, project_id, source_cwd, source_cwd_count,
+          session_label, session_label_basis, vendor_group,
+          source_dir_inode, source_dir_mtime, path_obsolete,
           started_at, ended_at, source_mtime, observed_at, time_basis,
           parent_session_id, session_relation_kind, archive_state, archive_source,
           session_model_param_id, metadata, source, type, release, project_path)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
           session_entity_id=excluded.session_entity_id,
           observation_id=excluded.observation_id,
@@ -733,6 +754,12 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
           source_id=COALESCE(excluded.source_id, sessions.source_id),
           project_id=COALESCE(excluded.project_id, sessions.project_id),
           source_cwd=excluded.source_cwd,
+          source_cwd_count=excluded.source_cwd_count,
+          session_label=excluded.session_label,
+          session_label_basis=excluded.session_label_basis,
+          vendor_group=excluded.vendor_group,
+          source_dir_inode=excluded.source_dir_inode,
+          source_dir_mtime=excluded.source_dir_mtime,
           path_obsolete=excluded.path_obsolete,
           started_at=excluded.started_at,
           ended_at=excluded.ended_at,
@@ -1233,14 +1260,42 @@ def record_source_diagnostics(
     is attached when the refusal happened inside a known Session and left null
     otherwise, since a Source-level refusal precedes any Session.
 
+    **Aggregated by `(reason_code, record type)`.** A refusal that recurs is
+    the same fact repeated: one Project refuses 21,314 records of six known
+    kinds, and writing a row each would roughly double the diagnostics table to
+    say six things. The row carries `occurrences` and the first locator seen,
+    so the count is queryable and one instance is reachable.
+
+    Kept per Source rather than folded across the store, because "which Source
+    refused this" is the question a coverage report asks; folding further would
+    answer a question nobody has and lose the one that is asked.
+
     Returns how many rows were written, so a caller can report what it stored
     rather than what it was handed.
     """
     written = 0
     now = datetime.now(UTC).isoformat()
+    grouped: dict[tuple[str, str | None], dict[str, Any]] = {}
     for item in pending:
+        key = (str(item["reason_code"]), item.get("source_record_type"))
+        first = grouped.get(key)
+        if first is None:
+            grouped[key] = dict(item, occurrences=1)
+        else:
+            first["occurrences"] += 1
+    for item in grouped.values():
         detail = item.get("detail")
         locator = item.get("source_locator")
+        occurrences = int(item.get("occurrences", 1))
+        if occurrences > 1:
+            # The count is the finding; the locator names one instance so a
+            # reader can reach the record rather than only its tally.
+            detail = (
+                f"{occurrences} records"
+                + (f", first at {locator}" if locator else "")
+                + (f": {detail}" if detail else "")
+            )
+            locator = None
         if locator and detail:
             detail = f"{locator}: {detail}"
         elif locator:

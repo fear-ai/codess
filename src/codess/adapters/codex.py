@@ -753,6 +753,41 @@ def _compaction_events(
         }
 
 
+def _record_refused(
+    opts: dict,
+    reason_code: str,
+    *,
+    source_file: str | None = None,
+    line_num: int | None = None,
+    record_type: str | None = None,
+) -> None:
+    """Record that one source record was read and not admitted.
+
+    Mirrors the Claude adapter's recorder for the same reason: a counter says
+    *how many* an adapter refused and a persisted row says *which*, so a
+    coverage report can state record-level loss rather than reporting a
+    structural zero. `store` aggregates these by reason and record type before
+    writing, which is what makes the high-volume kinds affordable.
+
+    Collected rather than written here, because an adapter must not write SQL:
+    these accumulate on `opts` and `store` persists them once the Source row
+    exists.
+    """
+    diagnostics = opts.get("diagnostics")
+    if diagnostics is not None:
+        diagnostics[reason_code] = diagnostics.get(reason_code, 0) + 1
+    pending = opts.get("record_diagnostics")
+    if pending is None:
+        return
+    pending.append({
+        "granularity": "record",
+        "reason_code": reason_code,
+        "source_locator": f"line:{line_num}" if line_num is not None else None,
+        "source_file": source_file,
+        "source_record_type": record_type,
+    })
+
+
 def process_file(
     path: Path,
     session_id: str,
@@ -850,8 +885,10 @@ def process_file(
                 text = _extract_reasoning_summary(payload.get("summary"))
                 if not text:
                     if diagnostics is not None:
-                        diagnostics["known_ignored_records"] = (
-                            diagnostics.get("known_ignored_records", 0) + 1
+                        _record_refused(
+                            opts, "record_reasoning_without_summary",
+                            source_file=source_file, line_num=line_num,
+                            record_type=str(item_type or ""),
                         )
                         diagnostics["reasoning_without_summary_records"] = (
                             diagnostics.get(
@@ -1172,8 +1209,10 @@ def process_file(
 
             if diagnostics is not None:
                 if item_type == "ghost_snapshot":
-                    diagnostics["known_ignored_records"] = (
-                        diagnostics.get("known_ignored_records", 0) + 1
+                    _record_refused(
+                        opts, "record_intermediate_state",
+                        source_file=source_file, line_num=line_num,
+                        record_type=str(item_type or ""),
                     )
                     diagnostics["intermediate_state_records"] = (
                         diagnostics.get("intermediate_state_records", 0) + 1
@@ -1306,8 +1345,10 @@ def process_file(
                 continue
             if msg_type == "context_compacted":
                 if diagnostics is not None:
-                    diagnostics["known_ignored_records"] = (
-                        diagnostics.get("known_ignored_records", 0) + 1
+                    _record_refused(
+                        opts, "record_context_compacted",
+                        source_file=source_file, line_num=line_num,
+                        record_type=str(msg_type or ""),
                     )
                 continue
             if msg_type == "thread_rolled_back":
@@ -1474,8 +1515,10 @@ def process_file(
                         "token_count": "usage_records",
                     }.get(msg_type)
                     if known_kind:
-                        diagnostics["known_ignored_records"] = (
-                            diagnostics.get("known_ignored_records", 0) + 1
+                        _record_refused(
+                            opts, f"record_{known_kind}",
+                            source_file=source_file, line_num=line_num,
+                            record_type=str(msg_type or ""),
                         )
                         diagnostics[known_kind] = (
                             diagnostics.get(known_kind, 0) + 1
@@ -1510,8 +1553,10 @@ def process_file(
             yield _annotate_source(ev, rtype, payload, line_num)
         elif diagnostics is not None:
             if rtype == "world_state":
-                diagnostics["known_ignored_records"] = (
-                    diagnostics.get("known_ignored_records", 0) + 1
+                _record_refused(
+                    opts, "record_intermediate_state",
+                    source_file=source_file, line_num=line_num,
+                    record_type=str(rtype or ""),
                 )
                 diagnostics["intermediate_state_records"] = (
                     diagnostics.get("intermediate_state_records", 0) + 1

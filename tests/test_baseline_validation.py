@@ -454,3 +454,46 @@ class TestDigestCoversTheSchema:
         assert semantic_digest([store]) != before, (
             "model evidence must be visible to a fixed-point comparison"
         )
+
+
+class TestTableListsFollowTheSchema:
+    """Every hardcoded table list is checked against the released DDL.
+
+    A list of table names written in code drifts silently: the snapshot
+    manifest counted twenty of twenty-four tables, so a manifest described a
+    snapshot as complete while saying nothing about four of them -- and a
+    reader comparing two manifests could not see one of those tables gain or
+    lose rows. `store.table_counts` had already been written to remove this
+    exact drift from two other modules, at eleven and twenty-two names.
+
+    The rule these assert is not "every list holds every table". A selecting
+    list is legitimate -- a storage report names the entities an operator reads
+    about. The rule is that a list is either derived from the store, or names
+    only tables that exist, so a rename fails here rather than silently
+    dropping a table from a report.
+    """
+
+    def _declared(self):
+        import re
+
+        from codess.schema_contract import load_ddl
+
+        return set(re.findall(r"CREATE TABLE (\w+)", load_ddl()))
+
+    def test_the_snapshot_manifest_counts_every_table(self, tmp_path):
+        """The manifest is derived from the store, not from a list."""
+        from codess.snapshot import _logical_counts
+        from codess.store import init_db
+
+        store = tmp_path / "sessions_cc.db"
+        init_db(store)
+        assert set(_logical_counts(store)) == self._declared()
+
+    def test_the_storage_report_names_only_real_tables(self):
+        """A selecting list may be a subset and may not name a table that is gone."""
+        from codess.storage_report import REPORTED_TABLES
+
+        unknown = set(REPORTED_TABLES) - self._declared()
+        assert not unknown, (
+            f"storage report names tables the schema does not declare: {sorted(unknown)}"
+        )

@@ -332,6 +332,51 @@ def _composer_headers(
     }
 
 
+CONVERSATION_INDEX_FILE = "conversation-search.db"
+
+
+def read_conversation_labels(cursor_data: Path | None = None) -> dict[str, dict]:
+    """Conversation titles and groupings, keyed by composer id.
+
+    Cursor keeps a search index beside the composer store, holding a `title`,
+    a `branches` value, and an `is_archived` flag per conversation. None of
+    these appears on a bubble, so a store built from bubbles alone cannot
+    report the name the operator sees in the interface -- measured on one
+    machine, 57 of 87 ingested Sessions had a title the store did not hold.
+
+    Read-only and best-effort: an absent or unreadable index yields no labels
+    rather than an error, because a label qualifies a Session and its absence
+    must not stop a decode.
+    """
+    root = cursor_data or CURSOR_DATA
+    if root is None:
+        return {}
+    path = Path(root) / "globalStorage" / CONVERSATION_INDEX_FILE
+    if not path.is_file():
+        return {}
+    labels: dict[str, dict] = {}
+    try:
+        with closing(connect_readonly(path)) as conn:
+            rows = conn.execute(
+                "SELECT id, title, branches, is_archived FROM conversations"
+            ).fetchall()
+    except sqlite3.Error:
+        return {}
+    for identity, title, branches, archived in rows:
+        if not isinstance(identity, str) or not identity:
+            continue
+        entry: dict[str, object] = {}
+        if isinstance(title, str) and title.strip():
+            entry["session_label"] = title.strip()
+        if isinstance(branches, str) and branches.strip():
+            entry["vendor_group"] = branches.strip()
+        if archived:
+            entry["is_archived"] = True
+        if entry:
+            labels[identity] = entry
+    return labels
+
+
 def _headerless_composers(conn: sqlite3.Connection) -> dict[str, dict]:
     """Composers holding bubbles that `composerHeaders` does not list.
 

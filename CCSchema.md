@@ -4,6 +4,95 @@ Vendor-specific structure for **Claude Code** (`@anthropic-ai/claude-code`). Nor
 
 **Version note:** Claude Code is distributed as a compiled npm package; on-disk formats evolve. Field names below match current Codess parsing and common installs.
 
+## Transcript Retention
+
+Claude Code prunes `~/.claude/projects` on a schedule. `cleanupPeriodDays`
+controls it and **defaults to 30**; `~/.claude/.last-cleanup` records when the
+sweep last ran.
+
+**Observed, and the reason this is documented rather than assumed.** A sweep on
+2026-08-20 left the oldest surviving transcript dated 2026-07-20 -- exactly 30
+days -- on a machine where the setting was unset. Ten of seventeen Project
+directories were emptied completely, and the two evidence stores that survive
+show what they held: `usage.db` records 17,541 turns for one of them, and
+`history.jsonl` 1,846 prompts.
+
+**The setting is not a guarantee.** Reported defects describe transcripts
+deleted despite `cleanupPeriodDays` set to 36500, around CLI and extension
+updates and restarts -- root cause unstated, several versions affected. So a
+high value reduces exposure rather than removing it.
+
+| Reference | Reports |
+|---|---|
+| `anthropics/claude-code` issue 62272 | Deletion despite a high setting, triggered around updates; closed as duplicate |
+| Issues 41458, 38055, 38691, 48334 | The same across several versions: sessions lost after an update, silent cleanup with no warning |
+
+**Deletion is reported to key on file mtime rather than on recorded activity
+time**, which would make anything that rewrites mtime -- a sync client, a
+restore from backup -- age a session artificially. **Not verified here**: on
+this machine the oldest surviving transcript is 2026-07-30 by both mtime and
+first-record timestamp, so the corpus cannot distinguish the two rules. Treated
+as a reported hazard rather than an established one, and it matters for a tree
+under sync or restored from a copy.
+
+**The consequence for Codess is a cadence requirement, not a feature.** A store
+built from vendor Sources holds only what the vendor still has, so **ingest
+must run more often than the vendor prunes** or the projection silently loses
+what it was built to preserve. Nothing currently measures that gap. On this
+machine it was crossed: one Project's format-4 store is the only remaining
+record of 122 Sessions, retained by accident rather than by policy.
+
+## Ancillary Stores Beside the Transcripts
+
+`~/.claude/projects/**.jsonl` is what Codess decodes. Five other locations hold
+Claude evidence, and three of them **outlive the transcripts** -- which matters
+because the transcript store is pruned on a schedule (see Retention below).
+
+| Location | Size | Holds | Survives cleanup |
+|---|---|---|---|
+| `history.jsonl` | 2.5 MiB | Every prompt: text, project path, session id, timestamp | **Yes** |
+| `aiTitle` on records | -- | A generated Session title, written into the transcript rather than a side index. Read into `sessions.session_label` with basis `vendor_generated` | With the transcript |
+| `usage.db` | 7.2 MiB | Per-session and per-turn token counts, model, tool name, cwd | **Yes** |
+| `file-history/<session>/<hash>@vN` | 82 MiB | Actual file content, versioned per edit | **No** -- keyed by live session |
+| `projects.tgz` | 21 MiB | A tar of `projects/` at some instant | Only what existed when it was made |
+| `tasks/`, `teams/`, `sessions/` | small | Per-session task and team state | Not established |
+
+**`history.jsonl` is the most useful of these.** 4,702 prompts spanning
+2026-01 to 2026-08 across 153 sessions, of which **132 have no surviving
+transcript**. It carries the human side of a Session -- what was asked, in
+which Project, when -- for periods where nothing else remains. It does not
+carry responses, tool calls, or results.
+
+**`usage.db` covers a disjoint window.** 54 sessions and 20,604 turns spanning
+2026-01-13 to 2026-04-26, with **zero overlap** with surviving transcripts. Per
+turn it records input, output, cache-read and cache-creation tokens, the model,
+the tool name, and the cwd. It has not been written since 2026-04-25, so it is
+not a current Claude Code feature; its `processed_files` table suggests a tool
+that ingested transcripts on its own schedule.
+
+**`file-history` has its own retention and is not transcript-keyed for
+retention purposes.** The documentation states it holds snapshots for the 100
+most recent checkpoints, deleting snapshot files no retained checkpoint
+references, **except each file's first snapshot**. Measured here: all 19 of its
+session directories correspond to live transcripts, so it did not outlive the
+sweep on this machine -- but the mechanism is a checkpoint count rather than
+the transcript sweep, so the two can diverge.
+
+**Documented layout, from the vendor's own reference:**
+
+| Path | Holds |
+|---|---|
+| `projects/<slug>/<session>.jsonl` | Session transcripts. Swept by `cleanupPeriodDays` |
+| `history.jsonl` | Every prompt typed, with timestamp and project path; used for up-arrow recall |
+| `file-history/<session>/` | Pre-edit file snapshots for checkpoint restore; retained by checkpoint count |
+| `shell-snapshots/` | Shell aliases and functions captured at startup |
+| `plans/` | Plan files written during plan mode |
+
+**None of these is decoded today.** Recorded here because a completeness claim
+about Claude evidence that counts only transcripts understates what the vendor
+retained -- and, for the two that survive cleanup, understates what is
+*recoverable* after it.
+
 ## Source Scope
 
 | Field | Value |

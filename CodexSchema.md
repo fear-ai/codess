@@ -7,6 +7,40 @@ format is not a stable public interface and may change. The shapes below
 describe the current tolerant Codess adapter and verified local fixtures, not a
 compatibility guarantee from Codex.
 
+## Session Naming, Archiving, and Their Effects
+
+Codex maintains state about a Session beside the rollout, and two of those
+records change what a Session *is called* and *where it lives* without changing
+the rollout.
+
+| Location | Holds | Read by Codess |
+|---|---|---|
+| `~/.codex/session_index.jsonl` | `id`, `thread_name`, `updated_at` -- the operator's name for a thread | **No** |
+| `~/.codex/archived_sessions/` | Rollouts moved out of the active set | Yes, as a second Source root |
+| `~/.codex/history.jsonl` | Prompt history | No |
+
+**Renaming a thread is invisible to the store.** Measured on one machine: the
+index holds 25 named threads and **21 of them are Sessions Codess has
+ingested**, carrying names like `Codess Continue` and `AGENTS.md WPages.md
+Status.md`. The rollout does not carry the name, so a store built only from
+rollouts reports a Session the operator can no longer recognise by the label
+they gave it.
+
+This is not the same as `~/.codess/session-names.json`, which records an
+operator alias *within Codess*. One is the vendor's own label and the other is
+ours; a reader wants the first when asking "which Session was that".
+
+**Archiving moves the file and Codess follows it.** `CODEX_ARCHIVED_SESSIONS`
+is a second Source root, so an archived rollout is still ingested and
+`archive_state` records it. Measured: 6 archived rollouts, all 6 ingested, of
+which 3 carry `archive_state='archived'` -- the other 3 are decoded from the
+archive directory without the state being set, so the location and the recorded
+state disagree.
+
+**A Session moved between tabs leaves no trace in the rollout.** Codex records
+`cwd` per record and nothing about which surface displayed it, so tab movement
+is invisible by construction rather than by omission.
+
 ## Source Scope
 
 | Field | Value |

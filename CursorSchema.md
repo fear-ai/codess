@@ -196,6 +196,41 @@ parent composer/session is not consistently available, so
 `parent_session_id` remains NULL instead of being inferred from time, content,
 or workspace proximity.
 
+### The Conversation Index
+
+`globalStorage/conversation-search.db` is a second SQLite store holding what
+the interface displays about a conversation, none of which appears on a bubble:
+
+| Column | Holds |
+|---|---|
+| `id` | The composer id, joining to `bubbleId:<id>:*` |
+| `title` | The conversation's name as shown |
+| `branches` | The vendor's own grouping value |
+| `is_archived` | Whether the conversation was archived |
+| `updated_at`, `root_fingerprint`, `source`, `scope` | Freshness, content identity, and whether the row is local or a cloud cache |
+
+Measured on one machine: 127 conversations, 110 carrying a title and 8 flagged
+archived. A store built from bubbles alone cannot report the name the operator
+sees, which is why `sessions.session_label` reads from here.
+
+An `fts5` virtual table (`conversation_fts`) indexes title, body, and branches
+for the interface's own search. Codess does not read it -- the body is content
+the resource policy governs, and the searchable copy is a second one.
+
+### Other `~/.cursor` Structures
+
+Recorded because a coverage claim that counts only the composer store
+understates what the vendor retains. None is decoded.
+
+| Path | Holds |
+|---|---|
+| `~/.cursor/worktrees/` | Worktree working areas the harness manages, one observed |
+| `~/.cursor/prompt_history.json` | Prompts typed, as a flat JSON array |
+| `~/.cursor/projects/<slug>/` | Per-project agent state: transcripts, tool output, terminals, canvases, MCP records |
+| `~/.cursor/chats/<hash>/<uuid>/store.db` | The superseded terminal-agent store |
+| `~/.cursor/ai-tracking/ai-code-tracking.db` | Authorship tracking for generated code |
+| `globalStorage/empty_composer_backup.jsonl` | Composer state written aside |
+
 ### Adjacent Key Spaces
 
 `cursorDiskKV` holds far more than the two key spaces Codess decodes. Recorded

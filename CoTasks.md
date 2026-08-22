@@ -88,16 +88,18 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W83 | High | Postponed | Early-access release readiness | B1 is the owner's decision; restart criteria on the item |
 | W84 | Low | Postponed | Characterise `selectedModels` parameters beyond `fast` and `effort` | Both observed ids are mapped; no third has appeared |
 | W85 | Normal | Postponed | Composers older than the header retention window are unattributed by design | Handling can improve; the condition itself is vendor retention |
-| W86 | High | Planned | Skipped and refused records are counted but not attributed | -- |
+| W86 | High | Closed | Skipped and refused records are counted but not attributed | -- |
 | W87 | Normal | Planned | Group the test corpus by subsystem; find superseded and uncovered cases | -- |
 | W88 | Normal | Planned | Cursor KV decode: classify by content kind before parsing | -- |
 | W89 | Normal | Planned | Path inclusion and exclusion belong in the discovery policy file | -- |
-| W90 | High | Planned | Scanned Projects are never ingested unless named again | -- |
-| W91 | High | Planned | One authoritative Project record spanning scanned, ingested, moved, and removed | -- |
+| W90 | High | Closed | Scanned Projects are never ingested unless named again | -- |
+| W91 | High | Closed | One authoritative Project record spanning scanned, ingested, moved, and removed | Structural half tracked on W14 |
 | W92 | Normal | Planned | Event-kind aggregation: most volume is machine traffic, not human work | -- |
 | W93 | Normal | Postponed | Session utilization: report counts and `surface_kind`, not a derived class | Detection settled; inclusion policy undecided |
 | W94 | Normal | Planned | Four files carry the format number; two drift silently | -- |
 | W95 | Low | Planned | Tighten message and comment wording against a worked example | -- |
+| W96 | High | Planned | Project location changes: detect, report, and direct the operator | W14 (partly) |
+| W97 | Normal | Planned | Read the Codex thread name; reconcile archive location with archive state | -- |
 
 ## Queue
 
@@ -112,6 +114,46 @@ not a preference.
 | 4 | **W66** | The largest structural item, and now the prerequisite rather than the sequel: W67's objects are built at the command adapter from values a setting declaration owns, so declaring each setting once must come first or the object's constructor encodes the current duplication. |
 | 5 | **W67** | Follows W66 directly and is mechanical once it lands: each relay already has an object to take, the measurement separating a relay from a builder is written down, and the five shared parameters are the same subset `ChildInvocation` carries. |
 | 6 | **W64 + W65** | W65's record-context cluster is adapter signatures, so consolidating before W04 rewrites them twice. W64 no longer waits on W04 -- what remains after the naming pass is dominated by optional-narrowing, which is what `strict_optional` decides -- but it is cheapest once the signatures have settled. |
+
+### Resuming: Project Location Changes
+
+**Where the work stopped.** W96 is the open thread: the seven ways a Project's
+location can change, of which three are handled and four are not. Read W96 for
+the conditions, W14 for the identity fix underneath them, and this for what to
+do first.
+
+**Do these in order. Each is small and leaves the suite green.**
+
+1. **Make one report directive.** `registry_check` finds an absent catalogued
+   directory and says so; it should also print
+   `codess catalog location retire --project-id <id> --path <path>`. One
+   finding, one command, no guessing -- and it is the pattern the rest follow.
+2. **Detect the Claude slug split.** Two slug directories whose decoded paths
+   differ, where one path is absent and the other live, are one Project's
+   history. Report the pair and the `path_aliases` entry that joins them.
+3. **Surface `sources_vanished`.** It is computed in the Project inventory and
+   no command reports it. It decides whether a superseded store may be deleted,
+   and getting that wrong is unrecoverable.
+4. **Document `catalog relocate` as the pre-move step**, which is the only
+   up-front direction that exists and is undocumented.
+5. **Then W14's five steps**, which remove the restore-and-copy failure rather
+   than reporting it.
+
+**State at the pause.** 1,970 tests, lint 171 against a ceiling of 172, types
+80 of 80, no regressions. `registry_check` reports 0 errors, 7 warnings, 14
+notes on the development machine; `catalog lifecycle` reports 30 ingested, 1
+moved, 1 superseded.
+
+**Closed in the session that produced this**, so they are not re-derived: W86
+(refusal reason codes reaching the store, aggregated), W90 (scanned and never
+ingested), W91 (reconciled lifecycle view and its command), W78 (module-level
+import cycles), W82 (unchecked tool SQL). W80 and W74.1 landed earlier.
+
+**Two conditions on the development machine that are evidence rather than
+defects**, and should not be "fixed" by a later reader: one Project holds a
+format-4 archived store that is the only remaining record of 122 vendor
+Sessions the vendor has pruned, and one Project pair is a linked git worktree
+recorded as such.
 
 ### Next Two Sprints
 
@@ -577,18 +619,52 @@ a Project that has never been ingested. The catalog fallback is the intended
 repair, and it cannot run because a fresh binding is written before anything
 asks whether the catalog already knows the path.
 
-**Two candidate fixes, differing in what they trust.**
+#### Proposed Resolution
 
-1. **Check the catalog before minting, not only when the binding is absent.**
-   A catalog entry claiming this path under a different identity is a conflict
-   to report rather than a race to win. Cheap, and it converts a silent
-   duplicate into a message.
-2. **Keep the authoritative binding in the registry rather than the Project.**
-   The registry survives a working tree being cleaned. The in-project file
-   becomes a convenience copy, and disagreement between the two is detectable
-   rather than decided by whichever is read first.
+**The registry becomes authoritative; the in-project file becomes a cache.**
+That inverts the current order and removes the failure mode rather than
+guarding it, and the reason is a property neither file shares: the registry
+outlives the working tree. A Project directory is cleaned, re-cloned, or
+restored from a copy predating its binding, and each of those loses an identity
+that the registry still holds.
 
-The first is a guard; the second removes the failure mode. They compose.
+**Steps, in dependency order. Each leaves the suite green.**
+
+1. **Add a registry-side binding index.** `~/.codess/project-bindings.json`
+   mapping resolved path to `project_id`, written by the same call that writes
+   the in-project file today, so both exist during the transition. No reader
+   changes yet.
+2. **Backfill it from the catalog**, which already records `locations[].path`
+   per Project. This is derivable rather than observed, so the index starts
+   complete for every Project ever published.
+3. **Invert the resolution order** in `_resolve_project_id`: registry index,
+   then in-project binding, then catalog locations, then mint. The in-project
+   file stops deciding and starts confirming.
+4. **Report disagreement rather than resolving it silently.** Where the
+   in-project file names a different identity than the registry, that is a
+   Project that was moved, copied, or restored -- all real conditions with
+   different answers, and none that a decode should choose. Warn and take the
+   registry's.
+5. **Retire the in-project file as authority**, keeping it written for a reader
+   who has a Project directory and no registry. Mark it in the file itself, so
+   a later maintainer does not restore its precedence by reading the code.
+
+**What each step costs.** Steps 1 and 2 are additive and reversible. Step 3 is
+the behaviour change and is where a test must pin the new order. Steps 4 and 5
+are documentation and a warning.
+
+**Why not simply check the catalog first.** That was the cheaper option and is
+the guard now in place: minting warns, and a binding disagreeing with the
+catalog warns. It does not fix the case that produced the nine duplicates,
+because the binding named a *valid* identity -- freshly minted -- and no check
+can tell a legitimately new Project from one whose binding was lost. Only a
+record that survives the loss can.
+
+**What this does not solve.** A Project ingested on one machine and moved to
+another still mints, because the registry is per-machine. That is correct --
+`location_id` is machine-scoped by design -- and the catalog's
+`path_aliases` is where a cross-machine identity would be stated. Out of scope
+here and worth naming so it is not mistaken for a gap in this fix.
 
 **Evidence to close.** Separate vendor stores cannot silently create unrelated
 Project identities for one repository; re-ingesting a Project that already has
@@ -3144,10 +3220,50 @@ per-ingest observation already exists for storage and not for diagnostics. The
 third is a policy statement: `malformed` should be zero, `known_ignored` should
 not, and nothing currently says so.
 
+#### Closed
+
+**Every refusal path in all three adapters now persists a reason code.** The
+mechanism existed -- `_record_refused` writes a row where `_diagnostic` only
+counts -- and the skip paths beside it used the counter. `adapters/codex` and
+`adapters/cursor` had no recorder at all; both now have one mirroring Claude's.
+`known_ignored_records` is gone from every adapter, replaced by codes naming
+the condition: `record_kind_not_mapped`, `record_context_compacted`,
+`record_duplicate_envelope_records`, `record_intermediate_state`,
+`record_reasoning_without_summary`, `record_usage_records`,
+`record_empty_assistant_envelope`, and five more.
+
+**Aggregated by `(reason_code, record type)` at the store boundary.** A refusal
+that recurs is one fact repeated, so the row carries `occurrences` and the
+first locator. Measured on this repository: **21,314 refused records reach the
+store as 20 rows**, each naming its reason, the vendor's own record type, the
+count, and a line to reach one instance:
+
+```
+record_usage_records          token_count        8810 records, first at line:16
+record_reasoning_without_summary reasoning       5876 records, first at line:11
+record_duplicate_envelope_records agent_message  1354 records, first at line:12
+```
+
+Writing a row per record would have added 21,314 rows to a diagnostics table
+holding 50,423 for the whole corpus.
+
+**Two coordinators never collected them.** `record_diagnostics` was reset and
+passed through only in the Claude path, so Codex and Cursor refusals
+accumulated into `None` and were discarded -- which is why the first
+measurement showed the codes counted and zero rows written. Both now reset per
+Source, for the reason the Claude path already documented: a refusal names the
+record it read, so carrying the previous file's list misattributes one Source's
+losses to the next.
+
+**The ingest summary reports every counter that fired**, rather than eleven
+named keys. Zeros are omitted, because a zero for a condition a run cannot
+produce reads the same as a zero for one it can. Five test assertions named the
+old aggregate and were updated to the specific codes.
+
 **Evidence to close.** Record-level discards reach `mapping_diagnostics` as
 aggregated rows carrying a reason code and the vendor's record kind; the
 ingest-time cost is one flush per Source rather than one write per record; a
-query reports what a store dropped and why; the 51 sites classified above as
+query reports what a store dropped and why; the sites classified above as
 exception swallows or value decisions each increment a counter; and an ingest
 can be compared against the previous ingest of the same Project so a moved
 count is visible.
@@ -3420,10 +3536,20 @@ coverage reporting, to the corpus baseline, and to any audit, and nothing
 reports the discrepancy. The failure is silent in exactly the way the system is
 otherwise careful to avoid.
 
-**Evidence to close.** A scanned Project that has never been ingested is
-reported; enumerating Projects for a bulk operation draws from the scanned set
-rather than from the catalog, or states that it does not; and the count of
-scanned-but-uningested Projects is queryable.
+**Closed.** `registry_store.never_ingested_entries` returns every entry with a
+`last_scan`, no `last_ingestion`, and a path that still exists -- the last
+condition deliberately, because a vanished path is `stale_entries`'s subject
+and cannot be ingested anyway. `codess storage report` emits a
+`scanned_never_ingested` warning naming up to ten paths and counting the rest,
+which is the command an operator runs to ask what the registry holds.
+
+The eight Projects found in this state were ingested, recovering roughly 74,000
+Events, of which 68,655 were this repository's own Sessions.
+
+**What is deliberately not changed.** Ingest still reads what it is told; it
+does not walk the scanned set and ingest everything. Reporting the gap is the
+fix, because ingesting on discovery would publish Projects an operator has not
+chosen -- including the temporary directories a test run scans.
 
 ### W91 -- One Authoritative Project Record
 
@@ -3466,6 +3592,42 @@ one writer. A reconciliation that lets two components write a lifecycle state
 recreates the disagreement it was built to fix, which is what happened with
 Project identity (W14): ingest inferred an identity and silently overrode a
 reviewed one.
+
+#### Partly Done
+
+`registry_store.project_lifecycle` reconciles the two records without adding a
+third. It joins `ingested_projects.json` and `projects.json` by path and
+derives a state from facts that each already have one writer:
+
+| State | Condition | Writer of the fact |
+|---|---|---|
+| `superseded` | The catalog entry carries a retiring disposition | The operator, through `catalog state` |
+| `removed` | The path no longer exists | The filesystem |
+| `ingested` | A `last_ingestion` is recorded | ingest |
+| `scanned` | Observed and never ingested | scan |
+
+**Derived rather than stored, deliberately.** A stored state would need a fifth
+writer and could disagree with all four facts beneath it -- which is the
+failure W14 demonstrated, where an inferred identity overrode a reviewed one.
+Ordered by last activity so current work reads first.
+
+On this machine after the consolidation: 30 `ingested`, 1 `superseded`, and the
+two records agree on all 31 paths. Before it they disagreed on 8.
+
+**`codess catalog lifecycle` is the operator surface.** It reports the rows
+with a per-state summary and `--state` to filter, and **exits nonzero when a
+Project was scanned and never ingested** -- the one state worth acting on
+rather than reading, and the one invisible to every list drawn from the
+catalog. `registry_check` stays the disagreement report; this is the state
+report, and they answer different questions.
+
+#### Remaining
+
+**Re-ingesting a catalogued Project can still add an entry**, which is W14's
+structural half: the binding inside the Project directory wins over the
+catalog, so a lost binding still splits a Project. The guard reports it; the
+fix moves the authoritative binding to the registry. That is tracked on W14
+rather than here.
 
 **Evidence to close.** A single query answers "every Project this machine has
 known, with what happened to it and when"; each fact in it names its writer;
@@ -3709,6 +3871,285 @@ are meeting while something is already wrong.
 **Evidence to close.** The standard is written where a contributor will meet
 it; the messages in `schema_contract` and `store` are revised against it; and
 the example above is retained as the reference.
+
+### W96 -- Project Location Changes
+
+**Work.** Detect, classify, and act on every way a Project's location can
+change, with a stated response per condition and per vendor.
+
+#### Following the Vendor Stance
+
+**A worktree is two Projects, because every vendor already treats it as two.**
+Claude gives each its own slug and its own prompt history, Codex records a
+distinct `cwd`, Cursor a distinct workspace. That a repository shares a `.git`
+is a git attribute; what Codess indexes is a *work area with its own Session
+history*, and by that measure a worktree is two.
+
+So `worktree` is withdrawn as a **disposition** -- it was recording a git fact
+in a field that states operator intent -- and the `multiplicity` dimension is
+withdrawn with it. What remains is a relation between two ordinary Projects,
+which `related_project_id` already carries without implying either is less than
+a Project.
+
+**`copy` survives the same test and for the opposite reason.** Two live paths
+holding one identity is not two work areas; it is one, duplicated. The vendors
+see one, because only one is being worked in.
+
+#### The Dimensions
+
+Three, after withdrawing multiplicity. Each is independent and a Project has a
+value in each:
+
+| Dimension | Subject | Answers | Values | Decided by |
+|---|---|---|---|---|
+| **Presence** | The directory | Is it on this machine | present, absent, copy | The filesystem, plus catalog locations |
+| **Coverage** | The store | Do the vendor Sources still exist | complete, purged | Recorded `source_uri` against disk |
+| **Disposition** | The operator | What was decided | none, priority, included, deferred, excluded, review | The operator |
+
+**Disposition vocabulary, revised.** `needs_review` becomes `review` -- the
+value is already a noun in a field named for a decision, and `needs_` restates
+it. `candidate` becomes `included`, because the question the field answers is
+whether a Project takes part, and `candidate` describes a stage in someone's
+process rather than the answer. `priority` remains as included-and-first.
+`worktree` is removed.
+
+**Precedence is documented rather than implied.** A single `state` label is
+kept as a derived convenience, and where two dimensions both have something to
+say the label takes disposition first, then coverage, then presence -- because
+an operator's decision outranks a measurement, and a measurement outranks a
+default. Stated here so the order is arguable rather than incidental to
+statement order.
+
+#### Harness Worktrees Are a Setting
+
+Claude Code has run Sessions in worktrees it created under
+`<project>/.claude/worktrees/<name>` -- one holding 1,350 turns. Those are the
+tool's working area: generated names, created and removed by the tool, pruned
+from git without the operator acting, and one observed registration outlived
+its directory.
+
+`CODESS_CLAUDE_WORKTREES` admits them and is **off by default**, because such a
+Session is *about* the parent Project and publishing it creates a Project whose
+path will not exist next week. Set it when the question is about harness
+behaviour rather than about a repository.
+
+**This is the first of a family.** Ingest needs settings that state what is
+admitted rather than deciding it in code, and this one names the pattern:
+`CODESS_<AREA>_<SUBJECT>`, boolean, off where admitting costs more than
+omitting.
+
+#### The Conditions, and What Each Means
+
+Seven, distinguishable by evidence rather than by guess. The first three are
+handled; the rest are not.
+
+| Condition | Evidence | Identity survives | Status |
+|---|---|---|---|
+| **Moved / renamed** whole | Binding travels; old path retired, new path holds the same `project_id` | **Yes**, automatically | Reported `moved`; retirement is manual |
+| **Copied** beside the original | Two **live** locations on one entry | Yes, and ambiguously -- both claim it | Reported `copy` with `copy_of` |
+| **Restored** | A move if the original is gone, a copy if it remains -- the same two states, decided by whether the original path still exists | Depends | Reported as `moved` or `copy` |
+| **Deleted** | Path absent, no live sibling | Entry retained as a record | Reported `removed` |
+| **Retired** | Operator excluded it | Retained as evidence, out of selection | Reported `retired` |
+| **Worktree** | Catalog records a `worktree_of` relation | Yes; an ordinary live sibling | Reported `worktree` |
+| **Purged** (vendor deleted its own records) | Path exists; recorded vendor Sources do not | Store outlives its Sources | **Measurable, not yet reported** |
+| **Restored from archive** | A store at a superseded format | Not contract-readable | Manual only |
+
+**`superseded` was withdrawn.** It named `excluded` and `worktree` as one
+state, which conflated a duplicate the operator answered with a live sibling of
+a repository -- different conditions, different actions. They are now `retired`
+and `worktree`.
+
+**Restore is not a distinct condition.** Restoring a directory produces a
+*move* when the original is gone and a *copy* when it remains, and the same two
+checks decide it. Naming it separately would imply a third answer that does not
+exist.
+
+**A copy must not be re-ingested.** Two live locations on one entry is one
+Project in two places; ingesting the second writes the same Sessions under the
+same identity from a second path. `copy_of` names the original so a scan can
+report the duplicate and decline. **Not yet enforced** -- the state is derived
+and nothing consults it at ingest.
+
+**The distinction that organises the work:** whether the *Project directory*
+moved, or the *vendor's record of it* changed. They fail differently and are
+detected by different evidence.
+
+#### Worktrees, as the Vendors See Them
+
+A linked worktree is one repository checked out at two paths on two branches.
+Measured on this machine:
+
+| Vendor | Treats a worktree as | Evidence |
+|---|---|---|
+| Claude | **A separate Project.** Each worktree gets its own slug directory and its own prompt history | `-Users-walter-Work-ZK-Zero400` and `-Users-walter-Work-ZK-ZeroPerf` both exist |
+| Codex | Whatever `cwd` each record states, so a worktree is a distinct value with no relation recorded | Per-record `cwd`; no index |
+| Cursor | A separate workspace, since `workspace.json` names the folder | One workspace per opened folder |
+
+**None of the three records the relation.** Each sees two directories; nothing
+in any vendor store says they share a repository. Only `git` knows, which is
+why the catalog's `worktree_of` disposition is operator-stated rather than
+decoded -- and why it has to be.
+
+**The harness creates worktrees too, and they are not the operator's.** Claude
+Code writes them under `<project>/.claude/worktrees/<name>`. Found here:
+`Spank/spank-py/.claude/worktrees/epic-proskuriakova` (registered in git,
+target directory gone, `prunable`) and a `Code/Misses/.claude/worktrees`
+directory. `usage.db` records three such sessions -- `epic-proskuriakova` 9
+turns, `beautiful-euler` 0, and **`reverent-austin-cd76da` 1,350 turns**.
+
+That last one matters twice: it is substantial work in a harness-created
+worktree, and its turns span **three different `cwd` values** --
+`spank-py/.claude/worktrees/reverent-austin-cd76da`, `spank-py`, and
+`spank-rs`. So a Session is not necessarily one directory, which every
+path-based binding in this system assumes. Two of 35 sessions in `usage.db`
+span more than one `cwd`.
+
+**Second example beyond Zero400/ZeroPerf:** `Spank/spank-py` registers
+`epic-proskuriakova`, whose directory no longer exists -- a worktree that was
+removed without `git worktree prune`, leaving a registration pointing at
+nothing. The Claw fork of `openclaw` no longer has worktrees under
+`/Users/walter/Work/Claw`; only an `openclaw/workspace` path appears in
+`usage.db`, and no `.git` file records a link today.
+
+#### Per-Vendor Specifics
+
+Each vendor binds a Session to a path by a different mechanism, so a move
+affects them differently:
+
+| Vendor | Binds by | A moved Project |
+|---|---|---|
+| Claude | The directory **slug encodes the absolute path** (`-Users-walter-Work-Code-Misses`) | Old Sessions stay under the old slug; new Sessions appear under a new one. **The Project's history splits across two slugs and nothing joins them** |
+| Codex | A rollout records `cwd` per record | Old rollouts keep the old `cwd`; discovery matches on it, so old Sessions stop matching the moved Project |
+| Cursor | `workspace.json` names the folder | The workspace entry is rewritten by the editor, so the binding follows -- but the composer keeps its own id, and a stale `workspace.json` elsewhere may still name the old path |
+
+**Claude's is the sharp case and is not handled.** After a move, the vendor
+holds two slug directories for one Project and Codess ingests them as two
+Projects, because the slug *is* the path. `path_aliases` already exists on a
+catalog entry and is where the join belongs; nothing currently populates it
+from a slug.
+
+**A vendor directory beside a Project is not a vendor record of it.** A
+`.claude` or `.cursor` directory inside a Project says a harness ran there; it
+does not mean the harness maintains a central index entry for that path, and
+the two can disagree. Claude's central index *is* the slug directory name, so
+it cannot disagree -- but it also cannot follow a move. Codex has no
+path-derived index at all, only `cwd` recorded per record. Cursor's
+`workspace.json` is the index and the editor rewrites it, so it follows a move
+made through the editor and not one made in a shell.
+
+**Per-vendor impact of a move, in order of severity:**
+
+| Vendor | After a move | Recovery |
+|---|---|---|
+| Claude | History splits across two slugs; both ingest as separate Projects | `path_aliases` joining the two decoded paths -- not built |
+| Codex | Old rollouts keep the old `cwd` and stop matching; new ones match | Match on either path once aliases exist |
+| Cursor | Follows if moved through the editor; a shell move leaves `workspace.json` stale | Re-open the folder in the editor, or an approved source link |
+
+**What an experiment would settle**, and is not yet run: whether each harness
+rewrites, duplicates, or abandons its index when a directory is renamed
+underneath it. That is W75's method -- trigger the condition, read the vendor
+store -- applied to a condition W75 does not currently list.
+
+#### What Exists Today
+
+- `tools/registry_check.py` reports duplicates, nesting, exclusion conflicts,
+  absent directories, worktrees, and dangling pointers. Retired locations are
+  skipped so an answered condition stops being reported.
+- `codess catalog lifecycle` reports `scanned`, `ingested`, `moved`, `removed`,
+  `superseded` per Project, derived rather than stored.
+- `codess catalog location retire` and `catalog relocate` are the manual
+  adjustments.
+- `_resolve_project_id` warns on minting and on a binding disagreeing with the
+  catalog.
+
+#### What Is Missing
+
+1. **Nothing retires a location automatically**, and deliberately so: an absent
+   path is a move, an unmounted volume, or a deletion, and those differ. What
+   is missing is not automation but a *directed* report -- naming the command
+   that resolves the condition it just found, rather than describing the
+   condition and stopping.
+2. **A copy is not resolvable at all.** Two live paths, one binding, and no
+   rule says which is the Project. Needs an operator decision and a way to
+   record it.
+3. **The Claude slug split is undetected.** Two slugs whose decoded paths differ
+   only by the move are one Project's history, and `path_aliases` is the
+   existing mechanism.
+4. **Purge is measurable and unreported, and needs protection rather than a
+   report alone.** `sources_vanished` answers it; no command surfaces it.
+
+   **A purged Project must not be acted on automatically.** Its store is the
+   only remaining copy of Sessions the vendor deleted, so a prune, a format
+   rebuild, or a "superseded store" cleanup can destroy evidence nothing can
+   regenerate. Required behaviour:
+
+   - **Never delete without explicit approval.** The state is the gate, not a
+     size or an age.
+   - **A broken reference is fixed, not followed.** A snapshot pointer into a
+     removed store, or an alias to a path that no longer exists, is repaired
+     rather than left dangling -- and repairing it must not silently drop the
+     purged store.
+   - **Access is guarded by a status check.** A reader asking for a purged
+     store gets it with the condition stated, so a result carries the fact
+     that its Sources are gone.
+
+   **Observed from Claude only, and that is not a property of Claude.** Claude
+   prunes on a 30-day default and a known defect bypasses the setting on
+   update. Codex and Cursor have not been observed pruning here -- which is
+   evidence about this machine, not about those vendors. A policy change, an
+   administrator, or Codess itself can purge records unexpectedly, so the
+   protection is keyed to the *condition* rather than to the vendor.
+5. **Up-front direction does not exist.** An operator about to move a Project
+   has no way to say so, and doing it afterwards is strictly harder --
+   `catalog relocate` exists and is not documented as the pre-move step.
+
+#### Proposed Approach
+
+**Report, direct, then adjust -- in that order, and never guess.** The pattern
+already works for retirement: a check finds the condition, the operator runs one
+command, and the check stops reporting it. Extend it so each finding carries the
+command that resolves it. Where a condition is ambiguous -- a copy, a restore --
+the report states the choices rather than picking one.
+
+**Evidence to close.** Each condition above is detected and named; a report
+naming a condition also names the command that resolves it; the Claude slug
+split is joined through `path_aliases`; and a Project can be relocated before
+the move as well as after.
+
+### W97 -- Codex Thread Names and Archive State
+
+**Work.** Read the operator's own name for a Codex thread, and make the archive
+location and the recorded archive state agree.
+
+**Two findings, both measured.**
+
+**1. The thread name is not read.** `~/.codex/session_index.jsonl` holds
+`id`, `thread_name`, `updated_at` per thread -- the name the operator gave it
+in the interface. Measured: 25 entries, of which **21 are Sessions Codess has
+ingested**, carrying names like `Codess Continue` and `AGENTS.md WPages.md
+Status.md`. The rollout does not carry the name, so a store built from rollouts
+alone reports Sessions the operator cannot recognise by their own label.
+
+This is distinct from `~/.codess/session-names.json`, which records an alias
+*within Codess*. One is the vendor's label and one is ours; conflating them
+would make an operator alias indistinguishable from a vendor-stated name, so
+the vendor's belongs in its own field with its own provenance.
+
+**2. Archive location and archive state disagree.** 6 rollouts sit in
+`~/.codex/archived_sessions/`, all 6 are ingested, and **3 carry
+`archive_state='archived'`**. The other 3 are decoded from the archive
+directory with the state unset, so the file's location and the store's record
+of it say different things. Either the state should follow the location, or the
+disagreement is a vendor fact worth recording -- and which it is has not been
+established.
+
+**Neither is a decode failure.** Both are evidence Codess does not read,
+sitting beside evidence it does.
+
+**Evidence to close.** A Codex Session carries the vendor's thread name where
+one exists, distinguishable from a Codess alias; and a rollout's archive
+location and its `archive_state` agree, or the disagreement is recorded as a
+vendor observation with its reason.
 
 ### Store Performance Baseline
 

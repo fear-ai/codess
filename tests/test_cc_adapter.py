@@ -666,10 +666,9 @@ class TestProcessFile:
         events = list(process_file(path, "s1", {"diagnostics": diagnostics}))
         # The two non-semantic assistant states remain state-only: an empty
         # thinking block and a fallback notice carry no communication.
-        assert diagnostics["empty_reasoning_state_records"] == 1
-        assert diagnostics["fallback_state_records"] == 1
-        assert diagnostics["known_ignored_records"] == 2
-        assert diagnostics.get("ignored_records", 0) == 0
+        assert diagnostics["record_empty_reasoning_state"] == 1
+        assert diagnostics["record_fallback_state"] == 1
+        assert diagnostics.get("record_unclassified", 0) == 0
         # The image-only user record now decodes. It was counted unsupported
         # and emitted nothing, so a human prompt existed in the Session and
         # not in the store.

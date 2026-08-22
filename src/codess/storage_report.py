@@ -1,6 +1,5 @@
 """Dated storage observations for CoSchema stores, snapshots, and Cursor.
 
-
 **Reads core tables directly** for row counts and byte sizes across every
 retained snapshot, including stores whose contract no longer matches -- which
 is precisely when a storage report is wanted and when the query layer would
@@ -22,12 +21,16 @@ from codess.config import (
     RAW_MANIFEST_FILE,
 )
 from codess.fileio import open_readonly, write_json_atomic
+from codess.registry_store import never_ingested_entries
 from codess.resources import allocated_bytes, file_usage, storage_usage, tree_usage
 from codess.schema_contract import FORMAT_VERSION
 from codess.store import table_counts, table_names
 from codess.token_usage import collect_token_usage
 
 REPORT_FORMAT = "codess.storage-observation/1"
+
+PENDING_PATHS_REPORTED = 10
+"""How many never-ingested paths the warning names before counting the rest."""
 
 REPORTED_TABLES = (
     "projects", "sources", "sessions", "interactions", "model_turns", "events",
@@ -290,6 +293,19 @@ def build_storage_report(
         report["warnings"].append({
             "kind": "cursor_db_size", "path": report["cursor"]["path"],
             "bytes": report["cursor"]["file_bytes"], "threshold": cursor_limit,
+        })
+    # A Project scanned and never ingested is absent from the catalog, so it is
+    # invisible to every enumeration drawn from there -- including a
+    # full-corpus rebuild. Reported here because this is the command an
+    # operator runs to ask what the registry holds.
+    pending = never_ingested_entries(registry)
+    if pending:
+        report["warnings"].append({
+            "kind": "scanned_never_ingested",
+            "count": len(pending),
+            "paths": sorted(
+                entry["path"] for entry in pending[:PENDING_PATHS_REPORTED]
+            ),
         })
     report["totals"] = _totals(report)
     if previous and previous.get("report_format") == REPORT_FORMAT:

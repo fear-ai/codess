@@ -53,6 +53,7 @@ from codess.refresh_operations import (
     REFRESH_DESIGNATORS,
     refresh_projects,
 )
+from codess.registry_store import PROJECT_LIFECYCLE_STATES, project_lifecycle
 from codess.retention import apply_retention_plan, build_retention_plan
 from codess.review_project import record_decision, refresh_candidates, validate_policy
 from codess.schema_evolution import RANK, compare, required
@@ -208,6 +209,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--store", dest="store_root", type=Path, default=STORE_ROOT
     )
     status.set_defaults(handler=_catalog_status)
+    lifecycle = catalog_commands.add_parser(
+        "lifecycle",
+        help="every Project this machine has known, with what happened and when",
+    )
+    lifecycle.add_argument(
+        "--store", dest="store_root", type=Path, default=STORE_ROOT,
+        help="registry root to read (default: the configured one)",
+    )
+    lifecycle.add_argument(
+        "--state", action="append", default=[],
+        choices=PROJECT_LIFECYCLE_STATES,
+        help="report only these states; repeatable (default: all)",
+    )
+    lifecycle.set_defaults(handler=_catalog_lifecycle)
     annotations = catalog_commands.add_parser("annotations")
     annotations.add_argument(
         "--store", dest="store_root", type=Path, default=STORE_ROOT
@@ -563,6 +578,28 @@ def _catalog_status(args: argparse.Namespace) -> int:
     report = catalog_readiness(args.store_root)
     _json(report)
     return 0 if report["summary"]["not_query_ready_projects"] == 0 else 1
+
+
+def _catalog_lifecycle(args: argparse.Namespace) -> int:
+    """Report every known Project and what happened to it.
+
+    Reconciles the two records that describe a Project -- what scan saw and
+    what ingest published -- which disagree in ways nothing else reports: a
+    Project scanned and never ingested is absent from the catalog entirely, so
+    every enumeration drawn from there inherits the omission.
+
+    Exits nonzero when a Project was scanned and never ingested, because that
+    is the state an operator would want to act on rather than merely read.
+    """
+    rows = project_lifecycle(args.store_root, load_catalog(args.store_root))
+    if args.state:
+        wanted = set(args.state)
+        rows = [row for row in rows if row["state"] in wanted]
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["state"]] = counts.get(row["state"], 0) + 1
+    _json({"projects": rows, "summary": counts})
+    return 1 if counts.get("scanned") else 0
 
 
 def _catalog_annotations(args: argparse.Namespace) -> int:
