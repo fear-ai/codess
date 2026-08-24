@@ -1004,7 +1004,7 @@ appear in the manifest, and conflating them is the mistake to avoid:
 can share `format_version` and hold different Events, because the decoder
 learned to map a field between them. That is the ordinary case during
 development -- the three generations retained for one Project on 2026-08-20
-hold 89,288, 89,601, and 89,685 Events at the same format 7 for exactly this
+hold 89,288, 89,601, and 89,685 Events at the same format for exactly this
 reason. So a same-format comparison is a comparison of decoders, and the
 manifest is where that is visible.
 

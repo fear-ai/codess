@@ -305,24 +305,16 @@ def _normalize_compaction(
     for source_name, common_name in field_names.items():
         if compact.get(source_name) is not None:
             metadata[common_name] = compact[source_name]
-    return {
-        "session_id": session_id,
-        "event_id": str(line_num),
-        "event_type": "system_event",
-        "subtype": "context_compaction",
-        "role": "system",
-        "content": None,
-        "content_len": None,
-        "content_ref": None,
-        "tool_name": None,
-        "tool_input": None,
-        "tool_output": None,
-        "timestamp": _get_timestamp(record),
-        "file_path": None,
-        "source_file": source_file,
-        "metadata": json.dumps(metadata, separators=(",", ":")),
-        "source_raw": None,
-    }
+    return _base_event(
+        session_id=session_id,
+        event_id=str(line_num),
+        event_type="system_event",
+        subtype="context_compaction",
+        role="system",
+        timestamp=_get_timestamp(record),
+        source_file=source_file,
+        metadata=json.dumps(metadata, separators=(",", ":")),
+    )
 
 
 def _mapping_rule(event: dict) -> str:
@@ -609,7 +601,7 @@ def _process_text(text: str, opts: dict, *, phase: str, record_type: str) -> str
 
 
 def _base_event(
-    *, session_id: str, event_id: str, event_type: str, subtype: str,
+    *, session_id: str, event_id: str, event_type: str, subtype: str | None,
     role: str, timestamp: float | None, source_file: str,
     content: str | None = None, content_len: int | None = None,
     metadata: str | None = None, **extra: Any,
@@ -991,29 +983,24 @@ def normalize_assistant(
             tool_input = extract_tool_input(tname or "", tinput)
             tool_input = sanitize_value(tool_input, redact_enabled)
             tool_use_id = block.get("id")
-            events.append({
-                "session_id": session_id,
-                "event_id": _block_event_id(line_num, emitted_index),
-                "event_type": "tool_call",
-                "subtype": None,
-                "role": role,
-                "content": None,
-                "content_len": None,
-                "content_ref": None,
-                "tool_name": tname,
-                "tool_input": json.dumps(tool_input) if tool_input else None,
-                "tool_output": None,
-                "timestamp": ts,
-                "file_path": (
+            events.append(_base_event(
+                session_id=session_id,
+                event_id=_block_event_id(line_num, emitted_index),
+                event_type="tool_call",
+                subtype=None,
+                role=role,
+                timestamp=ts,
+                source_file=source_file,
+                tool_name=tname,
+                tool_input=json.dumps(tool_input) if tool_input else None,
+                file_path=(
                     tool_input.get("path") or tool_input.get("file_path")
                     if isinstance(tool_input, dict) else None
                 ),
-                "source_file": source_file,
-                "metadata": _event_metadata(
+                metadata=_event_metadata(
                     record, tool_use_id, extra=model_configuration
                 ),
-                "source_raw": None,
-            })
+            ))
             _attach_timestamp_state(events[-1], record, ts)
             _attach_configuration_state(events[-1], record)
             field_state.attach(
@@ -1212,42 +1199,28 @@ def normalize_user(
                 and semantics["actor_kind"] == "harness"
             ):
                 subtype = semantics["subtype"]
-            events.append({
-                "session_id": session_id,
-                "event_id": _block_event_id(line_num, emitted_index),
-                "event_type": (
-                    local_command["event_type"]
-                    if (
-                        local_command is not None
-                        and not (
-                            local_command["actor_kind"] == "human"
-                            and semantics["actor_kind"] == "harness"
-                        )
-                    )
-                    else semantics["event_type"]
-                ),
-                "subtype": subtype,
-                "role": (
-                    local_command["role"]
-                    if (
-                        local_command is not None
-                        and not (
-                            local_command["actor_kind"] == "human"
-                            and semantics["actor_kind"] == "harness"
-                        )
-                    )
-                    else semantics["role"]
-                ),
-                "content": text,
-                "content_len": len(text),
-                "content_ref": None,
-                "tool_name": None,
-                "tool_input": None,
-                "tool_output": None,
-                "timestamp": ts,
-                "file_path": None,
-                "source_file": source_file,
-                "metadata": _event_metadata(record, extra={
+            # A local command names the Event unless the harness produced it on
+            # a human's behalf: there the command is what was typed and the
+            # harness is what acted, so the semantics win. One predicate,
+            # because `event_type` and `role` must not disagree about which
+            # source they came from.
+            named_by = semantics
+            if local_command is not None and not (
+                local_command["actor_kind"] == "human"
+                and semantics["actor_kind"] == "harness"
+            ):
+                named_by = local_command
+            events.append(_base_event(
+                session_id=session_id,
+                event_id=_block_event_id(line_num, emitted_index),
+                event_type=named_by["event_type"],
+                subtype=subtype,
+                role=named_by["role"],
+                content=text,
+                content_len=len(text),
+                timestamp=ts,
+                source_file=source_file,
+                metadata=_event_metadata(record, extra={
                     "prompt_source": semantics["prompt_source"],
                     "origin_kind": semantics["source_origin_kind"],
                     "user_type": record.get("userType"),
@@ -1258,8 +1231,7 @@ def normalize_user(
                         local_command["command_name"] if local_command else None
                     ),
                 }),
-                "source_raw": None,
-            })
+            ))
             if (
                 local_command is not None
                 and not (
@@ -1366,24 +1338,24 @@ def normalize_user(
                 )
             else:
                 subtype = "tool_result"
-            events.append({
-                "session_id": session_id,
-                "event_id": _block_event_id(line_num, emitted_index),
-                "event_type": "user_message",
-                "subtype": subtype,
-                "role": role,
-                "content": truncated,
-                "content_len": content_len,
-                "content_ref": None,
-                "tool_name": tool_name,
-                "tool_input": None,
-                "tool_output": truncated,
+            events.append(_base_event(
+                session_id=session_id,
+                event_id=_block_event_id(line_num, emitted_index),
+                event_type="user_message",
+                subtype=subtype,
+                role=role,
+                content=truncated,
+                content_len=content_len,
+                timestamp=ts,
+                source_file=source_file,
+                tool_name=tool_name,
+                tool_output=truncated,
                 # Claude states the result as a structured object on 12,863 real
                 # records -- `stdout` and `stderr` separately, `structuredPatch`,
                 # `interrupted` -- which the text projection flattens into one blob.
                 # The structure is carried so a reader can select on stderr or find
                 # an interrupted result without re-parsing the text.
-                "tool_output_structured": (
+                tool_output_structured=(
                     record.get("toolUseResult")
                     if isinstance(record.get("toolUseResult"), (dict, list))
                     else None
@@ -1393,20 +1365,17 @@ def normalize_user(
                 # results; `is_error` is Claude's own flag on the result block. Reading
                 # only the inference leaves `source_status` null on the 470 failure and
                 # denial Events whose outcome the vendor states directly.
-                "source_status": (
+                source_status=(
                     "application_error" if result_failure
                     else "is_error" if is_error
                     else None
                 ),
-                "normalized_status": (
+                normalized_status=(
                     "succeeded" if subtype == "tool_result"
                     else "failed" if subtype == "tool_failure"
                     else None
                 ),
-                "timestamp": ts,
-                "file_path": None,
-                "source_file": source_file,
-                "metadata": _event_metadata(
+                metadata=_event_metadata(
                     record,
                     tool_use_id,
                     extra=({
@@ -1415,8 +1384,7 @@ def normalize_user(
                         "result_status_evidence": result_failure,
                     } if result_failure else None),
                 ),
-                "source_raw": None,
-            })
+            ))
             _attach_timestamp_state(events[-1], record, ts)
             emitted_index += 1
 

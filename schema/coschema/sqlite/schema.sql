@@ -1,6 +1,11 @@
--- codess.coschema format 6
+-- codess.coschema
 -- Functional meanings live in schema/coschema/contract.json and Schemas.md.
 -- This file contains only the SQLite layout, constraints, and access paths.
+--
+-- The format number is declared once, by `PRAGMA user_version` below, and is
+-- read from there by `schema_contract`. It is not repeated in this comment:
+-- a number a check cannot read drifts from the one it describes, which is what
+-- a stale header here did while the pragma stayed correct.
 
 PRAGMA application_id = 1129268293; -- 0x434F4445, "CODE"
 PRAGMA user_version = 9;

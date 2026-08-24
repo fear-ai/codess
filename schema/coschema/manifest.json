@@ -64,7 +64,7 @@
     },
     "sqlite_schema": {
       "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "f397f3d0934b8e7793b0a9dde93e8ef1d8bf0cb09c61180b5602df6f5bcb6836"
+      "sha256": "b8207362d940c1eb83423c1425dddbc2c5650f6121efb4a540c8c0d6c1751157"
     }
   },
   "format_id": "codess.coschema",

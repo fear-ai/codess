@@ -462,6 +462,26 @@ So the representations should not be unified. What should change is the name:
 one identifier denoting two units in one schema is the defect, and the fix is
 to name the group in the column rather than to force one type on both.
 
+**The suffix states the representation.** A time column ending `_at` holds Unix
+milliseconds and was reported by a vendor or the filesystem; one ending `_when`
+holds RFC 3339 UTC text and was recorded by Codess. A reader then needs neither
+the DDL nor a convention memo to know which a column holds, and `started_at`
+means milliseconds everywhere it appears -- `processing_runs.started_at` becomes
+`started_when`, which is what removes the collision. The columns renamed are
+listed in `experiments/format-decisions.md` and land with the next format.
+
+**A comparison across the two converts at query time, not in the store.** The
+conversion lives in `codess.timeval.iso_to_ms`; SQLite's `strftime('%s', ...)`
+is the equivalent for a direct-SQL reader. A stored numeric copy of a `_when`
+column would reintroduce exactly the duplicate-column class that
+`events.timestamp`, `sources.ingested_at`, and `sessions.ingested_at` were
+removed for -- a second value that can disagree with the first, with nothing
+asserting they match -- and would widen every bookkeeping table for a comparison
+the common predicates never make. Converting at the point of use also keeps
+visible that two differently measured clocks are being compared. Should a
+measured query pattern ever justify it, the answer is an expression index rather
+than a column, because SQLite recomputes it and it cannot drift.
+
 **Nineteen columns is too many, and counting what each holds shows why.**
 The vendors supply almost one time between them: every Claude and Codex
 record carries `timestamp`, and Codex adds `started_at`/`completed_at` on a

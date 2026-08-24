@@ -404,6 +404,7 @@ def _base_event(
     tool_name: str | None = None, tool_input: str | None = None,
     tool_output: str | None = None, metadata: str | None = None,
     file_path: str | None = None, source_raw: object = None,
+    event_id: str | None = None,
     **extra: object,
 ) -> dict:
     """One Codex Event envelope, holding the fields every record shares.
@@ -441,7 +442,10 @@ def _base_event(
     }
     return {
         "session_id": session_id,
-        "event_id": str(line_num),
+        # One record can yield several Events -- a compaction with several
+        # summaries -- and each needs its own identity within the line. A
+        # caller with one Event lets the line number stand for it.
+        "event_id": str(line_num) if event_id is None else event_id,
         "event_type": event_type,
         "subtype": subtype,
         "role": role,
@@ -720,37 +724,33 @@ def _compaction_events(
                 metadata[key] = payload[key]
         if item.get("id") is not None:
             metadata["compaction_item_id"] = item["id"]
-        yield {
-            "session_id": session_id,
-            "event_id": (
+        yield _base_event(
+            session_id=session_id,
+            line_num=line_num,
+            event_id=(
                 str(line_num)
                 if len(summaries) == 1
                 else f"{line_num}:{emitted_index}"
             ),
-            "event_type": "system_event",
-            "subtype": "context_compaction",
-            "role": "harness",
-            "content": text or None,
-            "content_len": content_len if encrypted is not None else None,
-            "content_ref": None,
-            "tool_name": None,
-            "tool_input": None,
-            "tool_output": None,
-            "timestamp": timestamp,
-            "file_path": None,
-            "source_file": source_file,
-            "metadata": json.dumps(metadata, separators=(",", ":")),
-            "source_raw": source_raw,
-            "event_kind": "context.compact",
-            "actor_kind": "harness",
-            "content_role": "context",
-            "origin_kind": "harness_injected",
-            "_source_path": (
+            event_type="system_event",
+            subtype="context_compaction",
+            role="harness",
+            timestamp=timestamp,
+            source_file=source_file,
+            content=text or None,
+            content_len=content_len if encrypted is not None else None,
+            metadata=json.dumps(metadata, separators=(",", ":")),
+            source_raw=source_raw,
+            event_kind="context.compact",
+            actor_kind="harness",
+            content_role="context",
+            origin_kind="harness_injected",
+            _source_path=(
                 "$.payload.replacement_history"
                 if history_index < 0
                 else f"$.payload.replacement_history[{history_index}]"
             ),
-        }
+        )
 
 
 def _record_refused(

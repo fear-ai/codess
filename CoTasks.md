@@ -29,6 +29,7 @@ which are checkable.
 
 ## Table of Contents
 
+- [Active Work](#active-work)
 - [Status Vocabulary](#status-vocabulary)
 - [Open Items](#open-items)
 - [Queue](#queue)
@@ -36,6 +37,88 @@ which are checkable.
 - [Item Detail](#item-detail)
 - [Maintenance Directions](#maintenance-directions)
 - [Deferred Directions](#deferred-directions)
+
+## Active Work
+
+What is ready to work on now, what is in progress, and what waits on a decision
+rather than on effort. The full register is [Open Items](#open-items); this is
+the short list a reader needs first.
+
+### In Progress
+
+| ID | Work | State |
+|---|---|---|
+| **Sprint 1** | Wire-format change: token columns, time triple, `duplicate_of`, W50+W51 renames, `page_size` | Decisions captured in `experiments/format-decisions.md`; not applied |
+
+### Ready
+
+Unblocked, decided, and startable without waiting on anything.
+
+| ID | Work | Note |
+|---|---|---|
+| **W94** | Reduce four format-number declarations toward one | The unchecked fifth location is removed; what remains is a pre-commit check moving detection from test run to commit |
+| **W67** | Move relay fields into the objects that carry them | Five relays; independent of W04 and of W66 |
+| **W95** | Tighten message and comment wording | Low priority, batches with anything |
+| -- | Cursor `agentKv` tier-1 decode | Attribution solved via `toolFormerData.toolCallId`; supplies model names and 111,000+ tool invocations |
+| -- | Codex declared parentage | `forked_from_id`, `parent_thread_id`, `agent_role`, `thread_source` are declared in the protocol |
+
+### Blocked on a Decision
+
+The unanswered question, not the effort, is what holds each.
+
+| ID | Question | Whose |
+|---|---|---|
+| **W83** | Licence terms | Owner. Split to a separate item so W83 closes |
+| **W64** | Which mypy strict flags to enable | Was W04's; W04 is postponed, so this is parked indefinitely unless decoupled |
+| **W93** | Session-utilization inclusion policy | Detection settled; what a report includes is not |
+| -- | Symlink traversal in discovery | Recommendation: do not follow. See [Item Detail](#item-detail) |
+
+### Under Developer Review
+
+Held pending review of requirements and proposed designs, not for lack of work.
+
+| ID | Work |
+|---|---|
+| **W04** | Candidate-record contract |
+| **W05** | Real investigations against the query surface |
+
+### Analysis Only
+
+Design and analysis proceed; implementation is postponed.
+
+| ID | Work |
+|---|---|
+| **W73** | Vendor decode gaps. Codex half is now answered by the protocol source |
+| -- | Hash derivation: whether to segregate `hashlib` into one module |
+
+### Postponed Infrastructure
+
+| ID | Work | Restarts when |
+|---|---|---|
+| **W66** | Configuration unification | Deliberately deferred |
+| **W71** | Reporting adoption in the command layer | Deliberately deferred |
+| -- | Linking-tooling retest | More development and capability expansion land first |
+
+Exception: the **time and datetime module** is not postponed. It is standalone,
+takes an injected clock, and is developed, validated, and deployed in this round.
+
+### Recently Closed
+
+Recorded so closed work is not re-derived. Outcomes are in
+[CoReview](CoReview.md).
+
+| ID | Work |
+|---|---|
+| W72 | One Event-record builder per adapter; 23,470 real Events decode byte-identically after |
+| W74.1 | Cursor Session times -- corpus-verified: 0 of 37 Cursor Sessions carry a null `started_at` |
+| W86 | Refusal reason codes reaching the store, aggregated |
+| W90 | Scanned and never ingested |
+| W91 | Reconciled lifecycle view and its command |
+| W78 | Module-level import cycles |
+| W82 | Unchecked tool SQL |
+| W80 | `composerData.modelConfig` read for every composer |
+| -- | Sprint 2 Cursor field pass: turn and client timings, error details, terminal cwd, symbol and file links, todos, code blocks, `context` leaves, request and response identifiers |
+| -- | Three duplicate time columns removed: `events.timestamp`, `sources.ingested_at`, `sessions.ingested_at` |
 
 ## Status Vocabulary
 
@@ -74,8 +157,8 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W67 | Normal | Planned | Move relay fields into the objects that carry them | -- |
 | W70 | Normal | Planned | Re-partition documentation; remove cross-document redundancy | -- |
 | W71 | Normal | Planned | Adopt the reporting facility in the command layer | -- |
-| W72 | Normal | Planned | One Event-record builder per adapter; Cursor has none | -- |
-| W73 | High | Planned | Resolve or close the fifteen open vendor decode gaps CoPlan records | -- |
+| W72 | Normal | Closed | One Event-record builder per adapter; no adapter constructs an Event dict outside it | -- |
+| W73 | High | Analysis | Resolve or close the twenty-one open vendor decode gaps CoPlan records; Codex half answered by the protocol source | -- |
 | W74 | High | Planned | Cursor Session times dropped; unread populated fields; two vendor facts to record | Retrieved-reference policy split to W79 |
 | W75 | Normal | Postponed | Harness experiments for conditions no stored data records | Execution deferred; restart criteria on the item |
 | W76 | Normal | Postponed | Characterise current Cursor terminal-agent storage; the decoded store is obsolete | Restart criteria on the item |
@@ -108,9 +191,9 @@ not a preference.
 
 | Rank | Item | Why here |
 |---|---|---|
-| 1 | **W05** | The only item whose output is evidence about whether the query surface answers real questions rather than machinery that supports them. Needs no rebuild: format-6 stores exist and are audited, so the work starts against current data. |
+| 1 | **W05** | The only item whose output is evidence about whether the query surface answers real questions rather than machinery that supports them. Needs no rebuild: current-format stores exist and are audited, so the work starts against current data. |
 | 2 | **W04** | Structural, and coverage reporting states loss against exactly the profiles it enforces -- a report built against unenforced profiles attests to nothing. Baseline 2's substance. |
-| 3 | **W50 + W51** | The naming resolutions format 6 did not carry. Both are wire-format, so they land together as one rebuild or they cost two. |
+| 3 | **W50 + W51** | The naming resolutions no format has yet carried. Both are wire-format, so they land together as one rebuild or they cost two. |
 | 4 | **W66** | The largest structural item, and now the prerequisite rather than the sequel: W67's objects are built at the command adapter from values a setting declaration owns, so declaring each setting once must come first or the object's constructor encodes the current duplication. |
 | 5 | **W67** | Follows W66 directly and is mechanical once it lands: each relay already has an object to take, the measurement separating a relay from a builder is written down, and the five shared parameters are the same subset `ChildInvocation` carries. |
 | 6 | **W64 + W65** | W65's record-context cluster is adapter signatures, so consolidating before W04 rewrites them twice. W64 no longer waits on W04 -- what remains after the naming pass is dominated by optional-narrowing, which is what `strict_optional` decides -- but it is cheapest once the signatures have settled. |
@@ -139,10 +222,14 @@ do first.
 5. **Then W14's five steps**, which remove the restore-and-copy failure rather
    than reporting it.
 
-**State at the pause.** 1,970 tests, lint 171 against a ceiling of 172, types
-80 of 80, no regressions. `registry_check` reports 0 errors, 7 warnings, 14
-notes on the development machine; `catalog lifecycle` reports 30 ingested, 1
-moved, 1 superseded.
+**State at the pause.** 1,978 tests, lint 171 against a ceiling of 172, types
+80 of 80, no regressions. `catalog lifecycle` reports 20 ingested and 1
+worktree. `registry_check` reports 0 errors, 0 warnings, 1 note **when the
+discovery variables are unset**, which is not the same as a clean result: the
+layout checks do not run, and a skipped check currently reads as a passing one.
+Configured, the same command reported 0 errors, 7 warnings, 14 notes. Making a
+skipped check state that it was skipped is [Item Detail](#item-detail)'s
+discovery-configuration work.
 
 **Closed in the session that produced this**, so they are not re-derived: W86
 (refusal reason codes reaching the store, aggregated), W90 (scanned and never
@@ -221,7 +308,7 @@ to whichever sprint touches their vendor.
 | **W43** | Withdrawn on inspection. Retained so the analysis is not repeated. |
 | **W55** | Correctness-neutral, so it batches with anything and blocks nothing. |
 | **W73** | Fifteen gaps in six groups; each belongs to the round that touches its vendor rather than to a round of its own. |
-| **W74** | W74.1 closed in code; the field mapping is Sprint 1 and `duplicate_of` is Sprint 2, since it needs a column. |
+| **W74** | W74.1 closed and corpus-verified; the Cursor field mapping landed in Sprint 2. `duplicate_of` needs a column, so it is Sprint 1 with the rest of the wire-format change. |
 | **W75** | Postponed. Designed and segregated into machine and human parts; restarts when a dependent item needs an observation. |
 | **W70** | Documentation only, and continuous enough that queuing it would imply an end date it does not have. Do it alongside whatever item touches a document. |
 
@@ -249,10 +336,11 @@ current baseline, not a property of the system.
 
 | Measure | Current | Source |
 |---|---|---|
-| Published Project store sets | 30 | `~/.codess/projects/*/current.json` |
-| Sessions | 635 | `SELECT count(*) FROM sessions` across published stores |
-| Events | 329,750 | `SELECT count(*) FROM events` across published stores |
-| Store bytes | 2,333 MiB, largest set 560 MiB | Snapshot directory sizes |
+| Published Project store sets | 21 | `~/.codess/projects/*/current.json` |
+| Sessions | 431 | `SELECT count(*) FROM sessions` across published stores |
+| Events | 260,238 | `SELECT count(*) FROM events` across published stores |
+| Store bytes | 1,939 MB across 63 stores, largest store 431 MB | Snapshot directory sizes |
+| CoSchema format | 9 | `PRAGMA user_version` |
 | Ingest rate | ~900 Events/s | Refresh receipt: 76,055 Events in 83.7 s, one Project, apply stage |
 
 **What the rate is good for.** A full-corpus rebuild is the ingest rate against
@@ -316,9 +404,9 @@ either not started or has a stated boundary.
 | Command-layer help text | 76 distinct flag names in `admin_cmd` carry no help; `project.py` documents all of its own. Two were written where a verification step was being disabled; `parents=` would carry one declaration to every subcommand. | W66 |
 | Event-record builders | `cursor` has no module-level builder and `cc`/`codex` have sites that bypass theirs. Found by `pylint R0801`, not started. | W72 |
 | Deep audit adoption | `tools/deep_audit.py` runs and logs; nothing yet acts on its DESIGN tier. Counts are read from the tool rather than recorded here. | -- |
-| Time parsing consolidation | The three adapter parsers delegate to `units.epoch_milliseconds`, which answers R1-R8. The three inline `fromisoformat` callers -- `walk_sessions`, `token_usage`, `refresh_receipts` -- are untouched, and no check yet prevents a fourth parser appearing. | W55 |
+| Time parsing consolidation | `codess.timeval` is the standalone module: `epoch_ms`, `parse_iso`, `iso_to_ms`, `to_iso`, `month_key`, `is_sane`, and `now_ms` with an injected clock. Two tests assert the constraints -- no `codess` import, no ambient `datetime.now`. `units` re-exports `epoch_milliseconds` so existing callers keep working. **Remaining:** migrate the three inline `fromisoformat` callers (`walk_sessions`, `token_usage`, `refresh_receipts`), the four `epoch_milliseconds` importers, and the 20-plus `datetime.now(UTC)` sites onto the module and its injected clock. | W55 |
 | Cursor Session times | **Closed in code, unverified against the corpus.** The header fallback is written and the suite covers it; the 2 Sessions of 86 that carry no `started_at` are still null in the published stores, because closing them needs the reingest that W74.3's column change also needs. | W74.1 |
-| Cursor field mapping | 34 populated bubble fields are dropped with no recorded reason; every decision is written and none is applied. The retrieved-reference policy is split out so the other 33 need not wait. | W74.5a, W79 |
+| Cursor field mapping | The Sprint 2 pass landed: timings, error details, terminal cwd, symbol and file links, todos, code blocks, `context` leaves, and the request and response identifiers. **Remaining:** `richText` mention nodes and `isAgentic`, both populated on 390 of 4,984 sampled bubbles. | W74.5a, W79 |
 | `duplicate_of` reference | Decided and not built. Needs a column, so it batches with the next wire-format change rather than landing alone. | W74.3 |
 | Mechanical enforcement | Import boundaries, SQL ownership, module-level cycles, rejection vectors, and subprocess coverage each have a check. Mapping-profile conformance over emitted fixtures does not. | W04 |
 | Terminal-agent storage | The obsolete `chats/` store is characterised; the current `~/.cursor/projects/` tree is identified and not examined. | W76 |
@@ -566,8 +654,8 @@ finding with evidence, not as a review opinion.
 **Evidence to close.** Named investigations run end to end against a real Project;
 each documented as a worked example; every gap recorded as a finding.
 
-**Cost.** No rebuild: format-6 stores exist, so the work begins against current
-data rather than regenerating it.
+**Cost.** No rebuild: current-format stores exist, so the work begins against
+current data rather than regenerating it.
 
 ### W14 -- Project Identity for Direct Library Writes
 
@@ -690,7 +778,7 @@ duplicate what the current Sources still produce and can be discarded.
 
 **Disposition:**
 
-1. **Seven stores: dump.** Their Sources are intact, the current format-7 store
+1. **Seven stores: dump.** Their Sources are intact, the current-format store
    already holds the same evidence, and retaining an unreadable copy of
    reproducible data costs disk for nothing.
 2. **Two stores: archive, do not dump.** Retain outside the active registry,
@@ -721,7 +809,7 @@ decision is re-checkable. Without that, archiving is indistinguishable from
 losing track of something.
 
 **Then start afresh.** With the two archived and seven dumped, the active
-registry holds only format-7 stores built under current rules, and the next
+registry holds only current-format stores built under current rules, and the next
 format change costs one reingest per live Project rather than a decision per
 stale one.
 
@@ -1707,8 +1795,34 @@ addresses one level up.
 the per-day accumulator has one definition; `pylint --enable=R0801` reports only
 clusters recorded here as accepted.
 
-**Cost.** Correctness-neutral, no rebuild. Overlaps W04 (adapter signatures) and
-W67 (command preamble), so it batches with whichever lands first.
+**Closed.** No adapter constructs an Event dict outside its builder. The five
+remaining bypass sites were converted -- Claude's compaction, tool-call,
+user-text, and tool-result paths, and Codex's compaction path -- so `cc` routes
+21 constructions through `_base_event`, `codex` 17, and `cursor` 3, with none
+outside. Two signature corrections were needed and both were found by the type
+checker rather than by a test: `cc._base_event.subtype` had to admit `None`,
+which Codex's already did, and `codex._base_event` gained an explicit `event_id`
+parameter because a compaction record carrying several summaries needs an
+identity per Event rather than the line number that serves the single-Event
+case. Converting the user-text site also collapsed one predicate that was
+written twice: `event_type` and `role` each chose between the local command and
+the derived semantics using the same three-clause condition, and they must not
+disagree about which source named the Event.
+
+`pylint --enable=R0801` reports 10 clusters, none of them the Event envelope:
+the shared import and constant blocks at the head of `cc` and `codex`, the
+reporting package's re-export of its own API, `codex`/`cursor` timestamp parsing
+(W55), and the catalog row read in three modules (W04's shape one level up).
+Each is recorded above as accepted.
+
+**Verified against real Sources rather than fixtures.** 23,470 Events decoded
+from the development machine's own Claude and Codex transcripts are
+byte-identical before and after, comparing event identity, classification,
+content length, time, tool fields, and metadata. A refactor that claims to
+preserve behaviour is checkable that way and is not checkable by a suite that
+exercises the same builder on both sides.
+
+**Cost.** Correctness-neutral, no rebuild.
 
 ### W73 -- The Vendor Decode Gaps CoPlan Records
 
@@ -1716,20 +1830,28 @@ W67 (command preamble), so it batches with whichever lands first.
 as having a remaining action.
 
 **Why it is an item now.** CoPlan's three vendor sections each carry a
-`Source case | Current decision | Remaining action` table. Sixteen rows, one
-marked Done, **fifteen open** -- and none of the fifteen is named by any work
+`Source case | Current decision | Remaining action` table. Twenty-two rows, one
+marked Done, **twenty-one open** -- and none of the twenty-one is named by any work
 item, so the largest body of identified decode work in the repository is
 tracked only as prose inside an architecture document. That is the same failure
 the item list exists to prevent: a reader of CoTasks would conclude the decode
 layer has no open questions.
 
-**The fifteen, by vendor.** Codex carries the most, and the split is not even:
+**By vendor.** The tables grew from sixteen rows to twenty-two as vendor
+understanding deepened, so the earlier per-vendor split is superseded. Re-derive
+the counts from CoPlan's three tables rather than from a figure recorded here.
 
-| Vendor | Open | Concentrated in |
-|---|---|---|
-| Claude Code | 4 | Attachments and product state |
-| Codex | 6 | Envelope duplication and lineage |
-| Cursor | 5 | Composer attribution and projection loss |
+**The Codex half is now answerable from the source.** Codex is open source, and
+`codex-rs/protocol/src/protocol.rs` declares the fields several of these rows
+proposed to measure first: `SessionMeta` carries `forked_from_id`,
+`parent_thread_id`, `agent_nickname`, `agent_role`, and `agent_path`, and
+`ThreadSource` distinguishes `User`, `Subagent`, `Feature(String)`, and
+`MemoryConsolidation`. The parentage group therefore moves from *measure field
+availability, then decide* to *decode declared fields*. Three further findings
+are recorded in `experiments/format-decisions.md`: `instructions` moved from
+`SessionMeta` to `TurnContext`, three `RolloutItem` variants are unhandled
+(`InterAgentCommunication`, its metadata form, and `WorldState`), and
+`RolloutLine.ordinal` supplies an explicit sequence Codess does not read.
 
 **By component, which is what decides who does the work.**
 
@@ -3794,6 +3916,14 @@ and derivations that cannot go stale unnoticed.
 | `manifest.json` | `load_manifest`, `snapshot` | Yes | On the next store open, or `refresh_schema_manifest.py --check` |
 | `schema.sql` | Executed | Yes | At store creation, naming the file |
 | `contract.json` | Declarative only | Yes | On any contract read |
+
+**A fifth location existed and is removed.** `schema.sql` carried the format
+number twice: `PRAGMA user_version`, which every check reads, and a header
+comment, which none did. The comment had drifted several formats behind while
+the pragma stayed correct -- the precise failure this item describes, in the one
+place no check could see it. The comment now states where the number is declared
+instead of repeating it. A number a check cannot read is not a fifth declaration
+to synchronise; it is one to delete.
 
 **The silent gap is closed; one problem remains.** `load_contract` now compares
 the contract's `format_version` against the declaration, so all four locations
