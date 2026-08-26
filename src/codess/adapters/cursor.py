@@ -156,6 +156,13 @@ def _reasoning_metadata(data: dict) -> dict:
         text = thinking.get("text")
         if isinstance(text, str) and text.strip():
             values["reasoning_summary"] = text
+            # `full`, not `summary`: `thinking.text` is the reasoning itself.
+            # The adjacent `redactedThinking` flag only means something beside
+            # content, and the text runs to a 2,000-character bound where
+            # Codex's summaries have a 50-character median. Codex supplies a
+            # précis and this supplies the reasoning; the field says which so a
+            # cross-vendor query can compare them without conflating them.
+            values["reasoning_fidelity"] = "full"
         if thinking.get("redactedThinking"):
             # The vendor states that reasoning existed and was withheld, which
             # is not the same as none being produced.
@@ -166,6 +173,7 @@ def _reasoning_metadata(data: dict) -> dict:
             )
     elif isinstance(thinking, str) and thinking.strip():
         values["reasoning_summary"] = thinking
+        values["reasoning_fidelity"] = "full"
     style = data.get("thinkingStyle")
     if style is not None and not isinstance(style, (dict, list)):
         values["reasoning_style"] = style

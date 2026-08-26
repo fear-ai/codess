@@ -524,9 +524,19 @@ def _update_configuration(current: dict, observed: dict) -> None:
         current["configuration_provenance"] = provenance
 
 
-def _merge_metadata(payload: dict, configuration: dict) -> str | None:
+def _merge_metadata(
+    payload: dict, configuration: dict, extra: dict | None = None,
+) -> str | None:
+    """Merge a record's metadata with the run's configuration and any extras.
+
+    `extra` is for a fact the adapter establishes rather than reads -- the
+    reasoning fidelity, which is known from *which field was parsed* and appears
+    nowhere in the payload.
+    """
     values = json.loads(_metadata(payload) or "{}")
     values.update(configuration)
+    if extra:
+        values.update(extra)
     return json.dumps(values, separators=(",", ":")) if values else None
 
 
@@ -922,7 +932,16 @@ def process_file(
                     source_file=source_file,
                     content=truncated,
                     content_len=content_len,
-                    metadata=_merge_metadata( payload, current_configuration ),
+                    metadata=_merge_metadata(
+                        payload, current_configuration,
+                        # `summary`, not `full`: `_extract_reasoning_summary`
+                        # reads `payload.summary`, which the vendor exposes in
+                        # place of the reasoning state it withholds. Cursor
+                        # stores the reasoning itself under the same Event kind,
+                        # so the field is what lets one query select both
+                        # without treating a precis as the thing it summarizes.
+                        {"reasoning_fidelity": "summary"},
+                    ),
                     source_raw=source_raw,
                 ), rtype, payload, line_num)
                 continue

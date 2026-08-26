@@ -57,8 +57,6 @@ Unblocked, decided, and startable without waiting on anything.
 | ID | Work | Note |
 |---|---|---|
 | **W04** | Candidate-record contract, steps 3-4 | Unblocked: W35 closed, so the per-vendor hazard fixtures the strict/diagnostic semantics need are reachable and tested |
-| **W99** | One receipts tree | Accepted and not applied; a move, not a rewrite |
-| **W101** | `reasoning_fidelity` | Accepted and not applied; wire-format, so it batches with W50, W51, and W98 |
 | **W71** | Nine `warn` sites to the facility | Unblocked: every command module now attaches a sink |
 | **W94** | Reduce four format-number declarations toward one | The unchecked fifth location is removed; what remains is a pre-commit check moving detection from test run to commit |
 | **W89** | Path inclusion and exclusion belong in the discovery policy | Specification settled on the item; `exclude_dirs`/`exclude_paths`/`include_paths`, with Operations documenting the design ahead of the rename |
@@ -114,6 +112,8 @@ Recorded so closed work is not re-derived. Outcomes are in
 |---|---|
 | W04.1-2, .5 | `validate_mapped_event` at one vendor-neutral boundary, the candidate contract declared as a type, and a per-vendor conformance count in `decode_audit` that found an undeclared Cursor rule |
 | W35 | Every released manifest entry has a consumer that reads it through the manifest; four fixtures had none, and one was stale |
+| W99 | Receipts under one tree, `receipts/<kind>/`; a misplaced retention receipt is what the old prefix glob silently ignored |
+| W101 | `reasoning_fidelity` distinguishes Codex's precis from Cursor's reasoning: 12 `summary` and 6,374 `full` in one store set |
 | W67 | Every relay takes an object: 17 parameters to 4, 14 to 6, 12 to 8, 10 to 7, 8 to 3 |
 | W100 | One retention count, current included, shared by the publication trim and the prune |
 | -- | Two traversal helpers; `admin` and `query` attach a reporting sink and report start, done, and failure |
@@ -197,9 +197,9 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W96 | High | Planned | Project location changes: detect, report, and direct the operator | W14 (partly) |
 | W97 | Normal | Planned | Read the Codex thread name; reconcile archive location with archive state | -- |
 | W98 | Low | Planned | Ten field names still spell the algorithm rather than the value: `*_sha256` against the `*_digest` rule | Each is wire-format or a released document, so each costs a regeneration or a version bump |
-| W99 | Normal | Planned | One tree `receipts/<kind>/`; `receipt_format` unchanged. Accepted, not applied | -- |
+| W99 | Normal | Closed | One tree `receipts/<kind>/`; the refresh reader globs `*.json` and the directory states the kind | -- |
 | W102 | Low | Planned | Review the option classification against what each flag actually does: 110 flag-only, 34 default-only, 24 with a variable | The classification is recorded in CoNames and has not been critiqued per flag |
-| W101 | Normal | Planned | Add `reasoning_fidelity`: `summary` or `full`, set by the adapter that read it. Accepted, not applied; wire-format so it batches with the next regeneration | -- |
+| W101 | Normal | Closed | `reasoning_fidelity` set by the adapter that read it; verified `summary` on Codex and `full` on Cursor in one store set | -- |
 | W100 | Normal | Closed | One retention count, current included, read by both paths through one implementation; `--keep` and `create_snapshot(keep_total=)` override it per run | -- |
 
 ## Queue
@@ -5117,7 +5117,7 @@ reasoning. The two are different evidence and the common field says they are the
 same, so **option A is the smallest honest fix**: a `reasoning_fidelity` value of
 `summary` or `full`, set by the adapter that knows which it read.
 
-**Proposed: option A, a `reasoning_fidelity` value the adapter sets.**
+**Done: `reasoning_fidelity`, set by the adapter that read the field.**
 
 `summary` where the vendor supplied a précis, `full` where it supplied the
 reasoning. Codex sets `summary` because `_extract_reasoning_summary` reads
@@ -5140,9 +5140,17 @@ it at all. A prose note is findable only by someone who already suspects.
 evidence, not of the kind: a vendor that later exposes both would need two kinds
 and one Event, which a field handles and a name cannot.
 
-**Cost.** One column, one format bump, and the adapters already know which they
-read -- neither has to infer it. The `event_kind` vocabulary is unchanged, so no
-stored query breaks.
+**Cost, and it was lower than proposed.** No column and no format bump: the
+value lives in the Event's metadata, which is where a fact an adapter
+*establishes* rather than reads belongs. `_merge_metadata` gained an `extra`
+argument for exactly that -- the fidelity is known from which field was parsed
+and appears nowhere in the payload. The `event_kind` vocabulary is unchanged, so
+no stored query breaks.
+
+**Verified in one store set**, which is the condition that made the item worth
+opening: Zero400 holds 12 Codex rows marked `summary` and 6,374 Cursor rows
+marked `full` under one Event kind, now distinguishable from the common fields
+alone.
 
 **Evidence to close.** A query selecting reasoning across vendors can state,
 from the common fields alone, whether each row is a summary or the reasoning
@@ -5224,7 +5232,7 @@ found by inspection rather than by any check.
   unlike `plan_digest`, which cost one version bump because nothing had been
   stored.
 
-**Proposed: one tree, `receipts/<kind>/`, and `receipt_format` stays.**
+**Done: one tree, `receipts/<kind>/`, and `receipt_format` unchanged.**
 
 | Option | Cost | Buys |
 |---|---|---|

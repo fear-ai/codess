@@ -1,4 +1,15 @@
-"""Read bounded routine-refresh receipts as conservative Project observations."""
+"""Read bounded routine-refresh receipts as conservative Project observations.
+
+Receipts live at `<store>/receipts/<kind>/<applied_at>.json` -- one directory per
+kind, so a reader globs one directory and gets one kind. The alternative, a flat
+tree with a filename prefix, makes every reader carry a prefix its producer must
+match: this module globbed `reports/refresh-*.json` and silently ignored a
+retention receipt written into the same directory, which is that coupling
+failing rather than a mistake someone made.
+
+The filename is the receipt's own `applied_at`, so the name and the contents are
+two renderings of one instant.
+"""
 
 from __future__ import annotations
 
@@ -46,11 +57,11 @@ def latest_refresh_observations(
     """
     if receipt_limit <= 0:
         raise ValueError("receipt_limit must be positive")
-    reports = store_root.expanduser().resolve() / "reports"
-    if not reports.is_dir():
+    receipts = store_root.expanduser().resolve() / "receipts" / "refresh"
+    if not receipts.is_dir():
         return {}
     candidates = []
-    for path in reports.glob("refresh-*.json"):
+    for path in receipts.glob("*.json"):
         try:
             stat = path.stat()
         except OSError:

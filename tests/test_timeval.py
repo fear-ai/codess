@@ -255,3 +255,40 @@ def test_the_ambient_clock_has_one_definition() -> None:
         + ", ".join(offenders)
     )
 
+def test_only_one_comparison_orders_a_when_value_as_text() -> None:
+    """The claim `now_iso`'s docstring rests on, checked rather than remembered.
+
+    An `_at` column is `REAL` milliseconds and orders as a number; a `_when`
+    value is RFC 3339 text and orders lexicographically *only* because every one
+    carries the same offset. That guarantee is load-bearing for exactly one
+    comparison, and this fails if a second appears -- at which point either the
+    new site is correct and belongs on the list, or it is comparing text that
+    some other producer wrote and the guarantee does not cover it.
+
+    The docstring previously claimed the remaining comparisons were equality on
+    text. That was reasoning from plausibility, and the count was zero; this
+    test exists because a prose claim about the code is one the code can drift
+    away from silently.
+    """
+    root = Path(__file__).resolve().parents[1] / "src"
+    ordered = {ast.Lt, ast.Gt, ast.LtE, ast.GtE}
+    found: list[str] = []
+    for source in sorted(root.rglob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            if not any(type(op) in ordered for op in node.ops):
+                continue
+            text = ast.unparse(node)
+            # `_when`-style names only: an `_at` operand is numeric and orders
+            # as a number, which needs no offset guarantee.
+            if "observed_at" in text or "_when" in text:
+                # By file rather than by line: a line number fails on any edit
+                # above the site, which reports a move as a new comparison.
+                found.append(source.name)
+    assert found == ["project_catalog.py"], (
+        "a `_when` value is ordered as text somewhere new; confirm the offset "
+        f"guarantee covers it and update `now_iso`: {found}"
+    )
+

@@ -157,7 +157,7 @@ def _refresh(args: argparse.Namespace) -> int:
         stamp = system_clock().strftime("%Y%m%dT%H%M%S.%fZ")
         receipt = (
             resolve_store_root(args)
-            / "reports" / f"refresh-{stamp}.json"
+            / "receipts" / "refresh" / f"{stamp}.json"
         )
     # Both structures are built here, from `args`, which is what lets
     # `refresh_projects` take four parameters instead of seventeen: every value

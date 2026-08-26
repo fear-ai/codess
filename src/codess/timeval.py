@@ -188,19 +188,35 @@ def now_iso(clock: Callable[[], datetime]) -> str:
     A clock returning a naive `datetime` is read as UTC, matching `parse_iso`.
 
     **Always UTC, which is what makes the one ordered text comparison safe.**
-    Surveyed across `src/`: every other stamp comparison is numeric, because an
-    `_at` column is `REAL` milliseconds and orders as a number. Exactly one
-    compares text with an ordering operator --
-    `project_catalog._merge_location`, which picks the later of two location
-    observations with `>=` on `(observed_at, ...)` tuples.
+    Obtained by walking every `ast.Compare` in `src/` and reading the operand
+    types, so it is re-derivable rather than remembered:
+
+        ordered, on text          1   `project_catalog._merged_locations`
+        ordered, on REAL ms       5   `query_api`, `orientation_audit`,
+                                      `token_usage`
+        equality, on a stamp      0
+
+    `_merged_locations` picks the later of two location observations with `>=`
+    on `(observed_at, ...)` tuples. Everything else orders `_at` columns, which
+    are `REAL` milliseconds and compare as numbers.
 
     RFC 3339 sorts lexicographically only when every value carries the same
     offset, so converting a non-UTC clock rather than relabelling it is
     load-bearing there: one `+01:00` stamp among `+00:00` ones would sort by its
-    digits and pick the wrong observation. Everything else compares `_when` text
-    with `==` or `!=`, where the offset does not matter but a *differing*
-    representation of one instant would still be a false inequality -- which is
-    the same reason stated the other way round.
+    digits and pick the wrong observation.
+
+    **No stamp is compared for equality.** The survey's one syntactic match is
+    `key != "created_at"` in `investigation`, which excludes a field from an
+    investigation's hash by *name* so the hash covers content rather than when
+    it was recorded.
+
+    **That comparison has no numeric alternative.** `observed_at` is `TEXT` on
+    `sessions` and `sources` and text in the catalog's location records, with no
+    millisecond sibling anywhere -- deliberately, because CoSchema records that a
+    stored numeric copy of a `_when` value reintroduces the duplicate-column
+    class three columns were removed for. The choice is between comparing this
+    text and adding a column that can drift, and the text is safe precisely
+    because `now_iso` emits one offset.
     """
     instant = clock()
     if instant.tzinfo is None:

@@ -21,10 +21,10 @@ from codess.refresh_receipts import (
 
 
 def write_receipt(store_root, name, receipt, *, mtime=None):
-    """Write one receipt under the reports directory, optionally aged."""
-    reports = store_root / "reports"
-    reports.mkdir(parents=True, exist_ok=True)
-    path = reports / name
+    """Write one receipt under the refresh receipts directory, optionally aged."""
+    receipts = store_root / "receipts" / "refresh"
+    receipts.mkdir(parents=True, exist_ok=True)
+    path = receipts / name
     path.write_text(json.dumps(receipt), encoding="utf-8")
     if mtime is not None:
         os.utime(path, (mtime, mtime))
@@ -53,7 +53,7 @@ def receipt(project_id, *, stage="apply", status="passed", completed_at=None,
 class TestWhatIsRead:
     """A receipt is admitted only when it states the released format."""
 
-    def test_absent_reports_directory(self, tmp_path):
+    def test_absent_receipts_directory(self, tmp_path):
         """A store that has never refreshed is not an error."""
         assert latest_refresh_observations(tmp_path) == {}
 
@@ -61,20 +61,20 @@ class TestWhatIsRead:
         """`receipt_format` is the gate, so an unrelated JSON file is skipped."""
         body = receipt("p1")
         body["receipt_format"] = "something.else/9"
-        write_receipt(tmp_path, "refresh-a.json", body)
+        write_receipt(tmp_path, "a.json", body)
         assert latest_refresh_observations(tmp_path) == {}
 
     def test_unreadable_json_skipped(self, tmp_path):
         """One corrupt receipt must not hide every other Project's result."""
-        (tmp_path / "reports").mkdir()
-        (tmp_path / "reports" / "refresh-bad.json").write_text("{not json",
-                                                              encoding="utf-8")
-        write_receipt(tmp_path, "refresh-good.json", receipt("p1"))
+        receipts = tmp_path / "receipts" / "refresh"
+        receipts.mkdir(parents=True)
+        (receipts / "bad.json").write_text("{not json", encoding="utf-8")
+        write_receipt(tmp_path, "good.json", receipt("p1"))
         assert set(latest_refresh_observations(tmp_path)) == {"p1"}
 
     def test_status_outside_vocabulary(self, tmp_path):
         """Only `passed` and `failed` map; anything else is not an outcome."""
-        write_receipt(tmp_path, "refresh-a.json",
+        write_receipt(tmp_path, "a.json",
                       receipt("p1", status="cancelled"))
         assert latest_refresh_observations(tmp_path) == {}
 
@@ -89,10 +89,10 @@ class TestWhichObservationWins:
 
     def test_later_completion_wins(self, tmp_path):
         """Recency is decided by the stated completion, not by file order."""
-        write_receipt(tmp_path, "refresh-old.json",
+        write_receipt(tmp_path, "old.json",
                       receipt("p1", completed_at="2026-01-01T00:00:00+00:00",
                               snapshot_id="old"))
-        write_receipt(tmp_path, "refresh-new.json",
+        write_receipt(tmp_path, "new.json",
                       receipt("p1", completed_at="2026-06-01T00:00:00+00:00",
                               snapshot_id="new"))
         observed = latest_refresh_observations(tmp_path)
@@ -111,14 +111,14 @@ class TestWhichObservationWins:
             "completed_at": "2026-06-01T00:00:00+00:00",
             "returncode": 0, "ingest_summary": {"snapshot_id": "applied"},
         }]
-        write_receipt(tmp_path, "refresh-a.json", body)
+        write_receipt(tmp_path, "a.json", body)
         observed = latest_refresh_observations(tmp_path)
         assert observed["p1"]["stage"] == "apply"
         assert observed["p1"]["status"] == "refresh_applied"
 
     def test_failure_is_observed(self, tmp_path):
         """A failed refresh is what a reader most needs to see."""
-        write_receipt(tmp_path, "refresh-a.json",
+        write_receipt(tmp_path, "a.json",
                       receipt("p1", status="failed",
                               completed_at="2026-06-01T00:00:00+00:00"))
         observed = latest_refresh_observations(tmp_path)
@@ -127,9 +127,9 @@ class TestWhichObservationWins:
 
     def test_file_time_fallback(self, tmp_path):
         """A receipt with no stated time still orders, by when it was written."""
-        write_receipt(tmp_path, "refresh-old.json",
+        write_receipt(tmp_path, "old.json",
                       receipt("p1", snapshot_id="old"), mtime=1_000_000)
-        write_receipt(tmp_path, "refresh-new.json",
+        write_receipt(tmp_path, "new.json",
                       receipt("p1", snapshot_id="new"), mtime=2_000_000)
         observed = latest_refresh_observations(tmp_path)
         assert observed["p1"]["snapshot_id"] == "new"
@@ -144,7 +144,7 @@ class TestWhichObservationWins:
             "completed_at": "2026-06-01T00:00:00+00:00", "returncode": 1,
             "ingest_summary": {},
         })
-        write_receipt(tmp_path, "refresh-a.json", body)
+        write_receipt(tmp_path, "a.json", body)
         observed = latest_refresh_observations(tmp_path)
         assert observed["p1"]["status"] == "refresh_applied"
         assert observed["p2"]["status"] == "refresh_failed"

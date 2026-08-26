@@ -491,8 +491,8 @@ def test_catalog_readiness_reports_per_project_and_coverage(tmp_path):
 
 def test_catalog_readiness_uses_latest_completed_refresh_observation(tmp_path):
     _project, registry, project_id = _captured_project(tmp_path)
-    reports = registry / "reports"
-    reports.mkdir()
+    receipts = registry / "receipts" / "refresh"
+    receipts.mkdir(parents=True)
     common_plan = {
         "projects": [{
             "project_id": project_id,
@@ -500,7 +500,7 @@ def test_catalog_readiness_uses_latest_completed_refresh_observation(tmp_path):
             "raw_mode": "capture",
         }],
     }
-    (reports / "refresh-older.json").write_text(json.dumps({
+    (receipts / "refresh-older.json").write_text(json.dumps({
         "receipt_format": "codess.refresh-receipt/1",
         "created_at": "2026-07-30T10:00:00+00:00",
         "updated_at": "2026-07-30T10:01:00+00:00",
@@ -517,7 +517,7 @@ def test_catalog_readiness_uses_latest_completed_refresh_observation(tmp_path):
             "ingest_summary": {"snapshot_id": "snapshot-1"},
         }],
     }), encoding="utf-8")
-    (reports / "refresh-newer.json").write_text(json.dumps({
+    (receipts / "refresh-newer.json").write_text(json.dumps({
         "receipt_format": "codess.refresh-receipt/1",
         "created_at": "2026-07-30T11:00:00+00:00",
         "requested_stage": "preflight",
@@ -532,7 +532,7 @@ def test_catalog_readiness_uses_latest_completed_refresh_observation(tmp_path):
         }],
         "apply": [],
     }), encoding="utf-8")
-    (reports / "refresh-plan-only.json").write_text(json.dumps({
+    (receipts / "refresh-plan-only.json").write_text(json.dumps({
         "receipt_format": "codess.refresh-receipt/1",
         "created_at": "2026-07-30T12:00:00+00:00",
         "requested_stage": "plan",
