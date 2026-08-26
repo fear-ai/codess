@@ -539,7 +539,7 @@ def process_db(
     composer_start_tick: float | None = None
     last_progress: float | None = None
 
-    def emit(event: str, **fields) -> None:
+    def emit(event: str, **fields: object) -> None:
         if progress is not None:
             progress(
                 event, project=project_path, source=source_file,
@@ -580,9 +580,12 @@ def process_db(
             emit("cursor.composer.read.start")
         bubbles.append((bubble_id, data))
         now_tick = time.monotonic()
-        if len(bubbles) % _PROGRESS_ROWS == 0 or (
-            last_progress is not None
-            and now_tick - last_progress_tick >= _PROGRESS_SECONDS
+        if composer_start_tick is not None and (
+            len(bubbles) % _PROGRESS_ROWS == 0
+            or (
+                last_progress is not None
+                and now_tick - last_progress_tick >= _PROGRESS_SECONDS
+            )
         ):
             emit(
                 "cursor.composer.read.progress", bubbles=len(bubbles),

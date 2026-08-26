@@ -7,19 +7,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from codess.timeval import parse_iso
+
 REFRESH_RECEIPT_FORMAT = "codess.refresh-receipt/1"
 DEFAULT_RECEIPT_LIMIT = 1_000
 
 
 def _time_value(value: object, *, fallback: float) -> tuple[float, str]:
-    if isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value)
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=UTC)
-            return parsed.timestamp(), parsed.astimezone(UTC).isoformat()
-        except ValueError:
-            pass
+    parsed = parse_iso(value)
+    if parsed is not None:
+        return parsed.timestamp(), parsed.astimezone(UTC).isoformat()
     parsed = datetime.fromtimestamp(fallback, tz=UTC)
     return parsed.timestamp(), parsed.isoformat()
 

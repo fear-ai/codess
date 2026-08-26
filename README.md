@@ -217,6 +217,15 @@ local paths, credentials, and other private material.
 The [Raw Evidence](Operations.md#raw-evidence) procedure covers explicit
 capture. Storage deletion remains a reviewed maintenance operation.
 
+**A store can outlive the Sources it was built from.** Vendors prune their own
+records -- Claude Code on a 30-day default -- so a Codess store may become the
+only remaining record of Sessions that no longer exist anywhere else. Because a
+store is a projection that is recomputed rather than migrated, a format rebuild,
+a retention prune, or a superseded-store cleanup can destroy that record.
+`tools/project_inventory.py` reports which Projects are affected and exits
+nonzero when any is, so it gates those operations; see
+[Project Inventory](Operations.md#project-inventory).
+
 ## Documentation Map
 
 | Document or area | Focus |
@@ -231,7 +240,7 @@ capture. Storage deletion remains a reviewed maintenance operation.
 | [Code Review](CoReview.md) | Findings, the measurements that decided each, and real-Source validation |
 | [Developer Notes](CoNotes.md) | Duplication and constant audits, and observed process misses |
 | [CoSchema](CoSchema.md) | Common entities, relationships, fields, vocabularies, and query/store contracts |
-| [CoNames](CoNames.md) | **Authoritative** for every designator: vendor, harness, surface, provider, and the model name parts, in the database, the code, and the CLI |
+| [CoNames](CoNames.md) | **Authoritative** for every designator: vendor, harness, surface, provider, the model name parts, and the [command arguments](CoNames.md#command-arguments), in the database, the code, and the CLI |
 | [Claude Code Source Schema](CCSchema.md) | Claude Code storage, records, selective access, mapping, and limitations |
 | [Codex Source Schema](CodexSchema.md) | Codex storage, records, selective access, mapping, and limitations |
 | [Cursor Source Schema](CursorSchema.md) | Cursor storage, records, selective access, mapping, and limitations |

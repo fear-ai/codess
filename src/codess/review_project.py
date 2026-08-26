@@ -9,20 +9,24 @@ import os
 import subprocess
 import time
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from codess.codex_source import build_session_index as build_codex_session_index
 from codess.config import (
     MAX_SCAN_DIRECTORIES,
-    SCAN_DEADLINE_SECONDS,
+    SCAN_TIMEOUT,
     VENDOR_KEYS,
 )
 from codess.fileio import check_policy_format, read_json, write_json_atomic
 from codess.helpers import should_prune_directory, unsafe_traversal_root_reason
 from codess.path_label import classify_project_path, local_path_key
+from codess.settings import resolve
+from codess.timeval import now_iso
 from codess.walk_sessions import walk_sessions
+from codess.wallclock import system_clock
 
 # The shared shape of one candidate-project list, produced by both
 # load_candidate_csv (below) and refresh_candidates -- distinct from
@@ -106,7 +110,7 @@ def load_candidate_csv(path: Path, *, work_root: Path | None = None) -> dict[str
     projects.sort(key=lambda item: (item["curation"]["topic"], item["logical_name"].lower(), item["path"]))
     return {
         "catalog_format": CANDIDATE_LIST_FORMAT,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": now_iso(system_clock),
         "candidate_source": str(path.resolve()),
         "projects": projects,
     }
@@ -140,7 +144,7 @@ def _git_run(path: Path, arguments: list[str], timeout: int = 10) -> subprocess.
 def observe_git(
     path: Path, *, check_remote: bool = False, since: str | None = None,
 ) -> dict[str, Any]:
-    observed = {"observed_at": datetime.now(UTC).isoformat(), "is_repository": False}
+    observed = {"observed_at": now_iso(system_clock), "is_repository": False}
     if not path.exists():
         observed["error"] = "path_missing"
         return observed
@@ -191,7 +195,7 @@ def observe_git(
         if check_remote and configured:
             checked = _git_run(root, ["ls-remote", "--exit-code", "origin", "HEAD"], timeout=30)
             observed["remote"].update({
-                "checked_at": datetime.now(UTC).isoformat(),
+                "checked_at": now_iso(system_clock),
                 "status": "available" if checked.returncode == 0 else "unavailable",
                 "canonical_url": configured if checked.returncode == 0 else None,
             })
@@ -222,15 +226,19 @@ class ScanBudget:
     """
 
     __slots__ = (
-        "crossings", "deadline_seconds", "directories", "max_directories",
-        "started", "stopped_reason",
+        "crossings",
+        "directories",
+        "max_directories",
+        "scan_timeout",
+        "started",
+        "stopped_reason",
     )
 
     def __init__(
-        self, *, max_directories: int = 0, deadline_seconds: int = 0,
+        self, *, max_directories: int = 0, scan_timeout: int = 0,
     ) -> None:
         self.max_directories = max_directories
-        self.deadline_seconds = deadline_seconds
+        self.scan_timeout = scan_timeout
         self.directories = 0
         self.crossings: list[str] = []
         self.stopped_reason: str | None = None
@@ -240,17 +248,17 @@ class ScanBudget:
         """Count one directory; return whether the traversal may continue.
 
         Monotonic rather than wall clock: a backward NTP step would extend the
-        deadline unpredictably.
+        timeout unpredictably.
         """
         self.directories += 1
         if self.max_directories and self.directories > self.max_directories:
             self.stopped_reason = "directory_budget"
             return False
         if (
-            self.deadline_seconds
-            and time.monotonic() - self.started > self.deadline_seconds
+            self.scan_timeout
+            and time.monotonic() - self.started > self.scan_timeout
         ):
-            self.stopped_reason = "deadline"
+            self.stopped_reason = "timeout"
             return False
         return True
 
@@ -265,7 +273,7 @@ class ScanBudget:
             "partial": self.partial,
             "stopped_reason": self.stopped_reason,
             "max_directories": self.max_directories or None,
-            "deadline_seconds": self.deadline_seconds or None,
+            "scan_timeout": self.scan_timeout or None,
             "elapsed_seconds": round(time.monotonic() - self.started, 3),
             "filesystem_crossings": list(self.crossings),
         }
@@ -386,23 +394,58 @@ def recommend(
     return {"outcome": outcome, "policy": "codess.candidate-policy/1", "reasons": reasons}
 
 
+@dataclass(frozen=True, slots=True)
+class DiscoveryPolicy:
+    """How far a candidate scan traverses, decided once before the walk.
+
+    The eight parameters that bound a filesystem traversal rather than describe
+    what is being looked for. Separate from `RunPolicy` because the subjects
+    differ and so do the consumers: this bounds a walk and is read only here,
+    while `RunPolicy` describes what an ingest does and is read by four modules.
+    Merging them would put a `scan_timeout` that bounds a walk beside a
+    `scan_timeout` that bounds a child process -- two unrelated bounds one
+    field apart, which is the collision the naming rules exist to prevent.
+
+    `max_directories` and `scan_timeout` stay `int | None` because `None`
+    means "use the configured default" and 0 means "no bound"; the two are
+    different answers and `settings.resolve` distinguishes them.
+    """
+
+    vendor_filter: list[str] | None = None
+    recent_days: int | None = None
+    include_git: bool = True
+    discover_git: bool = False
+    max_depth: int = 2
+    check_remotes: bool = False
+    max_directories: int | None = None
+    scan_timeout: int | None = None
+    same_filesystem: bool = False
+
+
 def refresh_candidates(
     roots: list[Path],
+    discovery: DiscoveryPolicy,
     *,
-    vendor_filter: list[str] | None = None,
-    recent_days: int | None = None,
     candidate_csv: Path | None = None,
     catalog_path: Path | None = None,
-    include_git: bool = True,
-    discover_git: bool = False,
-    max_depth: int = 2,
-    check_remotes: bool = False,
     since: str | None = None,
     policy: dict[str, Any] | None = None,
-    max_directories: int | None = None,
-    deadline_seconds: int | None = None,
-    same_filesystem: bool = False,
 ) -> dict[str, Any]:
+    """Discover candidate Projects under `roots` and merge them with what exists.
+
+    `discovery` carries the eight traversal bounds; what remains describes the
+    subject rather than the walk -- which catalog to merge with, which commits to
+    count, which policy to apply.
+    """
+    vendor_filter = discovery.vendor_filter
+    recent_days = discovery.recent_days
+    include_git = discovery.include_git
+    discover_git = discovery.discover_git
+    max_depth = discovery.max_depth
+    check_remotes = discovery.check_remotes
+    max_directories = discovery.max_directories
+    scan_timeout = discovery.scan_timeout
+    same_filesystem = discovery.same_filesystem
     existing: dict[str, Any] = {"catalog_format": CANDIDATE_LIST_FORMAT, "projects": []}
     if candidate_csv:
         existing = load_candidate_csv(candidate_csv, work_root=roots[0] if len(roots) == 1 else None)
@@ -449,20 +492,21 @@ def refresh_candidates(
             observations.update({
                 "local_availability": "present" if path.exists() else "missing",
                 "session_count": row["sess"], "session_mb": row["mb"],
-                "session_span_weeks": row["span_weeks"], "scan_observed_at": datetime.now(UTC).isoformat(),
+                "session_span_weeks": row["span_weeks"], "scan_observed_at": now_iso(system_clock),
                 "vendors": row.get("source_metrics") or {
                     name: True for name in row["vendor"].split("|") if name
                 },
             })
             projects[key] = item
+    # The precedence is `settings.resolve`'s. Passed as a namespace rather than
+    # `args` because this function takes the two values directly: a library
+    # caller supplies them without ever building a parser.
+    supplied = SimpleNamespace(
+        max_directories=max_directories, scan_timeout=scan_timeout,
+    )
     budget = ScanBudget(
-        max_directories=(
-            MAX_SCAN_DIRECTORIES if max_directories is None else max_directories
-        ),
-        deadline_seconds=(
-            SCAN_DEADLINE_SECONDS if deadline_seconds is None
-            else deadline_seconds
-        ),
+        max_directories=resolve(supplied, "max_directories", MAX_SCAN_DIRECTORIES),
+        scan_timeout=resolve(supplied, "scan_timeout", SCAN_TIMEOUT),
     )
     if discover_git:
         for path in discover_git_roots(
@@ -486,7 +530,7 @@ def refresh_candidates(
     return {
         "catalog_format": CANDIDATE_LIST_FORMAT,
         "review_format": REVIEW_FORMAT,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": now_iso(system_clock),
         "roots": [str(root.resolve()) for root in roots],
         "diagnostics": {key: value for key, value in diagnostics.items() if not key.startswith("_")},
         # What the traversal spent and whether it finished. Reported
@@ -518,7 +562,7 @@ def record_decision(
         raise ValueError(f"candidate reference resolves to {len(matches)} projects")
     matches[0]["review"] = {
         "decision": decision, "reviewer": reviewer,
-        "notes": notes, "reviewed_at": datetime.now(UTC).isoformat(),
+        "notes": notes, "reviewed_at": now_iso(system_clock),
     }
     write_json_atomic(catalog_path, catalog)
     return matches[0]

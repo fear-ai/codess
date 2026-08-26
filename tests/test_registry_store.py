@@ -29,9 +29,9 @@ def test_merge_preserves_scan_when_ingest(tmp_path):
 
     import json
 
-    from codess.config import get_stats_path
+    from codess.config import get_project_state_path
 
-    raw = json.loads(get_stats_path(tmp_path).read_text())
+    raw = json.loads(get_project_state_path(tmp_path).read_text())
     ent = next(p for p in raw["projects"] if p["path"] == proj)
     assert "scan" in ent
     assert ent["sources"]["Claude"]["sessions"] == 2
@@ -144,7 +144,7 @@ class TestNeverIngested:
 class TestProjectLifecycle:
     """Every Project this machine has known, reconciled from two records.
 
-    `ingested_projects.json` records what scan saw and `projects.json` what
+    `projects_state.json` records what scan saw and `projects.json` what
     ingest published, and nothing joined them: a Project scanned and never
     ingested was absent from the catalog entirely, and a catalogued path whose
     directory had been removed stayed indefinitely. The state is derived rather

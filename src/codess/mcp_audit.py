@@ -15,6 +15,7 @@ from typing import Any
 
 from codess.adapters.codex import process_file
 from codess.project_catalog import catalog_readiness, durable_project_root
+from codess.snapshot import snapshot_stores
 from codess.store import connect
 from codess.tool_identity import bounded_source_call_id, is_mcp_tool
 from codess.tool_result_status import application_failure_evidence
@@ -320,7 +321,7 @@ def audit_mcp_interactions(
             continue
         root = durable_project_root(registry, project["project_id"])
         snapshot = root / "snapshots" / snapshot_id
-        for db_path in sorted(snapshot.glob("*.db")):
+        for db_path in snapshot_stores(snapshot):
             records.extend(_store_records(
                 db_path, project=project, snapshot_id=snapshot_id,
                 include_excerpts=include_excerpts,

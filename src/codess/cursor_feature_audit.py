@@ -13,11 +13,12 @@ workspace shape that vendor access already handles.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from codess.cursor_source import read_feature_evidence
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 AUDIT_FORMAT = "codess.cursor-feature-audit/1"
 
@@ -61,7 +62,7 @@ def audit_cursor_features(db_path: Path, catalog: dict[str, Any]) -> dict[str, A
     ]
     return {
         "audit_format": AUDIT_FORMAT,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": now_iso(system_clock),
         "scope": "all valid bubbleId records in the local Cursor global store",
         "privacy_boundary": "message, argument, result, and attachment values were not retained",
         "bubble_records": evidence["bubble_records"],

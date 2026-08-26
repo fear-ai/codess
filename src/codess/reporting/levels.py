@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 
 from codess.reporting.codes import DEBUG, ERROR, INFO, LEVEL_BY_NAME, WARNING
+from codess.settings import resolve_named
 
 # --- Compile-time gate -------------------------------------------------------
 #
@@ -115,7 +116,7 @@ def resolve(name: str | None = None, privacy: str | None = None) -> Profile:
     mean a run intended to redact does not, which is the failure this cannot
     afford to make quietly.
     """
-    selected = name or os.environ.get("CODESS_REPORT_PROFILE") or DEFAULT_PROFILE
+    selected = resolve_named(name, "report_profile", DEFAULT_PROFILE)
     try:
         profile = PROFILES[selected]
     except KeyError:
@@ -123,7 +124,7 @@ def resolve(name: str | None = None, privacy: str | None = None) -> Profile:
             f"unknown reporting profile {selected!r}; "
             f"expected one of {', '.join(sorted(PROFILES))}"
         ) from None
-    chosen_privacy = privacy or os.environ.get("CODESS_REPORT_PRIVACY")
+    chosen_privacy = resolve_named(privacy, "report_privacy", None)
     if chosen_privacy is None:
         return profile
     if chosen_privacy not in PRIVACY_PROFILES:

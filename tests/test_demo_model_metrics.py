@@ -61,7 +61,7 @@ def test_demo_model_metrics_generates_table_data_charts_and_manifest(tmp_path):
     _store(store)
     result = subprocess.run(
         [
-            sys.executable, str(TOOL), "--store", str(store),
+            sys.executable, str(TOOL), "--store-file", str(store),
             "--start", "2026-07-05", "--end", "2026-08-02",
             "--out-dir", str(output),
         ],

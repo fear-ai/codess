@@ -8,6 +8,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from cli.failure import fail, fail_configuration, warn
 from codess import reporting
 from codess.codex_source import build_session_index as build_codex_session_index
 from codess.config import (
@@ -15,7 +16,7 @@ from codess.config import (
     CODEX_SESSIONS,
     CURSOR_DATA,
     DAYS,
-    get_stats_path,
+    get_project_state_path,
 )
 from codess.helpers import unsafe_traversal_root_reason, write_csv
 from codess.project import (
@@ -45,8 +46,8 @@ def _registry_display_ts(ent: dict) -> str:
 
 
 def _load_registry_map(store_root: Path) -> tuple[dict[str, dict] | None, str | None]:
-    """Load ``ingested_projects.json`` into path (resolved string) -> entry dict."""
-    stats_path = get_stats_path(store_root)
+    """Load ``projects_state.json`` into path (resolved string) -> entry dict."""
+    stats_path = get_project_state_path(store_root)
     if not stats_path.exists():
         return None, f"codess: registry file not found: {stats_path}"
     try:
@@ -70,53 +71,35 @@ def _print_scan_diagnostics(diagnostics: dict) -> None:
         "failed_roots": diagnostics.get("failed_roots", 0),
     }
     if any(counts.values()):
-        print(
-            "codess: scan diagnostics: "
-            + " ".join(f"{key}={value}" for key, value in counts.items()),
-            file=sys.stderr,
-        )
+        warn('codess: scan diagnostics: ' + ' '.join((f'{key}={value}' for key, value in counts.items())))
     # A Project omitted by the recency window is not a diagnostic among
     # others: the result is incomplete in a way the reader cannot see from
     # the output, so it is stated separately with the way to widen it.
     hidden = diagnostics.get("projects_outside_recency_window", 0)
     if hidden:
-        print(
-            f"codess: {hidden} project(s) have coding work older than the "
-            f"{DAYS}-day window and are not listed; "
-            "use --days 0 for all, or CODESS_DAYS to change the default",
-            file=sys.stderr,
-        )
+        warn(f'codess: {hidden} project(s) have coding work older than the {DAYS}-day window and are not listed; use --days 0 for all, or CODESS_DAYS to change the default')
 
 
 def run(args: argparse.Namespace) -> int:
     """Run codess scan. Returns exit code."""
-    from codess.config import validate_config
-
-    config_errors = validate_config()
-    for msg in config_errors:
-        print(f"codess: {msg}", file=sys.stderr)
-    if config_errors:
+    if fail_configuration():
         return 1
 
     src_err = validate_scan_source_for_cli(getattr(args, "source", None))
     if src_err:
-        print(src_err, file=sys.stderr)
-        return 1
+        return fail(src_err)
 
     roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.CWD)
-    if err:
-        print(err, file=sys.stderr)
-        return 1
+    if err or roots is None:
+        return fail(err or "no roots resolved")
     for root in roots:
         reason = unsafe_traversal_root_reason(root)
         if reason:
-            print(f"codess: {reason}; select a project, workspace, or home subtree", file=sys.stderr)
-            return 1
+            return fail(f'codess: {reason}; select a project, workspace, or home subtree')
 
     opts = build_scan_run_options(args)
     if opts["recent_days"] is not None and opts["recent_days"] < 0:
-        print("codess: --days must be >= 0 (0 means all time)", file=sys.stderr)
-        return 1
+        return fail('codess: --days must be >= 0 (0 means all time)')
     merged: list[tuple[str, dict]] = []
     seen_paths: set[str] = set()
     had_error = False
@@ -179,10 +162,12 @@ def run(args: argparse.Namespace) -> int:
                 merged.append((full, r))
 
     pruned_global = prune_legacy_cursor_global_entries(write_root)
-    if pruned_global and opts["debug"]:
-        print(
-            f"codess: removed {pruned_global} legacy Cursor global pseudo-projects",
-            file=sys.stderr,
+    if pruned_global:
+        # The reporting level decides whether this is shown, rather than an
+        # `opts["debug"]` test beside it: two gates for one decision is how a
+        # profile and a flag come to disagree.
+        reporting.event(
+            reporting.code("registry.legacy_cursor_pruned"), projects=pruned_global,
         )
     reg_arg = getattr(args, "store_root", None)
     filter_active = bool(reg_arg and str(reg_arg).strip())
@@ -193,13 +178,9 @@ def run(args: argparse.Namespace) -> int:
     if filter_active:
         registry_entries, reg_err = _load_registry_map(write_root)
         if reg_err:
-            print(reg_err, file=sys.stderr)
-            return 1
+            return fail(reg_err)
         if not registry_entries:
-            print(
-                "codess: warning: registry has no projects; scan output is empty",
-                file=sys.stderr,
-            )
+            warn('codess: warning: registry has no projects; scan output is empty')
         initial_keys = set(registry_entries.keys())
         merged = [(f, r) for f, r in merged if f in initial_keys]
 

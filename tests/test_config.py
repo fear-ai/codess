@@ -156,7 +156,7 @@ class TestValidateScanSource:
 
 
 class TestRegistryArgResolution:
-    """``--store PATH`` vs omitted → ``resolve_store_root``."""
+    """``--store PATH`` vs omitted -> ``resolve_store_root``."""
 
     def test_omitted_uses_config_registry(self, monkeypatch, tmp_path):
         monkeypatch.setattr("codess.config.STORE_ROOT", tmp_path)
@@ -520,3 +520,307 @@ def test_default_configuration_reports_no_errors(monkeypatch):
         ]
     finally:
         reload_config(monkeypatch)
+
+def test_a_flag_name_declares_one_type() -> None:
+    """One flag name yields one type, whichever command family declares it.
+
+    `--store` is declared 22 times across two modules and carried three
+    incompatible forms: `type=Path` in 21 of them and `type=str` in the
+    twenty-second, so a caller moving between command families received a
+    different type from one flag name. Behaviour was right because
+    `resolve_store_root` normalizes both, which is what made the divergence
+    invisible.
+
+    Checks the *declared* type rather than any resolver, because a resolver that
+    accepts both is what hides this. `default` and `required` may legitimately
+    differ -- one subcommand requires the store it operates on -- so only the
+    type is compared.
+    """
+    import ast
+    from collections import defaultdict
+
+    root = Path(__file__).resolve().parents[1] / "src"
+    types_by_flag: dict[str, set[str]] = defaultdict(set)
+    for source in (root / "cli" / "admin_cmd.py", root / "codess" / "project.py"):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_argument"
+                and node.args
+            ):
+                continue
+            name = node.args[0]
+            if not (isinstance(name, ast.Constant) and str(name.value).startswith("--")):
+                continue
+            declared = next(
+                (ast.unparse(kw.value) for kw in node.keywords if kw.arg == "type"),
+                "str",
+            )
+            types_by_flag[str(name.value)].add(declared)
+
+    # Two of the three original collisions were renamed rather than tolerated:
+    # the Project *directory* became `--directory`, leaving `--project` for the
+    # references it always named, and `--selection` split into `--select` for a
+    # state and `--file` for a path.
+    #
+    # `--since` stays a collision on purpose. Both spellings are correct for
+    # their command -- a git date expression is what `rev-list --since` accepts,
+    # and a Unix millisecond timestamp is what a Codess `_at` column holds -- and
+    # each matches the vocabulary of the surface it belongs to. Renaming either
+    # would make one command's flag disagree with the tool it wraps.
+    different_subjects = {"--since"}
+
+    conflicting = {
+        flag: sorted(kinds)
+        for flag, kinds in types_by_flag.items()
+        if len(kinds) > 1 and flag not in different_subjects
+    }
+    assert not conflicting, f"one flag name, two declared types: {conflicting}"
+
+def test_a_shared_option_is_declared_once() -> None:
+    """An option many subcommands take is inherited, not rewritten per subcommand.
+
+    `--store` was written out 22 times, 19 of them byte-identical, and `--output`
+    11 times identically. Each addition was locally correct and matched its
+    neighbours; the pattern being matched was the defect, because a twentieth
+    subcommand needing the option got it the only way the surrounding code
+    demonstrated.
+
+    `parents=` is argparse's own mechanism and renders an inherited option
+    exactly as a locally declared one, so the deduplication is invisible to a
+    caller. The threshold is four rather than two: a genuinely different form --
+    `--store` required for one command, `--project-id` repeatable for one -- keeps
+    its own declaration rather than bending the shared one, and a handful of
+    those is the expected state rather than a regression.
+    """
+    import ast
+    from collections import Counter
+
+    root = Path(__file__).resolve().parents[1] / "src"
+    counts: Counter[str] = Counter()
+    tree = ast.parse((root / "cli" / "admin_cmd.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_argument"
+            and node.args
+        ):
+            continue
+        name = node.args[0]
+        if isinstance(name, ast.Constant) and str(name.value).startswith("--"):
+            counts[str(name.value)] += 1
+
+    # Counted by *identical* form, because that is what `parents=` can merge.
+    # `--catalog` is required for two commands and defaulted for a third,
+    # `--apply` carries a different help string per command because it enables a
+    # different action, and one `--project-id` is repeatable. Inheriting any of
+    # those would change what its subcommand accepts, which is a behaviour change
+    # wearing a deduplication's clothes.
+    identical: Counter[tuple[str, str]] = Counter()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_argument"
+            and node.args
+        ):
+            continue
+        name = node.args[0]
+        if not (isinstance(name, ast.Constant) and str(name.value).startswith("--")):
+            continue
+        form = ", ".join(sorted(f"{k.arg}={ast.unparse(k.value)}" for k in node.keywords))
+        identical[(str(name.value), form)] += 1
+
+    repeated = {
+        flag: n for (flag, _form), n in identical.items() if n >= 3
+    }
+    assert not repeated, (
+        "declare these on a `_shared` parent and inherit them rather than "
+        f"repeating the line: {repeated}"
+    )
+    assert counts, "no flags parsed; the check would pass vacuously"
+
+def test_a_directory_valued_flag_is_named_directory() -> None:
+    """A flag whose value is a Project directory is called `--directory`.
+
+    One spelling per subject, checked across the command modules and the
+    development tools together, because a caller moving between them should not
+    have to learn a second name for the same thing. Four tools and one
+    subcommand called it `--project` or `--path`: the first is the *reference*
+    spelling this CLI uses elsewhere, and the second says only that the value is
+    a path, which `type=Path` already says.
+
+    `--dir` is exempt and is not a lapse. It is the documented Project selector
+    for `scan`, `ingest`, and `query` -- 33 occurrences across README and
+    Operations -- and it is repeatable where `--directory` is singular and
+    required. Two names because they are two things: a selector that accumulates
+    a set, and the one directory a command operates on.
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    reference_spellings = {"--project", "--path"}
+    offenders: list[str] = []
+    for source in sorted((root / "src").rglob("*.py")) + sorted((root / "tools").rglob("*.py")):
+        try:
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover - a tool that does not parse
+            continue
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_argument"
+                and node.args
+            ):
+                continue
+            name = node.args[0]
+            if not (isinstance(name, ast.Constant) and name.value in reference_spellings):
+                continue
+            keywords = {k.arg: ast.unparse(k.value) for k in node.keywords}
+            # A `Path` conversion is what distinguishes a directory from a
+            # reference: `catalog decide --project` and `refresh --project` take
+            # an id, a name, or a path as text, and stay `--project`.
+            if keywords.get("type") == "Path":
+                offenders.append(
+                    f"{source.relative_to(root)}:{node.lineno} {name.value}"
+                )
+    assert not offenders, (
+        "a directory-valued flag is `--directory`: " + ", ".join(offenders)
+    )
+
+def test_dir_selects_and_directory_operates() -> None:
+    """`--dir` accumulates a set; `--directory` is one required operand.
+
+    Two flags rather than one because they differ in arity, and the difference
+    is load-bearing: `--dir` routes through `resolve_cli_roots`, which merges it
+    with the `--dirs` file and falls back to the current or Project root, while
+    every `--directory` callee takes exactly one `Path`.
+
+    Asserted so a merge cannot happen by accident. One name would stop
+    predicting arity -- `catalog location retire --dir X` singular and required
+    against `scan --dir X` repeatable and optional -- which is the same
+    one-name-two-behaviours defect the flag renames removed.
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    wrong: list[str] = []
+    for source in sorted((root / "src").rglob("*.py")) + sorted((root / "tools").rglob("*.py")):
+        try:
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover - a tool that does not parse
+            continue
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_argument"
+                and node.args
+            ):
+                continue
+            name = node.args[0]
+            if not isinstance(name, ast.Constant):
+                continue
+            keywords = {k.arg: ast.unparse(k.value) for k in node.keywords}
+            where = f"{source.relative_to(root)}:{node.lineno}"
+            if name.value == "--dir" and keywords.get("action") != "'append'":
+                wrong.append(f"{where} --dir is the selector and must be repeatable")
+            if name.value == "--directory" and keywords.get("action") == "'append'":
+                wrong.append(f"{where} --directory is one operand and must not repeat")
+    assert not wrong, "; ".join(wrong)
+
+def test_every_command_option_carries_help() -> None:
+    """No flag reaches an operator undocumented.
+
+    76 distinct names in `admin_cmd` carried no help while `project.py`
+    documented all of its own, so the administrative surface was undocumented as
+    a class rather than by oversight in a few places. Five of those gate a
+    verification step, which is exactly where an operator most needs to be told
+    what is being skipped.
+
+    Checked over the built parser rather than the source, because that is what a
+    caller reads: an option inherited from a shared parent is documented once and
+    must render documented everywhere it appears.
+    """
+    from cli.admin_cmd import build_parser
+
+    def walk(parser, prefix=()):
+        yield prefix, parser
+        for action in parser._actions:
+            choices = getattr(action, "choices", None)
+            if isinstance(choices, dict):
+                for name, sub in choices.items():
+                    if hasattr(sub, "_actions"):
+                        yield from walk(sub, (*prefix, name))
+
+    undocumented: list[str] = []
+    for prefix, parser in walk(build_parser()):
+        for action in parser._actions:
+            if not action.option_strings or action.option_strings == ["-h", "--help"]:
+                continue
+            if not action.help:
+                undocumented.append(f"{' '.join(prefix)} {action.option_strings[0]}")
+    assert not undocumented, f"these options render no help: {undocumented}"
+
+def test_a_wide_signature_is_a_builder_or_takes_a_structure() -> None:
+    """A function with many parameters either builds a record or takes an object.
+
+    The distinction is measurable rather than stylistic: a **builder** places its
+    parameters into a returned literal, so the parameter list *is* the record's
+    shape and an object would name every field twice. A **relay** forwards its
+    parameters to another call, and each one it names is a value it does not
+    read -- which is what a policy object removes.
+
+    `codex._base_event` takes 20 parameters and puts 14 into its dict; converting
+    it would be the anti-pattern, not the fix. `_ingest_project` forwards all 10
+    of its own, which is a relay with nothing else to say for itself.
+
+    The threshold is 10 because that is where a call site stops being readable
+    without counting positions, and the census is cheap: it parses `src/` in
+    well under a second.
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[1] / "src"
+    unclassified: list[str] = []
+    for source in sorted(root.rglob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            params = {
+                arg.arg for arg in node.args.args + node.args.kwonlyargs
+            } - {"self", "cls"}
+            if len(params) < 10:
+                continue
+            placed, forwarded = set(), set()
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Dict):
+                    placed |= {
+                        value.id for value in inner.values
+                        if isinstance(value, ast.Name) and value.id in params
+                    }
+                if isinstance(inner, ast.Call):
+                    supplied = list(inner.args) + [k.value for k in inner.keywords]
+                    forwarded |= {
+                        arg.id for arg in supplied
+                        if isinstance(arg, ast.Name) and arg.id in params
+                    }
+            # A builder places most of what it takes; a relay forwards most of
+            # it. A function doing neither is one whose parameters go nowhere a
+            # reader can see, which is the case worth reporting.
+            if len(placed) < len(params) / 2 and len(forwarded) < len(params) / 2:
+                unclassified.append(
+                    f"{source.name}:{node.lineno} {node.name} "
+                    f"({len(params)} params, {len(placed)} placed, "
+                    f"{len(forwarded)} forwarded)"
+                )
+    assert not unclassified, (
+        "a wide signature should build a record or forward to one call: "
+        + "; ".join(unclassified)
+    )
+

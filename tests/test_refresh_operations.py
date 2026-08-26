@@ -7,12 +7,14 @@ import subprocess
 from pathlib import Path
 
 from cli.admin_cmd import build_parser
+from codess.child_invocation import RunPolicy
 from codess.project_catalog import (
     ensure_project_binding,
     get_project_entry,
 )
 from codess.raw_store import RawStore
 from codess.refresh_operations import (
+    ResolveArgs,
     _result_summary,
     _run_project_ingest,
     refresh_projects,
@@ -82,6 +84,19 @@ def _project(
     return project, binding["project_id"]
 
 
+
+def _selection(**overrides) -> ResolveArgs:
+    """The selection a refresh resolves, with only what a test varies named."""
+    fields: ResolveArgs = {
+        "project_references": None, "project_list": None, "designator": None,
+        "source": "all", "raw_mode": "auto", "baseline_selection": None,
+        "reviewed_catalog": None, "large_event_count": 25_000,
+        "large_store_bytes": 1 << 30,
+    }
+    fields.update(overrides)  # type: ignore[typeddict-item]
+    return fields
+
+
 def test_refresh_resolves_ids_names_paths_and_project_lists(tmp_path):
     registry = tmp_path / "registry"
     first, first_id = _project(registry, tmp_path, "first")
@@ -134,7 +149,7 @@ def test_refresh_apply_preflights_all_then_applies_each(
     _second, _second_id = _project(registry, tmp_path, "second")
     calls = []
 
-    def fake_run(project, *, validate, **kwargs):
+    def fake_run(project, policy, *, validate):
         calls.append((project["name"], validate))
         return {
             "project_id": project["project_id"],
@@ -150,10 +165,9 @@ def test_refresh_apply_preflights_all_then_applies_each(
     )
     receipt_path = tmp_path / "refresh.json"
     receipt = refresh_projects(
-        registry,
-        repo_root=REPO_ROOT,
+        RunPolicy(registry=registry, repo_root=REPO_ROOT),
+        _selection(designator="included"),
         stage="apply",
-        designator="included",
         receipt_path=receipt_path,
     )
     assert receipt["status"] == "applied"
@@ -173,7 +187,7 @@ def test_refresh_rejects_whole_apply_when_one_preflight_fails(
     _second, _second_id = _project(registry, tmp_path, "second")
     calls = []
 
-    def fake_run(project, *, validate, **kwargs):
+    def fake_run(project, policy, *, validate):
         calls.append((project["name"], validate))
         failed = project["name"] == "second"
         return {
@@ -189,10 +203,9 @@ def test_refresh_rejects_whole_apply_when_one_preflight_fails(
         "codess.refresh_operations._run_project_ingest", fake_run
     )
     receipt = refresh_projects(
-        registry,
-        repo_root=REPO_ROOT,
+        RunPolicy(registry=registry, repo_root=REPO_ROOT),
+        _selection(designator="included"),
         stage="apply",
-        designator="included",
     )
     assert receipt["status"] == "preflight_rejected"
     assert calls == [("first", True), ("second", True)]
@@ -230,13 +243,10 @@ def test_refresh_records_timeout_as_project_failure(
             "source": "all",
             "raw_mode": "reference",
         },
+        RunPolicy(
+            registry=tmp_path / "registry", repo_root=REPO_ROOT, policy_timeout=1,
+        ),
         validate=True,
-        registry=tmp_path / "registry",
-        repo_root=REPO_ROOT,
-        min_size=0,
-        force=False,
-        resource_policy=None,
-        timeout_seconds=1,
     )
     assert result["status"] == "failed"
     assert result["error_type"] == "timeout"

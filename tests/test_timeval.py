@@ -12,7 +12,7 @@ reported instant from a counter that happens to parse.
 from __future__ import annotations
 
 import ast
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -24,6 +24,7 @@ from codess.timeval import (
     is_sane,
     iso_to_ms,
     month_key,
+    now_iso,
     now_ms,
     parse_iso,
     to_iso,
@@ -184,3 +185,73 @@ def test_now_ms_uses_the_injected_clock() -> None:
     """
     fixed = datetime(2026, 8, 23, 12, 0, 0, tzinfo=UTC)
     assert now_ms(lambda: fixed) == fixed.timestamp() * 1000
+
+
+def test_now_iso_uses_the_injected_clock() -> None:
+    """The `_when` counterpart to `now_ms`, fixed by the same clock."""
+    fixed = datetime(2026, 8, 23, 12, 0, 0, tzinfo=UTC)
+    assert now_iso(lambda: fixed) == "2026-08-23T12:00:00+00:00"
+
+
+def test_now_iso_reads_a_naive_clock_as_utc() -> None:
+    """A clock returning a naive stamp is read as UTC, matching `parse_iso`.
+
+    Read as local time instead, a receipt's stamp shifts by the operator's
+    offset with nothing recording why.
+    """
+    naive = datetime(2026, 8, 23, 12, 0, 0)  # noqa: DTZ001 -- naive is the case under test
+    assert now_iso(lambda: naive) == "2026-08-23T12:00:00+00:00"
+
+
+def test_now_iso_converts_a_non_utc_clock() -> None:
+    """A clock in another zone is converted rather than relabelled."""
+    eastern = datetime(2026, 8, 23, 8, 0, 0, tzinfo=timezone(timedelta(hours=-4)))
+    assert now_iso(lambda: eastern) == "2026-08-23T12:00:00+00:00"
+
+# Empty, and kept rather than deleted: it is the record that the exemption
+# existed and closed. A module named here is one whose clock reads have not been
+# converted; the set was four modules while relay consolidation was pending and
+# is now none.
+DEFERRED: frozenset[str] = frozenset()
+
+
+def test_the_ambient_clock_has_one_definition() -> None:
+    """`wallclock.system_clock` is the only `datetime.now` in the package.
+
+    The constraint above keeps `timeval` free of an ambient clock; this one
+    keeps the clock from reappearing everywhere else. Before it, 43 sites spelled
+    `datetime.now(UTC).isoformat()` inline, so a test that needed a fixed clock
+    had 43 things to patch and patched none of them.
+
+    `reporting.clock` is exempt: it anchors monotonic ticks for event timing,
+    which is a different clock and a different hazard -- a backward NTP step
+    there produces a negative duration.
+
+    `DEFERRED` is empty. It held four relay modules while their signatures were
+    pending, and each was removed as its module converted -- which is what the
+    list form was for: removing a name is an edit a reviewer sees, where a
+    pattern would have widened silently.
+    """
+    source_root = Path(__file__).resolve().parents[1] / "src"
+    offenders: list[str] = []
+    for path in sorted(source_root.rglob("*.py")):
+        relative = path.relative_to(source_root)
+        if relative.parts[:2] == ("codess", "reporting"):
+            continue
+        if relative.name in {"wallclock.py", *DEFERRED}:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        offenders.extend(
+            f"{relative}:{node.lineno}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"now", "utcnow", "today"}
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "datetime"
+        )
+    assert not offenders, (
+        "read the clock through `wallclock.system_clock` rather than directly: "
+        + ", ".join(offenders)
+    )
+

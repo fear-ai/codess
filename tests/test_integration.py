@@ -265,7 +265,7 @@ def test_malformed_json_skipped():
 
 
 def test_codex_ingest_and_query(durable_tmp_path):
-    """Codex ingest → query cycle with temp Codex dir."""
+    """Codex ingest -> query cycle with temp Codex dir."""
     tmp = durable_tmp_path
     proj = tmp / "myproj"
     proj.mkdir()
@@ -375,7 +375,7 @@ def test_codex_force_reingest_replaces_and_empty_removes_session(durable_tmp_pat
 
 
 def test_cursor_ingest_and_query(durable_tmp_path):
-    """Cursor ingest from workspace DB → query cycle."""
+    """Cursor ingest from workspace DB -> query cycle."""
     import json
     import sqlite3
 

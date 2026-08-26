@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from codess.bounded_jsonl import DEFAULT_MAX_RECORD_BYTES, iter_bounded_jsonl
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 CODEX_AUDIT_FORMAT = "codess.codex-feature-audit/1"
 SETTING_FIELDS = {
@@ -137,7 +138,7 @@ def audit_codex_features(
             diagnostics["io_error"] += 1
     return {
         "audit_format": CODEX_AUDIT_FORMAT,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": now_iso(system_clock),
         "privacy_boundary": (
             "record/payload field names, selected scalar configuration values, "
             "and aggregate counts only; message, reasoning, and tool bodies omitted"

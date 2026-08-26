@@ -15,13 +15,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codess.schema_contract import table_names
+from codess.config import MAPPING_PROFILE_FOR_SOURCE_SYSTEM
+from codess.schema_contract import load_mapping, table_names
 from codess.store import connect, table_counts
 
 STORE_FILES = {
@@ -189,6 +191,49 @@ def _linkage(conn) -> dict[str, object]:
     return report
 
 
+def _mapping_conformance(conn: sqlite3.Connection) -> dict[str, object]:
+    """Whether every stored `mapping_rule` is one its released profile declares.
+
+    The property `store._check_mapping_conformance` enforces at write time,
+    re-measured here at read time over what is actually stored. Enforcement and
+    measurement are different jobs: the check refuses a bad Event as it is
+    written, and this states whether a store already holds one -- which a store
+    written before the check existed can.
+
+    Reports `available: false` rather than a zero when the store names a source
+    system with no released profile, so a reader can tell "compared, nothing
+    found" from "not compared".
+    """
+    row = conn.execute(
+        "SELECT source_system_id FROM sessions LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return {"available": False, "reason": "store holds no Sessions"}
+    profile = MAPPING_PROFILE_FOR_SOURCE_SYSTEM.get(str(row[0]))
+    if profile is None:
+        return {"available": False, "reason": f"no released profile for {row[0]}"}
+    declared = {
+        str(rule["id"])
+        for rule in load_mapping(profile).get("rules", [])
+        if rule.get("id")
+    }
+    stored = {
+        str(value) for (value,) in conn.execute(
+            "SELECT DISTINCT mapping_rule FROM events WHERE mapping_rule IS NOT NULL"
+        )
+    }
+    undeclared = sorted(stored - declared)
+    return {
+        "available": True,
+        "profile": profile,
+        "declared_rules": len(declared),
+        "rules_in_use": len(stored),
+        "undeclared": undeclared,
+        "unused": sorted(declared - stored),
+        "conformant": not undeclared,
+    }
+
+
 def audit_store(path: Path) -> dict[str, object]:
     """Report classification and decode coverage for one store."""
     conn = connect(path, read_only=True)
@@ -202,6 +247,7 @@ def audit_store(path: Path) -> dict[str, object]:
             "linkage": _linkage(conn),
             "relations": _relations(conn),
             "context": _context_events(conn),
+            "mapping_conformance": _mapping_conformance(conn),
         }
         inconsistencies = {}
         for name, query, why in INCONSISTENT_PAIRINGS:

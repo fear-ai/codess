@@ -3,7 +3,6 @@
 import contextlib
 import json
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 
 from codess.codex_source import build_session_index as build_codex_session_index
@@ -23,10 +22,12 @@ from codess.cursor_source import (
     get_workspace_ids as get_cursor_workspace_ids,
 )
 from codess.helpers import is_excluded, local_path_from_uri, slug_to_path
-from codess.project import get_cc_session_dir
+from codess.project import cc_session_files, get_cc_session_dir
 from codess.reporting import code as _code
 from codess.reporting import event
+from codess.timeval import epoch_ms, now_ms
 from codess.units import DAY_MS, DAY_SECONDS, WEEK_MS
+from codess.wallclock import system_clock
 
 log = logging.getLogger(__name__)
 
@@ -96,15 +97,20 @@ def _record_count(diagnostics: dict | None, category: str, count: int) -> None:
         diagnostics[category] = diagnostics.get(category, 0) + count
 
 
-def _days_ago(max_ts: float) -> float | None:
-    """(now - max_ts) in days. None if max_ts is 0 or invalid."""
+def _days_ago(max_ts: float | None) -> float | None:
+    """(now - max_ts) in days. None if max_ts is absent, 0, or invalid.
+
+    Admits `None` because a store with no timed record supplies one, and the
+    guard below already treats it as absent. A signature narrower than the call
+    sites makes the caller assert what the callee then re-checks.
+    """
     if not max_ts:
         return None
-    # `datetime.now(UTC)` rather than `time.time()`: both are the same clock,
-    # and having two spellings for "the current instant" is the divergence this
+    # The injected clock rather than `time.time()`: both are the same clock, and
+    # having two spellings for "the current instant" is the divergence this
     # removes. `time.monotonic` is a different clock and stays where it is used.
-    now_ms = datetime.now(UTC).timestamp() * 1000
-    return round((now_ms - max_ts) / DAY_MS, 1)
+    current = now_ms(system_clock)
+    return round((current - max_ts) / DAY_MS, 1)
 
 
 def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool = False) -> dict:
@@ -158,8 +164,7 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool 
             except (json.JSONDecodeError, OSError, KeyError):
                 pass
         if count == 0:
-            main_files = list(cc_dir.glob("*.jsonl"))
-            nested_files = list(cc_dir.glob("*/subagents/**/*.jsonl"))
+            main_files, nested_files = cc_session_files(cc_dir)
             subagent_sessions = len(nested_files)
             selected = [(path, False) for path in main_files]
             if subagent:
@@ -179,7 +184,7 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool 
                     pass
     span = (max_ts - min_ts) / WEEK_MS if max_ts > min_ts else None
     if cc_dir is not None and not subagent_sessions:
-        subagent_sessions = len(list(cc_dir.glob("*/subagents/**/*.jsonl")))
+        subagent_sessions = len(cc_session_files(cc_dir)[1])
     return {"count": count, "events": events, "size_mb": round(BMB(total_bytes), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "stale_index_entries": stale_index_entries, "main_sessions": main_sessions, "subagent_sessions_available": subagent_sessions, "subagents_included": subagent}
 
 
@@ -196,17 +201,7 @@ def _session_metrics_codex(
             cwd = str(item.get("cwd") or "")
             if not cwd or str(Path(cwd).resolve()) != p_res:
                 continue
-            ts = item.get("timestamp")
-            if isinstance(ts, (int, float)):
-                ts_ms = ts * 1000 if ts < 1e12 else ts
-            elif isinstance(ts, str):
-                try:
-                    dt = datetime.fromisoformat(ts)
-                    ts_ms = dt.timestamp() * 1000
-                except (ValueError, TypeError):
-                    ts_ms = 0
-            else:
-                ts_ms = 0
+            ts_ms = epoch_ms(item.get("timestamp")) or 0
             if cutoff_ms and ts_ms < cutoff_ms:
                 continue
             count += 1
@@ -531,7 +526,7 @@ def walk_sessions(
     cutoff_ms = None
     if recent_days is not None and recent_days > 0:
         cutoff_ms = (
-            datetime.now(UTC).timestamp() - recent_days * DAY_SECONDS
+            system_clock().timestamp() - recent_days * DAY_SECONDS
         ) * 1000
     excluded_by_recency = 0
 

@@ -208,6 +208,36 @@ The rule: **`_id` names an identifier something assigned; a composed or
 descriptive literal takes `_key` or no suffix.** `source_system_id` violates it
 and is renamed. A bare rowid named `id` is unremarkable and stays.
 
+### Time Suffixes
+
+A time column's suffix states its representation, so a reader needs neither the
+DDL nor a convention memo to know which a column holds.
+
+| Suffix | Representation | Type | Who observed the instant |
+|---|---|---|---|
+| `_at` | Unix milliseconds | `REAL`, nullable | The vendor, or the filesystem |
+| `_when` | RFC 3339 UTC | `TEXT`, `NOT NULL` | Codess |
+
+The two representations are both correct and differ because the values answer
+different questions. A vendor instant arrives in epoch form, is compared and
+aggregated across hundreds of thousands of Events, and may be absent, so a
+nullable number preserves both the arithmetic and the vendor's silence. A
+Codess-recorded instant is a provenance statement read by a person auditing what
+ran, never aggregated, and RFC 3339 carries its own offset so the record is
+unambiguous outside the database.
+
+**One name currently denotes both, which is the defect the rule fixes.**
+`started_at` is `REAL` in `sessions` and `tool_invocations` and `TEXT` in
+`processing_runs`, so code reading both must know which table it is in.
+Renaming the Codess-recorded columns to `_when` leaves `started_at` meaning
+milliseconds everywhere it appears. No other time name is ambiguous, which is
+what makes the rule cheap. [CoSchema](CoSchema.md#time-column-naming) holds the
+analysis and `experiments/format-decisions.md` the columns renamed.
+
+A comparison across the two converts at query time -- `timeval.iso_to_ms`, or
+`strftime('%s', ...)` for a direct-SQL reader -- rather than in a stored numeric
+copy, which would be a duplicate column that can drift.
+
 **`entity_id` is a poor name, and for `sources` it is also wrong.** The value is a
 digest of vendor-stated facts, so two machines ingesting the same Session derive the
 same identity -- that is the property "global" is claiming, and for Sessions, Events,
@@ -271,10 +301,178 @@ mass nouns -- `store_meta` and the four `*_content` tables.
 `event_content` to match it is withdrawn: the two names disagree because the
 nouns differ, not because the convention does.
 
+## Command Arguments
+
+A flag is a designator like any other, so the rules above apply to it: one
+spelling per subject, and a name that says what the value *is* rather than what
+type carries it. Four measured conventions, each recorded because a flag was
+declared against it.
+
+### Which Options Take a Variable
+
+**A flag names this invocation's subject; a variable states a standing choice.**
+That is the rule, and the distribution across 168 distinct flags follows it
+closely enough to be checkable rather than asserted:
+
+| Topic | Flag only | Has a default | Has a variable |
+|---|---|---|---|
+| Selection (`--dir`, `--project-id`, `--session-id`) | 11 | 0 | 0 |
+| Policy (`--raw-mode`, `--redact`, `--resource-policy`) | 1 | 1 | 5 |
+| Bounds (`--min-size`, `--days`, `--keep`) | 5 | 9 | 4 |
+| Action (`--force`, `--apply`, `--no-hash`) | 9 | 0 | 5 |
+| Store (`--store`, `--snapshot`) | 4 | 0 | 2 |
+| Output (`--output`, `--format`) | 4 | 2 | 2 |
+
+**Selection is entirely flag-only, and that is the rule working rather than an
+omission.** No machine-wide variable can sensibly name which Session an
+operator is asking about. Policy is the inverse -- five of seven carry a
+variable -- because a policy is exactly the kind of choice made once for a
+machine and inherited by every run.
+
+**A default without a variable is a discovered location or a measured bound.**
+`--claude-root` defaults to `CC_PROJECTS`, `--max-record-bytes` to a measured
+limit: the value is derived or evidenced rather than chosen, so an operator who
+wants a different one says so per run, and there is nothing for a variable to
+override that the default does not already state.
+
+**A variable without a flag is a machine policy no run should vary.**
+`CODESS_KEEP_SNAPSHOTS` is the only one: retention depth governs the trim that
+follows every publication, and a flag there would let one ingest quietly change
+what a later one retains. `codess storage prune --keep` overrides it for a
+deliberate reclaim, which is a different command answering a different question.
+
+### One Spelling per Subject
+
+**A flag name means the same thing in every command that takes it.** Three
+spellings named two subjects each, which a caller moving between subcommands
+could not see:
+
+| Was | Now | The two subjects |
+|---|---|---|
+| `--project` | `--directory` for the directory; `--project` keeps the reference | A Project *reference* -- id, name, or path as text -- against a *directory on disk* |
+| `--selection` | `--select` for the state; `--file` for the path | A reviewed selection *state* to filter by against the selection *file* to read |
+| `--store` | `--store` for the durable store; `--store-file` for the file | The machine's durable store *directory* against one source-system store *file* |
+
+**`--since` is deliberately left naming two subjects.** It is a git date
+expression under `catalog candidates`, passed to `rev-list --since`, and a Unix
+millisecond timestamp under `query`. Both are correct for their command, because
+each matches the vocabulary of the surface it wraps -- renaming either would make
+one command disagree with the tool underneath it. The exemption is named in
+`test_a_flag_name_declares_one_type` rather than left to be rediscovered.
+
+### `--dir` and `--directory` Are Two Flags
+
+They differ in arity, not in subject, and the difference is load-bearing:
+
+| | `--dir` | `--directory` |
+|---|---|---|
+| Arity | Repeatable (`action="append"`) | Singular |
+| Required | No in the CLI; yes in the audit tools | Yes |
+| Empty | Falls back to the current or Project root | Rejected by argparse |
+| Companion | `--dirs`, a *file* listing directories | none |
+| Callee takes | `list[Path]` | one `Path` |
+
+`--dir` is the Project **selector**: it accumulates a set, defaults when omitted,
+and every consumer routes through `resolve_cli_roots`, which merges it with the
+`--dirs` file and validates each root. It is the documented selector for `scan`,
+`ingest`, and `query`, appearing 33 times across README and Operations.
+
+`--directory` is a required singular **operand**: the one directory a command
+acts on. Every callee -- `add_project_location`, `retire_location`,
+`validate_project`, `apply_project` -- takes exactly one `Path`, so there is no
+list to pass and a default would be a guess.
+
+**Merging them was considered and rejected.** One name would stop predicting
+arity: `catalog location retire --dir X` would be singular and required while
+`scan --dir X` stayed repeatable and optional, which is the same
+one-name-two-behaviours defect the renames above removed. It would also break
+the `--dir`/`--dirs` pairing on commands that have no list file, and it would
+turn five commands' "no argument is an error" into "no argument means here",
+which is a default appearing where a refusal used to be.
+
+### Type States the Subject
+
+A filesystem path is `type=Path` -- 84 declarations already were. Everything else
+omits `type` and takes argparse's `str`. An explicit `type=str` is reserved for
+the case a reader would otherwise assume a path, and says why in a comment:
+
+| Flag | Why `str` | Would break as `Path` |
+|---|---|---|
+| `--source` | A comma-separated vendor spec | Nothing, but the name suggests a file |
+| `--out` | `-` is the stdout sentinel | `Path("-")` is a relative file named `-` |
+
+`--content-policy` was `type=str, metavar="JSON"` for an argument the consumer
+wraps in `Path(...)`; the metavar named the file's *content* rather than the
+argument. It is `type=Path, metavar="PATH"`.
+
+**A setting may still arrive as either.** `content_policy` and `resource_policy`
+are `Path | str | None`: a `Path` from the flag and a `str` from the environment
+variable, since `env_str` reads text. The consumer normalizes, and that
+normalization is not redundant -- removing it breaks the environment spelling.
+
+### A Shared Option Is Declared Once
+
+Seven options are declared on a parent parser and inherited via argparse's
+`parents=`: `--store`, `--output`, `--project-id`, `--source`, `--project`,
+`--policy`, and `--reviewed`. `--store` had been written out 22 times, 19 of them
+byte-identical, and `--output` 11 times identically.
+
+An inherited option renders exactly as a locally declared one, so the
+deduplication is invisible to a caller: `--help` was dumped for all 45 parsers
+before and after, and every subcommand accepts the same option set. What changed
+is help text, which is the point -- one declaration carries one help string to
+every inheritor.
+
+**A form that genuinely differs keeps its own declaration.** `--store` is
+`required=True` for one command, one `--project-id` is repeatable, `--catalog` is
+required for two commands and defaulted for a third, and `catalog candidates`
+takes a comma-separated `--source` where the shared one takes `choices`.
+Inheriting any of those would change what that subcommand accepts, which is a
+behaviour change wearing a deduplication's clothes.
+
 ## Renames
 
-Every accepted rename, stated once. All are wire-format, so each requires
-regenerating every store.
+Every accepted rename, stated once. The stored ones are wire-format, so each
+requires regenerating every store; the command-argument ones are not, and cost a
+caller's script instead.
+
+### Command Arguments
+
+**Breaking for the named subcommands, and not for any store.** A renamed flag
+changes what a caller types; nothing on disk moves.
+
+| From | To | Where | Why |
+|---|---|---|---|
+| `--project` | `--directory` | `baseline validate\|apply\|recover-pointer`; `apply_and_verify`, `retire_project`, `validate_snapshot`, `demo_model_metrics` | The value is a directory, and `--project` names a *reference* elsewhere in the same CLI |
+| `--path` | `--directory` | `catalog location add\|retire` | Said only that the value is a path, which `type=Path` already says |
+| `--selection` | `--select` | `catalog candidates` | The value is a selection *state*, and the flag now names filtering by one |
+| `--selection` | `--file` | `baseline freeze`; `freeze_reviewed_baselines` | The selection is already the subcommand's subject, so the flag names which part of it |
+| `--store-root` | `--store` | `demo_model_metrics` | One spelling for the durable store, matching the CLI |
+| `--store` | `--store-file` | `demo_model_metrics` | Freed the CLI spelling: this one is a source-system store *file*, not the durable store |
+| `--registry` | `--store` | every command | Selects the machine's durable store; `registry` named one file inside it |
+
+### Digest Fields
+
+**A field holding a digest is named `*_digest`, never `*_sha256`.** The
+algorithm's name lives in `hashing` and nowhere else, so changing it is one
+edit rather than a rename across every document that carries a value.
+
+The failure the rule prevents is subtle and has occurred: a value produced by
+`codess_canonical_hash(256, 256, …)` *is* a bare SHA-256 at those widths, so a
+`_sha256` name reads as accurate. Change either width and the name is wrong with
+nothing to catch it -- the value still exists, still verifies against itself, and
+now lies about what it is.
+
+**Ten field names still carry the algorithm** -- `selection_sha256` (13
+occurrences), `stored_sha256` (8), `resolved_selection_sha256` (5),
+`catalog_sha256` and `raw_manifest_sha256` (4 each), `manifest_sha256` (3), and
+four singletons. They are
+wire-format or released-document fields, so each costs a regeneration or a
+version bump, and they are recorded in [CoTasks](CoTasks.md) rather than renamed
+piecemeal. `plan_digest` was renamed because retention documents are produced per
+run and read immediately, so the rename cost one version bump and no stored data.
+
+### Stored Names
 
 **Landed.** The model-parameter set went in one regeneration:
 
@@ -296,6 +494,7 @@ regenerating every store.
 |---|---|---|
 | `package_digest` | `contract_digest` | Covers the six-file contract, not the Python package |
 | `content_sha256`, `policy_sha256` | `content_digest`, `policy_digest` | Algorithm names live in `hashing` alone. `digest` rather than `hash`: the column holds a digest value, and `codess_hash` is the function that produces it |
+| `plan_sha256` | `plan_digest` | The same rule, applied to a field the earlier pass did not reach. The value is what `codess_canonical_hash` returns, which is a bare SHA-256 *only because* the widths are currently 256/256 -- so the name is accurate today and silently stops being so when a width changes. `codess.retention-plan` and `-receipt` go to `/2`, since a `/1` consumer declares a field a `/2` document does not carry |
 | `codess:<kind>:sha256:` in stored values | `codess:<kind>:id1:` | Names the derivation scheme instead of the algorithm, so a reader can tell two schemes apart and changing the algorithm is not a wire-format change |
 | `tool_invocations.started_at` | `source_started_at` | Distinguishes vendor-reported from Codess-recorded times |
 | `events.state.product` | four kinds | `session.label`, `harness.setting`, `content.attachment`, `session.marker` |
@@ -315,6 +514,11 @@ regenerating every store.
 | `sessions.source` | `adapter_key` | Holds the `SOURCE_PROFILES` key, not the Source entity |
 | `sessions.source_system_id` | `source_system_key` | A composed literal, not an assigned identifier |
 | `sessions.vendor_name` | *records the company* | `cursor` is a product; Anysphere is the vendor |
+| `sources.observed_at`, `sessions.observed_at`, `project_locations.observed_at` | `observed_when` | Codess-recorded RFC 3339 text; see [Time Suffixes](#time-suffixes) |
+| `processing_runs.started_at`, `completed_at` | `started_when`, `completed_when` | Removes the one time name denoting two representations |
+| `mapping_diagnostics.created_at` | `created_when` | Codess-recorded |
+| `correlation_assertions.asserted_at` | `asserted_when` | Codess-recorded |
+| `units.epoch_milliseconds` | `timeval.epoch_ms` | `_ms` is the convention the same module already used for `SECOND_MS` and `DAY_MS`; landed, with the old name kept as an alias |
 
 **Not renamed, and why.** `sources.id` -- a bare rowid is unremarkable.
 `event_content` -- mass noun, see [Plurality](#plurality). `surface_kind`,

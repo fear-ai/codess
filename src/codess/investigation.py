@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
 from typing import Any
 
 from codess.query_api import RESULT_FORMAT, QueryContractError, content_hash
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 INVESTIGATION_FORMAT = "codess.investigation/1"
 
@@ -64,7 +65,7 @@ def build_investigation(
         })
     record = {
         "format": INVESTIGATION_FORMAT,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": now_iso(system_clock),
         "processor_id": processor_id.strip(),
         "summary": summary,
         "input_result_hash": result.get("result_hash"),

@@ -18,7 +18,10 @@ from codess.fileio import write_json_atomic
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project", type=Path, required=True)
+    parser.add_argument(
+        "--directory", type=Path, required=True,
+        help="the Project directory to operate on",
+    )
     parser.add_argument("--source", choices=("cc", "codex", "cursor", "all"), default="all")
     parser.add_argument(
         "--raw-mode", type=canonical_raw_mode, choices=RAW_MODE_CHOICES,
@@ -32,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-size", type=int, default=0)
     parser.add_argument("--no-smoke", action="store_true")
     args = parser.parse_args(argv)
-    project = args.project.expanduser().resolve()
+    project = args.directory.expanduser().resolve()
     try:
         result = apply_project(
             project,

@@ -20,8 +20,8 @@ from codess.context_content import bound_context_content, truncate_content
 from codess.hashing import codess_bytes_hash
 from codess.mapping import annotate_mapping
 from codess.sanitize import apply_sanitization, sanitize_value
+from codess.timeval import epoch_ms
 from codess.tool_result_status import application_failure_evidence
-from codess.units import epoch_milliseconds
 
 log = logging.getLogger(__name__)
 
@@ -458,7 +458,7 @@ def _parse_timestamp(ts: Any) -> float | None:
     handles are a guard against a format change rather than a shape real data
     reaches.
     """
-    return epoch_milliseconds(ts)
+    return epoch_ms(ts)
 
 
 def _get_timestamp(record: dict, opts: dict | None = None) -> float | None:

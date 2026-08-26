@@ -22,7 +22,7 @@ from codess.catalog_operations import (
     relocate_project,
     retire_location,
 )
-from codess.child_invocation import ChildInvocation
+from codess.child_invocation import ChildInvocation, RunPolicy
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.project import parse_and_run
 from codess.project_catalog import (
@@ -35,6 +35,7 @@ from codess.project_catalog import (
 )
 from codess.raw_store import RawStore
 from codess.review_project import (
+    DiscoveryPolicy,
     ScanBudget,
     discover_git_roots,
     observe_git,
@@ -86,13 +87,12 @@ def test_admin_ingest_paths_forward_resource_policy(tmp_path, monkeypatch):
     )
     policy = tmp_path / "resources.json"
     run_ingest(ChildInvocation(
+        policy=RunPolicy(
+            registry=tmp_path / "registry", repo_root=tmp_path,
+            raw_mode="reference", resource_policy=policy, force=True,
+        ),
         projects=(tmp_path / "project",),
         vendor_selector="all",
-        raw_mode="reference",
-        registry=tmp_path / "registry",
-        repo_root=tmp_path,
-        resource_policy=policy,
-        force=True,
     ))
     def flag_value(command: list[str], flag: str) -> str | None:
         return (
@@ -105,12 +105,12 @@ def test_admin_ingest_paths_forward_resource_policy(tmp_path, monkeypatch):
     calls.clear()
     _run_ingest_stage(
         {"projects": [{"path": str(tmp_path / "project")}]},
+        RunPolicy(
+            registry=tmp_path / "registry", repo_root=tmp_path,
+            raw_mode="reference", resource_policy=policy,
+        ),
         validate=True,
         source="all",
-        raw_mode="reference",
-        registry=tmp_path / "registry",
-        repo_root=tmp_path,
-        resource_policy=policy,
     )
     assert flag_value(calls[0], "--resource-policy") == str(policy)
     assert "--validate" in calls[0]
@@ -212,7 +212,9 @@ def test_candidate_refresh_uses_scan_and_preserves_review(tmp_path, monkeypatch)
             "sess": 3, "mb": 2.5, "span_weeks": 1.0,
         }],
     )
-    report = refresh_candidates([tmp_path], catalog_path=catalog, since="2020-01-01")
+    report = refresh_candidates(
+        [tmp_path], DiscoveryPolicy(), catalog_path=catalog, since="2020-01-01",
+    )
     item = report["projects"][0]
     assert item["review"]["decision"] == "approved"
     assert item["recommendation"]["outcome"] == "consider"
@@ -320,25 +322,44 @@ class TestScanIsBounded:
         assert budget.partial is True
         assert found, "a partial scan must report what it found"
 
-    def test_a_deadline_stops_the_scan(self, tmp_path):
+    def test_zero_disables_each_bound_independently(self):
+        """0 disables one bound without disabling the other.
+
+        The two bounds compose, and 0 is falsy in the guard each uses -- which is
+        what makes 0 mean "no limit" here and *not* mean it for the bounds whose
+        consumer compares directly. `SOURCE_READ_MAX` of 0 reads nothing; a
+        `byte_limit` of 0 emits no rows. The meaning of 0 is the consumer's, so
+        it is asserted per consumer rather than assumed uniform.
+        """
+        unbounded = ScanBudget(max_directories=0, scan_timeout=0)
+        assert all(unbounded.visit() for _ in range(50))
+        assert unbounded.report()["stopped_reason"] is None
+        assert unbounded.report()["partial"] is False
+
+        # One bound set, the other disabled: the set one still stops the scan.
+        counted = ScanBudget(max_directories=5, scan_timeout=0)
+        assert not all(counted.visit() for _ in range(7))
+        assert counted.report()["stopped_reason"] == "directory_budget"
+
+    def test_a_timeout_stops_the_scan(self, tmp_path):
         """Zero seconds is already past, so the first visit trips it."""
-        budget = ScanBudget(deadline_seconds=0)
-        budget.deadline_seconds = 1
+        budget = ScanBudget(scan_timeout=0)
+        budget.scan_timeout = 1
         budget.started -= 3600
         discover_git_roots([self._tree(tmp_path, 3)], max_depth=5, budget=budget)
-        assert budget.report()["stopped_reason"] == "deadline"
+        assert budget.report()["stopped_reason"] == "timeout"
 
     def test_a_zero_budget_disables_the_bound(self, tmp_path):
-        budget = ScanBudget(max_directories=0, deadline_seconds=0)
+        budget = ScanBudget(max_directories=0, scan_timeout=0)
         discover_git_roots([self._tree(tmp_path, 4)], max_depth=5, budget=budget)
         assert budget.partial is False
 
     def test_the_report_names_the_bounds_it_ran_under(self, tmp_path):
-        budget = ScanBudget(max_directories=50, deadline_seconds=30)
+        budget = ScanBudget(max_directories=50, scan_timeout=30)
         discover_git_roots([tmp_path], max_depth=2, budget=budget)
         report = budget.report()
         assert report["max_directories"] == 50
-        assert report["deadline_seconds"] == 30
+        assert report["scan_timeout"] == 30
         assert report["elapsed_seconds"] >= 0
 
     def test_no_budget_keeps_the_previous_behaviour(self, tmp_path):
@@ -350,7 +371,8 @@ class TestScanIsBounded:
 
     def test_a_candidate_refresh_reports_its_scan(self, tmp_path):
         report = refresh_candidates(
-            [tmp_path], discover_git=True, include_git=False, max_depth=2,
+            [tmp_path],
+            DiscoveryPolicy(discover_git=True, include_git=False, max_depth=2),
         )
         assert "scan" in report
         assert report["scan"]["partial"] is False
@@ -456,8 +478,12 @@ def test_decision_and_plan_only_onboarding_do_not_ingest(tmp_path):
         catalog, project_ref="p1", decision="approved", reviewer="tester", notes="ok"
     )
     receipt = onboard_catalog(
-        catalog, registry=tmp_path / "registry", repo_root=Path(__file__).parents[1],
-        stop_after="plan", source="cursor", raw_mode="capture",
+        catalog,
+        RunPolicy(
+            registry=tmp_path / "registry", repo_root=Path(__file__).parents[1],
+            raw_mode="capture",
+        ),
+        stop_after="plan", source="cursor",
     )
     assert receipt["status"] == "planned"
     assert receipt["plan"]["projects"][0]["project_id"] == "p1"
@@ -780,15 +806,15 @@ def test_candidate_snapshot_does_not_publish_before_validation(tmp_path, monkeyp
     with pytest.raises(RuntimeError, match="first validation rejected"):
         apply_project(
             project,
+            RunPolicy(
+                registry=registry,
+                repo_root=Path(__file__).parents[1], raw_mode="capture",
+            ),
             source="all",
-            raw_mode="capture",
-            registry=registry,
             policy_path=None,
             repeat=False,
             approve_catalog=None,
-            min_size=0,
             query_smoke=False,
-            repo_root=Path(__file__).parents[1],
         )
 
     assert local_pointer.read_bytes() == prior_local
@@ -894,15 +920,15 @@ def test_repeat_build_failure_leaves_prior_pointers_current(
     with pytest.raises(RuntimeError, match="repeat ingest failed"):
         apply_project(
             project,
+            RunPolicy(
+                registry=registry,
+                repo_root=Path(__file__).parents[1], raw_mode="capture",
+            ),
             source="all",
-            raw_mode="capture",
-            registry=registry,
             policy_path=None,
             repeat=True,
             approve_catalog=None,
-            min_size=0,
             query_smoke=False,
-            repo_root=Path(__file__).parents[1],
         )
 
     assert local_pointer.read_bytes() == prior_local
@@ -982,15 +1008,15 @@ def test_fixed_point_with_allowed_source_drift_does_not_recheck_live_reference(
     )
     result = apply_project(
         project,
+        RunPolicy(
+            registry=tmp_path / "registry",
+            repo_root=Path(__file__).parents[1], raw_mode="reference",
+        ),
         source="all",
-        raw_mode="reference",
-        registry=tmp_path / "registry",
         policy_path=tmp_path / "policy.json",
         repeat=True,
         approve_catalog=None,
-        min_size=0,
         query_smoke=False,
-        repo_root=Path(__file__).parents[1],
     )
     assert reference_checks == [False, False]
     assert result["fixed_point"] == {

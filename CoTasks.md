@@ -56,8 +56,12 @@ Unblocked, decided, and startable without waiting on anything.
 
 | ID | Work | Note |
 |---|---|---|
+| **W04** | Candidate-record contract, steps 3-4 | Unblocked: W35 closed, so the per-vendor hazard fixtures the strict/diagnostic semantics need are reachable and tested |
+| **W99** | One receipts tree | Accepted and not applied; a move, not a rewrite |
+| **W101** | `reasoning_fidelity` | Accepted and not applied; wire-format, so it batches with W50, W51, and W98 |
+| **W71** | Nine `warn` sites to the facility | Unblocked: every command module now attaches a sink |
 | **W94** | Reduce four format-number declarations toward one | The unchecked fifth location is removed; what remains is a pre-commit check moving detection from test run to commit |
-| **W67** | Move relay fields into the objects that carry them | Five relays; independent of W04 and of W66 |
+| **W89** | Path inclusion and exclusion belong in the discovery policy | Specification settled on the item; `exclude_dirs`/`exclude_paths`/`include_paths`, with Operations documenting the design ahead of the rename |
 | **W95** | Tighten message and comment wording | Low priority, batches with anything |
 | -- | Cursor `agentKv` tier-1 decode | Attribution solved via `toolFormerData.toolCallId`; supplies model names and 111,000+ tool invocations |
 | -- | Codex declared parentage | `forked_from_id`, `parent_thread_id`, `agent_role`, `thread_source` are declared in the protocol |
@@ -68,9 +72,8 @@ The unanswered question, not the effort, is what holds each.
 
 | ID | Question | Whose |
 |---|---|---|
-| **W83** | Licence terms | Owner. Split to a separate item so W83 closes |
-| **W64** | Which mypy strict flags to enable | Was W04's; W04 is postponed, so this is parked indefinitely unless decoupled |
-| **W93** | Session-utilization inclusion policy | Detection settled; what a report includes is not |
+| **W83** | Licence terms | Owner. Postponed entire; restarts on the licence decision |
+| **W93** | Session-utilization inclusion policy | Detection **designed** on the item; what a report includes is not |
 | -- | Symlink traversal in discovery | Recommendation: do not follow. See [Item Detail](#item-detail) |
 
 ### Under Developer Review
@@ -96,7 +99,7 @@ Design and analysis proceed; implementation is postponed.
 | ID | Work | Restarts when |
 |---|---|---|
 | **W66** | Configuration unification | Deliberately deferred |
-| **W71** | Reporting adoption in the command layer | Deliberately deferred |
+| **W71** | Reporting adoption in the command layer | Fatal half done; nine status sites wait on whether two commands report at all |
 | -- | Linking-tooling retest | More development and capability expansion land first |
 
 Exception: the **time and datetime module** is not postponed. It is standalone,
@@ -109,6 +112,16 @@ Recorded so closed work is not re-derived. Outcomes are in
 
 | ID | Work |
 |---|---|
+| W04.1-2, .5 | `validate_mapped_event` at one vendor-neutral boundary, the candidate contract declared as a type, and a per-vendor conformance count in `decode_audit` that found an undeclared Cursor rule |
+| W35 | Every released manifest entry has a consumer that reads it through the manifest; four fixtures had none, and one was stale |
+| W67 | Every relay takes an object: 17 parameters to 4, 14 to 6, 12 to 8, 10 to 7, 8 to 3 |
+| W100 | One retention count, current included, shared by the publication trim and the prune |
+| -- | Two traversal helpers; `admin` and `query` attach a reporting sink and report start, done, and failure |
+| W66 (part) | Setting table with one stated precedence, `parents=` for seven shared options, help on every option, one declared type per flag, and the leaf-visible mechanism |
+| W71 (part) | The fatal-error channel: `cli.failure`, and no command module writes `sys.stderr` |
+| -- | Corpus recreated under the current contract and pruned to one snapshot per Project; the baseline table carries the resulting figures |
+| W55 | Time parsing consolidated onto `codess.timeval`; the `units` compatibility shim has no importers left |
+| W64 | Typing posture decided on measured cost: two flags enabled, one deferred with its figure |
 | W72 | One Event-record builder per adapter; 23,470 real Events decode byte-identically after |
 | W74.1 | Cursor Session times -- corpus-verified: 0 of 37 Cursor Sessions carry a null `started_at` |
 | W86 | Refusal reason codes reaching the store, aggregated |
@@ -141,22 +154,22 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 
 | ID | Priority | Status | Work | Blocked by |
 |---|---|---|---|---|
-| W04 | High | Planned | Shared candidate-record contract, enforced at the decode boundary | -- |
+| W04 | High | Planned | Candidate-record contract. Steps 1, 2, and 5 landed; steps 3-4 are unblocked now that W35 is closed | -- |
 | W05 | High | Planned | Run named real investigations against the query surface | -- |
-| W14 | High | Planned | Require or mark Project identity; duplicates override reviewed dispositions | -- |
+| W14 | High | Planned | Require or mark Project identity. The 2026-08-25 recreation reingested all 21 Projects and minted no duplicate, so the guard holds for a reingest; the direct-library-write path is still unguarded | -- |
 | W16 | Normal | Postponed | Evaluate external investigation interfaces | No consumer |
 | W17 | Normal | Postponed | Expand cross-Project analysis inputs | Baseline 2 |
-| W35 | Low | Postponed | Resolve the validation-fixture inventory | -- |
+| W35 | Normal | Closed | Every released entry has a consumer that reads it through the manifest | -- |
 | W43 | Low | Withdrawn | Table-drive request validation | -- |
 | W50 | Normal | Planned | Reconcile schema names with defined terminology | Batches with W51 |
 | W51 | Normal | Planned | Resolve source-identity naming and suffix rules | Batches with W50 |
-| W55 | Normal | Planned | Unify text and record parsing across the decode layer | -- |
-| W64 | Normal | Planned | Decide and enforce the typing posture | -- |
+| W55 | Normal | Closed | Text and record parsing unified on `codess.timeval`; the `datetime.now` sites remain and batch with W67 | -- |
+| W64 | Normal | Closed | Typing posture decided and enforced; `warn_return_any` recorded at 26 errors against W04 | -- |
 | W65 | Normal | Planned | Consolidate remaining relay parameter groups | W04 (partly) |
-| W66 | High | Planned | Unify configuration into one subsystem | -- |
-| W67 | Normal | Planned | Move relay fields into the objects that carry them | -- |
+| W66 | Normal | Planned | Configuration unification: table, `parents=`, help, types, the leaf mechanism, and the precedence sweep landed; a config file as a source remains | -- |
+| W67 | Normal | Closed | Every relay takes an object; the builder/relay distinction is a test; the three structures share no field | -- |
 | W70 | Normal | Planned | Re-partition documentation; remove cross-document redundancy | -- |
-| W71 | Normal | Planned | Adopt the reporting facility in the command layer | -- |
+| W71 | Normal | Planned | Fatal channel done; `admin` and `query` now configure a sink and report start/done. Nine `warn` sites remain to convert | -- |
 | W72 | Normal | Closed | One Event-record builder per adapter; no adapter constructs an Event dict outside it | -- |
 | W73 | High | Analysis | Resolve or close the twenty-one open vendor decode gaps CoPlan records; Codex half answered by the protocol source | -- |
 | W74 | High | Planned | Cursor Session times dropped; unread populated fields; two vendor facts to record | Retrieved-reference policy split to W79 |
@@ -168,21 +181,26 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W80 | High | Closed | Read `composerData.modelConfig` for every composer, not only headered ones | -- |
 | W81 | Normal | Postponed | Cursor Artifact evidence in adjacent key spaces: patch graphs, checkpoints, file snapshots | Restart criteria on the item |
 | W82 | High | Closed | Tools carry unchecked SQL; a renamed column broke the mandated audit silently | -- |
-| W83 | High | Postponed | Early-access release readiness | B1 is the owner's decision; restart criteria on the item |
+| W83 | High | Postponed | Early-access release readiness | Postponed entire, including the licence split; restarts on the owner's licence decision |
 | W84 | Low | Postponed | Characterise `selectedModels` parameters beyond `fast` and `effort` | Both observed ids are mapped; no third has appeared |
 | W85 | Normal | Postponed | Composers older than the header retention window are unattributed by design | Handling can improve; the condition itself is vendor retention |
 | W86 | High | Closed | Skipped and refused records are counted but not attributed | -- |
 | W87 | Normal | Planned | Group the test corpus by subsystem; find superseded and uncovered cases | -- |
 | W88 | Normal | Planned | Cursor KV decode: classify by content kind before parsing | -- |
-| W89 | Normal | Planned | Path inclusion and exclusion belong in the discovery policy file | -- |
+| W89 | Normal | Planned | Path inclusion and exclusion belong in the discovery policy file; specification settled, not applied | -- |
 | W90 | High | Closed | Scanned Projects are never ingested unless named again | -- |
 | W91 | High | Closed | One authoritative Project record spanning scanned, ingested, moved, and removed | Structural half tracked on W14 |
 | W92 | Normal | Planned | Event-kind aggregation: most volume is machine traffic, not human work | -- |
-| W93 | Normal | Postponed | Session utilization: report counts and `surface_kind`, not a derived class | Detection settled; inclusion policy undecided |
+| W93 | Normal | Postponed | Session utilization: report counts and `surface_kind`, not a derived class | Link-detection design recorded; inclusion policy undecided |
 | W94 | Normal | Planned | Four files carry the format number; two drift silently | -- |
 | W95 | Low | Planned | Tighten message and comment wording against a worked example | -- |
 | W96 | High | Planned | Project location changes: detect, report, and direct the operator | W14 (partly) |
 | W97 | Normal | Planned | Read the Codex thread name; reconcile archive location with archive state | -- |
+| W98 | Low | Planned | Ten field names still spell the algorithm rather than the value: `*_sha256` against the `*_digest` rule | Each is wire-format or a released document, so each costs a regeneration or a version bump |
+| W99 | Normal | Planned | One tree `receipts/<kind>/`; `receipt_format` unchanged. Accepted, not applied | -- |
+| W102 | Low | Planned | Review the option classification against what each flag actually does: 110 flag-only, 34 default-only, 24 with a variable | The classification is recorded in CoNames and has not been critiqued per flag |
+| W101 | Normal | Planned | Add `reasoning_fidelity`: `summary` or `full`, set by the adapter that read it. Accepted, not applied; wire-format so it batches with the next regeneration | -- |
+| W100 | Normal | Closed | One retention count, current included, read by both paths through one implementation; `--keep` and `create_snapshot(keep_total=)` override it per run | -- |
 
 ## Queue
 
@@ -191,12 +209,12 @@ not a preference.
 
 | Rank | Item | Why here |
 |---|---|---|
-| 1 | **W05** | The only item whose output is evidence about whether the query surface answers real questions rather than machinery that supports them. Needs no rebuild: current-format stores exist and are audited, so the work starts against current data. |
-| 2 | **W04** | Structural, and coverage reporting states loss against exactly the profiles it enforces -- a report built against unenforced profiles attests to nothing. Baseline 2's substance. |
-| 3 | **W50 + W51** | The naming resolutions no format has yet carried. Both are wire-format, so they land together as one rebuild or they cost two. |
-| 4 | **W66** | The largest structural item, and now the prerequisite rather than the sequel: W67's objects are built at the command adapter from values a setting declaration owns, so declaring each setting once must come first or the object's constructor encodes the current duplication. |
-| 5 | **W67** | Follows W66 directly and is mechanical once it lands: each relay already has an object to take, the measurement separating a relay from a builder is written down, and the five shared parameters are the same subset `ChildInvocation` carries. |
-| 6 | **W64 + W65** | W65's record-context cluster is adapter signatures, so consolidating before W04 rewrites them twice. W64 no longer waits on W04 -- what remains after the naming pass is dominated by optional-narrowing, which is what `strict_optional` decides -- but it is cheapest once the signatures have settled. |
+| 1 | **W05** | Unchanged, and now more clearly first: it is the only item whose output is evidence about whether the query surface answers real questions rather than machinery that supports them. The corpus was just rebuilt and audited, so the work starts against current data with no rebuild of its own. |
+| 2 | **W67** | Promoted from 5. Its prerequisite landed -- the setting table declares each value once, so a policy object built at the command adapter no longer encodes duplication. It also carries the twelve remaining ambient clock reads, which are in four of its five relay modules. |
+| 3 | **W04** (steps 3-4) | Steps 1, 2, and 5 landed, and step 5 found a real non-conformance on its first run. W35 is closed, so the per-vendor hazard fixtures the strict/diagnostic semantics need are now reachable and tested. |
+| 4 | **W50 + W51 + W98** | The naming resolutions no format has yet carried, now three rather than two. All are wire-format, so they land as one regeneration or they cost three. |
+| 5 | **W66** (config file) | Everything measured has landed, including the precedence sweep. What remains is admitting a config file as a source, which is a design question rather than a sweep and blocks nothing. |
+| 6 | **W65** | W64 closed. W65's record-context cluster is adapter signatures, so it still wants W04's steps to settle first -- which is why it now trails rank 3 rather than sharing a row with a closed item. |
 
 ### Resuming: Project Location Changes
 
@@ -209,7 +227,7 @@ do first.
 
 1. **Make one report directive.** `registry_check` finds an absent catalogued
    directory and says so; it should also print
-   `codess catalog location retire --project-id <id> --path <path>`. One
+   `codess catalog location retire --project-id <id> --directory <path>`. One
    finding, one command, no guessing -- and it is the pattern the rest follow.
 2. **Detect the Claude slug split.** Two slug directories whose decoded paths
    differ, where one path is absent and the other live, are one Project's
@@ -222,8 +240,12 @@ do first.
 5. **Then W14's five steps**, which remove the restore-and-copy failure rather
    than reporting it.
 
-**State at the pause.** 1,978 tests, lint 171 against a ceiling of 172, types
-80 of 80, no regressions. `catalog lifecycle` reports 20 ingested and 1
+**State at the pause.** The suite is green and lint and types are within their
+recorded ceilings; the figures are read from `tools/quality_report.py`, which is
+where a number that is wrong by the next change belongs. `project_inventory`
+reports 0 Projects holding vanished Sources, `registry_check` 0 errors and 0
+warnings, and `variable_reference --check` current. `catalog lifecycle`
+reports 20 ingested and 1
 worktree. `registry_check` reports 0 errors, 0 warnings, 1 note **when the
 discovery variables are unset**, which is not the same as a clean result: the
 layout checks do not run, and a skipped check currently reads as a passing one.
@@ -237,10 +259,109 @@ ingested), W91 (reconciled lifecycle view and its command), W78 (module-level
 import cycles), W82 (unchecked tool SQL). W80 and W74.1 landed earlier.
 
 **Two conditions on the development machine that are evidence rather than
-defects**, and should not be "fixed" by a later reader: one Project holds a
-format-4 archived store that is the only remaining record of 122 vendor
-Sessions the vendor has pruned, and one Project pair is a linked git worktree
-recorded as such.
+defects**, and should not be "fixed" by a later reader: one archived format-4
+store is the only remaining record of 22 vendor Sessions the vendor has pruned,
+and one Project pair is a linked git worktree recorded as such.
+
+**The archived store was located and protected**, because the earlier
+description of it did not match what is on disk. Measured across all 21
+published store sets, **every recorded Source still resolves** -- 0 vanished --
+so nothing in the registry holds unreproducible evidence. The two stores W14
+identified (154 Sources with 122 vanished, and 8 with 8) are **gone**: neither
+survives anywhere on this machine. What does survive is a different store, at
+`ZK/ZKs`, found only because a test scratch tree happened to retain it:
+
+| Measure | Value |
+|---|---|
+| Sessions | 22 |
+| Events | 20,235 |
+| Recorded Sources | 22, of which **22 vanished** |
+| Format | 4 |
+
+Its vendor directory holds no transcripts, it has no catalog entry, and its
+working store under the checkout holds zero Sessions -- so the copy in test
+scratch was the only record. It is now at
+`~/.codess/archive/ZKs-coschema4-20260812T072113Z`, read-only by permission,
+with an `ARCHIVE.md` stating what it holds and why deleting it is
+unrecoverable. The original was left in place rather than moved.
+
+**What a recreation cannot re-derive, captured before it runs.** The catalog's
+reviewed decisions are in `catalog/inventory/dispositions-20260824.json`: one
+`worktree_of` relation (ZeroPerf to Zero400) and 13 Cursor workspace bindings
+across 8 Projects, every one `approved`. Cursor keys its data by an opaque
+workspace hash rather than by path, so a binding is what connects a composer to
+a Project at all.
+
+Ten are ordinary `local_workspace_path_binding` rows that a re-ingest can
+rediscover by matching `workspace.json`. **Three cannot be rediscovered**, and
+they are the reason the capture exists:
+
+| Relation | Count | Asserts |
+|---|---|---|
+| `project_path_alias` | 2 | A different path is the same Project: `ZeroMac` is Zero400, `zerowallet400` is zerowalletmac |
+| `remote_workspace_local_binding` | 1 | An SSH remote URI is this local Project |
+
+No vendor store records either fact. `zerowalletmac` additionally holds three
+distinct workspace hashes for one path -- Cursor opened a new workspace on
+separate occasions -- and only the bindings record that they are one Project's
+work.
+
+**The recreation ran, and it was already overdue.** Every catalogued Project
+was reingested with `--force` and republished, with no error and no Project
+rejected. The resulting figures are the [Corpus Baseline](#corpus-baseline),
+which exists to price a rebuild and states where each is read from; repeating
+them here would be a second copy that goes stale first.
+
+**The rebuild was not caused by any change made here.** `PRAGMA user_version` is
+still 9, but the *contract digest* had moved: the schema files were last
+committed 2026-08-24 and the stores were published 2026-08-22, so every store was
+already unreadable by `require_store` before this session began. `codess query`
+said so directly, which is the gate working -- a store written under a superseded
+contract is refused rather than read as though it agreed.
+
+**The corpus grew rather than merely moving**, which is the fact worth keeping
+rather than the totals. CodeSess went from 70,571 to 74,839 Events and ZeroPerf
+from 39,417 to 40,998 across the three days between publications: two measured
+pairs, retained because they demonstrate what a rebuild does rather than what the
+store currently holds. A rebuild reads what the
+Sources hold now, which is the property that makes it safe when they are intact
+and destructive when they are not.
+
+**Every reviewed disposition survived**, checked rather than assumed: the
+ZeroPerf `worktree_of` relation and all 13 Cursor workspace bindings are intact,
+21 catalog entries in and 21 out, and **no path is claimed by two Projects** --
+so W14's minting defect did not recur. The catalog is keyed by `project_id` and
+written only when identity changes, which is why a reingest leaves it alone.
+
+**The archive was not reached.** `~/.codess/archive/ZKs-coschema4-…` still holds
+its 22 Sessions and 20,235 Events and is still read-only, which is what the
+permission is for: a rebuild sweep that reached it would have destroyed the only
+record of them.
+
+**The 27 superseded snapshots were pruned**, after both checks Operations
+requires. Counts alone can mislead -- two stores for one Project once read as
+one superseding the other while the older held two months the newer did not --
+so the date range was compared as well: **0 superseded snapshots covered time
+its current one does not**. The plan reported `safe_to_apply`, no blocking
+references, and all 21 current pointers present in `keep` and absent from
+`delete`.
+
+Applied with a receipt at `~/.codess/reports/prune-20260825.json`, whose
+`plan_digest` matches the plan that was reviewed, so what was applied is what
+was inspected, and `remaining_candidates` is 0. The count deleted and the bytes
+reclaimed are in the receipt rather than here: they describe one run, and a run's
+figures cannot close an item or be re-derived once the snapshots are gone.
+
+**The archive was not reached**, verified after the fact rather than assumed: it
+still holds its 22 Sessions and 20,235 Events and is still read-only. A prune is
+one of the three operations that can destroy a store whose Sources are gone, and
+the permission is what stops it.
+
+**What this changes about the rebuild.** A full recreation is safe for the
+published set, because nothing there depends on a Source that is gone. The
+hazard was real and sat outside the registry, which is the argument for running
+the inventory before the rebuild rather than trusting the recorded figure: the
+figure named two stores that no longer exist and missed the one that does.
 
 ### Next Two Sprints
 
@@ -337,9 +458,10 @@ current baseline, not a property of the system.
 | Measure | Current | Source |
 |---|---|---|
 | Published Project store sets | 21 | `~/.codess/projects/*/current.json` |
-| Sessions | 431 | `SELECT count(*) FROM sessions` across published stores |
-| Events | 260,238 | `SELECT count(*) FROM events` across published stores |
-| Store bytes | 1,939 MB across 63 stores, largest store 431 MB | Snapshot directory sizes |
+| Sessions | 434 | `SELECT count(*) FROM sessions` across published stores |
+| Events | 266,219 | `SELECT count(*) FROM events` across published stores |
+| Vanished Sources | **0 of 403** | Each published store's `source_path` tested against disk |
+| Store bytes | 1.8 GB across 21 snapshots, one per Project, with 0 superseded | Snapshot directory sizes; `tools/snapshot_inventory.py` |
 | CoSchema format | 9 | `PRAGMA user_version` |
 | Ingest rate | ~900 Events/s | Refresh receipt: 76,055 Events in 83.7 s, one Project, apply stage |
 
@@ -396,19 +518,19 @@ either not started or has a stated boundary.
 | Work | Stopping point | Item |
 |---|---|---|
 | Naming convention applied codebase-wide | Enforced for the two cases a checker catches, and both now report zero: builtin shadowing (ruff `A`) and a name rebound to a different type (mypy `assignment`). The subject-word and general-word rules are **not** applied to existing names, which is a wide diff with no behavioural content. | W64 |
-| Relay parameter consolidation | `run_ingest` converted as the worked example. Five further relays identified and untouched. | W67 |
-| Configuration unification | Measured and not begun. | W66 |
-| mypy strict flags | The count was reduced by repair rather than reclassification. Which flags to enable is undecided. | W64 |
+| Relay parameter consolidation | Done. All five relays take an object; `test_a_wide_signature_is_a_builder_or_takes_a_structure` holds the rule. | W67 |
+| Configuration unification | Step 3 closed ahead of the table: `--store`, `--dirs`, and `--resource-policy` each declared one type, and a test holds the rule. Steps 1-2 and 4-6 not begun. | W66 |
+| mypy strict flags | Decided on measured cost: `disallow_untyped_defs` and `strict_optional` enabled at zero cost, `warn_return_any` deferred at 26 errors against W04. The count returned to its 80 baseline by repair, not reclassification. | W64 |
 | Record-context parameter group | Identified; blocked behind W04 because it changes adapter signatures. | W65 |
 | Docstring summaries (`D205`) | The rule is selected and its findings are a recorded ceiling, not zero. Four docstrings in `field_state` were rewritten as the worked example; the rest fall as files are edited. | -- |
 | Command-layer help text | 76 distinct flag names in `admin_cmd` carry no help; `project.py` documents all of its own. Two were written where a verification step was being disabled; `parents=` would carry one declaration to every subcommand. | W66 |
 | Event-record builders | `cursor` has no module-level builder and `cc`/`codex` have sites that bypass theirs. Found by `pylint R0801`, not started. | W72 |
 | Deep audit adoption | `tools/deep_audit.py` runs and logs; nothing yet acts on its DESIGN tier. Counts are read from the tool rather than recorded here. | -- |
-| Time parsing consolidation | `codess.timeval` is the standalone module: `epoch_ms`, `parse_iso`, `iso_to_ms`, `to_iso`, `month_key`, `is_sane`, and `now_ms` with an injected clock. Two tests assert the constraints -- no `codess` import, no ambient `datetime.now`. `units` re-exports `epoch_milliseconds` so existing callers keep working. **Remaining:** migrate the three inline `fromisoformat` callers (`walk_sessions`, `token_usage`, `refresh_receipts`), the four `epoch_milliseconds` importers, and the 20-plus `datetime.now(UTC)` sites onto the module and its injected clock. | W55 |
+| Time parsing consolidation | `codess.timeval` is the standalone module: `epoch_ms`, `parse_iso`, `iso_to_ms`, `to_iso`, `month_key`, `is_sane`, `now_ms`, and `now_iso`. `codess.wallclock.system_clock` is the ambient clock the last two are handed, and is a separate module because `timeval`'s constraint forbids a clock read inside it. Three tests assert the constraints -- no `codess` import in `timeval`, no ambient clock in `timeval`, and no `datetime.now` anywhere in the package outside `wallclock` and `reporting.clock`. **Done:** the `fromisoformat` callers, the `epoch_milliseconds` importers, and 44 of the 56 clock reads. **Remaining:** 12 reads in four relay modules, listed in the test's `DEFERRED` set -- threading a clock through them changes the signatures W67 rewrites, so doing it first converts them twice. | W55, W67 |
 | Cursor Session times | **Closed in code, unverified against the corpus.** The header fallback is written and the suite covers it; the 2 Sessions of 86 that carry no `started_at` are still null in the published stores, because closing them needs the reingest that W74.3's column change also needs. | W74.1 |
 | Cursor field mapping | The Sprint 2 pass landed: timings, error details, terminal cwd, symbol and file links, todos, code blocks, `context` leaves, and the request and response identifiers. **Remaining:** `richText` mention nodes and `isAgentic`, both populated on 390 of 4,984 sampled bubbles. | W74.5a, W79 |
 | `duplicate_of` reference | Decided and not built. Needs a column, so it batches with the next wire-format change rather than landing alone. | W74.3 |
-| Mechanical enforcement | Import boundaries, SQL ownership, module-level cycles, rejection vectors, and subprocess coverage each have a check. Mapping-profile conformance over emitted fixtures does not. | W04 |
+| Mechanical enforcement | Import boundaries, SQL ownership, module-level cycles, rejection vectors, subprocess coverage, and now mapping-profile conformance each have a check. **Remaining:** the strict/diagnostic semantics of a non-conformance are not yet equal across vendors (W04 step 3), which needs the per-vendor hazard fixtures W35 inventories. | W04 |
 | Terminal-agent storage | The obsolete `chats/` store is characterised; the current `~/.cursor/projects/` tree is identified and not examined. | W76 |
 | Harness conditions | Designed, segregated into machine and human parts, and not run. | W75 |
 
@@ -614,11 +736,26 @@ by construction with nothing testing it, which is one refactor from being lost.
 
 | Step | Work | Verified by |
 |---|---|---|
-| 1 | Call `validate_mapped_event` at one vendor-neutral post-decode boundary, between adapter output and `store` insertion, so every Event passes it regardless of vendor. | A deliberately non-conformant Event routed through each adapter's ingest path meets the same rejection. |
-| 2 | Declare the shared candidate-record contract as a type, so the shape crossing that boundary is stated rather than implied by three adapters agreeing. | Adapters type-check against the declared candidate; mypy covers the decode boundary. |
+| 1 | **Done.** `_check_mapping_conformance` calls `validate_mapped_event` in `store.upsert_event`, beside the unmapped-semantics diagnostic, so every Event passes it regardless of vendor. | Done: `TestMappingProfileConformance` routes an undeclared rule through each of the three adapters and asserts one `mapping_profile_nonconformance` row each. |
+| 2 | **Done.** `mapping.CandidateEvent` declares the shape crossing that boundary: four required keys, matching the released contract's `mapped_event_required`, and the rest `NotRequired`. | Done: mypy reports `typeddict-item` on a candidate missing a required key. |
 | 3 | Give the boundary diagnostic and strict modes with the same semantics for all three vendors, replacing the Claude-only strict-mapping coverage. | Equivalent partial, malformed, unsupported, and hazard fixtures per vendor produce equivalent dispositions. |
 | 4 | Record each non-conformance as a `mapping_diagnostics` row rather than only raising, so diagnostic mode is inspectable after the fact. | Diagnostic-mode ingest of hazard fixtures yields rows carrying the reason codes the profiles declare. |
-| 5 | Extend `tools/decode_audit.py` with a per-vendor conformance count, so the current zero is re-measurable rather than observed once. | The audit reports conformance beside its existing invariants and exits nonzero on any failure. |
+| 5 | Extend `tools/decode_audit.py` with a per-vendor conformance count, so the current zero is re-measurable rather than observed once. **Not started**, and the smallest remaining piece. | The audit reports conformance beside its existing invariants and exits nonzero on any failure. |
+
+**What step 1 settled that the item did not anticipate.** The check is scoped to
+Events that carry a `mapping_rule`. An Event without one has no profile to be
+measured against, and the unmapped-semantics diagnostic recorded beside it
+already reports the condition -- validating it anyway reported one condition
+under two reason codes and raised every fixture's diagnostic count by one, which
+is what twelve suite failures showed on the first wiring. The boundary is also
+*after* the insert rather than between decode and insert: a diagnostic row
+references `event_id`, so recording one before the row exists cannot link it.
+
+**Strict mode raises `SchemaContractError`, not `SourceCompatibilityError`.** The
+latter is defined in the Claude adapter, so a vendor-neutral boundary importing
+it would depend on one vendor and invert the dependency the check exists to
+remove. A profile violation is a contract violation, which is what the neutral
+class already names.
 
 **Ordering within the item.** Steps 4 and 3 are what coverage reporting depends
 on: a loss report states what was *not* mapped, and diagnostic rows are that
@@ -627,6 +764,46 @@ which is a second decode path. Step 3 makes the counts comparable, since a
 vendor that raises where another tolerates gives the same figure two meanings.
 Steps 1 and 2 feed nothing else and can land independently. Step 5 overlaps
 coverage reporting in presentation and folds into it.
+
+#### Where This Item Stands
+
+**Steps 1 and 2 are in the code.** `store._check_mapping_conformance` calls
+`validate_mapped_event` at one vendor-neutral boundary, and `mapping.CandidateEvent`
+declares the shape crossing it. `TestMappingProfileConformance` routes an
+undeclared rule through each of the three adapters and asserts one diagnostic
+each, so the property the item was opened for is now tested rather than held by
+construction.
+
+**Step 5 landed, and immediately found what it was built to find.**
+`decode_audit` now reports `mapping_conformance` per store: the profile, the
+declared and in-use rule counts, the undeclared ids, and the declared-but-unused
+ones. Run against the corpus it reported one non-conformance -- `cursor.reasoning`,
+emitted by `adapters/cursor` at its `mapped(...)` call site and absent from
+`schema/mappings/cursor.json`.
+
+The rule is legitimate: it maps a Cursor bubble's `thinking` to
+`message.reasoning_summary`, with a model Actor and a reasoning content role. The
+*profile* was wrong, not the decoder, so the rule is declared and the schema
+manifest refreshed.
+
+**This is the drift the item predicted, in the place it predicted.** W04 records
+that Cursor is the one adapter where a new id needs no edit to a central table --
+seven literals at seven call sites -- and says to look there first if the
+conformance check ever reports an undeclared id. It did, and that is where it
+was. The follow-on the item leaves open is whether Cursor gains a dispatch table;
+the check catching this without one is evidence that it does not need one.
+
+**Step 5 also justifies itself against step 1.** The check at write time refuses
+a non-conforming Event as it is stored; the audit at read time states whether a
+store *already holds* one, which a store written before the check existed can.
+Enforcement and measurement are different jobs, and only the second could have
+found this.
+
+**Steps 3 and 4 are blocked, and on a named item rather than on effort.**
+Equivalent partial, malformed, unsupported, and hazard fixtures *per vendor* are
+what make a strict-versus-diagnostic disposition comparable, and inventorying
+them is W35 -- which was Low/Postponed on the assumption that nothing waited for
+it. Something does now.
 
 **Evidence to close.** All three adapters satisfy the typed and runtime candidate
 contract, pass the same post-decode conformance check, and share strict/diagnostic
@@ -754,6 +931,29 @@ another still mints, because the registry is per-machine. That is correct --
 `path_aliases` is where a cross-machine identity would be stated. Out of scope
 here and worth naming so it is not mistaken for a gap in this fix.
 
+#### What the Recreation Settled, and What It Did Not
+
+**The reingest path is proven and the defect did not recur.** Every catalogued
+Project was reingested with `--force` on 2026-08-25 and the catalog came out with
+the same entries it went in with: no path claimed by two Projects, ZeroPerf's
+`worktree_of` relation intact, and every Cursor workspace binding retained. The
+catalog is keyed by `project_id` and written only when identity changes, which is
+why a reingest leaves it alone.
+
+That is a real result and a narrow one. It exercises the path the nine duplicates
+came from -- repeated `codess ingest --dir <path> --force` against Projects that
+already had catalog entries -- and shows the guards added since hold there.
+
+**What it does not settle is the item's actual subject.** W14 is about *direct
+library writes*: a caller reaching `store` or `project_catalog` without going
+through a command, which is the path that has no guard and which no CLI run
+exercises. A reingest proving the CLI is safe says nothing about a library caller
+minting an identity, because they are different entry points.
+
+**So the disposition is unchanged.** The item stays open, at the same priority,
+and the recreation is recorded here as evidence about one path rather than as
+progress on the item.
+
 **Evidence to close.** Separate vendor stores cannot silently create unrelated
 Project identities for one repository; re-ingesting a Project that already has
 a catalog entry reuses that entry; and a path carrying a reviewed disposition
@@ -775,6 +975,18 @@ which store is newer. Checked per store, by testing whether each recorded
 source files no longer exist -- Claude prunes its own transcripts -- so those
 two stores are the last remaining record of 36,559 Events. The other seven
 duplicate what the current Sources still produce and can be discarded.
+
+**Both stores A and B are gone**, established by scanning every SQLite store
+under the work root and the registry: neither the 154-Source store nor the
+8-Source store survives anywhere on this machine, so the archive disposition
+below was never carried out and can no longer be. The 36,559 Events are lost.
+Recorded because a disposition that reads as pending invites a later reader to
+go looking for stores that are not there -- and because it is the measurement
+that argues for archiving on discovery rather than on a later scheduled pass.
+
+A **different** unreproducible store was found and archived in the same sweep;
+it is described under [Resuming](#resuming-project-location-changes) and is not
+one of these nine.
 
 **Disposition:**
 
@@ -853,9 +1065,26 @@ referenced by nothing but the manifest itself, so no test can fail on them.
 **Evidence to close.** Every entry in the released manifest has a named consumer,
 or is removed; a test fails if an entry acquires none.
 
-**Status.** Postponed and Low: the fixtures were removed from the write gate, so
-they no longer gate anything a store does. This is now a question about what the
-released set should contain.
+**Closed.** `tests/test_released_fixtures.py` resolves every entry *through*
+`load_manifest` rather than by path, which is the distinction that matters: a
+test opening a known path keeps passing after the manifest stops naming the file,
+and the manifest is what a package consumer resolves.
+
+**The count on this item was stale.** Six of the ten fixtures had a reader, not
+two. Four did not: both `store_meta` compatibility fixtures, `maximal/event`,
+and `hazard/cursor-tool-former` -- which is the one W04's strict/diagnostic work
+needs, so the gap and the dependency were the same fixture.
+
+**Writing the tests found the defect the gap allows.** `maximal/event` carries a
+`timestamp` field, which the `events` table has not had since it became
+`event_at`. The fixture is still valid -- `store.upsert_event` accepts `timestamp`
+as the vendor spelling -- but nothing had checked either way, which is what an
+unreferenced fixture means. It is now asserted against `mapping.CandidateEvent`,
+the contract it actually describes.
+
+**A fixture added to the released set is covered by construction**: the
+parametrized consumer derives its cases from the manifest, so a new entry is
+resolved and parsed without anyone remembering to add a test.
 
 ### W43 -- Table-Driven Request Validation
 
@@ -1140,12 +1369,36 @@ complete: every function has a return type and every argument has one.
    `assignment` errors concentrate in the `opts` and `settings` bags threaded
    through ingest.
 
+#### Decided on Measured Cost
+
+Each flag was enabled alone, the error count read, and the flag kept where the
+count did not rise. The method is what makes the answer checkable: a flag
+argued for on where errors *seem* to concentrate is how `strict_optional`
+reached this item attributed to a decode boundary it has nothing to do with.
+
+| Flag | Measured | Disposition |
+|---|---|---|
+| `disallow_untyped_defs` | 10 findings, all variadic bags or parameters whose type is spelled elsewhere in the package | **Enabled.** Annotating them exposed four optional-handling defects the untyped signatures had hidden; with those repaired it costs nothing |
+| `strict_optional` | 0 -- it is mypy's default. Disabling it *raises* the count by 31 | **Enabled.** States an existing guarantee rather than adding one |
+| `warn_return_any` | 26, concentrated in `query_api` (4), `schema_contract` (3), `snapshot`, `project`, `project_catalog` (2 each) | **Not enabled.** These are the `Any` vendor JSON legitimately carries until validated, which is what W04 types |
+
+**The four defects the annotations exposed**, each repaired rather than
+suppressed, because a flag whose findings are silenced measures nothing:
+
+| Where | Was | Now |
+|---|---|---|
+| `ingest_publication` | `catalog` set to `None` when no vendor changed, then passed to a reader expecting a dict | Defaults to an empty catalog, which is what the loop would read anyway |
+| `snapshot.create_snapshot` | `raw_store` declared required and passed `None` whenever the run was not sealing | Declared optional; the seal path raises if it is absent, which is the only path that resolves it |
+| `adapters/cursor` | Progress emission read `composer_start_tick` unguarded where a sibling read at line 555 guards it | Guarded, matching the sibling |
+| `cli/ingest_cmd` | `roots` is `None` exactly when `err` is set, a correlation the checker cannot follow | The absent case is stated rather than implied |
+
 **Evidence to close.** The enabled flag set is recorded with the reasoning for
 each; `Any` appears only where a stated rule permits it; the type count falls
 rather than being reclassified; `tools/quality_report.py` gates on the baseline.
 
-**Blocked by.** W04, which moves the decode boundary a large share of the
-remaining errors sit behind.
+**Closed.** Two flags enabled at zero cost, the third recorded with its figure
+and its owning item. The count returned to its baseline of 80 rather than being
+reclassified: the four defects were repaired, not ceiling-raised.
 
 ### W65 -- Recurring Parameter Groups
 
@@ -1184,7 +1437,7 @@ every setting, so a new option is one table row rather than four edits.
 **The defect.** A value's default is currently decided in up to four places -- a
 compiled constant in `config`, an `env_*` reader, an argparse `default=`, and a
 `getattr(args, ..., None) or CONSTANT` fallback at the use site -- and nothing
-states which wins. `--registry` and `--dir` each appear in four modules;
+states which wins. `--store` and `--dir` each appear in four modules;
 `--source`, `--raw-mode`, `--min-size`, `--force`, and `--resource-policy` in
 three. [CoReview](CoReview.md) holds the measured counts.
 
@@ -1201,9 +1454,9 @@ supports.
 `admin_cmd` builds **42 subparsers** and declares **158 flags inside them**,
 and nothing in the file uses argparse's own `parents=` facility for shared
 options -- verified to do exactly this job: one declaration on a parent parser,
-inherited by every subparser that lists it. So a new subcommand that needs `--registry` gets it the only way the
-surrounding code demonstrates: by writing the line again. Sixteen subcommands
-need it, so the line exists sixteen times. Each addition was locally correct and
+inherited by every subparser that lists it. So a new subcommand that needs `--store` gets it the only way the
+surrounding code demonstrates: by writing the line again. Twenty-two
+subcommands need it, so the line exists twenty-two times. Each addition was locally correct and
 matched its neighbours; the pattern that was being matched is the defect.
 
 That is the same mechanism CoPlan records for the snapshot file literals: a
@@ -1270,9 +1523,9 @@ which is the standard.
 **The gap is wider than those two.** 76 distinct flag names carry no help text, and **every
 one is in `admin_cmd`** -- `project.py` documents all of its own. So the
 administrative surface is undocumented as a class, not by oversight in a few
-places: `--registry`, `--source`, `--force`, `--min-size`, and `--raw-mode` are
+places: `--store`, `--source`, `--force`, `--min-size`, and `--raw-mode` are
 among them, which is the same set the duplication concentrates in. A flag
-declared sixteen times with no help is sixteen chances to write one and none
+declared twenty-two times with no help is twenty-two chances to write one and none
 taken.
 
 This is what makes `parents=` worth more than the deduplication itself: one
@@ -1431,24 +1684,74 @@ between any two.
 |---|---|---|
 | 1 | Extend `config`'s existing env table to a **setting table**: one row per setting naming its env var, flag, type, default, and which commands accept it. The table exists and is table-driven already; what it lacks is the flag half. | A test asserts every row is well-formed and no two rows share a flag |
 | 2 | Emit the argparse declarations **from** the table rather than by hand, one helper per command family. | `--help` output is byte-identical before and after, per command |
-| 3 | Resolve the three `--registry` variants into the one the table declares. | Below |
+| 3 | **Done.** Resolve the three `--store` variants into one declared type. | Done: `test_a_flag_name_declares_one_type` |
 | 4 | Replace the `getattr(args, ..., None) or CONSTANT` sites with one accessor that applies the stated precedence. | A test covers each precedence pair: flag over env, env over built-in |
 | 5 | State the import-order constraint once, and give the two flags that work around it a supported path. | The `os.environ[...] = "1"` writes in `project.parse_and_run` are gone |
 | 6 | Admit a config file as a source, between built-in and environment. | A file-set value loses to both the env var and the flag |
 
-**Step 3 is a real defect, not a tidy-up.** `--registry` is declared **16
-times** across two modules in three incompatible forms:
+**Step 3 is a real defect, not a tidy-up, and it is now closed.** The flag is
+`--store` since the rename; re-measured, it is declared **22 times** across two
+modules in three forms:
 
 | Form | Where | Consumed by |
 |---|---|---|
-| `type=Path, default=REGISTRY` | `admin_cmd`, 14 subcommands | `args.registry` directly, so it must be a `Path` |
-| `type=str, default=None` | `project.py` | `resolve_registry_directory`, which accepts `str \| None` |
-| `type=Path, required=True` | `admin_cmd`, one subcommand | `args.registry` directly |
+| `type=Path, default=STORE_ROOT` | `admin_cmd`, 20 subcommands | `args.store_root` directly, so it must be a `Path` |
+| `type=Path, required=True` | `admin_cmd`, one subcommand | `args.store_root` directly |
+| `type=str, default=None` | `project.py` | `resolve_store_root`, which accepts either |
 
-A caller moving between command families gets a different type from the same
-flag name. The table settles it: declare `Path` with the `REGISTRY` default and
-route every consumer through `resolve_registry_directory`, which already
-normalizes both.
+A caller moving between command families got a different type from one flag
+name. Behaviour was right -- `resolve_store_root` normalizes both -- and that is
+precisely what made the divergence invisible. `project.py` now declares `Path`,
+matching the other 21.
+
+**Extending the check found four more, of which one was the same defect.**
+`--dirs` and `--resource-policy` were `str` in `project.py` against `Path` in
+`admin_cmd`, and are now `Path`. `--resource-policy` also carried
+`metavar="JSON"` in one declaration for an argument that is a file path, which
+named the file's content rather than the argument.
+
+**Three flag names were reused for genuinely different subjects.** Two are
+renamed; the third stays, and the difference between those cases is the rule:
+
+| Was | Now | Because |
+|---|---|---|
+| `--project` (a directory) | **`--directory`** | The spelling named three subjects at once -- a reference under `catalog decide`, a repeatable reference list under `refresh`, and a path on disk. `--project` keeps the two that are references |
+| `--selection` (a state) | **`--select`** | The value is a selection state and the flag now names the act of filtering by one |
+| `--selection` (a file) | **`--file`** | Under `baseline freeze` the selection is already the subcommand's subject, so the flag names which part of it |
+| `--since` | unchanged | **Both spellings are correct for their command.** A git date expression is what `rev-list --since` accepts and a Unix millisecond timestamp is what an `_at` column holds; each matches the vocabulary of the surface it belongs to, and renaming either would make one command disagree with the tool it wraps |
+
+Verified by dumping `--help` for all 45 parsers before and after: exactly five
+subcommands changed, each by exactly the intended rename, and no other option
+moved.
+
+**Applied across the tools as well, because a caller does not change vocabulary
+at the `tools/` boundary.** Four scripts took a Project directory and called it
+`--project` -- `apply_and_verify`, `retire_project`, `validate_snapshot`, and
+`demo_model_metrics` -- and `catalog location add|retire` called one `--path`,
+which says only that the value is a path, a thing `type=Path` already says. All
+five are `--directory`.
+
+**Two further one-subject-two-spellings cases**, found by grouping declarations
+by `dest` rather than by name: `tools/demo_model_metrics` spelled the durable
+store `--store-root` where the CLI spells it `--store`, and
+`tools/freeze_reviewed_baselines` kept `--selection` after the command it
+mirrors became `--file`. Both now match.
+
+**`--dir` is exempt and is not a lapse.** It is the documented Project selector
+for `scan`, `ingest`, and `query`, appearing 33 times across README and
+Operations, and it is repeatable where `--directory` is singular and required.
+Two names because they are two things: a selector that accumulates a set, and
+the one directory a command operates on.
+
+`test_a_directory_valued_flag_is_named_directory` holds the rule over `src/` and
+`tools/` together. It keys on `type=Path`, which is what separates a directory
+from a reference: `catalog decide --project` and `refresh --project` take an id,
+a name, or a path as text, and keep the reference spelling.
+
+`test_a_flag_name_declares_one_type` holds the rule and now exempts only
+`--since`, with the reason on the exemption. It checks the *declared* type
+rather than any resolver, because a resolver accepting both is what hides the
+condition.
 
 **Step 5, stated exactly.** `config`'s constants resolve at import, which is
 before a flag is parsed. Two flags therefore work around it by writing the
@@ -1461,16 +1764,169 @@ remove the workaround but to make it the declared mechanism: a setting marked
 as leaf-visible is written to the environment by the resolver, once, instead of
 by two hand-written assignments.
 
-**Scope check.** 257 `add_argument` calls across exactly two files; 152 distinct
-flags of which **25 are declared more than once**; 133 `getattr(args, ...)`
-sites. The duplication is concentrated -- `--registry` 16, `--output` 11,
-`--project-id` 8, `--catalog`/`--source`/`--resource-policy`/`--project` 4 each
--- so eight names account for more than half of it.
+**Scope check**, re-measured by parsing both files rather than by grep, since a
+grep counts a flag inside a help string. 259 `add_argument` calls across exactly
+two files; 166 distinct long flags of which **32 are declared more than once**;
+133 `getattr(args, ...)` sites across `src/`, of which 3 take the
+`or CONSTANT` fallback form. The duplication is concentrated -- `--store` 22,
+`--output` 11, `--project-id` 9, `--source` 5, `--project` 5 -- so five names
+account for more than half of it.
+
+#### Execution Order
+
+The six steps above are the work; this states where they stop and what splits.
+
+| Order | Step | Boundary |
+|---|---|---|
+| 1 | **Done.** `codess.settings` declares one row per setting: name, flag, variable, composition rule, leaf visibility | Done: `tests/test_settings.py` asserts no name, flag, or variable repeats, and that every row's variable exists in `config`'s table |
+| 2 | **Partly done.** Seven shared options inherit via `parents=`; the table itself is not built | Done for those seven: all 45 subcommands accept the same options, verified by dumping `--help` before and after |
+| 3 | **Done.** Every option renders help | Done: 90 declarations gained one, which is what the work was; `test_every_command_option_carries_help` reads the built parser and holds the condition thereafter |
+| 4 | **Done, ahead of the table.** Resolve `--store`'s three incompatible forms | Done: one declared type per flag, asserted by `test_a_flag_name_declares_one_type` |
+| 5 | The precedence accessor, replacing the `getattr(args, ...) or CONSTANT` sites | A test per precedence pair |
+| 6 | **Done.** The leaf-visible mechanism | Done: `apply_leaf_visible` performs the writes from the table, and both hand-written assignments are gone |
+
+**Step 2 splits in two, and the reason is its own check.** Emitting declarations
+from the table and adding 76 help strings cannot both hold `--help`
+byte-identical -- the strongest check in the item would have to be dropped to do
+them together. Emit first and verify identity, then populate help as a diff that
+is only help text.
+
+**`parents=` ran second, and also did not need the table.** Seven shared
+options are now declared once on a parent parser and inherited: `--store` (was
+22 declarations, 19 byte-identical), `--output` (11, all identical),
+`--project-id`, `--source`, `--project`, `--policy`, and `--reviewed`. Total
+`add_argument` calls fell from 259 to 219.
+
+**The refactor is behaviourally inert, and that was checked rather than
+assumed.** `--help` was dumped for all 45 parsers before and after, and every
+subcommand accepts exactly the same option set. What did change is help text:
+the seven shared options each carry one now, which is the point -- one
+declaration carries one help string to every inheritor, so documenting them is a
+single edit rather than 22.
+
+**A form that genuinely differs keeps its own line.** `--store` is
+`required=True` for one command, one `--project-id` is repeatable, `--catalog` is
+required for two commands and defaulted for a third, and `--apply` carries a
+different help string per command because it enables a different action.
+Inheriting any of those would change what that subcommand accepts, which is a
+behaviour change wearing a deduplication's clothes. `catalog candidates` declares
+its own `--source` for the same reason: it takes a comma spec where the shared
+one takes `choices`.
+
+**A type convention, stated because 84 declarations already follow it.** A
+filesystem path is `type=Path`; everything else omits `type` and takes
+argparse's `str`. An explicit `type=str` is reserved for the case where the
+argument is a string *and* a reader would otherwise assume a path -- `--source`
+is a comma-separated vendor spec, `--out` uses `-` as a stdout sentinel that
+`Path` would turn into a relative file named `-`. Both now say so in a comment.
+`--content-policy` was `type=str, metavar="JSON"` for an argument the consumer
+wraps in `Path(...)`; it is `type=Path, metavar="PATH"`.
+
+**Direct reads are reconciled with the resolver.** `admin_cmd` read
+`args.store_root` at 24 sites and hand-rolled `.expanduser().resolve()` at two of
+them -- which is what `resolve_store_root` does. Both now call it. The remaining
+direct reads are fine: argparse applies the `STORE_ROOT` default, so the value is
+already a resolved `Path` by the time they see it. The resolver exists for the
+case argparse cannot cover, which is a value that arrives as a string or unset.
+
+**What the table owns, and what it deliberately does not.** `codess.settings`
+holds one row per setting -- name, flag, variable, whether it composes, whether a
+leaf module reads it -- and `resolve` applies one stated precedence: **flag, then
+variable, then built-in**, each narrower than the last. The *value* of a default
+stays in `config`, which resolves it from the same variable at import; putting it
+on the row as well would create the second declaration the table exists to
+remove. The row owns the name and the rule; `config` owns the value.
+
+**A boolean composes rather than overrides**, and that is not an inconsistency.
+`--force` with `CODESS_FORCE=0` is force, and so is `CODESS_FORCE=1` with no
+flag, because a `store_true` flag cannot express *off* -- treating its absence as
+an override would make the variable unsettable from any shell that also passes
+flags, which is every shell that runs the command. This is `flag_or_env`'s
+existing behaviour, now stated rather than repeated at ten sites.
+
+**Three shapes answered one question before this**, and one of them said nothing:
+`flag_or_env` at 10 sites, `getattr(...) or CONSTANT` at 3, `bool(getattr(...))`
+at 16, and a bare `getattr(args, name, None)` at 133 whose precedence a reader
+could not recover. The `or` form also cannot express a zero: `--days 0` means all
+time, and `0 or DAYS` is `DAYS`.
+
+**The leaf-visible mechanism is declared rather than worked around.** `fileio`
+and `schema_contract` read their variable directly, because a leaf module cannot
+import `config` without a cycle, so a flag reaches them only by writing that
+variable. Two hand-written `os.environ[...] = "1"` assignments did this;
+`apply_leaf_visible` now does it from the table and *returns what it wrote*, so a
+bypass is reported rather than silent -- both settings disable a verification
+step, which is where an operator most needs telling.
+
+**Declaring it found an asymmetry.** `CODESS_NO_HASH` was in `config`'s env
+table and `CODESS_NO_CONTRACT_CHECK` was not, so two settings of the same kind
+were declared in different places and only one was visible to a reader of that
+table. Both are there now.
+
+**Every option carries help.** 90 declarations gained a string -- the figure
+that bounded the work, obtained by parsing `add_argument` calls that carried no
+`help`. `test_every_command_option_carries_help` reads the *built parser* rather
+than the source, because an option inherited from a shared parent is declared
+once and must render documented everywhere it appears; the current count of
+undocumented options is what that test asserts rather than something to write
+down.
+
+**Type unification ran first, and did not need the table.** The three forms
+were a defect the table would have fixed as a side effect; fixing it directly
+took one declaration per flag and a test, and leaves the table free to be
+introduced for what only it can do -- one declaration, one precedence, one help
+string. What the table still owes is the *default* and *precedence* half: the
+type is now consistent, and where a value comes from is not.
+
+**What remains is tidiness plus one hazard.** Steps 1-3 remove duplicated
+declarations and document 76 undocumented flag names, neither of which can
+produce a wrong value. The hazard left is step 5: a default resolved in up to
+four places with nothing stating which wins, so a flag, an environment variable,
+and a constant can each be right about a value and disagree about it. Stop after
+step 5 if the work stops early.
+
+**Step 6 of the original table -- a config file as a source -- is deferred.** It
+is the only piece that adds a precedence *level* rather than documenting existing
+ones, and the only one with no measured defect behind it. It costs less once the
+table it would feed exists.
+
+**`ingested_projects.json` -> `projects_state.json` waits for the recreation.**
+The rename touches a file in the machine's durable store, so applying it before
+means writing migration code for a file the recreation regenerates anyway. The
+code-level renames carry no on-disk consequence and ride with step 1.
+
+#### What Remains
+
+Five of the seven pieces landed. What is left is one mechanical sweep and one
+addition, and neither blocks another item:
+
+**The sweep ran.** Every setting that has an environment variable now resolves
+through `settings.resolve`: the nine `flag_or_env` calls, the three
+`getattr(...) or CONSTANT` fallbacks, and the hand-written
+`MIN_SIZE if raw is None else raw`. `flag_or_env` had no callers left and is
+removed -- it was the older spelling of the table's boolean rule, and keeping
+both would have been the duplication this item exists to end.
+
+`resolve_store_root` now calls `resolve` for its precedence and keeps only its
+normalization, which is what it uniquely adds: a declaration may supply a `Path`
+or a string, and an empty string is not a path.
+
+**The remaining `getattr(args, ...)` sites are not unstated precedence.** They
+read report-mode selectors and per-command options -- `--sessions`,
+`--permissions`, `--snapshot-policy` -- which have no environment variable, so
+there is no precedence to state. Verified by intersecting every `getattr` name
+against `config`'s declared variables: `store_root` was the only overlap, and it
+is now routed.
+
+| Remaining | Scope | Why it is not done |
+|---|---|---|
+| A config file as a source | None yet | It adds a precedence *level* rather than documenting existing ones, and it is the only piece with no measured defect behind it. Deciding where a file sits relative to a variable is a design question, not a sweep |
 
 **Evidence to close.** One declaration per setting names its flag, variable,
 default, and type; precedence is stated and tested; no module reads `os.environ`
-for a declared setting except through the leaf-visible mechanism step 5 defines;
-a flag name appears in exactly one module.
+for a declared setting except through the leaf-visible mechanism; a flag name
+appears in exactly one module; and no call site restates a precedence the table
+already states.
 
 **Precedent.** `ChildInvocation` is the shape for the argv half and is done.
 
@@ -1643,16 +2099,92 @@ once when the layer below it changes.
 | `catalog_operations.onboard_catalog` | 10 | 8 | 5 |
 | `review_project.refresh_candidates` | 14 | 10 | 10 via `DiscoveryPolicy` |
 
+**Twelve ambient clock reads ride with this item.** `baseline_operations`,
+`catalog_operations`, `refresh_operations`, and `review_project` are the four
+modules still reading `datetime.now` directly, and they are four of the five
+relays converted here. Take `system_clock` on the policy object rather than
+threading a separate parameter: the clock is decided once before the first
+Project, which is the same lifetime every other field on that object has.
+`tests/test_timeval.py` names them in `DEFERRED`; remove each name as its module
+converts and the test holds it thereafter.
+
 **`refresh_candidates` is the one that needs a new structure.** The other four
 are served by splitting `ChildInvocation`; its ten discovery parameters have no
 existing home, which is what `DiscoveryPolicy` is for. Build it last, so the
 pattern is established before a new type is introduced.
 
+#### Every Relay Converted
+
+**All five are done**, and the measurement that separates a relay from a builder
+is now a test rather than a note. `test_a_wide_signature_is_a_builder_or_takes_a_structure`
+parses `src/` and reports any function of ten parameters or more that neither
+places most of them into a returned literal nor forwards most of them onward.
+
+| Relay | Was | Now | Takes |
+|---|---|---|---|
+| `refresh_projects` | 17 | 4 | `RunPolicy`, `ResolveArgs` |
+| `refresh_candidates` | 14 | 6 | `DiscoveryPolicy` |
+| `apply_project` | 12 | 8 | `RunPolicy` |
+| `onboard_catalog` | 10 | 7 | `RunPolicy` |
+| `_run_project_ingest` | 8 | 3 | `RunPolicy` |
+
+**Four builders remain wide and correctly so.** `codex._base_event` takes 20
+parameters and places 14 into its returned dict; `cc` and `cursor` place all 10
+of theirs. An object there would name every field twice, which is the
+anti-pattern this item records rather than the fix it asks for.
+
+**The three structures share no field.** `RunPolicy` describes what an ingest
+does, `DiscoveryPolicy` bounds a walk, `ChildInvocation` names one invocation's
+target -- verified by comparing their `__dataclass_fields__` pairwise. The last
+collision between them was `timeout_seconds`, which named a child-process bound
+on one and a traversal bound on the other; they are `policy_timeout` and
+`scan_timeout` now.
+
+#### Formerly Unblocked and Unstarted
+
+**The prerequisite landed.** W66's setting table declares each value once, which
+is what step 2 needs: a policy object built at the command adapter now draws from
+one declaration rather than encoding the duplication the object was meant to
+remove. Nothing else stands in front of this item.
+
+**The measurements still hold**, re-derived by parsing the current source rather
+than trusted from the earlier pass:
+
+| Relay | Parameters |
+|---|---|
+| `refresh_operations.refresh_projects` | 17 |
+| `review_project.refresh_candidates` | 14 |
+| `baseline_operations.apply_project` | 12 |
+| `catalog_operations.onboard_catalog` | 10 |
+| `ingest_publication.publish_snapshot` | 10 |
+| `refresh_operations._run_project_ingest` | 8 |
+
+No relay has been converted, so the item is unstarted rather than partly done.
+
+**The clock is now uniform, and `RunPolicy` carries it.** All twelve remaining
+`datetime.now` reads are converted: `refresh_operations`' four take the clock
+from the policy, and the other eight -- stamps in functions that take no policy --
+go through `now_iso(system_clock)` like the rest of the package.
+`tests/test_timeval.py`'s `DEFERRED` set is empty, so the test now holds the
+whole package with no exemption, and `wallclock.system_clock` is the only
+`datetime.now` outside `reporting.clock`.
+
+**`RunPolicy` holds the clock** rather than taking it as a parameter, for the
+reason it holds the store root: decided once before the first Project, read many
+times after. A run that needs a fixed clock sets it on the policy instead of
+threading an argument through three layers.
+
+**One relay is converted.** `_run_project_ingest` went from 8 parameters to 3 --
+`project`, `policy`, and `validate` -- because both call sites passed the same six
+policy values verbatim. Four relays remain, and step 2 moves construction from
+`refresh_projects` to the command adapter, at which point that function loses the
+six fields it currently names.
+
 **Evidence to close.** Every relay of five or more parameters takes an object or is
 recorded as a builder; a call site cannot mis-order same-typed arguments; no
 invocation is constructed twice where one would do; `ChildInvocation`'s policy
 and target halves are separable, or the reason they are not is recorded; the
-relay census runs as a test.
+relay census runs as a test; and `DEFERRED` is empty.
 
 ### W70 -- Documentation Partition and Redundancy
 
@@ -1705,15 +2237,113 @@ produced the current state.
 **Work.** Route command-layer status, progress, warnings, and errors through
 `codess.reporting` instead of writing them directly.
 
-**The gap.** The facility is complete and specified; the callers were never
-converted. Measured across `src/`:
+**The gap, re-measured, and it is not what the item recorded.** The earlier
+counts do not hold and the conversion they describe would break the command
+layer. Measured across `src/cli/`:
 
-| Path | Count | Location |
+| Path | Recorded | Measured | Note |
+|---|---|---|---|
+| `print(file=sys.stderr)` | 43 | **59** | 4 admin, 9 scan, 11 ingest, 35 query |
+| Direct `sys.stderr` writes | 63 | **0** | None remain; the figure counted something else or was already converted |
+| Of those prints, fatal | -- | **50** | Immediately precede `return 1` |
+| Of those prints, status | -- | **9** | The only genuine conversion candidates |
+
+**Converting the fatal sites would silence them.** `reporting.configure()` is
+called by `ingest_cmd` and `scan_cmd` only. In `admin_cmd` and `query_cmd` no
+sink is ever attached, so `event()` returns at its first gate and the message
+reaches nobody -- verified by calling it with no sink and observing no output.
+39 of the 59 prints are in those two modules, and nearly all report a fatal
+condition before `return 1`.
+
+**Even where a sink exists, the rendering is wrong for an error.** `HumanSink`
+emits `codess: progress <time> +<elapsed>s key=value` for every event. A fatal
+error rendered as a progress line is a worse result than the direct write.
+
+**The event and the print are not duplicates**, which two tests state directly.
+`TestProjectIdentityChange` asserts the operator reads "identity changed during
+ingest" on stderr and records why: a raised exception reaches the same exit code,
+so a test asserting only "the run reported a failure" cannot tell a set-aside
+Project from a crash. Removing the print in favour of the existing
+`project.identity_changed` event failed that test, because the subprocess has no
+sink. The event is the structured trace; the print is what an operator reads.
+
+**So the item splits in two, and the fatal half is now done.** A fatal message
+belongs on a channel of its own rather than in the event stream, and it now has
+one: `cli.failure`, holding `fail`, `fail_with`, `warn`, and
+`fail_configuration`. All 59 direct writes are converted and no command module
+names `sys.stderr` at all.
+
+| Helper | For | Returns |
 |---|---|---|
-| `reporting.*` call sites | 8 | mixed |
-| `print(file=sys.stderr)` | 43 | the four command modules |
-| Direct `sys.stderr` writes | 63 | the four command modules |
-| `logging` calls | 33 | mixed |
+| `fail(message)` | A fatal condition this code composed | 1, so a caller writes `return fail(...)` |
+| `fail_with(exc, context)` | A fatal condition from an exception | 1, carrying the exception's text |
+| `warn(message)` | A condition the run continues past | `None`, so it cannot be returned by accident |
+| `fail_configuration()` | Every configuration fault at once | 1 if any, else 0 |
+
+**`warn` returns `None` deliberately.** A warning that could be written
+`return warn(...)` eventually would be, and the run would exit on a condition it
+was built to survive. The two are separated by return type rather than by
+destination, because they share the destination.
+
+**Observability is maximal, and that is the privacy decision rather than an
+omission of one.** A fatal line reports the operator's own machine to the
+operator on their own terminal, so it carries the offending path, flag, or
+exception text verbatim. This matches `reporting`'s own `local` privacy profile
+-- the default for every profile, which emits every field verbatim including
+unregistered ones -- and for the same reason: nothing is leaving the machine.
+The redaction profiles exist for the *event stream*, which can be written to a
+file and shipped. A fatal message has no such path, and a redacted one would be
+the single message least able to do its job. If a support bundle ever wants
+these, the answer is a sink that captures them, not a policy that blinds them at
+the source.
+
+**The status half is unblocked: both commands now configure a sink.**
+`admin_cmd` and `query_cmd` call `reporting.configure` before dispatch and emit
+`admin.start`/`admin.done` and `query.start`/`query.done` -- INFO for the
+administrative pair because each of those subcommands can delete, publish, or
+rewrite state, and a run that reports nothing leaves an operator holding only an
+exit code.
+
+**One code per command family, not per subcommand.** 42 codes naming what
+`family` and `command` already carry as fields would be a second dispatch table
+beside the parser's.
+
+**A failure reports on both channels.** `command.failed` carries the exception
+family for a structured reader and `fail` carries its text for the operator;
+neither substitutes for the other, because a sink may be a file and stderr is
+what a person is looking at.
+
+**Both flush at the boundary.** The ring holds 256 events and neither command
+comes close, so without a flush most runs would emit nothing at all. `query.run`
+is a wrapper around `_run` for exactly this: `_run` returns from a dozen places,
+and a flush at each is a dozen chances to omit one.
+
+**Verified:** stdout is byte-identical across profiles, so `--output-format
+jsonl` remains pipeable.
+
+**What remains.** Nine `warn` sites still write through `cli.failure` rather than
+the facility. They can move now that a sink exists; the reason to do it in a
+separate pass is that each needs a code and a level decided on what it reports.
+
+**The status half, as originally recorded:** One site converted to
+the facility: `scan_cmd`'s legacy-Cursor-prune line, which was `opts["debug"]`-
+gated *and* written directly -- two gates for one decision. It is now
+`registry.legacy_cursor_pruned` at DEBUG. The other nine went to `warn` rather
+than to the facility, because the question below is unanswered:
+
+1. **Do `admin_cmd` and `query_cmd` have a progress model at all?** Neither calls
+   `reporting.configure()`, so an event from them reaches no sink. Until that is
+   decided, a status site in those modules cannot be converted either.
+2. **Should `HumanSink` render more than one shape?** It emits every event as
+   `codess: progress <time> +<elapsed>s key=value`, which suits progress and not
+   a warning.
+
+**Evidence to close.** Done for the fatal half: no command module writes to
+`sys.stderr`, `tests/test_failure_channel.py` asserts it over the syntax tree,
+and the prefix, the verbatim value, and `warn`'s return type each have a test.
+Remaining: the nine `warn` sites move to the facility once question 1 is
+answered, and `--output-format jsonl` stays byte-identical on stdout across
+profiles.
 
 **What is already correct and must not change.** Result output on stdout stays
 a plain `print()`. That is the result channel, and it is what lets
@@ -1726,11 +2356,38 @@ through it. A direct `sys.stderr` write has none of them, so the guarantees
 currently hold by convention at each call site rather than by construction, and
 a redaction profile does not reach the output an operator actually sees.
 
-**Evidence to close.** No command module writes to `sys.stderr` directly; the
-channel-separation test asserts it rather than the current convention;
-`--output-format jsonl` remains byte-identical on stdout across profiles.
+#### Execution Order
 
-**Cost.** Mechanical per call site, no rebuild. Independent of W04.
+**Cut by module, not by channel.** A channel cut splits every module's diff in
+two and touches all four twice; `query_cmd` alone holds 35 of the 60 `sys.stderr`
+references, so cutting it by channel produces two large diffs against one file
+instead of one. Ascending size, so the pattern is established on the small
+modules before the large one:
+
+| Order | Module | `sys.stderr` references |
+|---|---|---|
+| 1 | `src/cli/admin_cmd.py` | 4 |
+| 2 | `src/cli/scan_cmd.py` | 10 |
+| 3 | `src/cli/ingest_cmd.py` | 11 |
+| 4 | `src/cli/query_cmd.py` | 35 |
+| 5 | The channel-separation test | -- |
+
+Counts are `grep -c 'sys.stderr'` per file and include the import and the
+result-channel writes that stay; they order the work rather than bound it.
+
+**Run the stdout byte-identity check per module, not once at the end.**
+Per-module it names the commit that crossed the result-channel boundary; at the
+end it says one of four did. `query_cmd` holds 111 of the 146 `print(` calls and
+nearly all are the result channel, which is what makes the boundary worth
+checking at every step.
+
+**Run W71 before W66.** They are independent -- one touches output calls, the
+other argument declarations -- but they share all four files, and W66 step 2
+checks `--help` byte-identity. Converting output first means that check is
+established against files whose output calls are already uniform.
+
+**Cost.** Mechanical per status call site once the two decisions above are
+answered, and no rebuild. Independent of W04.
 
 ### W72 -- The Event Record Shape, Spelled Out Four Times
 
@@ -3624,6 +4281,67 @@ operator edits is the wrong home for a rule whose purpose is refusing a
 mistake. Documenting them in the policy file as read-only is worthwhile; making
 them editable is not.
 
+**The settled specification.** Three settings replace the two, split by whether
+a value is portable:
+
+| Setting | Answers | Form | Ships |
+|---|---|---|---|
+| `exclude_dirs` | Which directory *names* are never traversed | Names | Non-empty sample |
+| `exclude_paths` | Which trees on this machine are not the operator's work | Absolute paths | Empty |
+| `include_paths` | Which trees to admit despite a rule that would skip them | Absolute paths | Empty |
+
+`AGGREGATORS` is retired rather than renamed. It was defined here as "a
+container holding many repositories", which is a structural test; the operator's
+actual criterion is *intent* -- a collection kept for reference rather than
+developed in, which may hold one repository or fifty. On that definition it and
+`EXCLUDE_REVIEW_DIRS` were the same setting, and `exclude_paths` is it.
+
+**Names ship non-empty and paths ship empty**, which is the distinction the
+current all-empty default gets wrong. `tmp`, `var`, `windows`, `node_modules`
+mean the same thing on every machine, so a shipped list discloses nothing about
+one tree and is always correct. A reference tree's *location* is one machine's
+layout, so it stays empty and env-supplied. The Environment Separation rule
+distinguishes platform facts from operator facts; the current default treats
+both as operator facts.
+
+**Hidden names are a rule, not a list.** Any name beginning with `.` is skipped,
+so the policy file stops enumerating `.git`, `.venv`, `.mypy_cache` and the
+thirty others -- an enumeration of a rule is permanently incomplete, since each
+new tool adds a name. `.codess` and `.claude` are read by explicit path rather
+than traversal, so the rule does not reach them; a test must assert that,
+because it is the kind of thing that breaks silently.
+
+**Syntax, stated once.** Lists are comma-separated, not colon-separated: a colon
+is excluded from the value character set so a comma is unambiguous, and PATH
+notation would wrongly imply precedence by position. Whitespace is stripped from
+a file and the command line alike. A name is alphanumeric with `-`, `_`, and `.`
+permitted, no `/`, at most 255 characters; a path starts with `/`, may end with
+one, and is at most 1023 characters. `..` is rejected in either, because a
+traversal segment lets an entry escape the scope it appears to name.
+
+**Precedence:** `include_paths > exclude_paths > exclude_dirs > hidden names >
+default traversal`. Most specific wins, and an `include_paths` entry is honoured
+even where a parent is excluded and a segment name is on the list -- which is the
+whole reason it exists, since name-based exclusion over-reaches by design. This
+must be asserted by a test; a documented-only ordering rule regresses.
+
+**Symbolic links are not followed.** Following them breaks the precedence rule:
+a link inside an excluded tree pointing into an included one re-admits excluded
+content by a path that never matches `exclude_paths`, so an exclusion the
+operator wrote is silently void. Links also admit cycles and report one Project
+twice under two paths. A tree that lives behind a link is admitted by naming its
+real location in `include_paths`. Hardlinked directories are not creatable on
+the platforms in scope; hardlinked files affect source identity only, where
+`source_dir_inode` already records the evidence.
+
+**A skipped check must say so.** With the path settings unset, `registry_check`
+runs no layout check and reports zero findings -- indistinguishable from clean.
+Measured: 0 errors, 0 warnings, 1 note unset, against 0/7/14 configured. It
+should name the checks that did not run and the variable that enables them, and
+point at `tools/setup_discovery.py --propose`. Not a hard error: that would
+break a first run on a clean checkout, which is the early-access path W83 cares
+about.
+
 **Evidence to close.** A machine's inclusion and exclusion judgment survives a
 new shell; `tools/setup_discovery.py` proposes into that file; and the
 compiled-in refusals are documented in the same place without becoming editable.
@@ -3889,6 +4607,37 @@ yet known**, which is a different and rarer job:
 So it belongs as a diagnostic rather than a stored column: computed by an audit
 that asks "which Sessions repeat a shape", not written per row.
 
+#### Link Detection: The Design
+
+**Reframed from classification to link detection**, which separates what can be
+measured from the policy this item postpones. Detecting that 296 Sessions share
+one Event-kind sequence is a measurement; deciding what a report does about them
+is the undecided half. The design covers only the first.
+
+**The signal is the turn-pattern digest**: the ordered Event-kind sequence of a
+Session, hashed. Two Sessions are linked when their digests match. It is
+computed by an audit that asks "which Sessions repeat a shape", not written per
+row -- a stored column would imply the value is a property of the Session, and
+it is a property of the *set*.
+
+**What it must not become.** It does not identify the batch run; `surface_kind`
+does that more cheaply and with vendor authority. It earns its place on the case
+`surface_kind` cannot predict: 296 of the 318 share one sequence and 22 share
+another, differing by `state.product` against `content.attachment` on an
+identical scripted prompt. So the output is a digest-group table carrying the
+variance between groups, not a classification of each Session.
+
+**Comparability carries over unchanged.** A digest is compared *within* a
+vendor. Event counts differ 5,435 to 8,511 bytes per Event by vendor and tool
+invocation is harness-dependent, so a digest group spanning two vendors would
+be an artifact of how each harness records, not a repeated shape. Only the
+human-`message.prompt` count is comparable across vendors, and it is not what
+this detects.
+
+**What stays undecided**, and is why the item remains postponed: whether a
+detected group is excluded from counts, marked, or merely reported. Detection
+does not pre-empt it, which is the point of separating them.
+
 #### Project-Level Classes
 
 | Class | Count | Signal |
@@ -4033,7 +4782,7 @@ value in each:
 | Dimension | Subject | Answers | Values | Decided by |
 |---|---|---|---|---|
 | **Presence** | The directory | Is it on this machine | present, absent, copy | The filesystem, plus catalog locations |
-| **Coverage** | The store | Do the vendor Sources still exist | complete, purged | Recorded `source_uri` against disk |
+| **Coverage** | The store | Do the vendor Sources still exist | complete, partial, purged | Recorded `source_path` against disk |
 | **Disposition** | The operator | What was decided | none, priority, included, deferred, excluded, review | The operator |
 
 **Disposition vocabulary, revised.** `needs_review` becomes `review` -- the
@@ -4070,8 +4819,16 @@ omitting.
 
 #### The Conditions, and What Each Means
 
-Seven, distinguishable by evidence rather than by guess. The first three are
+Eight, distinguishable by evidence rather than by guess. The first three are
 handled; the rest are not.
+
+**Coverage has three values, not two, and the third is the dangerous one.** A
+vendor prune removes transcripts individually, so a Project commonly loses part
+of its Sources rather than all of them. Under a two-value dimension a partly
+purged store reads as `complete` and loses the delete-gate that the whole
+protection below depends on -- which is the unrecoverable case, not an edge of
+it. `sources_vanished` is a count, so the evidence to tell the three apart is
+already computed; what collapses them is the derived label.
 
 | Condition | Evidence | Identity survives | Status |
 |---|---|---|---|
@@ -4081,7 +4838,8 @@ handled; the rest are not.
 | **Deleted** | Path absent, no live sibling | Entry retained as a record | Reported `removed` |
 | **Retired** | Operator excluded it | Retained as evidence, out of selection | Reported `retired` |
 | **Worktree** | Catalog records a `worktree_of` relation | Yes; an ordinary live sibling | Reported `worktree` |
-| **Purged** (vendor deleted its own records) | Path exists; recorded vendor Sources do not | Store outlives its Sources | **Measurable, not yet reported** |
+| **Partly purged** | Some recorded Sources resolve and some do not | Store outlives part of its Sources | **Measurable, not yet reported** |
+| **Purged** (vendor deleted its own records) | Path exists; no recorded vendor Source does | Store outlives its Sources | **Measurable, not yet reported** |
 | **Restored from archive** | A store at a superseded format | Not contract-readable | Manual only |
 
 **`superseded` was withdrawn.** It named `excluded` and `worktree` as one
@@ -4280,6 +5038,278 @@ sitting beside evidence it does.
 one exists, distinguishable from a Codess alias; and a rollout's archive
 location and its `archive_state` agree, or the disagreement is recorded as a
 vendor observation with its reason.
+
+### W102 -- The Option Classification, Reviewed per Flag
+
+**Work.** The distribution in [CoNames](CoNames.md#which-options-take-a-variable)
+was measured and the rule it states -- a flag names this invocation's subject, a
+variable states a standing choice -- fits it. What has not happened is the
+reverse check: reading each flag and asking whether its class is right for what
+it does, rather than whether the totals look plausible.
+
+**Three questions the totals cannot answer.**
+
+1. *Which of the 110 flag-only options should have a variable.* Selection is
+   correctly flag-only, but `--format`, `--raw-store-root`, and the audit tools'
+   `--max-files` are standing choices an operator would set once.
+2. *Which of the 34 default-only options should have neither.* A default derived
+   from a measurement is evidence; a default chosen once is a decision that
+   should be stated where decisions live.
+3. *Whether any variable should not exist.* `CODESS_CLAUDE_WORKTREES` is off by
+   default and admits Sessions about a Project rather than in it -- a per-run
+   question wearing a machine-wide answer.
+
+**Not urgent, and the reason is the measurement.** Every collision the earlier
+passes found -- one spelling for two subjects, two spellings for one, a
+precedence stated four ways -- is closed and tested. What is left changes which
+of two correct mechanisms an option uses, which no current defect depends on.
+
+**Evidence to close.** Each flag's class is stated with its reason, or recorded
+as reviewed and correct; the CoNames distribution is regenerated from the result
+rather than from the current state.
+
+### W101 -- Reasoning Content Stored as a Summary
+
+**The condition.** Two vendors supply different evidence and Codess stores both
+under one name. Codex's `_extract_reasoning_summary` reads `payload.summary`
+and its docstring is explicit -- "vendor-exposed summary text, never encrypted
+reasoning state". Cursor's `thinking.text` is the reasoning itself, and the
+adjacent `redactedThinking` flag marks what the vendor withheld, which only
+makes sense if what remains is the content rather than a précis of it.
+
+Both are stored as `event_kind = message.reasoning_summary` with the text in a
+`reasoning_summary` metadata field.
+
+**Why it was done, and why that reason is still partly right.** The adapter
+records it: naming Cursor's evidence the way Codex names its own is what lets
+one query compare reasoning across vendors, and a per-vendor spelling would make
+that comparison a special case. The rule ids already differ correctly --
+`codex.reasoning-summary` against `cursor.reasoning` -- so the mapping evidence
+distinguishes them even though the common field does not.
+
+**What is wrong with it.** A common value should let two vendors be selected
+together without claiming they mean the same thing, and here it claims exactly
+that. A reader filtering `message.reasoning_summary` gets one vendor's summary
+and another's full reasoning in one result set, with nothing in the common
+fields to tell them apart -- which is the "normalization conceals a meaningful
+difference" case CoSchema exists to avoid.
+
+**Options.**
+
+| Option | Cost | Buys |
+|---|---|---|
+| A `reasoning_fidelity` field: `summary` or `full` | One column, one format bump | The comparison keeps working and a reader can qualify it |
+| Split the Event kind: `message.reasoning` and `message.reasoning_summary` | Wire-format, and every cross-vendor reasoning query becomes a two-kind query | The kinds stop lying, at the cost the adapter comment predicted |
+| Leave it, document the difference in CoSchema | Nothing | The evidence stays queryable and the difference stays findable only in prose |
+
+**The measurement was run, and it decides it.** Over the published stores, the
+text stored under `message.reasoning_summary`:
+
+| Vendor | Rows | Median chars | Mean | Max |
+|---|---|---|---|---|
+| Cursor | 13,361 | 236 | 419 | 2,000 |
+| Codex | 5,133 | 50 | 109 | 1,506 |
+
+Cursor's median is nearly five times Codex's, and its maximum sits exactly on a
+2,000-character bound -- a truncation, which a summary would not reach. A
+50-character median is a précis; a 236-character median that clips at a bound is
+reasoning. The two are different evidence and the common field says they are the
+same, so **option A is the smallest honest fix**: a `reasoning_fidelity` value of
+`summary` or `full`, set by the adapter that knows which it read.
+
+**Proposed: option A, a `reasoning_fidelity` value the adapter sets.**
+
+`summary` where the vendor supplied a précis, `full` where it supplied the
+reasoning. Codex sets `summary` because `_extract_reasoning_summary` reads
+`payload.summary` and its docstring already says what that is; Cursor sets `full`
+because `thinking.text` is the reasoning and `redactedThinking` marks what was
+withheld -- a flag that only makes sense beside content.
+
+**Why not split the Event kind.** `message.reasoning` and
+`message.reasoning_summary` as separate kinds would stop the lie, and would make
+every cross-vendor reasoning query a two-kind query. The adapter comment predicts
+exactly this: naming Cursor's evidence the way Codex names its own is what lets
+one query compare reasoning across vendors, and the fix should keep that rather
+than trade it.
+
+**Why not leave it documented.** The difference is 5x in the median and the
+common fields do not carry it, so a reader who has not read CoSchema cannot see
+it at all. A prose note is findable only by someone who already suspects.
+
+**Why a field rather than a longer name.** Fidelity is a property of the
+evidence, not of the kind: a vendor that later exposes both would need two kinds
+and one Event, which a field handles and a name cannot.
+
+**Cost.** One column, one format bump, and the adapters already know which they
+read -- neither has to infer it. The `event_kind` vocabulary is unchanged, so no
+stored query breaks.
+
+**Evidence to close.** A query selecting reasoning across vendors can state,
+from the common fields alone, whether each row is a summary or the reasoning
+itself.
+
+### W98 -- Field Names That Spell the Algorithm
+
+**Work.** Rename the ten `*_sha256` fields to `*_digest`, which is the rule
+[CoNames](CoNames.md#digest-fields) states and the majority already follow: 34
+`contract_digest`, 12 `content_digest`, 11 `semantic_digest` against ten names
+carrying the algorithm.
+
+**Why it is not cosmetic.** A value from `codess_canonical_hash(256, 256, …)`
+*is* a bare SHA-256 at those widths, so the name reads as accurate. Change a
+width and the name is wrong with nothing to catch it: the value still exists,
+still verifies against itself, and now misdescribes what it is. The rule keeps
+the algorithm's name in `hashing` alone, so changing it is one edit rather than a
+rename across every document that carries a value.
+
+| Name | Occurrences | Where it is written |
+|---|---|---|
+| `selection_sha256` | 13 | Baseline selection documents |
+| `stored_sha256` | 8 | Raw-object records |
+| `resolved_selection_sha256` | 5 | Baseline selection documents |
+| `catalog_sha256` | 4 | Reviewed-catalog documents |
+| `raw_manifest_sha256` | 4 | Snapshot manifests |
+| `manifest_sha256` | 3 | Snapshot manifests and current pointers |
+| `content_sha256`, `file_sha256`, `project_list_sha256`, `row_sha256` | 1 each | Assorted |
+
+**Cost, and why it is Low rather than deferred.** Each is wire-format or a
+released document, so each costs a regeneration or a format-version bump --
+unlike `plan_digest`, which was renamed on sight because a retention document is
+produced per run and read immediately, so it cost one version bump and no stored
+data. `manifest_sha256` is the sharp one: it appears in every `current.json`, so
+renaming it makes every published pointer unreadable until republished.
+
+**Batches with the next wire-format change**, which is Sprint 1. Renaming them
+alone would pay a full regeneration for a change with no behavioural content.
+
+**Evidence to close.** No field name outside `hashing` names an algorithm; a test
+asserts it over the released schema and the documents Codess writes.
+
+### W99 -- Two Trees for One Kind of Artifact
+
+**The condition.** Codess writes format-versioned records of what a command did
+into two directories under the machine store, by two different mechanisms, and
+reads back only one of them:
+
+| | Refresh | Retention |
+|---|---|---|
+| Written to | `reports/refresh-<stamp>.json` | `receipts/retention/<stamp>.json` |
+| Default decided in | `admin_cmd._refresh`, the command layer | `retention.apply_plan`, the domain layer |
+| Format key | `receipt_format` | `format` |
+| Format value | `codess.refresh-receipt/1` | `codess.retention-receipt/3` |
+| Read back | Yes -- `latest_refresh_observations` feeds the Project inventory | No reader |
+
+**Both are receipts by their own naming**, and the split is not a distinction
+between kinds of document -- it is two independent decisions that never met. The
+path construction is the same shape in both places: a timestamp under a store
+subdirectory. What differs is which subdirectory, and which layer decides.
+
+**The cost is not hypothetical.** Passing `--receipt` to `storage prune` with a
+path under `reports/` puts a retention receipt in the refresh tree, where
+`refresh_receipts` ignores it -- it globs `refresh-*.json` -- so the record exists
+and nothing will ever read it. That happened during the 2026-08-25 prune and was
+found by inspection rather than by any check.
+
+**What is not obviously wrong**, and is why this is an item rather than a fix:
+
+- *A tree per subject is defensible.* `receipts/retention/` admits a second
+  retention-adjacent document later without the glob becoming ambiguous, which a
+  flat `reports/` with a filename prefix does not.
+- *`reports/` may be the wrong name rather than the wrong tree.* It holds
+  receipts, and `codess storage report` writes an observation elsewhere, so the
+  directory is named for a thing it does not contain.
+- *`receipt_format` cannot simply become `format`.* It is the gate
+  `refresh_receipts` uses to skip unrelated JSON and it is read from files
+  already on disk, so the rename is wire-format for every stored receipt --
+  unlike `plan_digest`, which cost one version bump because nothing had been
+  stored.
+
+**Proposed: one tree, `receipts/<kind>/`, and `receipt_format` stays.**
+
+| Option | Cost | Buys |
+|---|---|---|
+| **One tree, `receipts/<kind>/`** | Move refresh receipts; the reader's glob changes | One place to look; a third kind needs no decision |
+| One tree, flat with prefixes | Same move; glob per prefix | Fewer directories, ambiguous as kinds grow |
+| Keep both, document the rule | Nothing | The condition stays, and the next author decides again |
+
+**Why the tree and not the flat form.** `receipts/retention/` already exists and
+already works. A kind per directory means a reader globs one directory and gets
+one kind; a flat tree with prefixes means every reader carries a prefix its
+producer must match, which is the coupling the current `refresh-*.json` glob
+already demonstrates -- the retention receipt I wrote into `reports/` was ignored
+by exactly that filter.
+
+**Why `receipt_format` stays and `format` does not become it.** The key is the
+gate `refresh_receipts` uses to skip unrelated JSON, and it is read from files
+already on disk. Renaming it is wire-format for every stored receipt, and buys
+consistency with 21 documents that were never read back. The retention documents
+use `format` and are produced per run, so they cost nothing to change and have
+already moved twice; the refresh receipts are the ones with history.
+
+**What tips it.** The two receipts are read differently and that is not going to
+change: refresh receipts feed the Project inventory, retention receipts are read
+by a person after a deletion. A shared tree makes them findable together without
+claiming they are interchangeable, which a shared *format key* would.
+
+**Migration is a move, not a rewrite.** `reports/refresh-*.json` becomes
+`receipts/refresh/*.json` with the name unchanged; `latest_refresh_observations`
+globs the new directory. A receipt left in the old location is not read, which
+is the current behaviour for a misplaced one anyway.
+
+**Not urgent.** Nothing is lost today: both kinds are written and the refresh
+half is read. What the split costs is a reader's time and the next author's
+decision, which is why this is Normal and not High.
+
+**Evidence to close.** One rule states where a receipt is written and which
+layer decides; a receipt written by any command is readable by whatever consumes
+that kind; and the format key is spelled one way or the two spellings are
+recorded with the reason.
+
+### W100 -- What `storage prune` Can Be Asked For
+
+**The options it has**, and what each decides:
+
+| Flag | Decides | Default |
+|---|---|---|
+| `--apply` | Whether anything is deleted at all; without it the command emits a plan | Report only |
+| `--receipt PATH` | Where the receipt is written | `receipts/retention/<applied_at>.json` |
+| `--reference-catalog PATH` | A catalog whose snapshot references block deletion; repeatable | None |
+| `--working-archives` | Whether working archives are candidates | Excluded |
+| `--keep-comparison-revisions` | Whether to retain several >=1 GiB revisions of one logical source | One kept |
+| `--output PATH` | Where the plan or receipt goes instead of stdout | stdout |
+| `--store PATH` | Which durable store | The configured one |
+
+**Resolved: one counting rule, one implementation, and `--keep` on the
+command.** `CODESS_KEEP_SNAPSHOTS` counts snapshots kept, current included, and
+both retention paths read it through `snapshot.superseded_beyond_depth`:
+
+| Value | Keeps | |
+|---|---|---|
+| 0 | Every snapshot | The audit case: an operator comparing a sequence of rebuilds |
+| 1 | The current alone | The shallowest retention |
+| 2 | The current and one past | The default: a rollback target |
+| N | The current and N-1 past | |
+
+**Counting the total rather than the prior generations is what made this
+settleable.** A count of prior generations has no spare value -- "keep nothing
+past" and "keep everything" both want 0 -- and the two paths read that one value
+in opposite directions: the trim kept everything, the prune kept one. Including
+the current snapshot in the count gives 0 its own meaning and leaves 1 to say
+what the prune was hard-coding.
+
+**Both paths take a parameter as well as reading the variable.**
+`create_snapshot(keep_total=...)` bounds the trim for a caller producing a
+throwaway snapshot, and `codess storage prune --keep N` bounds a deliberate
+reclaim. The variable remains the machine's standing policy; neither path
+requires setting it to vary one run.
+
+**The plan records what it applied.** `policy` is `keep-N-per-project` rather
+than a constant, so a receipt read later states the rule it followed rather than
+the rule in force when it is read.
+
+**Evidence to close.** One retention depth governs both publication trimming and
+`storage prune`, or the two are separately named and each states why; a plan
+records which policy it applied rather than a constant.
 
 ### Store Performance Baseline
 

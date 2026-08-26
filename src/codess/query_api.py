@@ -19,7 +19,9 @@ from typing import Any
 from codess.hashing import codess_bytes_hash
 from codess.identity import observation_row_id
 from codess.schema_contract import column_names
+from codess.timeval import now_iso
 from codess.units import DAY_MS
+from codess.wallclock import system_clock
 
 REQUEST_FORMAT = "codess.query-request/1"
 RESULT_FORMAT = "codess.query-result/1"
@@ -1687,7 +1689,7 @@ def execute(
     result = {
         "format": RESULT_FORMAT,
         "processor": QUERY_PROCESSOR,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": now_iso(system_clock),
         "request": canonical_request,
         "request_hash": content_hash(canonical_request),
         "provenance": [_store_provenance(store) for store in stores],

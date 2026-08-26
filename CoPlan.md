@@ -189,6 +189,62 @@ the authorities for functional meaning rather than code ownership.
 - DDL exists only in `schema/coschema/sqlite/schema.sql`.
 - Administrative wrappers call domain operations instead of implementing a
   second workflow.
+- `timeval` imports nothing from `codess` and reads no ambient clock. Time
+  parsing is needed by every layer -- adapters, store, query, catalog,
+  receipts -- so a dependency in either direction would make it either
+  unimportable from the bottom or a second parser at the top. Both constraints
+  are asserted by tests that walk the module's syntax tree rather than stated
+  in prose, because a prose constraint is one an edit can violate silently.
+- `wallclock` owns the ambient clock, and it is a separate module for the
+  constraint above rather than for size: a `system_clock` inside `timeval` would
+  be a `datetime.now` inside the module whose rule forbids one, whoever calls
+  it. A caller writes `now_iso(system_clock)`, so the injection point stays at
+  the call site and the clock has one definition. A third syntax-tree test
+  asserts no other `datetime.now` in the package, because the condition it
+  replaced was 43 inline spellings that a test needing a fixed clock could not
+  patch.
+- `reporting.clock` is a different clock and stays separate. It anchors
+  monotonic ticks for event timing, where a backward NTP step would make a
+  duration negative -- a hazard the wall clock does not have and a resolution
+  the wall clock cannot give.
+
+#### Filesystem Traversal
+
+**29 sites, and the question each asks is what decides whether it belongs to a
+helper.** The pattern is not the subject: five sites spelled
+`sorted(dir.glob("*.db"))` and meant one thing -- *the stores in a snapshot* --
+and three spelled a pair of globs and meant *Claude's transcripts, main and
+subagent*. Both are now one function, and the count fell from 34.
+
+| Group | Sites | What it asks | Owner |
+|---|---|---|---|
+| Snapshot stores | 1 | Which CoSchema stores a snapshot holds | `snapshot.snapshot_stores` |
+| Claude transcripts | 2 | Main and subagent transcripts under one slug | `project.cc_session_files` |
+| Codex rollouts | 3 | Which rollout files a session directory holds | `codex_source` |
+| Cursor workspaces | 1 | Which workspace directories exist | `cursor_source` |
+| Snapshot generations | 6 | Which snapshots a Project has, and which is current | `snapshot`, `retention`, `storage_report` |
+| Raw objects | 3 | Which captured objects exist, and which directories emptied | `retention`, `storage_report` |
+| Receipts and reports | 2 | Which receipts a store holds | `refresh_receipts`, `storage_report` |
+| Staging | 3 | Which stores a staging root holds mid-ingest | `ingest_cmd` |
+| Unbounded walks | 2 | What is under a tree nobody described | `review_project`, `retention` |
+
+**Two sites are `os.walk`, and only one needs a budget.** `review_project` walks
+a work root the operator names, so its size is unknown and `ScanBudget` bounds it
+by directory count, elapsed time, and device crossing. `retention` walks
+Codess's own raw-object tree to remove directories its own deletions emptied; the
+depth is the store's layout, so the bound is structural.
+
+**The rest name a directory Codess or a vendor created.** There is no tree to
+bound. What a helper owns there is not the traversal but the *layout knowledge*:
+that a snapshot holds its stores as `*.db` beside its manifest, and that Claude
+writes a delegated Session under `<parent>/subagents/`. A call site that globs
+those directly keeps working when the layout changes and quietly reports
+nothing, which is the failure the two helpers prevent.
+
+**What remains is not further consolidation.** The groups above ask different
+questions of different trees; merging them would produce a function taking a
+directory and a pattern and returning what `glob` returns, which moves the call
+site's own statement into an argument without owning anything.
 
 Focused evidence audits may inspect a vendor store directly when the source
 shape itself is the subject of the audit. That exception is read-only,
@@ -905,6 +961,19 @@ instead of disappearing as an undifferentiated limit failure. Source, Session,
 Event, and context bounds come from versioned policies with safe built-in
 defaults.
 
+**Every open-ended text field carries a bound, stated in KiB.** A bound is
+applied at decode, the original length is retained, and the truncation is
+recorded as a diagnostic -- a bound applied silently would make a completeness
+claim false. Bounds are set from measured distributions rather than chosen round
+numbers, and each states what proportion of observed values it retains intact;
+`experiments/format-decisions.md` holds the current table and its basis.
+
+A bound is set even where nothing observed reaches it. An unbounded field is a
+resource question rather than a size observation: the bound exists so a changed
+vendor format cannot introduce an unbounded body without the bound reporting it.
+Where a vendor publishes its own caps, they are the right neighbourhood to sit
+in -- Codess retains evidence for search, not for replay.
+
 ### 7.5 Mapping Profiles and Conformance
 
 The released profiles in `schema/mappings` declare source selectors, target
@@ -1264,8 +1333,8 @@ Projects hold Claude Sessions from 2026-05 that the vendor no longer has.
 
 #### 8.1.6 Retention Policy and Observed Outcomes
 
-`CODESS_KEEP_SNAPSHOTS` bounds how many generations are kept *besides* the
-current one. The policy exists because generations accumulate silently: each
+`CODESS_KEEP_SNAPSHOTS` bounds how many generations are kept, current
+included: 1 the current alone, 2 the current and one past, 0 every one. The policy exists because generations accumulate silently: each
 `ingest --force` adds one, and nothing warns.
 
 **Observed, and the reason the policy needs stating rather than assuming.** A

@@ -7,7 +7,6 @@ import sqlite3
 import tempfile
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +14,8 @@ from codess.config import RAW_CAPTURE_CHUNK_BYTES, canonical_raw_mode
 from codess.config import RAW_MODES as RAW_MODE_VALUES
 from codess.fileio import hash_file, open_readonly, read_source_revision, stat_consistency
 from codess.hashing import codess_digest, codess_text_hash
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 # Raw capture needs zstandard, ordinary ingest does not; each entry point
 # raises a user-facing error on None before touching it. The None assignment is
@@ -268,7 +269,7 @@ class RawStore:
             "source_system_id": source_system_id,
             "storage_format": storage_format,
             "source_locator": source_locator or str(path.resolve()),
-            "observed_at": datetime.now(UTC).isoformat(),
+            "observed_at": now_iso(system_clock),
             "source_mtime_ns": stat.st_mtime_ns,
             "source_size": stat.st_size,
             "availability": "not_retained" if mode == "observe" else "reference",

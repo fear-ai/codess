@@ -495,12 +495,19 @@ def write_latency_svg(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     selection = parser.add_mutually_exclusive_group(required=True)
-    selection.add_argument("--project", type=Path)
-    selection.add_argument("--store", type=Path)
+    selection.add_argument(
+        "--directory", type=Path,
+        help="the Project directory to read",
+    )
+    selection.add_argument(
+        "--store-file", dest="store", type=Path,
+        help="one source-system store to read instead of a Project directory",
+    )
     parser.add_argument("--vendor", choices=sorted(VENDOR_STORES), default="cc")
     parser.add_argument(
-        "--store-root", dest="store_root", type=Path,
+        "--store", dest="store_root", type=Path,
         default=Path.home() / ".codess",
+        help="the machine's durable store (default: ~/.codess)",
     )
     parser.add_argument("--start", required=True, help="inclusive ISO date/time")
     parser.add_argument("--end", required=True, help="exclusive ISO date/time")
@@ -520,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("--start must precede --end")
         store, selection_info = resolve_store(
             store=args.store,
-            project=args.project,
+            project=args.directory,
             vendor=args.vendor,
             registry=args.store_root.expanduser().resolve(),
         )

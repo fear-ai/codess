@@ -107,3 +107,32 @@ def test_decode_audit_report_sections(ingested_project):
     # dict is a valid answer; a missing key means the query never ran.
     for section in ("counts", "vocabularies", "inconsistencies", "linkage"):
         assert section in claude, f"decode audit omitted {section}"
+
+
+def test_project_inventory_reports_coverage(ingested_project):
+    """The Source-coverage inventory runs and classifies a live Project.
+
+    Takes `--store` rather than `--dir` because its subject is the machine's
+    durable store rather than one checkout, so it is not in the parametrized
+    list above. Asserted on the classification rather than the counts: a
+    freshly ingested Project's Sources are on disk by construction, and that
+    `complete` is the value the tool derives is the behaviour a rebuild depends
+    on.
+    """
+    _project_path, env = ingested_project
+    result = subprocess.run(
+        [
+            sys.executable, "tools/project_inventory.py",
+            "--store", env["CODESS_STORE_ROOT"],
+        ],
+        cwd=str(REPO), env=env, capture_output=True, text=True, check=False,
+    )
+    assert "Traceback" not in result.stderr, (
+        f"tools/project_inventory.py raised against a current store:\n{result.stderr}"
+    )
+    # Exit 0 means nothing holds vanished Sources, which is what a just-ingested
+    # Project must report; a nonzero exit here would mean the tool cannot tell a
+    # live Source from a pruned one.
+    assert result.returncode == 0, result.stdout
+    assert "complete" in result.stdout
+    assert "0 hold vanished Sources" in result.stdout

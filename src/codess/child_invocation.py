@@ -7,7 +7,7 @@ that three separate functions each built by hand for the same child process, so
 the group was a structure that had never been named.
 
 **What the duplication cost.** `baseline_operations`, `refresh_operations`, and
-`catalog_operations` each spelled `--source`, `--raw-mode`, `--registry`, and
+`catalog_operations` each spelled `--source`, `--raw-mode`, `--store`, and
 `--min-size` into their own list, and each decided independently whether to add
 `--no-progress`, `--validate`, `--force`, or `--candidate-snapshot`. A flag
 renamed at the CLI reaches all three only if someone edits each, which is the
@@ -31,14 +31,49 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
+
+from codess.wallclock import system_clock
 
 DEFAULT_TIMEOUT_SECONDS = 3_600
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
+class RunPolicy:
+    """What an ingest run does, decided once before the first Project.
+
+    The half of an invocation that does not change between Projects: where the
+    store is, what bounds apply, and how a child is run. Split from the target
+    half because the two have different lifetimes -- a policy is settled at the
+    command adapter from one setting declaration each, while a target changes
+    every loop iteration.
+
+    The split is what lets a relay take one argument instead of six. Both call
+    sites of `_run_project_ingest` passed the same six policy values verbatim,
+    so six of its eight arguments carried no information at either site.
+
+    Holds the clock for the same reason it holds the store root: it is decided
+    once before the first Project and read many times after, which is the
+    lifetime every other field here has. A run that needs a fixed clock sets it
+    on the policy rather than threading a parameter through three layers.
+    """
+
+    registry: Path
+    repo_root: Path
+    min_size: int = 0
+    raw_mode: str = "reference"
+    resource_policy: Path | None = None
+    force: bool = False
+    policy_timeout: int = DEFAULT_TIMEOUT_SECONDS
+    clock: Callable[[], datetime] = system_clock
+
+
+@dataclass(frozen=True, slots=True)
 class ChildInvocation:
+
     """One `codess ingest` child run: what to ingest, and under which policy.
 
     Frozen because an invocation describes a decision already made. A caller that
@@ -65,19 +100,45 @@ class ChildInvocation:
     uses a plain tuple on that path.
     """
 
+    policy: RunPolicy
     projects: tuple[Path, ...]
     vendor_selector: str
-    raw_mode: str
-    registry: Path
-    repo_root: Path
-    min_size: int = 0
-    resource_policy: Path | None = None
     validate: bool = False
-    force: bool = False
     candidate_snapshot: bool = False
     live_progress: bool = True
-    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     extra_flags: tuple[str, ...] = field(default_factory=tuple)
+
+    # The policy's fields, readable through the invocation so a call site that
+    # holds one does not reach past it. Properties rather than copies: a second
+    # binding is a second thing to keep in step, which is the duplication the
+    # split removes.
+    @property
+    def registry(self) -> Path:
+        return self.policy.registry
+
+    @property
+    def repo_root(self) -> Path:
+        return self.policy.repo_root
+
+    @property
+    def raw_mode(self) -> str:
+        return self.policy.raw_mode
+
+    @property
+    def min_size(self) -> int:
+        return self.policy.min_size
+
+    @property
+    def resource_policy(self) -> Path | None:
+        return self.policy.resource_policy
+
+    @property
+    def force(self) -> bool:
+        return self.policy.force
+
+    @property
+    def policy_timeout(self) -> int:
+        return self.policy.policy_timeout
 
     def command(self) -> list[str]:
         """The argv, built in one place.
@@ -133,6 +194,6 @@ class ChildInvocation:
             env=self.environment(),
             capture_output=True,
             text=True,
-            timeout=self.timeout_seconds,
+            timeout=self.policy_timeout,
             check=False,
         )

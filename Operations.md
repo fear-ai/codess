@@ -37,8 +37,10 @@ central. They are not copies of each other.
 complete new store set rather than a delta, so a Project ingested repeatedly
 accumulates one full copy per run.
 
-`CODESS_KEEP_SNAPSHOTS` bounds that: it counts snapshots *besides* the
-current one, defaults to **2**, and **0 keeps every snapshot**. Trimming runs
+`CODESS_KEEP_SNAPSHOTS` bounds that: it counts snapshots kept, current
+included, and defaults to **2** -- the snapshot just published and one rollback
+target. **1 keeps only the current** and **0 keeps every snapshot**, which is
+what an operator auditing a sequence of rebuilds needs. Trimming runs
 after the new snapshot is published, so an interruption leaves more snapshots
 than asked for rather than none -- the failure that matters is a Project with no
 readable store, and this ordering cannot produce it. The oldest are removed
@@ -109,36 +111,86 @@ application state.
 
 ### Scan Scoping
 
-Scan treats some directories as groupings that contain Projects rather than
-as Projects themselves, and skips others as review or backup trees. Both
-lists default to one set of names and are replaced wholesale:
+**This section describes the decided design; the code still uses the previous
+variable names.** `CODESS_AGGREGATORS` and `CODESS_EXCLUDE_REVIEW_DIRS` are what
+a running Codess reads today, and the rest of this document shows them in the
+setup sequences below. The rename to the three settings here lands with the
+discovery-configuration work; until it does, read the table as what each
+question is called *after* that change, and the sequences below as what to type
+now.
+
+Scan decides which directories are candidate Projects. Three settings bound
+that, and they answer different questions:
+
+| Setting | Answers | Form | Ships |
+|---|---|---|---|
+| `CODESS_EXCLUDE_DIRS` | Which directory *names* are never traversed anywhere | Names | Non-empty sample |
+| `CODESS_EXCLUDE_PATHS` | Which specific trees on *this machine* are not the operator's work | Absolute paths | Empty |
+| `CODESS_INCLUDE_PATHS` | Which trees to admit despite a rule that would skip them | Absolute paths | Empty |
+
+**A name is portable and a path is not**, which is what decides who supplies
+each. `tmp`, `var`, `node_modules`, and `windows` mean the same thing on every
+machine, so they ship as a sample. A reference tree's location is one machine's
+layout, so it ships empty and the operator supplies it.
 
 ```bash
-# Directories that group Projects rather than being one.
-export CODESS_AGGREGATORS='Clients,Research,Tools,Github,Sandbox'
+# Trees kept for reference rather than developed in.
+export CODESS_EXCLUDE_PATHS='/opt/vendor-src,/home/user/reference'
 
-# Path prefixes, relative to the work root, skipped as review/backup trees.
-export CODESS_EXCLUDE_REVIEW_DIRS='Tools,Vendor/Bundled,Research/Archive'
+# Admitted despite an exclusion, typically outside the home tree.
+export CODESS_INCLUDE_PATHS='/srv/projects/active'
 ```
 
-Entries are comma-separated and relative to the work root; an absolute entry
-is reported by configuration validation, because it would never match. An
-empty value means an empty list, which is how a tree with no grouping
-directories says so -- `CODESS_AGGREGATORS=''` makes every directory a
-candidate Project.
+**Syntax.** Lists are **comma-separated**, not colon-separated: a colon is
+excluded from the value character set precisely so a comma is unambiguous, and
+PATH notation would wrongly suggest precedence by position. Leading and trailing
+whitespace is stripped, from a file and from the command line alike. A directory
+name is alphanumeric with `-`, `_`, and `.` permitted, no `/`, at most 255
+characters. A path starts with `/`, may end with one, and is at most 1023
+characters. `..` is rejected in either: a traversal segment would let an entry
+escape the scope it appears to name.
 
-**Both ship empty**, so an unconfigured machine treats every directory as a
-candidate Project and excludes nothing. That is deliberate -- a shipped list
-derived from one tree misclassifies directories on every other machine -- but
-it means these are the first two settings to establish on a new machine, not an
-optional refinement.
+**Precedence is by specificity, stated once because the ordering bug is the
+predictable failure:**
 
-**What belongs in each, by the question it answers:**
+```text
+include_paths > exclude_paths > exclude_dirs > hidden names > default traversal
+```
 
-| Setting | Answers | Typical entries |
-|---|---|---|
-| `CODESS_AGGREGATORS` | Which directories only *hold* Projects and are not Projects themselves | A container grouping several repositories under one topic |
-| `CODESS_EXCLUDE_REVIEW_DIRS` | Which trees hold code that is not this operator's work | Vendored or cloned third-party sources, read for reference |
+An `include_paths` entry is honoured even when a parent is excluded and even
+when a segment matches an excluded name -- that is the whole reason it exists.
+Name-based exclusion over-reaches by design: a real `bin/` of checked-in scripts
+is skipped by the `bin` rule, and `include_paths` is the recourse that does not
+require weakening the rule for every tree.
+
+**Hidden names are skipped without being listed.** Any directory whose name
+begins with `.` is not traversed, so the list does not enumerate `.git`,
+`.venv`, `.mypy_cache`, and the rest -- an enumeration of a rule is permanently
+incomplete, since every new tool adds a name. `.codess` and `.claude` are read
+by explicit path rather than by traversal, so the rule does not reach them.
+
+**Symbolic links are not followed.** Following them breaks the precedence rule
+above: a link inside an excluded tree pointing into an included one re-admits
+excluded content by a path that never matches `exclude_paths`, so an exclusion
+the operator wrote is silently void. Links also admit cycles and report one
+Project twice under two paths. A tree that genuinely lives behind a link is
+admitted by naming its real location in `include_paths`, which is explicit and
+auditable.
+
+**A vendored clone is indistinguishable from a Project by inspection.** Both are
+directories with a `.git` and a remote; nothing on disk says which the operator
+develops. `CODESS_EXCLUDE_PATHS` is where that judgment lives, and leaving it
+empty does not mean "no exclusions apply" -- it means the judgment has not been
+recorded. Measured consequence on an unconfigured machine: a directory of
+third-party clones read for reference was ranked as a candidate Project for
+Sessions belonging to a repository beside it.
+
+**A skipped check is not a passing check.** With the path settings unset, the
+layout checks in `registry_check` do not run, and the command reports zero
+findings -- which reads as clean. It states which checks were skipped and the
+variable that enables them, so the two are distinguishable. Run
+`tools/setup_discovery.py --propose` to see what the running process resolved
+and to get candidates from the operator's own tree.
 
 **A vendored clone is indistinguishable from a Project by inspection.** Both are
 directories with a `.git` and a remote; nothing on disk says which one the
@@ -167,6 +219,21 @@ Codess does not migrate stores. Vendor sources remain the authority, so a
 store written under a different released package is rebuilt rather than
 converted. The procedure preserves the old data instead of deleting it, so a
 comparison remains possible if a rebuild produces something unexpected.
+
+**Check Source coverage before rebuilding.** "Vendor sources remain the
+authority" holds only where those Sources still exist. A rebuild reads the
+Sources, so a store whose Sources the vendor has pruned yields less than it
+held -- and the old store moved aside is then the only record of the
+difference.
+
+```bash
+python tools/project_inventory.py   # nonzero exit if any Project lost Sources
+```
+
+Archive any Project it names before proceeding; the procedure is under
+[Project Inventory](#project-inventory). This is a real condition rather than a
+precaution: Claude Code prunes on a 30-day default, and a known defect bypasses
+the setting on update.
 
 Move existing stores aside, keeping them:
 
@@ -647,7 +714,7 @@ which file is damaged:
 
 ```bash
 # current.json lost or corrupt: republish the newest snapshot that validates.
-codess baseline recover-pointer --project /path/to/project
+codess baseline recover-pointer --directory /path/to/project
 
 # manifest.json corrupt: reconstruct it from the surviving stores.
 codess baseline recover-manifest --snapshot /path/to/project/.codess/snapshots/<id>
@@ -739,9 +806,18 @@ The `codess` command is the supported interface. The scripts under `tools/`
 are development and diagnosis aids that are not installed as commands and are
 run with the repository's Python. They are grouped here by what they answer.
 
+### Before Rebuilding or Deleting a Store
+
+`tools/project_inventory.py` reports, per published Project, whether its
+recorded vendor Sources still exist, and exits nonzero if any do not. It is the
+gate on the three operations that can destroy an unreproducible store: a format
+rebuild, a retention prune, and a superseded-store cleanup. See
+[Project Inventory](#project-inventory) for the coverage values and the archive
+procedure.
+
 ### When the Schema Manifest Needs Refreshing
 
-`schema/manifest.json` records a SHA-256 per released schema file, and
+`schema/coschema/manifest.json` records a SHA-256 per released schema file, and
 `tools/refresh_schema_manifest.py` recomputes them. It is separate from a
 snapshot's `manifest.json`, which describes one store set -- the names collide
 and the roles do not.
@@ -753,7 +829,7 @@ and the roles do not.
 | A CoSchema format bump | Every store read fails with `format_version mismatch`, including stores just written | Yes -- format 6 to 7. The DDL, the contract, the constant, *and* the manifest each needed updating, and missing the manifest failed 289 tests |
 | A contract file edited without a format change | The write gate warns that the recorded `contract_digest` differs | Yes -- adding a vocabulary |
 | A fixture or policy file edited | The released-package check reports a digest mismatch | Yes -- adding `backup_conventions` to the discovery policy |
-| A comment-only edit to a schema file | Same as above: the digest covers bytes, not meaning | Expected, not yet observed |
+| A comment-only edit to a schema file | Same as above: the digest covers bytes, not meaning | Yes -- rewriting the `schema.sql` header comment. Caught before collection, in under a second, naming the file and `tools/refresh_schema_manifest.py` |
 
 **The workflow that avoids the trap:** edit the schema file, run
 `tools/refresh_schema_manifest.py`, then run the suite. Refreshing *after* the
@@ -813,8 +889,81 @@ reasons, in the order they matter:
 ```bash
 python tools/snapshot_inventory.py --ranges     # what is there, what is safe
 codess storage report                           # what it costs, recorded dated
-codess storage prune                            # the reviewed removal
+codess storage prune                            # the plan, reported not applied
+codess storage prune --apply                    # the reviewed removal
 ```
+
+**`storage prune` without `--apply` deletes nothing.** It emits a
+`codess.retention-plan/3` document naming every path it would remove, and
+`--apply` emits a `codess.retention-receipt/3` naming every path it did. The two
+are separate commands so a plan can be read before it is acted on, and the
+receipt carries the plan's `plan_digest` so the applied plan is provably the
+reviewed one.
+
+**Read `safe_to_apply` and the pointer check before applying.** The plan reports
+`safe_to_apply`, `errors`, and `references.blocking`; the last names anything
+still pointing at a snapshot due for deletion. A plan that is not safe states
+why rather than refusing silently.
+
+**Where the receipt lands.** `~/.codess/receipts/retention/<applied_at>.json`
+by default, named for the instant its own `applied_at` records -- the file name
+and the contents are two renderings of one moment, which is the correlation a
+receipt exists to support. `--receipt PATH` overrides it, and a path outside that
+tree is not read back by anything: `refresh_receipts` scans
+`~/.codess/reports/refresh-*.json` and nothing scans elsewhere, so an overridden
+receipt is a copy for a person rather than a record the system consults.
+
+**The eight flags, and why each is a flag rather than a setting or a default.**
+A retention run is deliberate and infrequent, so its options belong on the
+command where an operator states them per run -- not in the environment, where a
+value set once silently governs a later deletion:
+
+| Flag | Decides | Why it is exposed here |
+|---|---|---|
+| `--apply` | Whether anything is deleted | The one irreversible act in the command; separating plan from apply is what lets a plan be read before it is trusted |
+| `--keep N` | How many snapshots survive per Project, current included: 1 the current alone, 2 the current and one past, 0 every one | Defaults to `CODESS_KEEP_SNAPSHOTS`, so a prune retains what publication retains. Per run because a deliberate reclaim may want to keep less than routine trimming |
+| `--reference-catalog PATH` | Which catalogs' references block a deletion | A catalog outside the store cannot be discovered, so it is named. Repeatable because a machine may hold several |
+| `--working-archives` | Whether working archives are candidates | Off by default: they are a working area rather than published evidence, and including them by default would delete on a run an operator asked to be conservative |
+| `--keep-comparison-revisions` | Whether several >=1 GiB revisions of one logical source survive | The default keeps one. A comparison between two large revisions is a deliberate, temporary state, so retaining both is asked for rather than assumed |
+| `--receipt PATH` | Where the receipt is written | Overrides the default location; see below |
+| `--output PATH` | Where the document goes instead of stdout | The result channel, so a plan can be saved and diffed against the receipt |
+| `--store PATH` | Which durable store | One machine may hold more than one |
+
+**Why the depth is a flag *and* a variable.** Publication trims after every
+ingest and a prune runs when an operator decides to reclaim; both are retention,
+so both read `CODESS_KEEP_SNAPSHOTS` and a prune that ignored it would replace a
+policy rather than apply one. `--keep` overrides it for one run, and the plan's
+`policy` field records which depth was applied -- `current-plus-2-per-project`
+rather than a constant, so a receipt read later states the rule it followed.
+
+**Why the receipt is a separate document and not the plan.** They answer
+different questions, and the receipt records six things a plan cannot: when it
+was applied, what was *actually* removed rather than proposed, what was
+reclaimed, the postcondition, the selection flags in force, and the digest of the
+plan it came from. It also carries `kept` and `verified` -- what survived, and
+the reference checks that made the deletion safe -- so a reader holding only the
+receipt can tell a snapshot that was deleted from one that was never there, and
+can audit the claim that nothing still pointed at what went.
+
+**What the result keys are**, because a caller parsing them should not guess:
+
+| Key | Plan | Receipt | Holds |
+|---|---|---|---|
+| `format` | yes | yes | `codess.retention-plan/3` or `codess.retention-receipt/3` |
+| `safe_to_apply`, `errors` | yes | -- | Whether the plan may be applied, and why not |
+| `delete`, `keep` | yes | -- | Counts, byte usage, and the paths or ids on each side |
+| `deleted` | -- | yes | `snapshot_paths`, `raw_object_paths`, `working_archive_paths` -- **lists of paths, not counts** |
+| `reclaimed` | -- | yes | `snapshot_allocated_bytes` and its raw and working-archive counterparts |
+| `kept` | -- | yes | `snapshot_ids` and counts of what survived -- the question asked when a store is found to be missing something |
+| `verified` | -- | yes | The `references`, `errors`, and pre-apply `safe_to_apply` that justified the deletion |
+| `postcondition` | -- | yes | `remaining_candidates` and `safe_to_apply` after the fact |
+| `plan_digest` | yes | yes | Identifies the plan; equal values mean the applied plan is the reviewed one |
+| `policy` | yes | yes | The rule applied, named: `keep-newest` |
+| `keep_total` | yes | yes | How many snapshots the rule retained per Project, current included |
+| `receipt_path` | -- | yes, on stdout | Where the receipt was written |
+
+A count comes from `len(deleted["snapshot_paths"])`; there is no `snapshots`
+key on a receipt, and no `applied` key at all.
 
 **Resilience implications.** Reading the manifest rather than the store is what
 keeps the registry legible after a format change: a machine that upgrades
@@ -879,8 +1028,8 @@ directory holds. Nothing infers a state from a path.
 | Command | Records |
 |---|---|
 | `codess catalog state --project-id <id> --state <s> [--related-project-id <id>] [--note ...]` | A disposition: `priority`, `candidate`, `deferred`, `excluded`, `needs_review`, `worktree`. `worktree` requires the related Project |
-| `codess catalog location retire --project-id <id> --path <p>` | One location is no longer live; the Project's other locations stand |
-| `codess catalog location add --project-id <id> --path <p>` | A second location for one Project |
+| `codess catalog location retire --project-id <id> --directory <p>` | One location is no longer live; the Project's other locations stand |
+| `codess catalog location add --project-id <id> --directory <p>` | A second location for one Project |
 | `codess catalog relocate --project-id <id> --old-path <p> --new-path <q>` | A move, in one step. **Usable before the move as well as after** |
 | `codess catalog lifecycle [--state <s>]` | Reports the derived state per Project; exits nonzero on `scanned` |
 
@@ -925,7 +1074,7 @@ an `active` location, so every check that reads locations keeps reporting a
 directory that is gone. Retire it explicitly:
 
 ```bash
-codess catalog location retire --project-id <id> --path <old-path>
+codess catalog location retire --project-id <id> --directory <old-path>
 ```
 
 After that the location carries `state: retired` and `path_obsolete: true`, and
@@ -966,8 +1115,49 @@ a store with vanished Sources is the last remaining record of them. That
 distinction is a query rather than a judgement, which is what makes it
 re-checkable after the person who made the call has forgotten it.
 
-The file carries absolute paths from one machine, so it is generated locally
-and excluded from version control by the `*.csv` rule.
+**`tools/project_inventory.py` computes it.** Run it before any rebuild,
+retention prune, or superseded-store cleanup -- those are the three operations
+that can destroy a store whose Sources are gone.
+
+```bash
+python tools/project_inventory.py                    # every published Project
+python tools/project_inventory.py --csv out.csv      # the reference row
+```
+
+It opens every store read-only and writes nothing. It **exits nonzero when any
+Project holds vanished Sources**, so it can gate a rebuild rather than merely
+report before one.
+
+**Coverage has three values, and the middle one is why.** A vendor prune
+removes transcripts individually, so a Project commonly loses part of its
+Sources rather than all of them:
+
+| Value | Means | Consequence |
+|---|---|---|
+| `complete` | Every recorded Source resolves | The store can be rebuilt from its Sources |
+| `partial` | Some resolve, some do not | The store is the only record of the part that is gone |
+| `purged` | None resolves | The store is the only record of all of it |
+
+Reading coverage as two values reports a partly purged store as `complete` and
+removes the protection it most needs, which is the unrecoverable case rather
+than an edge of it.
+
+**An archived store is protected by permission, not by convention.** A store
+retained because its Sources are gone belongs outside the active registry --
+`require_store` refuses its format, so it answers no query, and leaving it in
+place invites the same question at every format change. Copy it under
+`~/.codess/archive/<name>/`, write a note beside it stating what it holds and
+why it cannot be regenerated, and remove write permission:
+
+```bash
+chmod -R a-w ~/.codess/archive/<name>
+```
+
+Restoring write permission is then the deliberate act that must precede any
+change to it.
+
+The reference row carries absolute paths from one machine, so it is generated
+locally and excluded from version control by the `*.csv` rule.
 
 ### Where a Measurement Is Read From
 

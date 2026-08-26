@@ -2,7 +2,7 @@
 """Check the registry's record of Projects against the filesystem.
 
 Three records describe what Codess knows about a Project and they can
-disagree: `ingested_projects.json` records what scan saw, `projects.json` is
+disagree: `projects_state.json` records what scan saw, `projects.json` is
 the catalog of what ingest published, and `projects/<id>/` holds the stores.
 Nothing reconciles them, so a Project can be scanned and never ingested,
 catalogued and its directory removed, or published twice for one path.
@@ -61,7 +61,7 @@ def _git_common_dir(path: Path) -> str | None:
 def check(store_root: Path) -> list[tuple[str, str, str]]:
     """Return (severity, subject, detail) for every disagreement found."""
     findings: list[tuple[str, str, str]] = []
-    scanned = _load(store_root / "ingested_projects.json").get("projects", [])
+    scanned = _load(store_root / "projects_state.json").get("projects", [])
     catalog = _load(store_root / "projects.json").get("projects", [])
 
     # A retired location is a path the operator has already accounted for --

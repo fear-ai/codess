@@ -50,7 +50,7 @@ pipeable into `cut` or `awk`.
 """
 
 
-def tabular_row(*values, separator: str = TABULAR_SEPARATOR) -> str:
+def tabular_row(*values: object, separator: str = TABULAR_SEPARATOR) -> str:
     """Render one tabular row: sanitize every field, join once.
 
     `query_cmd` assembled a row by hand at twenty sites, each joining sanitized
@@ -67,7 +67,7 @@ def tabular_row(*values, separator: str = TABULAR_SEPARATOR) -> str:
     return separator.join(sanitize_tabular(value) for value in values)
 
 
-def tabular_fields(*pairs, separator: str = " ") -> str:
+def tabular_fields(*pairs: tuple[str, Any], separator: str = " ") -> str:
     """Render `key=value` pairs, dropping the pairs whose value is absent.
 
     The other shape `query_cmd` repeats: a summary line of labelled values where

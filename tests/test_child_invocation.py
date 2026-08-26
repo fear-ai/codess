@@ -11,7 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from codess.child_invocation import ChildInvocation
+from codess.child_invocation import ChildInvocation, RunPolicy
+
+# The policy's fields and the target's, so a test names either without knowing
+# which structure holds it. Splitting here rather than at each call site keeps
+# every test below stating only what it varies.
+_POLICY_FIELDS = frozenset(RunPolicy.__dataclass_fields__)
 
 
 def _invocation(**overrides) -> ChildInvocation:
@@ -23,7 +28,9 @@ def _invocation(**overrides) -> ChildInvocation:
         "repo_root": Path("/repo"),
     }
     fields.update(overrides)
-    return ChildInvocation(**fields)
+    policy = {k: v for k, v in fields.items() if k in _POLICY_FIELDS}
+    target = {k: v for k, v in fields.items() if k not in _POLICY_FIELDS}
+    return ChildInvocation(policy=RunPolicy(**policy), **target)
 
 
 def _flag_value(command: list[str], flag: str) -> str | None:
@@ -137,7 +144,7 @@ class TestOneRunnerForEveryCaller:
             "codess.child_invocation.subprocess.run",
             lambda command, **kwargs: seen.append((command, kwargs)) or Result(),
         )
-        _invocation(timeout_seconds=7).run()
+        _invocation(policy_timeout=7).run()
         command, kwargs = seen[0]
         assert command[1:4] == ["-m", "main", "ingest"]
         assert kwargs["timeout"] == 7

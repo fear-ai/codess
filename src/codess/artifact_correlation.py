@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from codess.identity import artifact_uri_id
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 METHOD = "catalog.longest-root-containment/1"
 RELATION = "artifact_path_within_project_location"
@@ -109,7 +110,7 @@ def correlate_external_artifacts(conn: sqlite3.Connection, catalog: dict) -> dic
                 (
                     artifact_uri_id(uri), project_id, relation, METHOD,
                     json.dumps(evidence, sort_keys=True, separators=(",", ":")),
-                    confidence, datetime.now(UTC).isoformat(),
+                    confidence, now_iso(system_clock),
                 ),
             )
     return result

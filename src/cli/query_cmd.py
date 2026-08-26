@@ -11,10 +11,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from cli.failure import fail, fail_configuration, warn
+from codess import reporting
 from codess.config import (
     DEFAULT_QUERY_BYTE_LIMIT,
     get_project_stores,
-    validate_config,
 )
 from codess.configuration_audit import audit as audit_configurations
 from codess.coverage_report import store_coverage
@@ -344,28 +345,47 @@ def _session_by_identifier(scope: QueryScope, identifier: str) -> dict | None:
 
 
 def run(args: argparse.Namespace) -> int:
+    """Run session-query, flushing whatever it reported.
+
+    A thin wrapper around `_run` because that function returns from a dozen
+    places: a flush at each is a dozen chances to omit one, and an unflushed
+    batch is a report that silently ends early. The buffer holds 256 events and
+    a query rarely fills it, so without this most runs would emit nothing at all.
+    """
+    reporting.configure(
+        getattr(args, "report_profile", None),
+        privacy=getattr(args, "report_privacy", None),
+        redaction_roots={"home": Path.home(), "store": resolve_store_root(args)},
+    )
+    action = getattr(args, "action", None)
+    reporting.event(reporting.code("query.start"), action=action)
+    try:
+        code = _run(args)
+        reporting.event(
+            reporting.code("query.done"), action=action, exit_code=code,
+        )
+        return code
+    finally:
+        reporting.flush()
+
+
+def _run(args: argparse.Namespace) -> int:
     """Run session-query. Returns exit code."""
-    config_errors = validate_config()
-    for msg in config_errors:
-        print(f"codess: {msg}", file=sys.stderr)
-    if config_errors:
+    if fail_configuration():
         return 1
 
     limit = getattr(args, "limit", None)
     if limit is not None and limit < 0:
-        print("codess: --limit must be >= 0", file=sys.stderr)
-        return 1
+        return fail('codess: --limit must be >= 0')
     source_tokens, source_error = _parse_source_tokens(
         getattr(args, "source", None)
     )
     if source_error:
-        print(source_error, file=sys.stderr)
-        return 1
+        return fail(source_error)
     if getattr(args, "sess", None) is not None and getattr(
         args, "session_identifier", None
     ):
-        print("codess: -sess and --session-id are mutually exclusive", file=sys.stderr)
-        return 1
+        return fail('codess: -sess and --session-id are mutually exclusive')
     primary_modes = [
         getattr(args, "tool", None) is not None,
         bool(getattr(args, "sessions", False)),
@@ -385,21 +405,17 @@ def run(args: argparse.Namespace) -> int:
         # would make the requested result contract ambiguous.
         report_modes_without_session_filter = primary_modes[:2] + primary_modes[3:]
         if any(report_modes_without_session_filter) or getattr(args, "sess", None) is not None:
-            print("codess: typed query actions cannot be combined with report modes", file=sys.stderr)
-            return 1
+            return fail('codess: typed query actions cannot be combined with report modes')
         primary_modes = [True]
     if sum(primary_modes) > 1:
-        print("codess: select exactly one query report mode", file=sys.stderr)
-        return 1
+        return fail('codess: select exactly one query report mode')
     if getattr(args, "show", None) is not None and not (
         getattr(args, "sess", None) is not None
         or getattr(args, "session_identifier", None)
     ):
-        print("codess: --show requires -sess or --session-id", file=sys.stderr)
-        return 1
+        return fail('codess: --show requires -sess or --session-id')
     if getattr(args, "sess_id", False) and not getattr(args, "sessions", False):
-        print("codess: --id requires --sessions", file=sys.stderr)
-        return 1
+        return fail('codess: --id requires --sessions')
 
     registry = resolve_store_root(args)
     requested_project_ids = list(getattr(args, "project_ids", None) or [])
@@ -416,12 +432,7 @@ def run(args: argparse.Namespace) -> int:
         + int(explicit_paths)
     )
     if selector_count > 1:
-        print(
-            "codess: select exactly one of --project-id, --project-set, "
-            "--all-current, or --dir/--dirs",
-            file=sys.stderr,
-        )
-        return 1
+        return fail('codess: select exactly one of --project-id, --project-set, --all-current, or --dir/--dirs')
     catalog_selection = bool(requested_project_ids) or project_set is not None or all_current
     if catalog_selection:
         try:
@@ -433,8 +444,7 @@ def run(args: argparse.Namespace) -> int:
                 allow_contract_mismatch=contract_policy == "read-compatible",
             )
         except (OSError, ValueError, json.JSONDecodeError, SnapshotError) as exc:
-            print(f"codess: cannot resolve Project scope: {exc}", file=sys.stderr)
-            return 1
+            return fail(f'codess: cannot resolve Project scope: {exc}')
         resolved_roots = [
             Path(selection["project_path"]) for selection in project_scopes
         ]
@@ -442,22 +452,15 @@ def run(args: argparse.Namespace) -> int:
         roots, err = resolve_cli_roots(
             args, when_empty=RootsWhenEmpty.PROJECT_ROOT
         )
-        if err:
-            print(err, file=sys.stderr)
-            return 1
+        if err or roots is None:
+            return fail(err or "no roots resolved")
         resolved_roots = [root.resolve() for root in roots]
         project_scopes = []
     snapshot_id = getattr(args, "snapshot_id", None)
     if snapshot_id and (project_set is not None or all_current):
-        print(
-            "codess: --snapshot-id cannot be combined with --project-set or "
-            "--all-current; put expected snapshots in the Project set",
-            file=sys.stderr,
-        )
-        return 1
+        return fail('codess: --snapshot-id cannot be combined with --project-set or --all-current; put expected snapshots in the Project set')
     if snapshot_id and len(resolved_roots) != 1:
-        print("codess: --snapshot-id requires exactly one project root", file=sys.stderr)
-        return 1
+        return fail('codess: --snapshot-id requires exactly one project root')
     try:
         if catalog_selection:
             scope, missing_roots = _open_project_id_query_scope(
@@ -474,23 +477,14 @@ def run(args: argparse.Namespace) -> int:
                 source_tokens=source_tokens,
             )
     except (StoreError, SchemaContractError, SnapshotError) as exc:
-        print(f"codess: cannot open query stores: {exc}", file=sys.stderr)
-        return 1
+        return fail(f'codess: cannot open query stores: {exc}')
     if not scope.stores:
-        print("No store found. Run session-ingest first.", file=sys.stderr)
-        return 1
+        return fail('No store found. Run session-ingest first.')
     scope.session_names = alias_index(registry)
     for root in missing_roots:
-        print(
-            f"codess: warning: no store found for {sanitize_tabular(root)}",
-            file=sys.stderr,
-        )
+        warn(f'codess: warning: no store found for {sanitize_tabular(root)}')
     if snapshot_id and contract_policy == "read-compatible":
-        print(
-            "codess: warning: historical snapshot package differs or was not "
-            "required to match; hashes and format were verified, mapping parity was not",
-            file=sys.stderr,
-        )
+        warn('codess: warning: historical snapshot package differs or was not required to match; hashes and format were verified, mapping parity was not')
 
     try:
         if getattr(args, "query_action", None):
@@ -539,13 +533,7 @@ def run(args: argparse.Namespace) -> int:
             return _artifacts(scope, limit)
         if getattr(args, "coverage", False):
             return _coverage(scope)
-        print(
-            "Specify --tool, --sessions, -sess, --session-id, --permissions, --task-review, "
-            "--lineage, --audit, --diagnostics, --artifacts, --coverage, --stats, "
-            "or --taxonomy",
-            file=sys.stderr,
-        )
-        return 1
+        return fail('Specify --tool, --sessions, -sess, --session-id, --permissions, --task-review, --lineage, --audit, --diagnostics, --artifacts, --coverage, --stats, or --taxonomy')
     finally:
         scope.close()
 
@@ -635,9 +623,9 @@ def _typed_filters(args: argparse.Namespace, source_tokens: set[str] | None) -> 
         "since": getattr(args, "since", None),
         "until": getattr(args, "until", None),
     }
-    for key, value in values.items():
-        if value is not None:
-            filters[key] = value
+    filters.update(
+        {key: value for key, value in values.items() if value is not None}
+    )
     if getattr(args, "session_identifier", None):
         filters["session_ids"] = [args.session_identifier]
     if source_tokens:
@@ -652,23 +640,11 @@ def _typed_output(
     action = args.query_action
     if action == "cite":
         if not getattr(args, "result_input", None):
-            print(
-                "codess: query cite requires --result-input",
-                file=sys.stderr,
-            )
-            return 1
+            return fail('codess: query cite requires --result-input')
         if not getattr(args, "summary_file", None):
-            print(
-                "codess: query cite requires --summary-file",
-                file=sys.stderr,
-            )
-            return 1
+            return fail('codess: query cite requires --summary-file')
         if not getattr(args, "processor_id", None):
-            print(
-                "codess: query cite requires --processor-id",
-                file=sys.stderr,
-            )
-            return 1
+            return fail('codess: query cite requires --processor-id')
         try:
             prior = load_document(Path(args.result_input), RESULT_FORMAT)
             selected_snapshots = selected_project_snapshots(scope.stores)
@@ -689,33 +665,28 @@ def _typed_output(
             if getattr(args, "save_investigation", None):
                 save_document(Path(args.save_investigation), record)
         except (OSError, UnicodeError, QueryContractError) as exc:
-            print(f"codess: cited investigation rejected: {exc}", file=sys.stderr)
-            return 1
+            return fail(f'codess: cited investigation rejected: {exc}')
         print(json.dumps(record, indent=2, sort_keys=True))
         return 0
     if action == "evidence":
         event_ids = getattr(args, "event_ids", None) or []
         if len(event_ids) != 1:
-            print("codess: query evidence requires exactly one --event-id", file=sys.stderr)
-            return 1
+            return fail('codess: query evidence requires exactly one --event-id')
         matches = []
         for store in scope.stores:
             try:
                 matches.append(verify_event_source(store, event_ids[0]))
             except LookupError as exc:
                 if "ambiguous" in str(exc):
-                    print(f"codess: {exc}", file=sys.stderr)
-                    return 1
+                    return fail(f'codess: {exc}')
         if len(matches) != 1:
-            print(f"codess: event {event_ids[0]!r} resolved in {len(matches)} stores; use a globally unique ID", file=sys.stderr)
-            return 1
+            return fail(f'codess: event {event_ids[0]!r} resolved in {len(matches)} stores; use a globally unique ID')
         allowed = (
             {QUERY_SOURCE_FILTERS[token] for token in scope.source_tokens}
             if scope.source_tokens else None
         )
         if allowed and matches[0]["source"]["source_system_id"] not in allowed:
-            print("codess: event is outside the selected vendor scope", file=sys.stderr)
-            return 1
+            return fail('codess: event is outside the selected vendor scope')
         print(json.dumps(matches[0], indent=2, sort_keys=True))
         return 0 if matches[0]["selected"] else 2
     if action == "configurations":
@@ -731,14 +702,9 @@ def _typed_output(
                     scope, args.session_identifier
                 )
             except ValueError as exc:
-                print(f"codess: {exc}", file=sys.stderr)
-                return 1
+                return fail(f'codess: {exc}')
             if selected_session is None:
-                print(
-                    f"codess: no Session matches {args.session_identifier!r}",
-                    file=sys.stderr,
-                )
-                return 1
+                return fail(f'codess: no Session matches {args.session_identifier!r}')
             audit_stores = [
                 store
                 for store in scope.stores
@@ -753,8 +719,7 @@ def _typed_output(
         return 0
     source_tokens, error = _parse_source_tokens(getattr(args, "source", None))
     if error:
-        print(error, file=sys.stderr)
-        return 1
+        return fail(error)
     try:
         derivations = []
         selected = None
@@ -873,12 +838,10 @@ def _typed_output(
         if getattr(args, "save_result", None):
             save_document(Path(args.save_result), result)
     except (QueryContractError, OSError) as exc:
-        print(f"codess: typed query rejected: {exc}", file=sys.stderr)
-        return 1
+        return fail(f'codess: typed query rejected: {exc}')
     output_format = getattr(args, "output_format", "table")
     if output_format == "csv":
-        print("codess: typed results are JSON documents; use jq/sqlite/notebooks for tabular projection", file=sys.stderr)
-        return 1
+        return fail('codess: typed results are JSON documents; use jq/sqlite/notebooks for tabular projection')
     if output_format == "jsonl":
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     else:
@@ -928,7 +891,7 @@ def _merge_stats_into_registry(
 
 def _jsonl_output(
     scope: QueryScope,
-    args,
+    args: argparse.Namespace,
     roots: list[Path],
     limit: int | None,
     store_root: Path,
@@ -962,13 +925,12 @@ def _jsonl_output(
         if update_registry:
             _merge_stats_into_registry(counts, roots, store_root)
         return 0
-    print("codess: JSON Lines prototype currently supports --sessions and --stats", file=sys.stderr)
-    return 1
+    return fail('codess: JSON Lines prototype currently supports --sessions and --stats')
 
 
 def _csv_output(
     scope: QueryScope,
-    args,
+    args: argparse.Namespace,
     roots: list[Path],
     limit: int | None,
     store_root: Path,
@@ -1011,8 +973,7 @@ def _csv_output(
         if update_registry:
             _merge_stats_into_registry(counts, roots, store_root)
         return 0
-    print("codess: CSV currently supports --sessions and --stats", file=sys.stderr)
-    return 1
+    return fail('codess: CSV currently supports --sessions and --stats')
 
 
 def _stats(
@@ -1159,12 +1120,10 @@ def _show_session(
             else _session_by_number(scope, int(sess_num))
         )
     except ValueError as exc:
-        print(f"codess: {exc}", file=sys.stderr)
-        return 1
+        return fail(f'codess: {exc}')
     if not session:
         display = session_identifier if session_identifier is not None else sess_num
-        print(f"No session {display}", file=sys.stderr)
-        return 1
+        return fail(f'No session {display}')
 
     modes = show_modes or ["prompt", "pr", "agent", "tool", "perm"]
     show_prompt = "prompt" in modes or "pr" in modes
@@ -1262,10 +1221,11 @@ def _json_metadata(raw: Any) -> dict:
 
 def _session_details(raw: Any) -> str:
     metadata = _json_metadata(raw)
-    details = []
-    for key in ("originator", "source", "storage", "parent_session_id"):
-        if metadata.get(key) is not None:
-            details.append(f"{key}={metadata[key]}")
+    details = [
+        f"{key}={metadata[key]}"
+        for key in ("originator", "source", "storage", "parent_session_id")
+        if metadata.get(key) is not None
+    ]
     if metadata.get("is_sidechain"):
         details.append("sidechain=true")
     return sanitize_tabular(",".join(details))

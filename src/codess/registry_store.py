@@ -1,4 +1,4 @@
-"""Central ``ingested_projects.json``: merged updates from scan, ingest, and query.
+"""Central ``projects_state.json``: merged updates from scan, ingest, and query.
 
 Each project entry is keyed by resolved ``path``. Top-level keys may include:
 ``sources`` (ingest store counts), ``scan`` (last index-led metrics), ``query``
@@ -10,31 +10,32 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from codess.config import get_stats_path
+from codess.config import get_project_state_path
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 
 def load_registry_data(store_root: Path) -> dict[str, Any]:
     """Load registry JSON or return an empty shell (for first write)."""
-    stats_path = get_stats_path(store_root)
+    stats_path = get_project_state_path(store_root)
     if not stats_path.exists():
-        return {"projects": [], "updated": datetime.now(UTC).isoformat()}
+        return {"projects": [], "updated": now_iso(system_clock)}
     try:
         data = json.loads(stats_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return {"projects": [], "updated": datetime.now(UTC).isoformat()}
+        return {"projects": [], "updated": now_iso(system_clock)}
     if "projects" not in data:
         data["projects"] = []
     return data
 
 
 def save_registry_data(store_root: Path, data: dict[str, Any]) -> None:
-    stats_path = get_stats_path(store_root)
+    stats_path = get_project_state_path(store_root)
     stats_path.parent.mkdir(parents=True, exist_ok=True)
-    data["updated"] = datetime.now(UTC).isoformat()
+    data["updated"] = now_iso(system_clock)
     stats_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
@@ -154,7 +155,7 @@ def project_lifecycle(store_root: Path, catalog: dict[str, Any] | None = None) -
     """Every Project this machine has known, with what happened to it and when.
 
     Reconciles the two records that describe a Project without introducing a
-    third: `ingested_projects.json` (what scan saw) and `projects.json` (what
+    third: `projects_state.json` (what scan saw) and `projects.json` (what
     ingest published). They disagree in ways nothing reported -- a Project
     scanned and never ingested is absent from the catalog entirely, and a
     catalogued path whose directory has been removed stays indefinitely.
@@ -299,14 +300,14 @@ def prune_stale_entries(
 
 
 def merge_ingest_sources(entry: dict[str, Any], source_stats: dict[str, Any]) -> None:
-    entry["last_ingestion"] = datetime.now(UTC).isoformat()
+    entry["last_ingestion"] = now_iso(system_clock)
     src = dict(entry.get("sources") or {})
     src.update(source_stats)
     entry["sources"] = src
 
 
 def merge_scan_rows(entry: dict[str, Any], scan_rows: list[dict[str, Any]]) -> None:
-    entry["last_scan"] = datetime.now(UTC).isoformat()
+    entry["last_scan"] = now_iso(system_clock)
     by_vendor: dict[str, Any] = {}
     for r in scan_rows:
         v = str(r.get("vendor", ""))
@@ -342,5 +343,5 @@ def prune_legacy_cursor_global_entries(store_root: Path) -> int:
 
 
 def merge_query_stats(entry: dict[str, Any], sessions: int, events: int) -> None:
-    entry["last_query"] = datetime.now(UTC).isoformat()
+    entry["last_query"] = now_iso(system_clock)
     entry["query"] = {"sessions": int(sessions), "events": int(events)}

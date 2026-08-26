@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +23,10 @@ from codess.fileio import open_readonly, write_json_atomic
 from codess.registry_store import never_ingested_entries
 from codess.resources import allocated_bytes, file_usage, storage_usage, tree_usage
 from codess.schema_contract import FORMAT_VERSION
+from codess.snapshot import SNAPSHOTS_DIR, snapshot_generations, snapshot_stores
 from codess.store import table_counts, table_names
 from codess.token_usage import collect_token_usage
+from codess.wallclock import system_clock
 
 REPORT_FORMAT = "codess.storage-observation/1"
 
@@ -149,15 +150,20 @@ def all_store_paths(registry: Path) -> tuple[list[Path], set[Path]]:
         if snapshot is None or not snapshot.is_dir():
             continue
         current_snapshots.add(snapshot.resolve())
-        stores.extend(sorted(snapshot.glob("*.db")))
+        stores.extend(snapshot_stores(snapshot))
     return stores, current_snapshots
 
 
 def _snapshot_inventory(registry: Path, current: set[Path]) -> dict[str, Any]:
+    projects_root = registry / "projects"
     snapshots = [
-        path for path in (registry / "projects").glob("*/snapshots/*")
-        if path.is_dir()
-    ] if (registry / "projects").exists() else []
+        path
+        for project_dir in (
+            sorted(p for p in projects_root.iterdir() if p.is_dir())
+            if projects_root.exists() else []
+        )
+        for path in snapshot_generations(project_dir / SNAPSHOTS_DIR)
+    ]
     current_paths = [path for path in snapshots if path.resolve() in current]
     old_paths = [path for path in snapshots if path.resolve() not in current]
     return {
@@ -261,7 +267,7 @@ def build_storage_report(
 ) -> dict[str, Any]:
     registry = registry.expanduser().resolve()
     history_dir = history_dir or registry / "observations" / "storage"
-    observed = datetime.now(UTC)
+    observed = system_clock()
     previous = _previous(history_dir)
     stores, current = all_store_paths(registry)
     report: dict[str, Any] = {

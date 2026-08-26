@@ -355,7 +355,7 @@ def test_snapshot_is_central_and_relocation_preserves_query_access(tmp_path):
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
     result = subprocess.run(
         [
-            sys.executable, "tools/retire_project.py", "--project", str(project),
+            sys.executable, "tools/retire_project.py", "--directory", str(project),
             "--store", str(registry), "--new-location", str(replacement),
         ],
         cwd=Path(__file__).resolve().parents[1], env=env,

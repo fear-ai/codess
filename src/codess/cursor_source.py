@@ -39,7 +39,7 @@ from codess.config import (
 from codess.fileio import open_readonly, quote_identifier
 from codess.hashing import codess_digest
 from codess.helpers import local_path_from_uri
-from codess.units import EPOCH_SECONDS_FLOOR, epoch_milliseconds
+from codess.timeval import EPOCH_SECONDS_FLOOR, epoch_ms
 
 log = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def parse_timestamp(value: Any) -> float | None:
             return None
         if number < EPOCH_SECONDS_FLOOR:
             return None
-    return epoch_milliseconds(value)
+    return epoch_ms(value)
 
 
 def open_bubble_rows(

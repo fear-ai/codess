@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from datetime import UTC, datetime
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,7 @@ from codess.baseline_validation import (
     run_query_smoke,
     validate_project,
 )
-from codess.child_invocation import ChildInvocation
+from codess.child_invocation import ChildInvocation, RunPolicy
 from codess.config import (
     CURRENT_POINTER_FILE,
     LAST_INGEST_REPORT_FILE,
@@ -29,12 +29,14 @@ from codess.snapshot import (
     publish_snapshot,
     snapshot_store_paths,
     snapshot_store_paths_from_base,
+    snapshot_stores,
 )
+from codess.wallclock import system_clock
 
 
 def archive_stale_working_stores(project: Path) -> Path | None:
     base = project / STORE_DIR
-    databases = sorted(base.glob("*.db"))
+    databases = snapshot_stores(base)
     if not databases:
         return None
     current_digest = contract_digest()
@@ -58,7 +60,7 @@ def archive_stale_working_stores(project: Path) -> Path | None:
     # `archived_at` are two renderings of the same moment, so reading the clock
     # twice would let a directory claim a different second than the manifest
     # inside it -- and the directory name is what an operator sorts by.
-    archived_at = datetime.now(UTC)
+    archived_at = system_clock()
     stamp = archived_at.strftime("%Y%m%dT%H%M%SZ")
     old_label = "-".join(sorted((value or "unknown")[:12] for value in contract_digests))
     destination = base / WORKING_ARCHIVES_DIR / f"pre-package-{old_label}-{stamp}"
@@ -155,21 +157,23 @@ def run_ingest(invocation: ChildInvocation) -> dict[str, Any]:
 
 def apply_project(
     project: Path,
+    run: RunPolicy,
     *,
     source: str,
-    raw_mode: str,
-    registry: Path,
     policy_path: Path | None,
     repeat: bool,
     approve_catalog: Path | None,
-    min_size: int,
     query_smoke: bool,
-    repo_root: Path,
     report_path: Path | None = None,
-    resource_policy: Path | None = None,
 ) -> dict[str, Any]:
+    """Validate one Project against a baseline policy and record the outcome.
+
+    `run` rather than its five fields: `registry`, `repo_root`, `raw_mode`,
+    `min_size`, and `resource_policy` were passed through unchanged to build the
+    `ChildInvocation` below, which is what a policy is for.
+    """
     project = project.expanduser().resolve()
-    registry = registry.expanduser().resolve()
+    registry = run.registry
     policy = load_policy(policy_path)
     if policy.get("require_fixed_point") and not repeat:
         raise RuntimeError("policy requires --repeat")
@@ -179,9 +183,8 @@ def apply_project(
     # eight-argument calls, and the second existing only to prove the first is
     # reproducible means they must not be able to differ.
     invocation = ChildInvocation(
-        projects=(project,), vendor_selector=source, raw_mode=raw_mode,
-        registry=registry, repo_root=repo_root, min_size=min_size,
-        resource_policy=resource_policy, force=True, candidate_snapshot=True,
+        policy=replace(run, force=True),
+        projects=(project,), vendor_selector=source, candidate_snapshot=True,
     )
     first_ingest = run_ingest(invocation)
     if first_ingest["returncode"] != 0:

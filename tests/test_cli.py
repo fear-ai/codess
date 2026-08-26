@@ -141,7 +141,7 @@ def test_query_aggregates_multiple_project_roots():
         )
         assert r.returncode == 0
         assert "Sessions: 2" in r.stdout
-        data = json.loads((registry / "ingested_projects.json").read_text())
+        data = json.loads((registry / "projects_state.json").read_text())
         counts = {entry["path"]: entry["query"]["sessions"] for entry in data["projects"]}
         assert counts == {str(first.resolve()): 1, str(second.resolve()): 1}
 
@@ -281,7 +281,7 @@ def test_query_warns_for_root_without_store_and_counts_it_as_zero():
 
         assert r.returncode == 0
         assert f"warning: no store found for {empty.resolve()}" in r.stderr
-        data = json.loads((registry / "ingested_projects.json").read_text())
+        data = json.loads((registry / "projects_state.json").read_text())
         counts = {entry["path"]: entry["query"]["sessions"] for entry in data["projects"]}
         assert counts[str(populated.resolve())] == 1
         assert counts[str(empty.resolve())] == 0
@@ -487,7 +487,7 @@ def test_query_can_select_an_exact_retained_snapshot_without_registry_update():
         ])
         assert result.returncode == 0
         assert "Sessions: 1" in result.stdout and "Events: 1" in result.stdout
-        assert not (registry / "ingested_projects.json").exists()
+        assert not (registry / "projects_state.json").exists()
 
 
 def test_query_no_mode_exit_1():
@@ -627,7 +627,7 @@ def test_query_stats():
         r = _run(["query", "--dir", str(proj), "--stats"], env=env)
         assert r.returncode == 0
         assert "Sessions:" in r.stdout and "Events:" in r.stdout
-        data = json.loads((reg / "ingested_projects.json").read_text())
+        data = json.loads((reg / "projects_state.json").read_text())
         ent = next(p for p in data["projects"] if p["path"] == str(proj.resolve()))
         assert "query" in ent
         assert "sessions" in ent["query"]
@@ -1433,7 +1433,7 @@ def test_query_vendor_filter_stable_session_id_sequence_and_csv():
         assert csv_rows[-1]["report"] == "stats.total"
         assert csv_rows[-1]["sessions"] == "1"
         assert csv_rows[-1]["events"] == "2"
-        assert not (registry / "ingested_projects.json").exists()
+        assert not (registry / "projects_state.json").exists()
 
         detail = _run([
             "query", "--dir", str(project), "--source", "cursor",

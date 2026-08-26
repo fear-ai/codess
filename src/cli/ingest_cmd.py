@@ -8,12 +8,12 @@ import tempfile
 import time
 from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from cli.failure import fail, fail_configuration, warn
 from codess import reporting
 from codess.codex_source import build_session_index as build_codex_session_index
 from codess.config import (
@@ -26,7 +26,6 @@ from codess.config import (
     VENDOR_KEYS,
     get_state_path,
     get_store_path,
-    validate_config,
 )
 from codess.content_processing import ContentPolicy, ContentProcessor
 from codess.cursor_cohort import (
@@ -103,6 +102,8 @@ from codess.store import (
     sync_project_catalog,
     table_counts,
 )
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 log = logging.getLogger(__name__)
 
@@ -527,7 +528,7 @@ class VendorStore:
             return {
                 "sessions": counts.get("sessions", 0),
                 "events": counts.get("events", 0),
-                "last_ingestion": datetime.now(UTC).isoformat(),
+                "last_ingestion": now_iso(system_clock),
             }
         finally:
             conn.close()
@@ -575,16 +576,12 @@ def _resolve_ingest_request(args: argparse.Namespace,
     prints its own message, matching the command-layer contract that argument
     faults are reported here rather than raised into domain code.
     """
-    config_errors = validate_config()
-    for msg in config_errors:
-        print(f"codess: {msg}", file=sys.stderr)
-    if config_errors:
+    if fail_configuration():
         return 1
 
     roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.PROJECT_ROOT)
-    if err:
-        print(err, file=sys.stderr)
-        return 1
+    if err or roots is None:
+        return fail(err)
 
     from codess.project import resolve_store_root
 
@@ -592,22 +589,16 @@ def _resolve_ingest_request(args: argparse.Namespace,
 
     raw_src = getattr(args, "source", None) or "all"
     if "," in raw_src:
-        print(
-            "codess: ingest --source must be one token: cc | codex | cursor | all (not a comma list)",
-            file=sys.stderr,
-        )
-        return 1
+        return fail('codess: ingest --source must be one token: cc | codex | cursor | all (not a comma list)')
     source = raw_src.strip().lower()
     if source not in SOURCE_CHOICES:
-        print(f"codess: invalid ingest --source: {raw_src!r}", file=sys.stderr)
-        return 1
+        return fail(f'codess: invalid ingest --source: {raw_src!r}')
     sources = list(VENDOR_KEYS) if source == "all" else [source]
 
     try:
         settings = build_ingest_run_options(args)
     except ResourcePolicyError as exc:
-        print(f"codess: invalid resource policy: {exc}", file=sys.stderr)
-        return 1
+        return fail(f'codess: invalid resource policy: {exc}')
     for name, value in (
         ("--max-source-bytes", settings["max_source_bytes"]),
         ("--max-cursor-container-bytes", settings["max_cursor_container_bytes"]),
@@ -616,8 +607,7 @@ def _resolve_ingest_request(args: argparse.Namespace,
         ("--max-context-content-chars", settings["max_context_content_chars"]),
     ):
         if value is not None and value <= 0:
-            print(f"codess: {name} must be > 0", file=sys.stderr)
-            return 1
+            return fail(f'codess: {name} must be > 0')
     return roots, store_root, sources, settings
 
 
@@ -647,15 +637,7 @@ def _report_ingest_outcome(
         # decode boundary was counted and never printed -- and a zero for a
         # condition that cannot occur in this run reads the same as a zero for
         # one that can. Sorted so two runs are comparable line to line.
-        print(
-            "codess: ingest diagnostics: "
-            + " ".join(
-                f"{name}={count}"
-                for name, count in sorted(diagnostics.items())
-                if count
-            ),
-            file=sys.stderr,
-        )
+        warn('codess: ingest diagnostics: ' + ' '.join((f'{name}={count}' for name, count in sorted(diagnostics.items()) if count)))
 
 
 def _progress_events(project: str | None = None) -> list[dict]:
@@ -680,9 +662,8 @@ def _progress_events(project: str | None = None) -> list[dict]:
 def _print_preflight_report(
     settings: dict,
     roots: list,
-    sources: list[str],
-    staging_root,
-    temporary,
+    staging_root: Path | None,
+    temporary: tempfile.TemporaryDirectory[str] | None,
     progress_trace: ProgressEmitter,
     opts: dict,
     *,
@@ -694,8 +675,14 @@ def _print_preflight_report(
     Preflight writes nothing outside its temporary directory, so this is the
     only place its results are surfaced.
     """
+    # Walked once and bound: the same traversal was performed three times in
+    # this body -- here, for `resource_summary`, and for `evidence_summary` --
+    # over a directory nothing writes to between them. Three walks of one tree
+    # can also disagree if anything ever does write, which is a failure the
+    # single binding cannot have.
+    staged_stores = sorted(staging_root.rglob("*.db"))
     store_checks = []
-    for path in sorted(staging_root.rglob("*.db")):
+    for path in staged_stores:
         conn = connect(path, read_only=True)
         try:
             counts = table_counts(conn, ("sessions", "events"))
@@ -729,7 +716,7 @@ def _print_preflight_report(
         "resource_observations": opts["resource_observations"],
         "resource_summary": summarize_project_resources(
             opts["resource_observations"],
-            normalized_store_paths=sorted(staging_root.rglob("*.db")),
+            normalized_store_paths=staged_stores,
         ),
         "progress_events": _progress_events(),
         "session_kinds": (
@@ -737,7 +724,7 @@ def _print_preflight_report(
             if "Claude" in outcome.source_stats else {}
         ),
         "store_checks": store_checks,
-        "evidence_summary": _evidence_summary(sorted(staging_root.rglob("*.db"))),
+        "evidence_summary": _evidence_summary(staged_stores),
         "resource_policy": settings["resource_policy"],
         "limits": _resource_limits_report(settings),
         "mutation_boundary": "temporary stores only; project, registry, raw store, snapshots, and ingest state unchanged",
@@ -1064,7 +1051,7 @@ def _cursor_preflight(
                     "ingest.failed", stage="cursor.cohort",
                     error_type=type(exc).__name__,
                 )
-                print(f"codess: Cursor cohort capture failed: {exc}", file=sys.stderr)
+                warn(f'codess: Cursor cohort capture failed: {exc}')
                 # The caller cleans up on a returned code, so the temporary is
                 # released here and reported as absent rather than handed back
                 # already-cleaned.
@@ -1205,7 +1192,7 @@ def _ingest_project(
             store_path = store.path
             cc_dir = get_cc_session_dir(project_path)
             if cc_dir is None and sources == ["cc"]:
-                print(f"No CC project dir for {project_path}", file=sys.stderr)
+                warn(f'No CC project dir for {project_path}')
                 project.tally.note_error()
                 if settings["stop_on_error"]:
                     progress_trace(
@@ -1351,12 +1338,7 @@ def _ingest_project(
                 # publishing work under an identity that no longer names it.
                 current = read_project_binding(project_path)
                 if current and current["project_id"] != opts["project_id"]:
-                    print(
-                        f"codess: Project identity changed during ingest of "
-                        f"{project_path}: {opts['project_id']} became "
-                        f"{current['project_id']}; not publishing this Project",
-                        file=sys.stderr,
-                    )
+                    warn(f"codess: Project identity changed during ingest of {project_path}: {opts['project_id']} became {current['project_id']}; not publishing this Project")
                     progress_trace(
                         "project.identity_changed", project=str(project_path),
                         was=opts["project_id"], now=current["project_id"],
@@ -1621,6 +1603,9 @@ def run(args: argparse.Namespace) -> int:
         validate_only=settings["validate_only"], raw_mode=settings["raw_mode"],
     )
     if settings["content_policy"]:
+        # `Path(...)` around a value the flag already delivers as one: the
+        # setting is `Path | str | None`, because `CODESS_CONTENT_POLICY` reaches
+        # it as text. Normalizing here is what lets both spellings arrive.
         policy_path = Path(settings["content_policy"]).expanduser()
         try:
             policy_data = json.loads(policy_path.read_text(encoding="utf-8"))
@@ -1631,8 +1616,7 @@ def run(args: argparse.Namespace) -> int:
             )
             opts["content_policy_data"] = policy_data
         except (OSError, json.JSONDecodeError, ValueError) as exc:
-            print(f"codess: invalid content policy {policy_path}: {exc}", file=sys.stderr)
-            return 1
+            return fail(f'codess: invalid content policy {policy_path}: {exc}')
     force = True if settings["validate_only"] else settings["force"]
     min_size = settings["min_size"]
 
@@ -1729,7 +1713,7 @@ def run(args: argparse.Namespace) -> int:
 
     if settings["validate_only"]:
         _print_preflight_report(
-            settings, roots, sources, staging_root, temporary, progress_trace, opts,
+            settings, roots, staging_root, temporary, progress_trace, opts,
             diagnostics=diagnostics, outcome=outcome,
         )
         return 1 if outcome.tally.errors else 0

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from codess.baseline_validation import validate_project
-from codess.child_invocation import ChildInvocation
+from codess.child_invocation import ChildInvocation, RunPolicy
 from codess.config import CURRENT_POINTER_FILE, RAW_MANIFEST_FILE, SNAPSHOTS_DIR
 from codess.fileio import read_json, write_json_atomic
 from codess.hashing import codess_bytes_hash, codess_canonical_hash
@@ -20,6 +19,8 @@ from codess.project_catalog import (
 )
 from codess.schema_contract import contract_digest
 from codess.snapshot import current_stores
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 ONBOARD_RECEIPT_FORMAT = "codess.catalog-onboard/1"
 
@@ -53,20 +54,12 @@ def resolve_reviewed_selection(
 
 
 def _run_ingest_stage(
-    plan: dict[str, Any],
-    *,
-    validate: bool,
-    source: str,
-    raw_mode: str,
-    registry: Path,
-    repo_root: Path,
-    resource_policy: Path | None = None,
+    plan: dict[str, Any], run: RunPolicy, *, validate: bool, source: str,
 ) -> dict[str, Any]:
     invocation = ChildInvocation(
+        policy=run,
         projects=tuple(Path(item["path"]) for item in plan["projects"]),
-        vendor_selector=source, raw_mode=raw_mode, registry=registry,
-        repo_root=repo_root, resource_policy=resource_policy,
-        validate=validate,
+        vendor_selector=source, validate=validate,
     )
     command = invocation.command()
     result = invocation.run()
@@ -86,31 +79,31 @@ def _run_ingest_stage(
 
 def onboard_catalog(
     catalog_path: Path,
+    run: RunPolicy,
     *,
-    registry: Path,
-    repo_root: Path,
     decision: str = "approved",
     source: str = "all",
-    raw_mode: str = "reference",
     apply: bool = False,
     stop_after: str | None = None,
     receipt_path: Path | None = None,
-    resource_policy: Path | None = None,
 ) -> dict[str, Any]:
+    """Plan, preflight, and optionally apply an ingest for a reviewed catalog.
+
+    `run` rather than its four fields: `registry`, `repo_root`, `raw_mode`, and
+    `resource_policy` reached only the `_run_ingest_stage` calls below.
+    """
     plan = resolve_reviewed_selection(
         catalog_path, decision=decision, source=source
     )
-    plan["raw_mode"] = raw_mode
+    plan["raw_mode"] = run.raw_mode
     receipt: dict[str, Any] = {
         "receipt_format": ONBOARD_RECEIPT_FORMAT,
-        "created_at": datetime.now(UTC).isoformat(), "status": "planned", "plan": plan,
+        "created_at": now_iso(system_clock), "status": "planned", "plan": plan,
         "preflight": None, "apply": None,
     }
     if stop_after != "plan":
         preflight = _run_ingest_stage(
-            plan, validate=True, source=source, raw_mode=raw_mode,
-            registry=registry, repo_root=repo_root,
-            resource_policy=resource_policy,
+            plan, run, validate=True, source=source,
         )
         receipt["preflight"] = preflight
         if preflight["returncode"] != 0:
@@ -126,9 +119,7 @@ def onboard_catalog(
             if current["contract_digest"] != plan["contract_digest"]:
                 raise RuntimeError("CoSchema package changed between preflight and apply")
             applied = _run_ingest_stage(
-                plan, validate=False, source=source, raw_mode=raw_mode,
-                registry=registry, repo_root=repo_root,
-                resource_policy=resource_policy,
+                plan, run, validate=False, source=source,
             )
             receipt["apply"] = applied
             receipt["status"] = "applied" if applied["returncode"] == 0 else "apply_failed"

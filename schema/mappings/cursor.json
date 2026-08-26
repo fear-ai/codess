@@ -5,20 +5,110 @@
   "vendor": "cursor",
   "product": "cursor-composer",
   "source_system_id": "cursor.composer",
-  "storage_formats": ["cursor-sqlite"],
-  "rules": [
-    {"id": "cursor.bubble", "source": "cursorDiskKV.bubbleId:*", "target": "events", "operation": "from_each", "retention": "core"},
-    {"id": "cursor.tool-former-invocation", "source": "bubble.toolFormerData", "target": "tool_invocations", "operation": "from", "retention": "specialized"},
-    {"id": "cursor.tool-former-result", "source": "bubble.toolFormerData.result,status", "target": "tool_results", "operation": "from", "retention": "specialized"},
-    {"id": "cursor.permission-decision", "source": "bubble.toolFormerData.userDecision", "target": "tool_invocations.source_status+tool_invocations.normalized_status", "operation": "from", "retention": "specialized"},
-    {"id": "cursor.tool-result-legacy", "source": "bubble.toolResults[]", "target": "tool_results", "operation": "from_each", "retention": "specialized"},
-    {"id": "cursor.model-selection", "source": "bubble.modelInfo.modelName", "target": "model_turns.model_param_id", "operation": "from", "retention": "specialized"},
-    {"id": "cursor.context-window-observation", "source": "bubble.contextWindowStatusAtCreation", "target": "events.metadata", "operation": "from", "retention": "extension"},
-    {"id": "cursor.compaction-summary", "source": "bubble.conversationSummary", "target": "events.context.compact", "operation": "from", "retention": "core"},
-    {"id": "cursor.request-context", "source": "cursorDiskKV.messageRequestContext:*", "target": "events.context.inject", "operation": "from_each", "retention": "core"},
-    {"id": "cursor.header", "source": "composerHeaders", "target": "sessions", "operation": "from", "retention": "extension"},
-    {"id": "cursor.archive", "source": "composerHeaders.isArchived", "target": "sessions.archive_state", "operation": "from", "retention": "core"},
-    {"id": "cursor.subagent", "source": "composerHeaders.isSubagent", "target": "sessions.session_relation_kind", "operation": "from", "retention": "core"}
+  "storage_formats": [
+    "cursor-sqlite"
   ],
-  "hazards": ["live-sqlite-requires-consistent-read", "global-db-must-be-project-scoped", "renamed-or-remote-workspace-requires-approved-source-link", "bubble-role-is-not-actor", "repeated-server-bubble-copies", "whitespace-only-assistant-envelopes-are-not-messages", "toolResults-may-be-present-but-empty", "default-model-selection-is-not-an-exact-model-name"]
+  "rules": [
+    {
+      "id": "cursor.bubble",
+      "source": "cursorDiskKV.bubbleId:*",
+      "target": "events",
+      "operation": "from_each",
+      "retention": "core"
+    },
+    {
+      "id": "cursor.reasoning",
+      "source": "cursorDiskKV.bubbleId:*.thinking",
+      "target": "events",
+      "operation": "from_each",
+      "retention": "core"
+    },
+    {
+      "id": "cursor.tool-former-invocation",
+      "source": "bubble.toolFormerData",
+      "target": "tool_invocations",
+      "operation": "from",
+      "retention": "specialized"
+    },
+    {
+      "id": "cursor.tool-former-result",
+      "source": "bubble.toolFormerData.result,status",
+      "target": "tool_results",
+      "operation": "from",
+      "retention": "specialized"
+    },
+    {
+      "id": "cursor.permission-decision",
+      "source": "bubble.toolFormerData.userDecision",
+      "target": "tool_invocations.source_status+tool_invocations.normalized_status",
+      "operation": "from",
+      "retention": "specialized"
+    },
+    {
+      "id": "cursor.tool-result-legacy",
+      "source": "bubble.toolResults[]",
+      "target": "tool_results",
+      "operation": "from_each",
+      "retention": "specialized"
+    },
+    {
+      "id": "cursor.model-selection",
+      "source": "bubble.modelInfo.modelName",
+      "target": "model_turns.model_param_id",
+      "operation": "from",
+      "retention": "specialized"
+    },
+    {
+      "id": "cursor.context-window-observation",
+      "source": "bubble.contextWindowStatusAtCreation",
+      "target": "events.metadata",
+      "operation": "from",
+      "retention": "extension"
+    },
+    {
+      "id": "cursor.compaction-summary",
+      "source": "bubble.conversationSummary",
+      "target": "events.context.compact",
+      "operation": "from",
+      "retention": "core"
+    },
+    {
+      "id": "cursor.request-context",
+      "source": "cursorDiskKV.messageRequestContext:*",
+      "target": "events.context.inject",
+      "operation": "from_each",
+      "retention": "core"
+    },
+    {
+      "id": "cursor.header",
+      "source": "composerHeaders",
+      "target": "sessions",
+      "operation": "from",
+      "retention": "extension"
+    },
+    {
+      "id": "cursor.archive",
+      "source": "composerHeaders.isArchived",
+      "target": "sessions.archive_state",
+      "operation": "from",
+      "retention": "core"
+    },
+    {
+      "id": "cursor.subagent",
+      "source": "composerHeaders.isSubagent",
+      "target": "sessions.session_relation_kind",
+      "operation": "from",
+      "retention": "core"
+    }
+  ],
+  "hazards": [
+    "live-sqlite-requires-consistent-read",
+    "global-db-must-be-project-scoped",
+    "renamed-or-remote-workspace-requires-approved-source-link",
+    "bubble-role-is-not-actor",
+    "repeated-server-bubble-copies",
+    "whitespace-only-assistant-envelopes-are-not-messages",
+    "toolResults-may-be-present-but-empty",
+    "default-model-selection-is-not-an-exact-model-name"
+  ]
 }

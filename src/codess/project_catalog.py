@@ -6,7 +6,6 @@ import json
 import logging
 import platform
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +20,8 @@ from codess.fileio import write_json_atomic
 from codess.hashing import codess_canonical_hash
 from codess.helpers import ephemeral_project_location_reason
 from codess.identity import location_id
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ def _save_catalog_entry(
     catalog back) with nothing else in common between them; extracted so a
     future site can't stamp only one of the two by omission.
     """
-    stamped = datetime.now(UTC).isoformat()
+    stamped = now_iso(system_clock)
     entry["updated_at"] = stamped
     catalog["updated_at"] = stamped
     write_json_atomic(_catalog_path(store_root), catalog)
@@ -375,7 +376,7 @@ def ensure_project_binding(store_root: Path, project_path: Path) -> dict[str, An
 
     # One observation, one timestamp. These were three separate `now()` calls,
     # so a single logical event could be stamped at three different instants.
-    observed_at = datetime.now(UTC).isoformat()
+    observed_at = now_iso(system_clock)
     machine_id = _machine_id(store_root)
     observed_location_id = location_id(machine_id, project_path)
 
@@ -463,7 +464,7 @@ def set_project_selection_state(
     entry["selection_state"] = state
     disposition = {
         "state": state,
-        "updated_at": datetime.now(UTC).isoformat(),
+        "updated_at": now_iso(system_clock),
     }
     if previous and previous != state:
         disposition["previous_state"] = previous
@@ -739,7 +740,7 @@ def catalog_readiness(store_root: Path) -> dict[str, Any]:
         ))
     return {
         "format": "codess.catalog-readiness/1",
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": now_iso(system_clock),
         "summary": _readiness_summary(projects),
         "projects": projects,
     }
@@ -914,7 +915,7 @@ def add_project_location(
         "path": resolved,
         "path_obsolete": False,
         "state": "active",
-        "observed_at": datetime.now(UTC).isoformat(),
+        "observed_at": now_iso(system_clock),
         "platform": platform.system().lower(),
     }
     entry["locations"] = sorted(
@@ -960,7 +961,7 @@ def retire_project_location(
         raise ValueError("refusing to retire the last active location")
     target["state"] = "retired"
     target["path_obsolete"] = True
-    target["retired_at"] = datetime.now(UTC).isoformat()
+    target["retired_at"] = now_iso(system_clock)
     _save_catalog_entry(store_root, catalog, entry)
     return {"project_id": project_id, "path": resolved, "state": "retired"}
 

@@ -1504,3 +1504,101 @@ class TestRecordLevelDiagnostics:
             assert levels.get("record") == 1
         finally:
             conn.close()
+
+class TestMappingProfileConformance:
+    """A stored `mapping_rule` is one its released profile declares.
+
+    The property held by construction -- each adapter selects a declared id
+    rather than deriving one from the record -- with nothing testing it, so a
+    refactor that replaced a dispatch table with a derivation would have been
+    silently accepted. Stores written before the current contract show what that
+    looks like: they carry ids of the form `vendor.event_type.subtype`, built
+    from the record rather than chosen from the profile.
+    """
+
+    def _commit(self, tmp_path, rule, source_name):
+        from codess.ingest_pipeline import commit_source_replacement
+
+        db = tmp_path / f"conformance-{source_name}.db"
+        init_db(db)
+        commit_source_replacement(
+            db,
+            session={"id": "s1", "source": source_name, "type": "Code",
+                     "project_path": str(tmp_path)},
+            events=[{
+                "session_id": "s1", "event_id": "e0",
+                "event_type": "user_message", "subtype": "prompt",
+                "role": "user", "content": "x",
+                "source_record_type": "user", "source_record_locator": "l1",
+                "mapping_rule": rule, "mapping_trace": '{"applied_rules": []}',
+            }],
+            session_id="s1",
+        )
+        conn = connect(db, read_only=True)
+        try:
+            return [
+                row[0] for row in conn.execute(
+                    "SELECT reason_code FROM mapping_diagnostics"
+                )
+            ]
+        finally:
+            conn.close()
+
+    @pytest.mark.parametrize(
+        ("source_name", "declared"),
+        [("Claude", "claude.message"), ("Codex", "codex.message"),
+         ("Cursor", "cursor.bubble")],
+    )
+    def test_a_declared_rule_records_no_nonconformance(
+        self, tmp_path, source_name, declared
+    ):
+        """Every adapter's own declared id passes the shared check."""
+        codes = self._commit(tmp_path, declared, source_name)
+        assert "mapping_profile_nonconformance" not in codes
+
+    @pytest.mark.parametrize(
+        "source_name", ["Claude", "Codex", "Cursor"],
+    )
+    def test_an_undeclared_rule_is_refused_identically_per_vendor(
+        self, tmp_path, source_name
+    ):
+        """The same non-conformance meets the same disposition in each adapter.
+
+        A vendor that raises where another tolerates would give one conformance
+        figure two meanings, which is why the check sits at one vendor-neutral
+        boundary rather than in three adapters.
+        """
+        codes = self._commit(tmp_path, "vendor.user_message.prompt", source_name)
+        assert codes.count("mapping_profile_nonconformance") == 1
+
+    def test_an_event_without_a_rule_is_not_reported_twice(self, tmp_path):
+        """No rule means no profile to measure against.
+
+        The unmapped-semantics diagnostic already reports it, and reporting the
+        same condition under two reason codes would double every count a
+        coverage report derives from them.
+        """
+        from codess.ingest_pipeline import commit_source_replacement
+
+        db = tmp_path / "conformance-none.db"
+        init_db(db)
+        commit_source_replacement(
+            db,
+            session={"id": "s1", "source": "Claude", "type": "Code",
+                     "project_path": str(tmp_path)},
+            events=[{"session_id": "s1", "event_id": "e0",
+                     "event_type": "user_message", "subtype": "prompt",
+                     "role": "user", "content": "x"}],
+            session_id="s1",
+        )
+        conn = connect(db, read_only=True)
+        try:
+            codes = [
+                row[0] for row in conn.execute(
+                    "SELECT reason_code FROM mapping_diagnostics"
+                )
+            ]
+        finally:
+            conn.close()
+        assert "mapping_profile_nonconformance" not in codes
+

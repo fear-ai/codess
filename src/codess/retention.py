@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,10 +20,23 @@ from codess.config import (
 from codess.fileio import hash_file, open_readonly, write_json_atomic
 from codess.hashing import codess_canonical_hash
 from codess.resources import storage_usage
-from codess.snapshot import SnapshotError, current_snapshot, read_manifest
+from codess.snapshot import (
+    SnapshotError,
+    current_snapshot,
+    read_manifest,
+    snapshot_generations,
+    superseded_beyond_depth,
+)
+from codess.wallclock import system_clock
 
-PLAN_FORMAT = "codess.retention-plan/1"
-RECEIPT_FORMAT = "codess.retention-receipt/1"
+# Version 3 adds `keep_total` and stops spelling the count into `policy`;
+# version 2 renamed `plan_sha256` to `plan_digest`. The format string carries a
+# version precisely so a consumer can tell them apart: a `/2` reader parsing
+# `keep-2-per-project` out of `policy` finds a name with no number in it, and
+# would rather be told the format changed than return nothing. No stored
+# document is rewritten -- each records what happened under its own version.
+PLAN_FORMAT = "codess.retention-plan/3"
+RECEIPT_FORMAT = "codess.retention-receipt/3"
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -247,12 +259,48 @@ def _working_archives(
     return sorted(archives)
 
 
+def _superseded_beyond_total(
+    all_snapshots: list[Path], current: set[Path], keep_total: int,
+) -> list[Path]:
+    """Superseded snapshots outside the retained total, per Project.
+
+    The counting rule is `snapshot.superseded_beyond_depth`, shared with the trim
+    that follows a publication so a retained total means one thing. What this
+    adds is the grouping: a total is a per-Project allowance, and a Project
+    ingested ten times must not consume another's.
+    """
+    by_project: dict[Path, list[Path]] = {}
+    for path in all_snapshots:
+        if path not in current:
+            by_project.setdefault(path.parent, []).append(path)
+    superseded: list[Path] = []
+    for parent, paths in sorted(by_project.items()):
+        names = superseded_beyond_depth(
+            sorted(path.name for path in paths), keep_total,
+        )
+        superseded.extend(parent / name for name in names)
+    return sorted(superseded)
+
+
 def build_retention_plan(
     registry: Path, *, reference_catalogs: list[Path] | None = None,
     include_working_archives: bool = False,
     allow_large_comparison_revisions: bool = False,
+    keep_total: int | None = None,
 ) -> dict[str, Any]:
-    """Plan current snapshots and enforce explicit retention of huge revisions."""
+    """Plan current snapshots and enforce explicit retention of huge revisions.
+
+    `keep_total` counts snapshots kept per Project, current included, and
+    defaults to `CODESS_KEEP_SNAPSHOTS` so a prune retains what publication
+    retains. 1 keeps only what each Project's pointer names; 0 keeps every
+    snapshot.
+    """
+    from codess.config import KEEP_SNAPSHOTS
+
+    # A second name rather than a rebind: the parameter is `int | None` and the
+    # resolved value is an `int`, and the naming rule exists so a reader sees
+    # which of the two a later line means.
+    total = KEEP_SNAPSHOTS if keep_total is None else keep_total
     registry = registry.expanduser().resolve()
     projects_root = registry / "projects"
     raw_root = registry / "raw" / "codess.raw-1"
@@ -276,11 +324,19 @@ def build_retention_plan(
             current_raw_records.extend((snapshot, record) for record in records)
         except (OSError, ValueError, KeyError, json.JSONDecodeError, sqlite3.Error, RuntimeError) as exc:
             errors.append(str(exc))
+    # Per Project through the owning module rather than one glob over a literal
+    # layout: `*/snapshots/*` spelled here is the second place that knows where a
+    # snapshot lives, and it also admits a partially written one.
     all_snapshots = sorted(
-        path.resolve() for path in projects_root.glob("*/snapshots/*") if path.is_dir()
-    ) if projects_root.exists() else []
+        path.resolve()
+        for project_dir in (
+            sorted(p for p in projects_root.iterdir() if p.is_dir())
+            if projects_root.exists() else []
+        )
+        for path in snapshot_generations(project_dir / SNAPSHOTS_DIR)
+    )
     current_set = set(current)
-    delete_snapshots = [path for path in all_snapshots if path not in current_set]
+    delete_snapshots = _superseded_beyond_total(all_snapshots, current_set, total)
     objects_root = raw_root / "objects"
     all_objects = sorted(path for path in objects_root.rglob("*.zst") if path.is_file()) if objects_root.exists() else []
     delete_objects = [
@@ -323,14 +379,25 @@ def build_retention_plan(
         "large_shared_revisions": large_shared_revisions,
         "allow_large_comparison_revisions": allow_large_comparison_revisions,
     }
-    plan_sha256 = codess_canonical_hash(256, 256, identity)
+    # `plan_digest`, not `plan_sha256`: the algorithm's name lives in
+    # `hashing` alone, and the value is what `codess_canonical_hash`
+    # returns rather than a bare SHA-256 -- it is one today only because
+    # the widths happen to be 256/256, so the name is accurate until
+    # someone changes a width and then silently is not.
+    plan_digest = codess_canonical_hash(256, 256, identity)
     return {
         "format": PLAN_FORMAT,
-        "policy": "latest-current-per-project; one-large-revision-per-logical-source",
+        # The rule is named and the number is a field beside it. Spelling the
+        # count into the name -- `keep-2-per-project` -- makes every value look
+        # like a distinct policy when only 0 and 1 differ in kind: 0 retains
+        # everything and 1 retains only the current, while every value above 1
+        # is the same rule with a different allowance.
+        "policy": "keep-newest; one-large-revision-per-logical-source",
+        "keep_total": total,
         "registry": str(registry),
         "safe_to_apply": not errors,
         "errors": errors,
-        "plan_sha256": plan_sha256,
+        "plan_digest": plan_digest,
         "keep": {
             "snapshots": len(current), "raw_objects": len(raw_keep),
             "snapshot_ids": sorted(current_ids),
@@ -373,11 +440,18 @@ def apply_retention_plan(
     registry: Path, *, reference_catalogs: list[Path] | None = None,
     receipt_path: Path | None = None, include_working_archives: bool = False,
     allow_large_comparison_revisions: bool = False,
+    keep_total: int | None = None,
 ) -> dict[str, Any]:
-    """Re-plan immediately, then delete only the validated latest-only candidates."""
+    """Re-plan immediately, then delete only the validated candidates.
+
+    Re-plans rather than taking a plan, so what is deleted is decided against
+    the store as it is now: a plan read minutes ago may name a snapshot a
+    concurrent publication has since made current.
+    """
     plan = build_retention_plan(
         registry, reference_catalogs=reference_catalogs,
         include_working_archives=include_working_archives,
+        keep_total=keep_total,
         allow_large_comparison_revisions=allow_large_comparison_revisions,
     )
     if not plan["safe_to_apply"]:
@@ -418,13 +492,14 @@ def apply_retention_plan(
     # is written to are two renderings of the same moment; reading the clock
     # twice would name the file a different instant than its own contents
     # report, which is exactly the correlation a receipt exists to support.
-    applied_at = datetime.now(UTC)
+    applied_at = system_clock()
     receipt = {
         "format": RECEIPT_FORMAT,
         "applied_at": applied_at.isoformat(),
         "registry": plan["registry"],
         "policy": plan["policy"],
-        "plan_sha256": plan["plan_sha256"],
+        "keep_total": plan["keep_total"],
+        "plan_digest": plan["plan_digest"],
         "selection": {
             "keep_comparison_revisions": allow_large_comparison_revisions,
             "working_archives": include_working_archives,
@@ -433,6 +508,25 @@ def apply_retention_plan(
             "snapshot_paths": deleted_snapshots,
             "raw_object_paths": deleted_objects,
             "working_archive_paths": deleted_working_archives,
+        },
+        # What survived, not only what went. A receipt listing deletions alone
+        # answers "what did this remove" and not "what is left", and the second
+        # is the question asked after a store is found to be missing something:
+        # a reader can then tell a snapshot that was deleted from one that was
+        # never there.
+        "kept": {
+            "snapshot_ids": plan["keep"]["snapshot_ids"],
+            "snapshots": plan["keep"]["snapshots"],
+            "raw_objects": plan["keep"]["raw_objects"],
+        },
+        # The checks that made the deletion safe, carried so the receipt states
+        # its own justification rather than referring to a plan that is gone.
+        # `references.blocking` empty is the claim that nothing still pointed at
+        # a snapshot being removed, and it is the claim most worth auditing.
+        "verified": {
+            "references": plan["references"],
+            "errors": plan["errors"],
+            "safe_to_apply_before": plan["safe_to_apply"],
         },
         "reclaimed": {
             "snapshot_allocated_bytes": plan["delete"]["snapshots_usage"]["allocated_bytes"],

@@ -218,6 +218,15 @@ _EVENT_SPECS: tuple[tuple[str, int, int], ...] = (
     ("cursor.project.unchanged", INFO, SCOPE_INGEST),
     ("cursor.project.no_composers", INFO, SCOPE_INGEST),
     ("source.map.progress", DEBUG, SCOPE_INGEST),
+    # Scan-side registry maintenance. Debug because it reports a cleanup that
+    # happened rather than a condition an operator acts on.
+    ("registry.legacy_cursor_pruned", DEBUG, SCOPE_SCAN),
+    # Every administrative subcommand, not one code per subcommand: 42 codes
+    # naming what `family`/`command` already say would be a second dispatch
+    # table. INFO because each of these can delete, publish, or rewrite state,
+    # and "which command ran" is the first thing a later reader wants.
+    ("admin.start", INFO, SCOPE_ADMIN),
+    ("admin.done", INFO, SCOPE_ADMIN),
 )
 
 EVENT_NAMES: tuple[str, ...] = tuple(name for name, _level, _scope in _EVENT_SPECS)
@@ -302,6 +311,9 @@ FIELD_CLASSES: dict[str, str] = {
     "pages_completed": OPEN, "pages_total": OPEN, "validate_only": OPEN,
     "raw_mode": OPEN, "project_index": OPEN, "project_total": OPEN,
     "reason": OPEN, "error_type": OPEN, "directories": OPEN,
+    # Which subcommand ran. `open` because a subcommand name is a fixed
+    # token from the parser, not a path and not a correlatable identifier.
+    "family": OPEN, "command": OPEN, "exit_code": OPEN, "action": OPEN,
     "budget": OPEN, "partial": OPEN, "device": OPEN, "field": OPEN,
     "records": OPEN, "bytes": OPEN, "rows": OPEN, "limit": OPEN,
     "size_mb": OPEN, "span_weeks": OPEN, "days_ago": OPEN,

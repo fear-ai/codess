@@ -20,7 +20,10 @@ from codess.baseline_validation import (
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project", type=Path, required=True)
+    parser.add_argument(
+        "--directory", type=Path, required=True,
+        help="the Project directory to operate on",
+    )
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--raw-store-root", type=Path)
     parser.add_argument("--report", type=Path)
@@ -32,12 +35,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         report = validate_project(
-            args.project,
+            args.directory,
             policy=load_policy(args.policy),
             raw_store_root=args.raw_store_root,
         )
         if args.query_smoke and report["status"] != "rejected":
-            smoke = run_query_smoke(args.project.resolve())
+            smoke = run_query_smoke(args.directory.resolve())
             report["query_smoke"] = smoke
             failures = [name for name, item in smoke.items() if not item["passed"]]
             if failures:

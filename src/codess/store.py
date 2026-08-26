@@ -14,12 +14,11 @@ import os
 import sqlite3
 import uuid
 from collections.abc import Iterable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from codess import __version__
-from codess.config import VENDORS
+from codess.config import MAPPING_PROFILE_FOR_SOURCE_SYSTEM, STRICT_MAPPING, VENDORS
 from codess.fileio import (
     open_readonly,
     open_writable,
@@ -47,13 +46,17 @@ from codess.schema_contract import (
     APPLICATION_ID,
     FORMAT_ID,
     FORMAT_VERSION,
+    SchemaContractError,
     contract_check_disabled,
     contract_digest,
     load_ddl,
     require_store,
     table_names,
+    validate_mapped_event,
 )
+from codess.timeval import now_iso
 from codess.tool_identity import bounded_source_call_id, mcp_namespace
+from codess.wallclock import system_clock
 
 log = logging.getLogger(__name__)
 
@@ -191,7 +194,7 @@ def init_db(db_path: Path) -> None:
             "decoder_version": DECODER_VERSION,
             "validator_version": VALIDATOR_VERSION,
             "created_by": __version__,
-            "created_at": datetime.now(UTC).isoformat(),
+            "created_at": now_iso(system_clock),
         }
         if contract_check_disabled():
             # Records that the digest was not verified at creation, so a
@@ -433,7 +436,7 @@ def sync_project_catalog(
                 location["location_id"], project_id, location["machine_id"],
                 location["path"], int(bool(location.get("path_obsolete"))),
                 location.get("state", "unknown"),
-                location.get("observed_at") or datetime.now(UTC).isoformat(),
+                location.get("observed_at") or now_iso(system_clock),
                 json.dumps({"platform": location.get("platform")}, separators=(",", ":")),
             ),
         )
@@ -531,7 +534,7 @@ def ensure_source(
     source_entity_id = source_revision_entity_id(
         profile["source_system_id"], source_file, revision
     )
-    now = datetime.now(UTC).isoformat()
+    now = now_iso(system_clock)
     conn.execute(
         """
         INSERT INTO sources(
@@ -660,7 +663,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         archive_source = "vendor"
     started_at = session.get("started_at")
     time_basis = session.get("time_basis") or ("event" if started_at is not None else "unknown")
-    now = datetime.now(UTC).isoformat()
+    now = now_iso(system_clock)
     source_system_id = session.get("source_system_id") or profile["source_system_id"]
     vendor_session_id = session.get("vendor_session_id") or session.get("id")
     session_identity = session_entity_id(source_system_id, vendor_session_id)
@@ -852,6 +855,60 @@ def _normalized_status(event: dict[str, Any], metadata: dict[str, Any]) -> tuple
         except ValueError:
             return source_status, event.get("normalized_status")
     return source_status, event.get("normalized_status")
+
+
+def _check_mapping_conformance(
+    conn: sqlite3.Connection, event: dict[str, Any], row_id: int
+) -> None:
+    """Validate a stored Event against its source system's released profile.
+
+    The one vendor-neutral point every Event passes regardless of which adapter
+    produced it. The contract was written and reachable only from tests, so the
+    property it states -- that a stored `mapping_rule` is one the profile
+    declares -- held by construction with nothing testing it, which is one
+    refactor from being lost.
+
+    Scoped to Events that carry a mapping rule. An Event without one has no
+    profile to be measured against, and the unmapped-semantics diagnostic
+    recorded beside this one already reports it; validating it here would report
+    one condition twice under two reason codes.
+
+    Strict mode raises and diagnostic mode records, and both mean the same thing
+    for all three vendors: a vendor that raises where another tolerates gives
+    the same conformance figure two meanings.
+    """
+    rule = event.get("mapping_rule")
+    if not rule:
+        return
+    row = conn.execute(
+        "SELECT source_system_id FROM sessions WHERE id=?", (event.get("session_id"),)
+    ).fetchone()
+    profile = MAPPING_PROFILE_FOR_SOURCE_SYSTEM.get(str(row[0])) if row else None
+    if profile is None:
+        return
+    try:
+        errors = validate_mapped_event(profile, event)
+    except SchemaContractError:
+        # An unreadable or absent profile is a released-contract fault rather
+        # than an Event fault, and `require_store` reports it where it can be
+        # acted on.
+        return
+    if not errors:
+        return
+    detail = "; ".join(errors)
+    if STRICT_MAPPING:
+        raise SchemaContractError(
+            f"{profile} event does not conform to its released mapping "
+            f"profile: {detail}"
+        )
+    _record_diagnostic(
+        conn, event, row_id,
+        reason_code="mapping_profile_nonconformance",
+        source_field="mapping_rule/mapping_trace",
+        source_value=rule,
+        detail=detail,
+        granularity="record",
+    )
 
 
 def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
@@ -1157,7 +1214,7 @@ def record_processing_run(
     # serializing here: a local json.dumps would disagree with it on any
     # non-ASCII content, so equal policies could hash differently.
     policy_sha = codess_canonical_hash(256, 256, policy)
-    now = datetime.now(UTC).isoformat()
+    now = now_iso(system_clock)
     run_id = processing_run_id(
         project_id, policy_sha, codess_canonical_hash(256, 256, actions)
     )
@@ -1233,7 +1290,7 @@ def _record_diagnostic(
             severity,
             reason_code, source_field,
             None if source_value is None else str(source_value),
-            mapping_rule, detail, datetime.now(UTC).isoformat(),
+            mapping_rule, detail, now_iso(system_clock),
         ),
     )
 
@@ -1274,7 +1331,7 @@ def record_source_diagnostics(
     rather than what it was handed.
     """
     written = 0
-    now = datetime.now(UTC).isoformat()
+    now = now_iso(system_clock)
     grouped: dict[tuple[str, str | None], dict[str, Any]] = {}
     for item in pending:
         key = (str(item["reason_code"]), item.get("source_record_type"))
@@ -1767,6 +1824,7 @@ def replace_session_events(
                 granularity=str(diagnostic.get("granularity") or "field"),
                 severity=str(diagnostic.get("severity") or "warn"),
             )
+        _check_mapping_conformance(conn, event, row_id)
         if _event_classification(event)["event_kind"] == "unknown":
             _record_diagnostic(
                 conn, event, row_id,

@@ -60,7 +60,7 @@
     },
     "mapping_cursor": {
       "path": "schema/mappings/cursor.json",
-      "sha256": "84ae3f3f02201b5141f897857ea7d690e51dd6bcd511b9316cf774ac9d834a1d"
+      "sha256": "a1b5a4e81de47d332c0aa83dfe88d98d0494d3acafd78dccdd2b4b9ed3526b77"
     },
     "sqlite_schema": {
       "path": "schema/coschema/sqlite/schema.sql",

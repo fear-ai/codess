@@ -44,7 +44,7 @@ from codess.cursor_source import get_workspace_ids as get_cursor_workspace_ids
 from codess.cursor_source import has_bubble_rows as cursor_has_bubble_rows
 from codess.ingest_pipeline import commit_source_replacement, inspect_sources, mark_source_complete
 from codess.ingest_review import record_ingest_review
-from codess.project import get_cc_session_dir
+from codess.project import cc_session_files, get_cc_session_dir
 from codess.project_catalog import register_workspace_bindings
 from codess.resources import (
     ResourceLimitError,
@@ -70,7 +70,7 @@ from codess.store import (
 log = logging.getLogger(__name__)
 
 
-def _progress(opts: dict, event: str, **fields) -> None:
+def _progress(opts: dict, event: str, **fields: object) -> None:
     callback = opts.get("progress")
     if callback is not None:
         callback(event, **fields)
@@ -252,11 +252,14 @@ def _record_related_raw(
 
 def _cc_session_files(cc_dir: Path) -> list[tuple[Path, str | None]]:
     """Return main and nested subagent transcripts with their parent session id."""
-    main = [(path, None) for path in cc_dir.glob("*.jsonl")]
-    nested = []
-    for path in cc_dir.glob("*/subagents/**/*.jsonl"):
-        rel = path.relative_to(cc_dir)
-        nested.append((path, rel.parts[0]))
+    main_files, nested_files = cc_session_files(cc_dir)
+    main = [(path, None) for path in main_files]
+    # The parent Session is the first path segment: Claude writes a delegated
+    # transcript under `<parent-session>/subagents/`, so the layout states the
+    # relationship the record does not.
+    nested = [
+        (path, path.relative_to(cc_dir).parts[0]) for path in nested_files
+    ]
     return sorted(main + nested, key=lambda item: str(item[0]))
 
 
@@ -265,7 +268,7 @@ def _record_cc_source(
     path: Path,
     external_sources: list[dict],
     external_start: int,
-    conn,
+    conn: sqlite3.Connection,
 ) -> None:
     """Record one Claude source and the external content it referenced.
 

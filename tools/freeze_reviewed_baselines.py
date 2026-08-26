@@ -21,8 +21,10 @@ from codess.config import catalog_root
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--selection", type=Path,
+        # `--file`, matching `codess baseline freeze`, which this mirrors.
+        "--file", dest="selection", type=Path,
         default=catalog_root() / "baseline-selection.json",
+        help="the baseline selection to freeze (default: the configured one)",
     )
     parser.add_argument(
         "--approved", type=Path,

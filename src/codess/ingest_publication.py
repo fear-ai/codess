@@ -25,7 +25,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from codess.artifact_correlation import correlate_external_artifacts
 from codess.config import (
@@ -40,6 +40,10 @@ from codess.config import (
 from codess.project_catalog import load_catalog
 from codess.snapshot import create_snapshot, current_snapshot, read_manifest
 from codess.store import connect, record_processing_run
+
+if TYPE_CHECKING:
+    from codess.raw_store import RawStore
+    from codess.reporting.api import ProgressEmitter
 
 log = logging.getLogger(__name__)
 
@@ -151,7 +155,7 @@ def correlate_project_artifacts(
     store_root: Path,
     *,
     diagnostics: dict[str, int],
-    progress_trace,
+    progress_trace: ProgressEmitter,
 ) -> bool:
     """Correlate external Artifacts in every store this run touched.
 
@@ -161,7 +165,7 @@ def correlate_project_artifacts(
     snapshot is warranted.
     """
     derived_changed = False
-    catalog = load_catalog(store_root) if vendors else None
+    catalog = load_catalog(store_root) if vendors else {}
     for vendor in sorted(vendors):
         path = config.store_path(project_path, VENDOR_SOURCE_KEYS[vendor])
         if not path.exists():
@@ -276,13 +280,13 @@ def publish_snapshot(
     project_path: Path,
     raw_records: list[dict],
     *,
-    raw_store,
+    raw_store: RawStore | None,
     store_root: Path,
     project_id: str,
     sources: list[str] | tuple[str, ...],
     minimum_source_size: int,
     required: bool,
-    progress_trace,
+    progress_trace: ProgressEmitter,
 ) -> tuple[str | None, str | None]:
     """Create a snapshot over the Project's working stores when one is due.
 

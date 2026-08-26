@@ -26,6 +26,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from codess.config import MAPPING_PROFILE_FOR_SOURCE_SYSTEM
 from codess.fileio import quote_identifier
 from codess.schema_contract import (
     SchemaContractError,
@@ -219,11 +220,6 @@ def profile_conformance(
     source system has no released profile, so a reader can tell "compared,
     nothing found" from "not compared".
     """
-    profile_for = {
-        "anthropic.claude-code": "claude",
-        "openai.codex": "codex",
-        "cursor.composer": "cursor",
-    }
     if "store_meta" in table_names(conn):
         row = conn.execute(
             "SELECT value FROM store_meta WHERE key='contract_digest'"
@@ -249,7 +245,7 @@ def profile_conformance(
             "available": False,
             "reason": "store holds no Sessions, so it names no source system",
         }
-    name = profile_for.get(source_system_id)
+    name = MAPPING_PROFILE_FOR_SOURCE_SYSTEM.get(source_system_id)
     if name is None:
         return {
             "available": False,

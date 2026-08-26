@@ -205,10 +205,21 @@ ignore_missing_imports = true
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
-# Not enabled yet, each with the item that would make it achievable:
-#   disallow_untyped_defs  -- broad annotation work, no owning item
-#   strict_optional        -- W04, at the decode boundary
-#   warn_return_any        -- W04, same reason
+# Enabled on measured cost. Each was turned on alone, the error count read, and
+# the flag kept where the count did not rise:
+#   disallow_untyped_defs  -- ten unannotated signatures, all variadic bags or
+#     parameters whose type is spelled elsewhere in the package. Annotating them
+#     exposed four optional-handling defects the untyped signatures had hidden,
+#     which is the flag paying for itself; with those repaired it costs nothing.
+#   strict_optional        -- already mypy's default, so enabling it states an
+#     existing guarantee rather than adding one. Disabling it *raises* the count
+#     by 31, which is the measurement that settles it.
+disallow_untyped_defs = true
+strict_optional = true
+# Not enabled: measured at 26 additional errors, concentrated in the `Any` that
+# vendor JSON legitimately carries until it is validated. It becomes affordable
+# when the candidate-record contract (W04) types the decode boundary.
+#   warn_return_any
 
 [tool.coverage.run]
 # CLI integration tests exercise the command layer by launching a child

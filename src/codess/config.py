@@ -137,15 +137,27 @@ _IS_ENV_TABLE = (
     # truncating an ordinary one, and 0 disables it.
     # --- Snapshot retention ---
     # Each publication writes a complete store set, not a delta, so a Project
-    # ingested repeatedly accumulates one full copy per run. Keeping two prior
-    # snapshots leaves a rollback target and its predecessor while bounding the
-    # depository; 0 keeps every snapshot, which is what an operator auditing a
-    # sequence of rebuilds needs. Superseded snapshots beyond the limit are
-    # removed after the new one is published, never before.
+    # ingested repeatedly accumulates one full copy per run.
+    #
+    # The value counts snapshots kept, current included: 1 keeps only what was
+    # just published, 2 keeps it and one rollback target, and 0 keeps every
+    # snapshot -- which is what an operator auditing a sequence of rebuilds
+    # needs.
+    #
+    # Counting the total rather than the prior generations is what gives 0 a
+    # meaning distinct from "keep only the current". When the value counted
+    # prior generations both wanted 0, and the trim and the prune resolved that
+    # collision in opposite directions.
     ("CODESS_KEEP_SNAPSHOTS", env_int, 2),
     ("CODESS_MAX_SCAN_DIRECTORIES", env_int, 200_000),
-    ("CODESS_SCAN_DEADLINE_SECONDS", env_int, 900),
+    ("CODESS_SCAN_TIMEOUT", env_int, 900),
     ("CODESS_NO_HASH", env_bool, "0"),
+    # Declared beside `CODESS_NO_HASH` because the two are the same kind of
+    # setting: both disable a verification step and both are read by a leaf
+    # module that cannot import this one. `schema_contract` still reads the
+    # variable directly -- the row exists so the name is declared once and a
+    # reader of this table sees both bypasses, not one.
+    ("CODESS_NO_CONTRACT_CHECK", env_bool, "0"),
 )
 # `Any`, deliberately and explicitly. The table is heterogeneous by design -- one
 # row per variable, each with its own reader returning `int`, `bool`, `str`,
@@ -293,6 +305,14 @@ VENDORS: dict[str, dict[str, str]] = {
     },
 }
 
+
+# The released mapping profile for each source system, derived from `VENDORS`
+# rather than restated: a profile named here and not there would validate
+# Events against a contract no adapter writes to.
+MAPPING_PROFILE_FOR_SOURCE_SYSTEM: dict[str, str] = {
+    vendor["source_system_id"]: vendor["mapping"] for vendor in VENDORS.values()
+}
+
 VENDOR_KEYS = tuple(VENDORS)
 """CLI and filename tokens, in a fixed order so output is deterministic."""
 
@@ -323,7 +343,13 @@ def vendor(key: str) -> dict[str, str]:
         raise KeyError(f"unknown vendor: {key!r}")
     return VENDORS[resolved]
 STATE_FILE = "ingest_state.json"
-STATS_FILE = "ingested_projects.json"
+# `projects_state.json`, not `ingested_projects.json`: the file is written by
+# `scan` and `query` as well as `ingest`, so "ingested" named one of three
+# writers, and its subject is what has happened to a Project rather than which
+# Projects were ingested. `PROJECT_STATE_FILE` rather than `STATS_FILE` for the
+# same reason -- it holds timestamps and source lists as well as counts, so
+# "stats" described one column family rather than the document.
+PROJECT_STATE_FILE = "projects_state.json"
 LAST_INGEST_REPORT_FILE = "last-ingest-report.json"
 PROJECT_FILE = "project.json"
 SOURCE_LINKS_FILE = "source-links.json"
@@ -337,7 +363,7 @@ MANIFEST_BACKUP_FILE = "manifest.json.bak"
 CURRENT_POINTER_FILE = "current.json"
 RAW_MANIFEST_FILE = "raw-manifest.jsonl"
 
-# --- Registry (central ingested_projects.json, default ~/.codess) ---
+# --- Registry (central projects_state.json, default ~/.codess) ---
 STORE_ROOT = _IS_ENV_VALUES["CODESS_STORE_ROOT"]
 
 
@@ -346,7 +372,7 @@ def catalog_root() -> Path:
 
     Operator state, not source: which Projects were accepted as validation
     baselines, and under which policy, is a decision about one machine's data.
-    It defaults beside the registry -- where `ingested_projects.json`,
+    It defaults beside the registry -- where `projects_state.json`,
     snapshots, raw objects, and receipts already live -- rather than inside the
     checkout, which previously made a fresh clone write operator state into its
     own source tree.
@@ -355,6 +381,10 @@ def catalog_root() -> Path:
     path, so pointing at a checked-in selection remains possible when that is
     what a reviewer wants.
     """
+    # Read directly rather than through `settings.resolve`: this is `config`,
+    # which `settings` imports for nothing but must not import back. The row in
+    # `settings` declares the name and the flag; the value resolves here, which
+    # is the same division every other setting follows.
     configured = os.environ.get("CODESS_CATALOG")
     if configured:
         return Path(configured).expanduser()
@@ -481,7 +511,7 @@ def raw_mode_error(name: str, value: object, *, extra: tuple[str, ...] = ()) -> 
 RAW_MODE = canonical_raw_mode(_IS_ENV_VALUES["CODESS_RAW_MODE"])
 KEEP_SNAPSHOTS = _IS_ENV_VALUES["CODESS_KEEP_SNAPSHOTS"]
 MAX_SCAN_DIRECTORIES = _IS_ENV_VALUES["CODESS_MAX_SCAN_DIRECTORIES"]
-SCAN_DEADLINE_SECONDS = _IS_ENV_VALUES["CODESS_SCAN_DEADLINE_SECONDS"]
+SCAN_TIMEOUT = _IS_ENV_VALUES["CODESS_SCAN_TIMEOUT"]
 STRICT_MAPPING = _IS_ENV_VALUES["CODESS_STRICT_MAPPING"]
 CONTENT_POLICY = _IS_ENV_VALUES["CODESS_CONTENT_POLICY"]
 RESOURCE_POLICY = _IS_ENV_VALUES["CODESS_RESOURCE_POLICY"]
@@ -559,6 +589,7 @@ STOP = _IS_ENV_VALUES["CODESS_STOP"]
 
 # --- Snapshot/manifest hash verification bypass (recovery/debugging; see fileio.read_hash) ---
 NO_HASH = _IS_ENV_VALUES["CODESS_NO_HASH"]
+NO_CONTRACT_CHECK = _IS_ENV_VALUES["CODESS_NO_CONTRACT_CHECK"]
 
 # --- Truncation (display / stored excerpt limits) ---
 # One default, so a limit that has no reason to differ does not drift. The two 200s
@@ -597,14 +628,18 @@ def get_state_path(project_path: Path) -> Path:
     return project_path / STORE_DIR / STATE_FILE
 
 
-def get_stats_path(store_root: Path | None = None) -> Path:
-    """Return path to ``ingested_projects.json`` — merged project registry.
+def get_project_state_path(store_root: Path | None = None) -> Path:
+    """Return path to ``projects_state.json`` -- per-Project status.
+
+    Keyed by path and holding what has happened to each Project: its sources,
+    last scan, last ingestion, last query, and counts. Distinct from
+    ``projects.json``, which is keyed by `project_id` and holds identity.
 
     Updated by **scan** (index metrics), **ingest** (store counts), and **query**
     (for example, ``--stats``) via ``codess.registry_store``.
     """
     root = store_root if store_root is not None else STORE_ROOT
-    return root / STATS_FILE
+    return root / PROJECT_STATE_FILE
 
 
 def validate_config() -> list[str]:
@@ -614,6 +649,41 @@ def validate_config() -> list[str]:
         errs.append(f"CODESS_DAYS={DAYS} out of range [0, 3650]")
     if MIN_SIZE < 0:
         errs.append(f"CODESS_MIN_SIZE={MIN_SIZE} must be >= 0")
+    # A negative total is not a smaller retention -- it is a slice bound that
+    # would silently retain the wrong end of the list. Validated rather than
+    # clamped, because an operator who typed -1 meant something this cannot
+    # guess. 0 is valid and means keep everything.
+    if KEEP_SNAPSHOTS < 0:
+        errs.append(f"CODESS_KEEP_SNAPSHOTS={KEEP_SNAPSHOTS} must be >= 0")
+    # Two floors, because 0 does not mean the same thing to every bound. Its
+    # meaning is the consumer's, checked at each rather than assumed:
+    #
+    #   disabled by 0 -- the consumer guards with `if bound and ...`, so 0 is
+    #   falsy and the check does not run. `ScanBudget.consume` does this for
+    #   both scan bounds.
+    #
+    #   not disabled by 0 -- the consumer compares directly, so 0 is the
+    #   strictest possible bound rather than none. `fileio` reads a Source only
+    #   `if size <= SOURCE_READ_MAX`, so 0 reads nothing; `storage_report` warns
+    #   `if bytes > limit`, so 0 warns about every file; a query's `byte_limit`
+    #   is checked `is not None`, so 0 emits no rows.
+    for name, value in (
+        ("CODESS_MAX_SCAN_DIRECTORIES", MAX_SCAN_DIRECTORIES),
+        ("CODESS_SCAN_TIMEOUT", SCAN_TIMEOUT),
+    ):
+        if value < 0:
+            errs.append(f"{name}={value} must be >= 0; 0 disables the bound")
+    for name, value in (
+        ("CODESS_QUERY_BYTE_LIMIT", DEFAULT_QUERY_BYTE_LIMIT),
+        ("CODESS_SOURCE_READ_MAX", SOURCE_READ_MAX),
+        ("CODESS_MAX_CODESS_DB_BYTES", MAX_CODESS_DB_BYTES),
+        ("CODESS_MAX_CURSOR_DB_BYTES", MAX_CURSOR_DB_BYTES),
+    ):
+        if value <= 0:
+            errs.append(
+                f"{name}={value} must be > 0; this bound has no disabled value, "
+                "and 0 would reject everything rather than nothing"
+            )
     for name, values in (
         ("CODESS_AGGREGATORS", sorted(AGGREGATORS)),
         ("CODESS_EXCLUDE_REVIEW_DIRS", EXCLUDE_REVIEW_DIRS),
@@ -640,6 +710,27 @@ def validate_config() -> list[str]:
             errs.append(f"{name}={limit} must be > 0")
     if RAW_MODE not in RAW_MODES:
         errs.append(raw_mode_error("CODESS_RAW_MODE", RAW_MODE))
+    # `.` and `..` are rejected for the durable store as they are for a Project
+    # directory name: both name a location relative to wherever a command
+    # happened to run, and a 58 GB store placed by an unset variable is not a
+    # recoverable mistake. `CODESS_STORE_ROOT=""` resolves to `.` through
+    # `Path("")`, so the empty value is caught by the same test.
+    # Leading or trailing whitespace in a configured path is almost always a
+    # copy-paste artefact and is invisible in a terminal, a shell history, and a
+    # `.env` file alike. It is also legal: `store ` and `store` are two real
+    # directories on POSIX, so the value cannot be silently trimmed -- doing so
+    # points the store at a different existing directory and nothing says why.
+    # Reported instead, which is the only way an operator sees it at all.
+    if str(STORE_ROOT) != str(STORE_ROOT).strip():
+        errs.append(
+            f"CODESS_STORE_ROOT={str(STORE_ROOT)!r} has leading or trailing "
+            "whitespace; quote the value or remove the spaces"
+        )
+    if str(STORE_ROOT) in (".", "..") or STORE_ROOT.name == "..":
+        errs.append(
+            f"CODESS_STORE_ROOT={str(STORE_ROOT)!r} is a relative location; "
+            "give an absolute path, or unset it for the default"
+        )
     if not CC_PROJECTS.is_absolute():
         errs.append(f"CODESS_CC_PROJECTS must be absolute: {CC_PROJECTS}")
     if not CODEX_SESSIONS.is_absolute():

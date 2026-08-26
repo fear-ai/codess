@@ -23,7 +23,6 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Iterable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +60,8 @@ from codess.snapshot import (
     snapshot_store_paths_from_base,
 )
 from codess.store import integrity_report, table_counts
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 REPORT_FORMAT = "codess.validation-report/1"
 
@@ -749,7 +750,7 @@ def validate_project(
     policy = policy or {}
     report: dict[str, Any] = {
         "report_format": REPORT_FORMAT,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": now_iso(system_clock),
         "project": str(project_path),
         "status": "rejected",
         "errors": [],

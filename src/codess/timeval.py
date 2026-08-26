@@ -174,3 +174,35 @@ def now_ms(clock: Callable[[], datetime]) -> float:
     supposed to record what a run observed.
     """
     return clock().timestamp() * 1000
+
+
+def now_iso(clock: Callable[[], datetime]) -> str:
+    """The current instant as a `_when` value: RFC 3339 UTC text.
+
+    The `_when` counterpart to `now_ms`, taking the same injected clock for the
+    same reason. It exists because the stamp Codess writes when it records an
+    observation is the commonest use of a clock in the package, and a caller
+    that has to compose `to_iso(now_ms(clock))` will write `datetime.now`
+    instead -- which is the ambient clock this module is here to remove.
+
+    A clock returning a naive `datetime` is read as UTC, matching `parse_iso`.
+
+    **Always UTC, which is what makes the one ordered text comparison safe.**
+    Surveyed across `src/`: every other stamp comparison is numeric, because an
+    `_at` column is `REAL` milliseconds and orders as a number. Exactly one
+    compares text with an ordering operator --
+    `project_catalog._merge_location`, which picks the later of two location
+    observations with `>=` on `(observed_at, ...)` tuples.
+
+    RFC 3339 sorts lexicographically only when every value carries the same
+    offset, so converting a non-UTC clock rather than relabelling it is
+    load-bearing there: one `+01:00` stamp among `+00:00` ones would sort by its
+    digits and pick the wrong observation. Everything else compares `_when` text
+    with `==` or `!=`, where the offset does not matter but a *differing*
+    representation of one instant would still be a false inequality -- which is
+    the same reason stated the other way round.
+    """
+    instant = clock()
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=UTC)
+    return instant.astimezone(UTC).isoformat()

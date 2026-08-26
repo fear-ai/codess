@@ -6,11 +6,11 @@ import csv
 import json
 import subprocess
 import time
-from datetime import UTC, datetime
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, TypedDict
 
-from codess.child_invocation import ChildInvocation
+from codess.child_invocation import ChildInvocation, RunPolicy
 from codess.config import (
     LARGE_STORE_BYTES,
     LAST_INGEST_REPORT_FILE,
@@ -27,6 +27,7 @@ from codess.project_catalog import durable_project_root, load_catalog
 from codess.refresh_receipts import REFRESH_RECEIPT_FORMAT
 from codess.schema_contract import contract_digest
 from codess.snapshot import SnapshotError, current_snapshot, read_manifest
+from codess.timeval import now_iso
 
 REFRESH_DESIGNATORS = frozenset({
     "included",
@@ -131,7 +132,7 @@ def _resolve_reference(
     )
 
 
-class _ResolveArgs(TypedDict):
+class ResolveArgs(TypedDict):
     """The arguments `resolve_refresh_selection` takes beyond the registry.
 
     Splatting an untyped `dict[str, Any]` into a typed signature erases every
@@ -383,33 +384,32 @@ def _result_summary(
 
 
 def _run_project_ingest(
-    project: dict[str, Any],
-    *,
-    validate: bool,
-    registry: Path,
-    repo_root: Path,
-    min_size: int,
-    force: bool,
-    resource_policy: Path | None,
-    timeout_seconds: int,
+    project: dict[str, Any], policy: RunPolicy, *, validate: bool,
 ) -> dict[str, Any]:
+    """Ingest one Project in a child process, timed and bounded.
+
+    Takes the policy rather than its six fields: both call sites passed the same
+    six values verbatim, differing only in `validate`, so six of the eight
+    arguments carried no information at either site.
+    """
     # The command and environment come from `ChildInvocation`; the call stays here
     # because refresh wraps it in timing and timeout handling that the other two
     # callers do not want.
+    # The per-Project raw mode replaces the policy's, which is the one field a
+    # target may override: a refresh plan records a mode per Project.
     invocation = ChildInvocation(
+        policy=replace(policy, raw_mode=project["raw_mode"]),
         projects=(Path(project["path"]),),
-        vendor_selector=project["source"], raw_mode=project["raw_mode"],
-        registry=registry, repo_root=repo_root, min_size=min_size,
-        resource_policy=resource_policy, validate=validate, force=force,
-        live_progress=False, timeout_seconds=timeout_seconds,
+        vendor_selector=project["source"], validate=validate,
+        live_progress=False,
     )
     command = invocation.command()
-    started_at = datetime.now(UTC).isoformat()
+    started_at = now_iso(policy.clock)
     start_tick = time.monotonic()
     try:
         result = subprocess.run(
-            command, cwd=repo_root, env=invocation.environment(),
-            capture_output=True, text=True, timeout=timeout_seconds,
+            command, cwd=policy.repo_root, env=invocation.environment(),
+            capture_output=True, text=True, timeout=policy.policy_timeout,
             check=False,
         )
         returncode = result.returncode
@@ -427,7 +427,7 @@ def _run_project_ingest(
         stdout = _as_text(error.stdout)
         stderr = (
             f"{_as_text(error.stderr)}\n"
-            f"refresh timed out after {timeout_seconds} seconds"
+            f"refresh timed out after {policy.policy_timeout} seconds"
         ).strip()
         error_type = "timeout"
     except OSError as error:
@@ -444,7 +444,7 @@ def _run_project_ingest(
         "returncode": returncode,
         "error_type": error_type,
         "started_at": started_at,
-        "completed_at": datetime.now(UTC).isoformat(),
+        "completed_at": now_iso(policy.clock),
         "elapsed_seconds": round(time.monotonic() - start_tick, 3),
         "command": command,
         "stdout_bytes": len(stdout.encode("utf-8")),
@@ -455,54 +455,29 @@ def _run_project_ingest(
 
 
 def refresh_projects(
-    registry: Path,
+    policy: RunPolicy,
+    selection: ResolveArgs,
     *,
-    repo_root: Path,
     stage: str = "plan",
-    project_references: list[str] | None = None,
-    project_list: Path | None = None,
-    designator: str | None = None,
-    source: str = "all",
-    raw_mode: str = "auto",
-    baseline_selection: Path | None = None,
-    reviewed_catalog: Path | None = None,
-    large_event_count: int = 25_000,
-    large_store_bytes: int = LARGE_STORE_BYTES,
-    min_size: int = 0,
-    force: bool = False,
-    resource_policy: Path | None = None,
-    timeout_seconds: int = 3_600,
     receipt_path: Path | None = None,
 ) -> dict[str, Any]:
     """Plan, preflight, or apply a Project refresh with a durable receipt."""
     if stage not in REFRESH_STAGES:
         raise ValueError("stage must be plan, preflight, or apply")
-    if min_size < 0:
+    if policy.min_size < 0:
         raise ValueError("min_size must be non-negative")
-    if timeout_seconds <= 0:
-        raise ValueError("timeout_seconds must be positive")
-    registry = registry.expanduser().resolve()
-    repo_root = repo_root.resolve()
+    if policy.policy_timeout <= 0:
+        raise ValueError("policy_timeout must be positive")
+    registry = policy.registry
     # A `TypedDict` annotation, not a `TypedDict(...)` construction. Measured:
     # an annotated literal is a plain dict at 47 ns, while the constructor form
     # costs 120 ns -- so typing this bag is free at run time, and `type()` returns
     # `dict` either way. The alternative of repeating nine arguments at both call
     # sites is what the bag exists to avoid.
-    resolve_args: _ResolveArgs = {
-        "project_references": project_references,
-        "project_list": project_list,
-        "designator": designator,
-        "source": source,
-        "raw_mode": raw_mode,
-        "baseline_selection": baseline_selection,
-        "reviewed_catalog": reviewed_catalog,
-        "large_event_count": large_event_count,
-        "large_store_bytes": large_store_bytes,
-    }
-    plan = resolve_refresh_selection(registry, **resolve_args)
+    plan = resolve_refresh_selection(registry, **selection)
     receipt: dict[str, Any] = {
         "receipt_format": REFRESH_RECEIPT_FORMAT,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": now_iso(policy.clock),
         "receipt_path": (
             str(receipt_path.expanduser().resolve())
             if receipt_path is not None else None
@@ -532,7 +507,7 @@ def refresh_projects(
     }
 
     def checkpoint() -> None:
-        receipt["updated_at"] = datetime.now(UTC).isoformat()
+        receipt["updated_at"] = now_iso(policy.clock)
         if receipt_path is not None:
             write_json_atomic(receipt_path.expanduser().resolve(), receipt)
 
@@ -541,12 +516,7 @@ def refresh_projects(
         return receipt
 
     for project in plan["projects"]:
-        result = _run_project_ingest(
-            project, validate=True, registry=registry,
-            repo_root=repo_root, min_size=min_size, force=force,
-            resource_policy=resource_policy,
-            timeout_seconds=timeout_seconds,
-        )
+        result = _run_project_ingest(project, policy, validate=True)
         receipt["preflight"].append(result)
         checkpoint()
     preflight_failures = [
@@ -562,7 +532,7 @@ def refresh_projects(
     if stage == "preflight":
         return receipt
 
-    current = resolve_refresh_selection(registry, **resolve_args)
+    current = resolve_refresh_selection(registry, **selection)
     changed = []
     for key, label in (
         ("selection_sha256", "refresh selection"),
@@ -585,12 +555,7 @@ def refresh_projects(
         checkpoint()
         return receipt
     for project in plan["projects"]:
-        result = _run_project_ingest(
-            project, validate=False, registry=registry,
-            repo_root=repo_root, min_size=min_size, force=force,
-            resource_policy=resource_policy,
-            timeout_seconds=timeout_seconds,
-        )
+        result = _run_project_ingest(project, policy, validate=False)
         receipt["apply"].append(result)
         checkpoint()
     failures = [

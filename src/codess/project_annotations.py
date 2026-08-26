@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import Counter
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +16,10 @@ from codess.project_catalog import (
     load_catalog,
 )
 from codess.schema_contract import column_names
-from codess.snapshot import SnapshotError, current_snapshot, read_manifest
+from codess.snapshot import SnapshotError, current_snapshot, read_manifest, snapshot_stores
 from codess.store import table_counts
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 ANNOTATION_REPORT_FORMAT = "codess.project-annotations/1"
 
@@ -66,7 +67,7 @@ def _snapshot_facts(snapshot: Path | None) -> dict[str, Any]:
         facts["raw_mode"] = build_policy.get("raw_mode")
     source_counts: Counter[str] = Counter()
     try:
-        for store in sorted(snapshot.glob("*.db")):
+        for store in snapshot_stores(snapshot):
             facts["normalized_store_bytes"] += store.stat().st_size
             conn = open_readonly(store)
             try:
@@ -277,7 +278,7 @@ def build_project_annotations(
     }
     return {
         "format": ANNOTATION_REPORT_FORMAT,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": now_iso(system_clock),
         "registry": str(registry),
         "definitions": definitions,
         "thresholds": {

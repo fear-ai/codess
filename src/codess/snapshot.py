@@ -10,7 +10,6 @@ import sqlite3
 import subprocess
 import tempfile
 from collections.abc import Iterable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +51,7 @@ from codess.schema_contract import (
     store_metadata,
     table_names,
 )
+from codess.wallclock import system_clock
 
 
 class SnapshotError(RuntimeError):
@@ -67,6 +67,60 @@ class SnapshotContractMismatchError(SnapshotError):
     by matching the message text, which made the wording a silent interface --
     rewording the message reclassified the status.
     """
+
+
+def snapshot_stores(snapshot_dir: Path) -> list[Path]:
+    """The CoSchema store files a snapshot holds, in a stable order.
+
+    One question five call sites asked separately -- `sorted(dir.glob("*.db"))`
+    in `mcp_audit`, `project_annotations`, `storage_report`,
+    `baseline_operations`, and `ingest_cmd`. The pattern is not the variation
+    between them; it is the same pattern, and what differs is only what each
+    does with the result.
+
+    Sorted because two runs over one snapshot must report in the same order:
+    a coverage report and a diff both compare across runs, and directory order
+    is not stable between filesystems.
+
+    Knowledge of the layout belongs here, with the module that writes it. A call
+    site that globs a snapshot directly is one that will keep working when the
+    layout changes and quietly report nothing.
+
+    **Not the manifest's `stores`, and deliberately so.** `manifest.json` records
+    a store list with a digest per entry and is the authority: `require_snapshot`
+    verifies each against it. This reports what is *present*, which is the other
+    half of the same question -- a store the manifest declares and the directory
+    lacks is a missing store, and one the directory holds and the manifest does
+    not is an unrecorded one. Reading the manifest here would make both
+    invisible by construction.
+    """
+    return sorted(snapshot_dir.glob("*.db"))
+
+
+def snapshot_generations(snapshots_dir: Path, *, newest_first: bool = False) -> list[Path]:
+    """The retained snapshot directories under one Project, in name order.
+
+    A snapshot id begins with its creation timestamp, so name order is
+    chronological and `newest_first` is a rollback search rather than a
+    different sort key.
+
+    Hidden entries are excluded: a partially written snapshot is staged under a
+    dot-prefixed name, and a recovery or a trim that treated one as a generation
+    would act on a directory whose contents are still arriving.
+
+    Owned here with the module that creates the layout. `retention` and
+    `storage_report` both spelled `glob("*/snapshots/*")` against a literal
+    rather than `SNAPSHOTS_DIR`, which is the layout leaking into two modules
+    that do not write it.
+    """
+    if not snapshots_dir.is_dir():
+        return []
+    return sorted(
+        (entry for entry in snapshots_dir.iterdir()
+         if entry.is_dir() and not entry.name.startswith(".")),
+        key=lambda entry: entry.name,
+        reverse=newest_first,
+    )
 
 
 def read_manifest(snapshot_dir: Path) -> dict[str, Any]:
@@ -451,11 +505,7 @@ def recover_current_snapshot(
     snapshots_dir = expected_base / SNAPSHOTS_DIR
     if not snapshots_dir.is_dir():
         raise SnapshotError(f"no retained snapshots to recover from: {snapshots_dir}")
-    candidates = sorted(
-        (entry for entry in snapshots_dir.iterdir() if entry.is_dir()),
-        key=lambda entry: entry.name,
-        reverse=True,
-    )
+    candidates = snapshot_generations(snapshots_dir, newest_first=True)
     errors: list[str] = []
     for candidate in candidates:
         try:
@@ -480,14 +530,22 @@ def create_snapshot(
     store_paths: Iterable[Path],
     raw_records: list[dict[str, Any]],
     *,
-    raw_store: RawStore,
+    raw_store: RawStore | None,
     seal: bool = False,
     build_policy: dict[str, Any] | None = None,
     store_root: Path | None = None,
     project_id: str | None = None,
     publish: bool = True,
+    keep_total: int | None = None,
 ) -> Path:
-    """Build an immutable snapshot and optionally publish it as current."""
+    """Build an immutable snapshot and optionally publish it as current.
+
+    `keep_total` bounds the trim that follows publication, defaulting to
+    `CODESS_KEEP_SNAPSHOTS`. A parameter as well as a variable because a caller
+    that knows it is producing a throwaway snapshot -- a validation run, a
+    fixture -- should be able to say so without setting an environment variable
+    that outlives the call.
+    """
     local_base = project_path / STORE_DIR
     base = (
         durable_project_root(store_root, project_id)
@@ -503,7 +561,7 @@ def create_snapshot(
         raise SnapshotError(
             "current-format store was written under a different CoSchema contract"
         )
-    created_at = datetime.now(UTC)
+    created_at = system_clock()
     created_at_text = created_at.isoformat()
     policy = build_policy or {"raw_mode": "seal" if seal else "unspecified"}
     policy_digest = codess_canonical_hash(256, 256, policy)
@@ -546,6 +604,8 @@ def create_snapshot(
             for record in raw_records:
                 stream.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
                 if seal and record.get("availability") == "captured":
+                    if raw_store is None:
+                        raise SnapshotError("sealing requires a raw store")
                     source_object = raw_store.resolve(record)
                     if source_object is None or not source_object.exists():
                         raise SnapshotError(f"missing raw object for {record.get('object_id')}")
@@ -606,11 +666,41 @@ def create_snapshot(
             store_root=store_root,
             project_id=project_id,
         )
-        _trim_prior_snapshots(snapshots, keep_current=snapshot_id)
+        _trim_prior_snapshots(
+            snapshots, keep_current=snapshot_id, keep_total=keep_total,
+        )
     return final
 
 
-def _trim_prior_snapshots(snapshots: Path, *, keep_current: str) -> list[str]:
+def superseded_beyond_depth(prior: list[str], keep_total: int) -> list[str]:
+    """The superseded snapshots outside the retained total, oldest first.
+
+    `keep_total` counts snapshots kept, current included: 1 keeps only the
+    current, 2 keeps it and one rollback target, and 0 keeps every snapshot.
+
+    Counting the total is what gives 0 its own meaning. A count of prior
+    generations has no spare value -- "keep nothing prior" and "keep everything"
+    both want 0 -- and two retention paths reading that one value can disagree
+    about which it means.
+
+    One implementation for both paths, the trim that follows a publication and
+    `codess storage prune`, so a retained total means one thing.
+
+    `prior` must exclude the current snapshot and be sorted; snapshot ids begin
+    with a creation timestamp, so a lexicographic sort is chronological and the
+    newest survivors are the last entries.
+    """
+    if keep_total < 0:
+        raise ValueError("keep_total must be zero or more")
+    if keep_total == 0:
+        return []
+    keep_prior = keep_total - 1
+    return prior if keep_prior == 0 else prior[:max(0, len(prior) - keep_prior)]
+
+
+def _trim_prior_snapshots(
+    snapshots: Path, *, keep_current: str, keep_total: int | None = None,
+) -> list[str]:
     """Remove superseded snapshots beyond the configured limit.
 
     Runs only after the new snapshot is published, so a failure here leaves a
@@ -618,25 +708,24 @@ def _trim_prior_snapshots(snapshots: Path, *, keep_current: str) -> list[str]:
     more snapshots are retained than asked for, which is recoverable, while
     trimming first could leave a Project with no readable store at all.
 
-    `CODESS_KEEP_SNAPSHOTS` counts snapshots *besides* the current one,
-    so the default of 2 leaves three directories: a rollback target, its
-    predecessor, and the snapshot just published. 0 disables trimming, which
-    an operator auditing a sequence of rebuilds needs.
+    `CODESS_KEEP_SNAPSHOTS` counts snapshots kept, current included: the default
+    of 2 leaves the snapshot just published and one rollback target. 0 keeps
+    every snapshot, which an operator auditing a sequence of rebuilds needs.
 
     Names sort chronologically because a snapshot id begins with its creation
     timestamp, so the oldest are the ones removed. A directory that cannot be
     removed is reported rather than raised: retention is not the operation the
     caller asked for.
     """
-    if KEEP_SNAPSHOTS <= 0:
-        return []
-    prior = sorted(
-        entry.name for entry in snapshots.iterdir()
-        if entry.is_dir() and entry.name != keep_current
-        and not entry.name.startswith(".")
-    )
+    # No local special case: 0 means keep everything, and that is decided once
+    # in `superseded_beyond_depth` rather than here and again in the prune.
+    total = KEEP_SNAPSHOTS if keep_total is None else keep_total
+    prior = [
+        entry.name for entry in snapshot_generations(snapshots)
+        if entry.name != keep_current
+    ]
     removed = []
-    for name in prior[:max(0, len(prior) - KEEP_SNAPSHOTS)]:
+    for name in superseded_beyond_depth(prior, total):
         try:
             shutil.rmtree(snapshots / name)
         except OSError as exc:
@@ -644,7 +733,7 @@ def _trim_prior_snapshots(snapshots: Path, *, keep_current: str) -> list[str]:
             continue
         removed.append(name)
     if removed:
-        emit_named("snapshot.trimmed", removed=len(removed), kept=KEEP_SNAPSHOTS)
+        emit_named("snapshot.trimmed", removed=len(removed), kept=total)
     return removed
 
 
@@ -664,10 +753,7 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
         raise SnapshotError(
             f"cannot reconstruct manifest without raw-manifest.jsonl: {snapshot_dir}"
         )
-    store_paths = sorted(
-        path for path in snapshot_dir.iterdir()
-        if path.is_file() and path.suffix == ".db"
-    )
+    store_paths = snapshot_stores(snapshot_dir)
     if not store_paths:
         raise SnapshotError(
             f"cannot reconstruct manifest without a surviving store database: {snapshot_dir}"

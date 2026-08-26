@@ -470,6 +470,38 @@ means milliseconds everywhere it appears -- `processing_runs.started_at` becomes
 `started_when`, which is what removes the collision. The columns renamed are
 listed in `experiments/format-decisions.md` and land with the next format.
 
+**One reader per representation, and the vendor rule sits above it.**
+`timeval.epoch_ms` reads an `_at` value from whatever a vendor wrote --
+ISO-8601 text, epoch seconds, or epoch milliseconds -- because the scale is not
+stated in the field and all three appear across the three vendors. It is
+deliberately permissive, and what it will not do is the caller's: which field
+holds a time is vendor knowledge, and what an implausible value means is a
+vendor's own question.
+
+So each adapter wraps it rather than replacing it, and the wrapper is where a
+vendor-specific rule lives:
+
+| Vendor | Wrapper | Rule above `epoch_ms` |
+|---|---|---|
+| Claude | `cc._parse_timestamp` | None. Claude writes ISO-8601, and the numeric paths are a guard against a format change rather than a shape real records reach |
+| Codex | `codex._parse_timestamp` | None. Same reason |
+| Cursor | `cursor_source.parse_timestamp` | **A plausibility floor.** A numeric value below `EPOCH_SECONDS_FLOOR` is rejected rather than scaled |
+
+**Cursor needs the floor and the others do not**, which is why it is not in the
+shared reader. Cursor bubbles carry values that are not times at all -- small
+counters and enum codes sit in fields a reader would take for stamps, and
+`timingInfo.clientStartTime` holds milliseconds since process start. Scaled by
+the shared rule, a counter becomes a 1970s instant that looks like evidence.
+Imposing the floor on all three instead would make the shared reader reject a
+genuine pre-2001 stamp from a vendor that has no counters in its time fields --
+trading a real failure for a hypothetical one.
+
+**A second gate applies after conversion.** `is_sane` bounds a converted value
+to `[2020-01-01, now + 24h]` before it is copied into a derived field. The
+floor and the gate are not redundant: the floor rejects a value whose *scale* is
+wrong, the gate rejects one whose *instant* is implausible, and a counter large
+enough to pass the floor is what the gate is for.
+
 **A comparison across the two converts at query time, not in the store.** The
 conversion lives in `codess.timeval.iso_to_ms`; SQLite's `strftime('%s', ...)`
 is the equivalent for a direct-SQL reader. A stored numeric copy of a `_when`

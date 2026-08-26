@@ -14,8 +14,8 @@ from codess.content_processing import apply_processing
 from codess.context_content import bound_context_content, truncate_content
 from codess.mapping import annotate_mapping
 from codess.sanitize import sanitize_value
+from codess.timeval import epoch_ms
 from codess.tool_result_status import application_failure_evidence
-from codess.units import epoch_milliseconds
 
 log = logging.getLogger(__name__)
 
@@ -154,7 +154,7 @@ def get_session_metadata(path: Path) -> dict:
 
 def _parse_timestamp(value: Any) -> float | None:
     """Normalize a Codex time to Unix milliseconds."""
-    return epoch_milliseconds(value)
+    return epoch_ms(value)
 
 
 def _extract_text_from_content(content: list) -> str:

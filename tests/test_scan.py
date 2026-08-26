@@ -28,7 +28,7 @@ def _run(cmd, cwd=None, env=None, **kw):
 
 
 def _scan_env(base: Path, **extra: str) -> dict:
-    """Isolate ``ingested_projects.json`` writes from the developer home."""
+    """Isolate ``projects_state.json`` writes from the developer home."""
     reg = base / "_test_codess_registry"
     reg.mkdir(parents=True, exist_ok=True)
     return {**os.environ.copy(), "CODESS_STORE_ROOT": str(reg), **extra}
@@ -257,7 +257,7 @@ def test_multi_root_scan_does_not_register_cursor_global_as_project(tmp_path):
         env=env,
     )
     assert result.returncode == 0
-    registry_path = reg / "ingested_projects.json"
+    registry_path = reg / "projects_state.json"
     if registry_path.exists():
         registry = json.loads(registry_path.read_text())
         assert not any("(global)" in row["path"] for row in registry["projects"])
@@ -268,7 +268,7 @@ def test_scan_prunes_legacy_cursor_global_pseudo_project(tmp_path):
     work.mkdir()
     reg = tmp_path / "registry"
     reg.mkdir()
-    (reg / "ingested_projects.json").write_text(json.dumps({"projects": [{
+    (reg / "projects_state.json").write_text(json.dumps({"projects": [{
         "path": str(work / "(global)"),
         "scan": {"by_vendor": {"Cursor": {"sess": 5}}},
     }]}))
@@ -277,7 +277,7 @@ def test_scan_prunes_legacy_cursor_global_pseudo_project(tmp_path):
         env=_scan_env(tmp_path, CODESS_STORE_ROOT=str(reg)),
     )
     assert result.returncode == 0
-    registry = json.loads((reg / "ingested_projects.json").read_text())
+    registry = json.loads((reg / "projects_state.json").read_text())
     assert registry["projects"] == []
 
 
@@ -828,7 +828,7 @@ def test_scan_invalid_source_exit(tmp_path):
 
 
 def test_scan_registry_missing_file_exit(tmp_path):
-    """--registry with no ingested_projects.json exits 1."""
+    """--registry with no projects_state.json exits 1."""
     reg = tmp_path / "reg"
     reg.mkdir()
     work = tmp_path / "work"
@@ -854,7 +854,7 @@ def test_scan_registry_missing_file_exit(tmp_path):
 def test_scan_registry_corrupt_json_exit(tmp_path):
     reg = tmp_path / "reg"
     reg.mkdir()
-    (reg / "ingested_projects.json").write_text("{broken")
+    (reg / "projects_state.json").write_text("{broken")
     work = tmp_path / "work"
     work.mkdir()
     r = _run(
@@ -868,7 +868,7 @@ def test_scan_registry_corrupt_json_exit(tmp_path):
 def test_scan_empty_registry_warns_and_outputs_only_header(tmp_path):
     reg = tmp_path / "reg"
     reg.mkdir()
-    (reg / "ingested_projects.json").write_text('{"projects":[]}')
+    (reg / "projects_state.json").write_text('{"projects":[]}')
     work = tmp_path / "work"
     work.mkdir()
     r = _run(
@@ -932,7 +932,7 @@ def test_scan_merges_registry_without_registry_flag(tmp_path):
         env=env,
     )
     assert r.returncode == 0
-    stats_path = reg_home / "ingested_projects.json"
+    stats_path = reg_home / "projects_state.json"
     assert stats_path.exists()
     data = json.loads(stats_path.read_text())
     byp = {p["path"]: p for p in data.get("projects", [])}
@@ -981,7 +981,7 @@ def test_scan_registry_filter_and_ref_columns(tmp_path):
             }
         ]
     }
-    (reg / "ingested_projects.json").write_text(json.dumps(stats))
+    (reg / "projects_state.json").write_text(json.dumps(stats))
     env = _scan_env(
         tmp_path,
         CODESS_CC_PROJECTS=str(cc),

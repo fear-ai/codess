@@ -980,8 +980,12 @@ class TestPriorSnapshotsAreTrimmed:
         return sorted(entry.name for entry in root.iterdir())
 
     def test_oldest_beyond_the_limit(self, tmp_path, monkeypatch):
-        """The current snapshot survives whatever the limit is."""
-        monkeypatch.setattr(snapshot, "KEEP_SNAPSHOTS", 2)
+        """The current snapshot survives whatever the limit is.
+
+        The limit counts snapshots kept, current included, so 3 leaves the
+        current one and two past.
+        """
+        monkeypatch.setattr(snapshot, "KEEP_SNAPSHOTS", 3)
         names = self._snapshots(tmp_path, 6)
         current = names[-1]
 
@@ -991,7 +995,22 @@ class TestPriorSnapshotsAreTrimmed:
         assert len(removed) == 3
         assert removed == names[:3], "the oldest are the ones removed"
         assert current in remaining
-        assert len(remaining) == 3, "current plus two prior"
+        assert len(remaining) == 3, "the current snapshot and two past"
+
+    def test_one_keeps_only_the_current(self, tmp_path, monkeypatch):
+        """1 keeps the current snapshot alone, and is distinct from 0.
+
+        Counting the total is what separates them: a count of prior generations
+        has no spare value for "keep everything".
+        """
+        monkeypatch.setattr(snapshot, "KEEP_SNAPSHOTS", 1)
+        names = self._snapshots(tmp_path, 4)
+        current = names[-1]
+
+        removed = snapshot._trim_prior_snapshots(tmp_path, keep_current=current)
+
+        assert removed == names[:3]
+        assert [entry.name for entry in tmp_path.iterdir()] == [current]
 
     def test_zero_keeps_every_snapshot(self, tmp_path, monkeypatch):
         """0 is unlimited, for an operator auditing a sequence of rebuilds."""
