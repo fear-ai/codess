@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from codess.config import (
+    PROJECT_BINDINGS_FILE,
     PROJECT_FILE,
     SOURCE_LINKS_FILE,
     SOURCE_LINKS_FORMAT,
@@ -27,6 +28,7 @@ log = logging.getLogger(__name__)
 
 CATALOG_FORMAT = "codess.project-catalog/1"
 PROJECT_BINDING_FORMAT = "codess.project-binding/1"
+PROJECT_BINDINGS_FORMAT = "codess.project-bindings/1"
 PROJECT_SET_FORMAT = "codess.project-set/1"
 PROJECT_SELECTION_STATES = frozenset({
     "priority", "candidate", "deferred", "excluded", "needs_review",
@@ -42,6 +44,90 @@ def _catalog_path(store_root: Path) -> Path:
 
 def _binding_path(project_path: Path) -> Path:
     return project_path / STORE_DIR / PROJECT_FILE
+
+
+def _bindings_index_path(store_root: Path) -> Path:
+    return store_root / PROJECT_BINDINGS_FILE
+
+
+def load_binding_index(store_root: Path) -> dict[str, str]:
+    """Read the registry's path-to-identity index.
+
+    An unreadable or unsupported index returns empty rather than raising. It is
+    a cache of a fact the catalog also holds, so a caller that cannot read it
+    falls through to the catalog search and reaches the same identity; refusing
+    to resolve at all would turn a damaged index into an unusable registry.
+    """
+    path = _bindings_index_path(store_root)
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        log.warning("unreadable binding index at %s: falling back to the catalog", path)
+        return {}
+    if not isinstance(value, dict) or value.get("format") != PROJECT_BINDINGS_FORMAT:
+        return {}
+    bindings = value.get("bindings")
+    if not isinstance(bindings, dict):
+        return {}
+    return {
+        str(key): str(identity)
+        for key, identity in bindings.items()
+        if isinstance(key, str) and isinstance(identity, str) and identity
+    }
+
+
+def _write_binding_index(store_root: Path, bindings: dict[str, str]) -> None:
+    write_json_atomic(
+        _bindings_index_path(store_root),
+        {
+            "format": PROJECT_BINDINGS_FORMAT,
+            "updated_at": now_iso(system_clock),
+            "bindings": dict(sorted(bindings.items())),
+        },
+    )
+
+
+def record_binding(store_root: Path, resolved_path: str, project_id: str) -> None:
+    """Record one path's identity in the registry index."""
+    bindings = load_binding_index(store_root)
+    if bindings.get(resolved_path) == project_id:
+        return
+    bindings[resolved_path] = project_id
+    _write_binding_index(store_root, bindings)
+
+
+def backfill_binding_index(store_root: Path) -> dict[str, str]:
+    """Derive the index from the catalog's own `locations[].path`.
+
+    Derivable rather than observed, so the index starts complete for every
+    Project ever published rather than filling one directory at a time as each
+    is next ingested. A path a live entry already claims is not overwritten:
+    the catalog is the authority this index caches, so where the two disagree
+    the catalog wins and the disagreement is reported by `_resolve_project_id`.
+
+    A retired or obsolete location is skipped. It names where a Project used to
+    be, and admitting it would let an abandoned path resolve to the identity
+    that has since moved off it.
+    """
+    store_root = store_root.expanduser().resolve()
+    bindings = load_binding_index(store_root)
+    for entry in load_catalog(store_root)["projects"]:
+        if not isinstance(entry, dict) or not entry.get("project_id"):
+            continue
+        project_id = str(entry["project_id"])
+        for location in entry.get("locations", []):
+            if not isinstance(location, dict):
+                continue
+            path = location.get("path")
+            if not path or location.get("path_obsolete"):
+                continue
+            if location.get("state") in {"retired", "missing"}:
+                continue
+            bindings.setdefault(str(path), project_id)
+    _write_binding_index(store_root, bindings)
+    return bindings
 
 
 def _save_catalog_entry(
@@ -115,24 +201,34 @@ def _resolve_project_id(
     binding: dict[str, Any] | None,
     entries_by_id: dict[str, dict[str, Any]],
     resolved_path: str,
+    index_bindings: dict[str, str] | None = None,
 ) -> str:
     """Find this Project's stable identity, or mint one.
 
-    Three sources in falling order of authority: the Project's own retained
-    binding, a catalog entry already claiming this exact location, and
-    finally a new identity. The catalog search matters when a binding file
-    was deleted but the catalog still records the Project -- reminting there
-    would split one Project's history across two identities.
+    Four sources in falling order of authority: the registry's binding index,
+    the Project's own retained binding, a catalog entry already claiming this
+    exact location, and finally a new identity.
 
-    **A minted identity is reported.** The binding lives inside the Project
-    directory, so it is lost whenever that directory is cleaned, re-cloned, or
-    restored from a copy predating it -- and a lost binding is
-    indistinguishable from a Project never ingested. Minting then produces a
-    second Project for one path, which is silent in every list and carries none
-    of the review the first entry may have accumulated. Nine such duplicates
-    were created on this machine in one session before anything said so.
+    **The registry decides and the in-project file confirms.** That order is
+    inverted from the one that produced nine duplicate Projects in a single
+    session, and the reason is a property the two files do not share: the
+    registry outlives the working tree. A Project directory is cleaned,
+    re-cloned, or restored from a copy predating its binding, and each of those
+    loses an identity the registry still holds. Consulting the in-project file
+    first meant a freshly minted identity became authoritative for every later
+    run before anything asked whether the machine already knew the path.
+
+    **A disagreement is reported, not resolved silently.** Where the in-project
+    file names a different identity than the registry, the Project was moved,
+    copied, or restored -- real conditions with different answers, none of which
+    a decode should choose. The registry's identity wins and the condition is
+    named.
+
+    **A minted identity is reported.** Minting produces a second Project for one
+    path, which is silent in every list and carries none of the review the first
+    entry may have accumulated.
     """
-    project_id = binding.get("project_id") if binding else None
+    index_bindings = index_bindings or {}
     claimants = [
         str(entry["project_id"])
         for entry in entries_by_id.values()
@@ -141,22 +237,35 @@ def _resolve_project_id(
             for location in entry.get("locations", [])
         )
     ]
-    if project_id:
-        others = [claimed for claimed in claimants if claimed != str(project_id)]
+    retained = str(binding["project_id"]) if binding and binding.get("project_id") else None
+    indexed = index_bindings.get(resolved_path)
+
+    if indexed:
+        if retained and retained != indexed:
+            log.warning(
+                "the binding inside %s names %s while the registry records %s: "
+                "this Project was moved, copied, or restored. Taking the "
+                "registry's identity; run `codess catalog relocate` if the "
+                "Project moved, or retire the stale location if it was copied",
+                resolved_path, retained, indexed,
+            )
+        return indexed
+    if retained:
+        others = [claimed for claimed in claimants if claimed != retained]
         if others:
             log.warning(
                 "project binding names %s while the catalog records %s for %s: "
                 "one path now has several Projects",
-                project_id, ", ".join(sorted(others)), resolved_path,
+                retained, ", ".join(sorted(others)), resolved_path,
             )
-        return str(project_id)
+        return retained
     if claimants:
         return claimants[0]
     minted = f"codess:project:{uuid.uuid4()}"
     log.warning(
-        "no retained binding and no catalog entry for %s: minting %s. If this "
-        "Project was ingested before, its binding was lost and its history "
-        "will split across two identities",
+        "no registry binding, no retained binding, and no catalog entry for %s: "
+        "minting %s. If this Project was ingested before, its binding was lost "
+        "and its history will split across two identities",
         resolved_path, minted,
     )
     return minted
@@ -372,7 +481,9 @@ def ensure_project_binding(store_root: Path, project_path: Path) -> dict[str, An
         for item in catalog["projects"]
         if isinstance(item, dict) and item.get("project_id")
     }
-    project_id = _resolve_project_id(binding, by_id, resolved)
+    project_id = _resolve_project_id(
+        binding, by_id, resolved, load_binding_index(store_root),
+    )
 
     # One observation, one timestamp. These were three separate `now()` calls,
     # so a single logical event could be stamped at three different instants.
@@ -401,11 +512,17 @@ def ensure_project_binding(store_root: Path, project_path: Path) -> dict[str, An
     catalog["projects"] = sorted(by_id.values(), key=lambda item: item["project_id"])
     catalog["updated_at"] = observed_at
     write_json_atomic(_catalog_path(store_root), catalog)
+    record_binding(store_root, resolved, project_id)
     binding = {
         "binding_format": PROJECT_BINDING_FORMAT,
         "project_id": project_id,
         "location_id": observed_location_id,
         "store_root": str(store_root),
+        # Stated in the file rather than only in the code, so a later maintainer
+        # who reads this document does not restore its precedence. The registry
+        # index at `store_root` decides identity; this copy confirms it and
+        # serves a reader who has a Project directory and no registry.
+        "authority": "registry",
     }
     write_json_atomic(binding_path, binding)
     return binding

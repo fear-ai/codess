@@ -130,6 +130,14 @@ def open_message_request_context_rows(
         yield from iter_message_request_context_rows(conn, composer_ids)
 
 
+def open_agent_kv_rows(
+    db_path: Path, limit: int | None = None,
+) -> Iterator[tuple[str, object]]:
+    """Yield `agentKv` rows from `db_path`, owning the connection."""
+    with closing(connect_readonly(db_path)) as conn:
+        yield from iter_agent_kv_rows(conn, limit)
+
+
 def get_global_db(cursor_data: Path | None = None) -> Path | None:
     data_root = cursor_data or CURSOR_DATA
     db = data_root / "globalStorage" / "state.vscdb"
@@ -505,6 +513,29 @@ def _composer_settings(conn: sqlite3.Connection, composer_ids: set[str]) -> dict
     return settings
 
 
+def unbound_composer_count(db_path: Path) -> dict[str, int]:
+    """How many composers exist, and how many no header binds to a workspace.
+
+    Cursor keeps three lists of the same composers and no two agree: the header
+    table, the workspace `composer.composerData` fallback, and the global
+    `composerData:` keys. The disagreement is not corruption -- each index is
+    internally consistent -- so a decoder trusting one reports a smaller corpus
+    than exists and cannot tell that it did.
+
+    The split is temporal rather than random: the vendor prunes header rows on
+    age while retaining the data they index, so `composerHeaders` is a retention
+    window rather than an inventory of what exists.
+    """
+    with closing(connect_readonly(db_path)) as conn:
+        headered = set(_composer_headers(conn, None))
+        recovered = set(_headerless_composers(conn))
+    return {
+        "composers_total": len(headered | recovered),
+        "composers_with_header": len(headered),
+        "composers_without_header": len(recovered - headered),
+    }
+
+
 def get_composer_headers(
     db_path: Path, workspace_ids: set[str] | None = None,
 ) -> dict[str, dict]:
@@ -836,6 +867,61 @@ def iter_bubble_rows(
             "WHERE key >= ? AND key < ? ORDER BY key",
             (f"bubbleId:{composer_id}:", f"bubbleId:{composer_id}:\U0010ffff"),
         )
+
+
+def classify_kv_value(value: object) -> str:
+    """What a `cursorDiskKV` value is, decided before any parse is attempted.
+
+    One key space holds several encodings, so a failed `json.loads` conflates
+    three unrelated facts: a record that is not JSON at all, a record that is
+    text, and a record that is JSON and malformed. Only the third is a decoder
+    defect, and counting all three together makes the one signal an operator has
+    unactionable.
+
+    Measured over the `agentKv` blobs on the development machine: most rows are
+    protobuf with leading bytes `0a`, a smaller set is plain text -- file bodies
+    stored verbatim, a Markdown brief or a config file -- and the rest is JSON.
+    Calling the first two parse failures counts real content as an error.
+
+    The sniff reads the first bytes rather than the whole value, so it is
+    cheaper than the parse attempt it replaces as well as more accurate.
+    """
+    if value is None:
+        return "null"
+    raw = value if isinstance(value, bytes | bytearray) else str(value).encode(
+        "utf-8", errors="replace",
+    )
+    if not raw:
+        return "empty"
+    if raw[:1] in (b"{", b"["):
+        return "json"
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return "binary"
+    if not text.strip():
+        return "empty"
+    printable = sum(character.isprintable() or character.isspace() for character in text)
+    return "text" if printable / len(text) > 0.9 else "binary"
+
+
+def iter_agent_kv_rows(
+    conn: sqlite3.Connection, limit: int | None = None,
+) -> Iterator[tuple[str, object]]:
+    """Yield `agentKv:blob:` key/value rows over an indexed range.
+
+    Content-addressed like the terminal-agent store, so the key states no
+    composer and the range cannot be scoped to one. `limit` bounds a survey;
+    ingest passes None and applies its own resource bounds to what it reads.
+    """
+    query = (
+        "SELECT key, value FROM cursorDiskKV "
+        "WHERE key >= 'agentKv:blob:' AND key < 'agentKv:blob;' ORDER BY key"
+    )
+    if limit is not None:
+        yield from conn.execute(f"{query} LIMIT ?", (limit,))
+        return
+    yield from conn.execute(query)
 
 
 def iter_bubble_size_rows(

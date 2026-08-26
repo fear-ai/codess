@@ -54,6 +54,7 @@ from codess.schema_contract import (
     table_names,
     validate_mapped_event,
 )
+from codess.settings import resolve_named
 from codess.timeval import now_iso
 from codess.tool_identity import bounded_source_call_id, mcp_namespace
 from codess.wallclock import system_clock
@@ -896,7 +897,11 @@ def _check_mapping_conformance(
     if not errors:
         return
     detail = "; ".join(errors)
-    if STRICT_MAPPING:
+    # Read through the module rather than from the name bound at import, so the
+    # disposition is decided per run rather than per interpreter. The two modes
+    # are what makes the conformance figure comparable across vendors, and a
+    # setting a test cannot vary is one the equivalence cannot be shown for.
+    if resolve_named(None, "strict_mapping", STRICT_MAPPING):
         raise SchemaContractError(
             f"{profile} event does not conform to its released mapping "
             f"profile: {detail}"
@@ -977,6 +982,9 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
         mapping_trace,
         stored_metadata, event.get("event_type"), event.get("subtype"),
         event.get("role"), event.get("file_path"),
+        event.get("duplicate_of"),
+        _token_count(event, "inputTokens", "input_tokens"),
+        _token_count(event, "outputTokens", "output_tokens"),
     )
     conn.execute(
         """
@@ -987,8 +995,9 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
           parent_event_id, caused_by_event_id, content, content_len, tool_name,
           tool_input, tool_output, event_at, event_at_basis, source_status,
           normalized_status, source_file, artifact_path, mapping_rule,
-          mapping_trace, metadata, event_type, subtype, role, file_path)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          mapping_trace, metadata, event_type, subtype, role, file_path,
+          duplicate_of, input_tokens, output_tokens)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(session_id, event_id) DO UPDATE SET
           event_entity_id=excluded.event_entity_id, source_id=excluded.source_id, sequence_no=excluded.sequence_no,
           source_record_locator=excluded.source_record_locator,
@@ -1006,7 +1015,10 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
           artifact_path=excluded.artifact_path, mapping_rule=excluded.mapping_rule,
           mapping_trace=excluded.mapping_trace, metadata=excluded.metadata,
           event_type=excluded.event_type, subtype=excluded.subtype,
-          role=excluded.role, file_path=excluded.file_path
+          role=excluded.role, file_path=excluded.file_path,
+          duplicate_of=excluded.duplicate_of,
+          input_tokens=excluded.input_tokens,
+          output_tokens=excluded.output_tokens
         """,
         values,
     )
@@ -1014,6 +1026,35 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
         "SELECT id FROM events WHERE session_id=? AND event_id=?",
         (event.get("session_id"), event.get("event_id")),
     ).fetchone()[0])
+
+
+def _token_count(event: dict[str, Any], vendor_key: str, common_key: str) -> int | None:
+    """One recorded usage count, retained even when the vendor states zero.
+
+    A recorded zero and an absent field are different observations, and only
+    the first says the vendor reported no usage. This applies to all three
+    vendors rather than to the one whose field prompted it: Cursor writes
+    `tokenCount` on essentially every bubble and non-zero on a small fraction,
+    and reading that as "mostly uninteresting" would discard the evidence that
+    the vendor measured and reported nothing.
+
+    A `bool` is refused before the numeric branch for the reason the time
+    normalizer refuses one: `isinstance(True, int)` holds, so a flag misread as
+    a count would store 1.
+    """
+    direct = event.get(common_key)
+    source: Any = direct
+    if source is None:
+        counts = event.get("tokenCount")
+        if isinstance(counts, dict):
+            source = counts.get(vendor_key)
+    if source is None or isinstance(source, bool):
+        return None
+    if isinstance(source, int):
+        return source if source >= 0 else None
+    if isinstance(source, float) and source.is_integer():
+        return int(source) if source >= 0 else None
+    return None
 
 
 def _ensure_content_object(

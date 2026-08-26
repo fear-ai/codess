@@ -12,7 +12,12 @@ from codess import field_state
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
 from codess.content_processing import apply_processing
 from codess.context_content import bound_context_content, truncate_content
-from codess.mapping import annotate_mapping
+from codess.mapping import (
+    RecordContext,
+    annotate_mapping,
+    as_mapping,
+    is_decodable_record,
+)
 from codess.sanitize import sanitize_value
 from codess.timeval import epoch_ms
 from codess.tool_result_status import application_failure_evidence
@@ -35,6 +40,17 @@ def iter_codex_records(
                 continue
             try:
                 record = json.loads(line)
+                if not is_decodable_record(record):
+                    if diagnostics is not None:
+                        diagnostics["malformed_records"] = (
+                            diagnostics.get("malformed_records", 0) + 1
+                        )
+                    if warn:
+                        log.warning(
+                            "non-object record at %s:%d: %s",
+                            path, line_num, type(record).__name__,
+                        )
+                    continue
                 yield line_num, record, raw
             except json.JSONDecodeError as e:
                 if diagnostics is not None:
@@ -50,7 +66,7 @@ def get_session_meta(path: Path) -> tuple[str, str]:
     """Return (session_id, project_path) from first session_meta. Fallback to filename stem and '.'."""
     for _line_num, record, _ in iter_codex_records(path, warn=False):
         if record.get("type") == "session_meta":
-            payload = record.get("payload") or {}
+            payload = as_mapping(record.get("payload"))
             sid = payload.get("id")
             cwd = payload.get("cwd")
             return (
@@ -105,7 +121,7 @@ def get_session_metadata(path: Path) -> dict:
     for _line_num, record, _ in iter_codex_records(path, warn=False):
         if record.get("type") != "session_meta":
             continue
-        payload = record.get("payload") or {}
+        payload = as_mapping(record.get("payload"))
         values = {
             key: payload[key]
             for key in (
@@ -210,8 +226,8 @@ def _build_record_maps(
     mcp_call_ids: set[str] = set()
     output_by_call: dict[str, object] = {}
     for _line_num, record, _raw in iter_codex_records(path, warn=False):
-        payload = record.get("payload") or {}
-        if not isinstance(payload, dict):
+        payload = as_mapping(record.get("payload"))
+        if not payload:
             continue
         if (
             record.get("type") == "event_msg"
@@ -664,13 +680,10 @@ def _exit_code_status(payload: dict) -> str | None:
 
 def _compaction_events(
     payload: dict,
+    context: RecordContext,
     *,
-    session_id: str,
-    source_file: str,
-    line_num: int,
     timestamp: float | None,
     source_raw: bytes | None,
-    opts: dict,
 ) -> Iterator[dict]:
     """Map each explicit encrypted Codex compaction summary once.
 
@@ -678,6 +691,9 @@ def _compaction_events(
     transcript messages.  Only its dedicated ``type=compaction`` item is new
     compaction communication; copying the rest would multiply large messages.
     """
+    session_id, source_file, line_num, opts = (
+        context.session_id, context.source_file, context.line_num, context.opts,
+    )
     history = payload.get("replacement_history")
     if not isinstance(history, list):
         history = []
@@ -764,11 +780,9 @@ def _compaction_events(
 
 
 def _record_refused(
-    opts: dict,
+    context: RecordContext,
     reason_code: str,
     *,
-    source_file: str | None = None,
-    line_num: int | None = None,
     record_type: str | None = None,
 ) -> None:
     """Record that one source record was read and not admitted.
@@ -783,6 +797,9 @@ def _record_refused(
     these accumulate on `opts` and `store` persists them once the Source row
     exists.
     """
+    opts, source_file, line_num = (
+        context.opts, context.source_file, context.line_num,
+    )
     diagnostics = opts.get("diagnostics")
     if diagnostics is not None:
         diagnostics[reason_code] = diagnostics.get(reason_code, 0) + 1
@@ -819,14 +836,25 @@ def process_file(
     current_configuration: dict = {}
 
     for line_num, record, raw_line in iter_codex_records(path, diagnostics):
+        # Built once per record and passed whole: the four values identify the
+        # record under decode and none of them varies within it.
+        context = RecordContext(
+            session_id=session_id, source_file=source_file,
+            line_num=line_num, opts=opts,
+        )
         rtype = record.get("type")
-        payload = record.get("payload") or {}
-        if not isinstance(payload, dict):
+        raw_payload = record.get("payload")
+        # Counted rather than coerced: a payload stated as a list is a vendor
+        # observation, and `as_mapping` used here would make the diagnostic
+        # unreachable. Coercion is right where a *field* may be malformed and
+        # the record is still worth decoding; a whole payload is not.
+        if not isinstance(raw_payload, dict):
             if diagnostics is not None:
                 diagnostics["malformed_records"] = (
                     diagnostics.get("malformed_records", 0) + 1
                 )
             continue
+        payload = raw_payload
         timestamp = _parse_timestamp(record.get("timestamp"))
 
         source_raw = (
@@ -852,12 +880,12 @@ def process_file(
         if rtype == "compacted":
             for event in _compaction_events(
                 payload,
-                session_id=session_id,
-                source_file=source_file,
-                line_num=line_num,
+                RecordContext(
+                    session_id=session_id, source_file=source_file,
+                    line_num=line_num, opts=opts,
+                ),
                 timestamp=timestamp,
                 source_raw=source_raw,
-                opts=opts,
             ):
                 yield _annotate_source(event, rtype, payload, line_num)
             continue
@@ -894,17 +922,56 @@ def process_file(
             if item_type == "reasoning":
                 text = _extract_reasoning_summary(payload.get("summary"))
                 if not text:
+                    # An item carrying encrypted state and no exposed summary
+                    # is *withheld* reasoning, not absent reasoning: the vendor
+                    # states that reasoning happened and does not show it.
+                    # Recorded with empty content and `reasoning_redacted`, the
+                    # same representation Cursor's `redacted-reasoning` part
+                    # gets, so one query compares the two vendors. Dropping it
+                    # said the model produced no reasoning, which is a
+                    # different claim and a false one -- measured, 17,460 of
+                    # 24,793 Codex reasoning items are this shape.
+                    if not payload.get("encrypted_content"):
+                        if diagnostics is not None:
+                            _record_refused(
+                                context, "record_reasoning_without_summary",
+                                record_type=str(item_type or ""),
+                            )
+                            diagnostics["reasoning_without_summary_records"] = (
+                                diagnostics.get(
+                                    "reasoning_without_summary_records", 0
+                                ) + 1
+                            )
+                        continue
                     if diagnostics is not None:
-                        _record_refused(
-                            opts, "record_reasoning_without_summary",
-                            source_file=source_file, line_num=line_num,
-                            record_type=str(item_type or ""),
+                        diagnostics["reasoning_redacted_records"] = (
+                            diagnostics.get("reasoning_redacted_records", 0) + 1
                         )
-                        diagnostics["reasoning_without_summary_records"] = (
-                            diagnostics.get(
-                                "reasoning_without_summary_records", 0
-                            ) + 1
-                        )
+                    yield _annotate_source(_base_event(
+                        line_num=line_num,
+                        session_id=session_id,
+                        event_type="assistant_message",
+                        subtype="reasoning_summary",
+                        role="assistant",
+                        event_kind="message.reasoning_summary",
+                        actor_kind="model",
+                        content_role="reasoning_summary",
+                        origin_kind="model_generated",
+                        timestamp=timestamp,
+                        source_file=source_file,
+                        content="",
+                        content_len=0,
+                        metadata=_merge_metadata(
+                            payload, current_configuration,
+                            # Never the encrypted state itself, which stays
+                            # opaque: the flag is the whole evidence.
+                            {
+                                "reasoning_fidelity": "redacted",
+                                "reasoning_redacted": True,
+                            },
+                        ),
+                        source_raw=source_raw,
+                    ), rtype, payload, line_num)
                     continue
                 bounded = _bounded_content(
                     text, opts, record_type="reasoning_summary",
@@ -1229,8 +1296,7 @@ def process_file(
             if diagnostics is not None:
                 if item_type == "ghost_snapshot":
                     _record_refused(
-                        opts, "record_intermediate_state",
-                        source_file=source_file, line_num=line_num,
+                        context, "record_intermediate_state",
                         record_type=str(item_type or ""),
                     )
                     diagnostics["intermediate_state_records"] = (
@@ -1365,8 +1431,7 @@ def process_file(
             if msg_type == "context_compacted":
                 if diagnostics is not None:
                     _record_refused(
-                        opts, "record_context_compacted",
-                        source_file=source_file, line_num=line_num,
+                        context, "record_context_compacted",
                         record_type=str(msg_type or ""),
                     )
                 continue
@@ -1535,8 +1600,7 @@ def process_file(
                     }.get(msg_type)
                     if known_kind:
                         _record_refused(
-                            opts, f"record_{known_kind}",
-                            source_file=source_file, line_num=line_num,
+                            context, f"record_{known_kind}",
                             record_type=str(msg_type or ""),
                         )
                         diagnostics[known_kind] = (
@@ -1573,8 +1637,7 @@ def process_file(
         elif diagnostics is not None:
             if rtype == "world_state":
                 _record_refused(
-                    opts, "record_intermediate_state",
-                    source_file=source_file, line_num=line_num,
+                    context, "record_intermediate_state",
                     record_type=str(rtype or ""),
                 )
                 diagnostics["intermediate_state_records"] = (

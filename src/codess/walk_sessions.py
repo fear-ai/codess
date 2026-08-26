@@ -7,7 +7,7 @@ from pathlib import Path
 
 from codess.codex_source import build_session_index as build_codex_session_index
 from codess.codex_source import get_session_files as get_codex_session_files
-from codess.config import AGGREGATORS, BMB, CC_PROJECTS, CURSOR_WS, VENDOR_KEYS
+from codess.config import BMB, CC_PROJECTS, CURSOR_WS, VENDOR_KEYS
 from codess.cursor_source import (
     get_db_metrics,
     get_project_composer_headers,
@@ -349,30 +349,21 @@ def project_boundary(path: Path, work_root: Path, live_paths: set[Path]) -> Path
     return max(parents, key=lambda item: len(item.parts)) if parents else path
 
 
-def is_aggregator(path: Path, work_root: Path) -> bool:
-    """Whether `path` is a configured grouping directory rather than a Project.
-
-    Only a direct child of the work root can be one: an aggregator groups
-    Projects, and a directory deeper than that is inside one.
-    """
-    try:
-        relative = path.relative_to(work_root)
-    except ValueError:
-        return False
-    return len(relative.parts) == 1 and relative.parts[0] in AGGREGATORS
-
-
 def canonicalize(paths: set[Path], work_root: Path) -> set[Path]:
     """Keep the most specific paths; drop a parent when a child is present.
 
     Longest-first, so a nested repository is seen before the repository around
-    it and the outer one is dropped. Aggregators and excluded trees are removed
-    here rather than by the caller, because both are questions about which
-    directory is a Project.
+    it and the outer one is dropped. Excluded trees are removed here rather
+    than by the caller, because that is a question about which directory is a
+    Project.
     """
     keep: set[Path] = set()
     for candidate in sorted(paths, key=lambda item: -len(item.parts)):
-        if is_aggregator(candidate, work_root) or is_excluded(candidate, work_root):
+        # One question, one answer. `is_aggregator` asked a second version of
+        # it -- is this a tree the operator excluded -- against a setting whose
+        # definition turned out to be the same, so `exclude_paths` answers both
+        # and `is_excluded` already applies the precedence.
+        if is_excluded(candidate, work_root):
             continue
         if any(
             kept != candidate and str(kept).startswith(str(candidate) + "/")
@@ -387,7 +378,7 @@ def walk_sessions(
     work_root: Path,
     vendor_filter: list[str] | None = None,
     recent_days: int | None = None,
-    debug: bool = False,  # noqa: ARG001 - see the docstring
+    debug: bool = False,  # noqa: ARG001
     subagent: bool = False,
     diagnostics: dict | None = None,
     include_cursor_global: bool = True,

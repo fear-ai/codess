@@ -193,13 +193,19 @@ def test_store_coverage_reports_every_section(store):
     """Every section of the report travels with the others.
 
     A count, its shapes, whether those shapes match the released profile, its
-    loss, and the evidence no decoder admits at all.
+    loss, the evidence no decoder admits at all, what the projection dropped
+    before an Event existed, and the composers no index binds.
+
+    The last two are loss a store cannot report on itself: a field never
+    projected leaves no row, and an unattributed composer is excluded from
+    ingest by design, so both read as absent-from-the-vendor unless stated.
     """
     add_event(store, "e1", event_kind="tool.call", source_record_type="assistant")
     store.commit()
     report = store_coverage(store)
     assert set(report) == {
         "coverage", "shapes", "conformance", "loss", "undecoded",
+        "projection", "unbound", "repeated_prompts",
     }
     assert report["coverage"]["admitted_events"] == 1
     assert report["shapes"]["by_source_record_type"] == {"assistant": 1}
@@ -385,3 +391,254 @@ class TestProfileConformance:
         result = coverage_report.profile_conformance(conn, "anthropic.claude-code")
         assert result["available"] is False
         assert "superseded" in result["reason"]
+
+
+class TestProjectionAndUnboundCoverage:
+    """Two shapes of loss a store cannot report on itself.
+
+    `loss()` measures what a decoder read and could not fully map. These
+    measure what never reached the decoder: a bubble field the projection drops
+    before an Event is built, and a composer no index binds to a Project. Both
+    leave no row, so a report derived only from the store states zero by
+    construction -- the unfalsifiable zero recorded elsewhere.
+    """
+
+    def test_projection_names_the_dropped_field_count(self):
+        from codess.coverage_report import projection_coverage
+
+        report = projection_coverage("cursor.composer")
+        assert report["available"] is True
+        assert report["observed_fields"] > report["projected_fields"]
+        assert report["unprojected_fields"] == (
+            report["observed_fields"] - report["projected_fields"]
+        )
+
+    def test_the_projected_set_is_derived_from_the_decoder(self):
+        """Restating it here would let the report drift from what is read."""
+        from codess.adapters.cursor import _MAPPED_BUBBLE_FIELDS
+        from codess.coverage_report import projection_coverage
+
+        report = projection_coverage("cursor.composer")
+        assert set(report["projected"]) == set(_MAPPED_BUBBLE_FIELDS)
+
+    def test_another_vendor_reports_unavailable_rather_than_omitting(self):
+        """Unavailable is stated rather than the key being omitted.
+
+        A reader must be able to tell "measured, none" from "not measured".
+        """
+        from codess.coverage_report import projection_coverage, unbound_composers
+
+        for report in (
+            projection_coverage("anthropic.claude-code"),
+            unbound_composers("openai.codex"),
+        ):
+            assert report["available"] is False
+            assert report["reason"]
+
+    def test_an_unreadable_container_does_not_fail_the_report(self, tmp_path):
+        """A coverage report never fails the query it describes."""
+        import sqlite3
+
+        import codess.cursor_source as cursor_source
+        from codess import coverage_report
+
+        def _raise(_path):
+            raise sqlite3.DatabaseError("unreadable")
+
+        saved = cursor_source.unbound_composer_count
+        cursor_source.unbound_composer_count = _raise
+        try:
+            report = coverage_report.unbound_composers("cursor.composer")
+        finally:
+            cursor_source.unbound_composer_count = saved
+        assert report["available"] is False
+
+
+class TestRepeatedPrompts:
+    """Repetition is the signal, not brevity.
+
+    An earlier version filtered to prompts of 40 characters or fewer. That is
+    wrong twice: 40 characters is the 25th percentile of human prompts in this
+    corpus, so it is not short; and the most repeated text measured is 8,670
+    characters repeated 13 times -- a scripted evaluation run, which a length
+    filter hides entirely.
+    """
+
+    def _prompt(self, store, event_id, sequence_no, text, event_at,
+                session_id="s1"):
+        insert_event(
+            store, session_id, event_id, event_kind="message.prompt",
+            actor_kind="human", content=text, sequence_no=sequence_no,
+            event_at=event_at,
+        )
+
+    def test_a_consecutive_identical_prompt_is_reported(self, store):
+        from codess.coverage_report import repeated_prompts
+
+        self._prompt(store, "e1", 1, "continue", 1_000)
+        self._prompt(store, "e2", 2, "continue", 21_000)
+        store.commit()
+        report = repeated_prompts(store)
+        assert report["consecutive"] == 1
+        assert report["examples"][0]["gap_ms"] == 20_000
+
+    def test_a_long_repeated_prompt_is_not_filtered_out(self, store):
+        """The case a length filter hid: 8,670 characters, repeated."""
+        from codess.coverage_report import repeated_prompts
+
+        text = "You are an impartial judge reviewing a conversation. " * 160
+        self._prompt(store, "e1", 1, text, 1_000)
+        self._prompt(store, "e2", 2, text, 5_000)
+        store.commit()
+        report = repeated_prompts(store)
+        assert report["consecutive"] == 1
+        assert report["examples"][0]["chars"] > 8_000
+
+    def test_the_reported_text_is_bounded(self, store):
+        """The report states what repeated rather than reproducing it."""
+        from codess.coverage_report import repeated_prompts
+
+        text = "x" * 5_000
+        self._prompt(store, "e1", 1, text, 1_000)
+        self._prompt(store, "e2", 2, text, 2_000)
+        store.commit()
+        assert len(repeated_prompts(store)["examples"][0]["text"]) <= 80
+
+    def test_a_text_recurring_across_sessions_is_reported_separately(self, store):
+        """A scripted run and an operator's `continue` are both worth seeing."""
+        from codess.coverage_report import repeated_prompts
+
+        add_session(store, session_id="s2")
+        self._prompt(store, "e1", 1, "continue", 1_000, session_id="s1")
+        self._prompt(store, "e2", 1, "continue", 2_000, session_id="s2")
+        store.commit()
+        report = repeated_prompts(store)
+        # Different Sessions, so not consecutive; recurring is the right shape.
+        assert report["consecutive"] == 0
+        assert report["recurring"][0]["sessions"] == 2
+
+    def test_a_distant_repeat_is_outside_the_window(self, store):
+        from codess.coverage_report import repeated_prompts
+
+        self._prompt(store, "e1", 1, "continue", 1_000)
+        self._prompt(store, "e2", 2, "continue", 6_000_000)
+        store.commit()
+        report = repeated_prompts(store)
+        assert report["consecutive"] == 1
+        assert report["within_window"] == 0
+
+    def test_different_prompts_are_not_a_repeat(self, store):
+        from codess.coverage_report import repeated_prompts
+
+        self._prompt(store, "e1", 1, "continue", 1_000)
+        self._prompt(store, "e2", 2, "go", 2_000)
+        store.commit()
+        assert repeated_prompts(store)["consecutive"] == 0
+
+    def test_it_does_not_classify_the_cause(self, store):
+        from codess.coverage_report import repeated_prompts
+
+        store.commit()
+        assert "not classified" in repeated_prompts(store)["disposition"]
+
+
+class TestPromptFamilies:
+    """An exact-keyed group count is a floor, not a family size.
+
+    A templated prompt embeds varying content into a fixed preamble, so one
+    scripted run splits into as many exact groups as it has variants. Measured:
+    327 prompts of an LLM-judge harness share one opening, hold 6 preambles and
+    24 generated transcripts, and reduce to 34 exact texts -- the largest
+    holding 13. Reading 13 as the family understates the run 25-fold.
+    """
+
+    def _prompt(self, store, event_id, sequence_no, text, session_id="s1"):
+        insert_event(
+            store, session_id, event_id, event_kind="message.prompt",
+            actor_kind="human", content=text, sequence_no=sequence_no,
+            event_at=1_000 * sequence_no,
+        )
+
+    def _templated(self, store, count):
+        """One preamble, a different body per Session -- the observed shape."""
+        preamble = "You are an impartial judge reviewing a conversation. " * 6
+        for index in range(count):
+            # `s1` is the fixture's own Session, so the run starts there and
+            # adds the rest rather than recreating it.
+            session_id = "s1" if index == 0 else f"fam{index}"
+            if index:
+                add_session(store, session_id=session_id)
+            self._prompt(
+                store, f"e{index}", 1,
+                preamble + f"[BEGIN TRANSCRIPT] variant {'x' * index}",
+                session_id=session_id,
+            )
+        store.commit()
+
+    def test_a_templated_family_is_reported_at_its_true_size(self, store):
+        from codess.coverage_report import repeated_prompts
+
+        self._templated(store, 8)
+        report = repeated_prompts(store)
+        family = report["families"][0]
+        assert family["sessions"] == 8
+        assert family["exact_texts"] == 8
+
+    def test_the_exact_grouping_would_have_reported_nothing(self, store):
+        """Every text is distinct, so exact keying sees no repetition at all.
+
+        This is the failure the roll-up exists for: the family is invisible to
+        the grouping that reports honestly on each of its fragments.
+        """
+        from codess.coverage_report import repeated_prompts
+
+        self._templated(store, 8)
+        report = repeated_prompts(store)
+        assert report["recurring"] == []
+        assert report["families"][0]["sessions"] == 8
+
+    def test_a_length_span_proves_the_family_is_larger(self, store):
+        """Identical texts cannot have different lengths.
+
+        `varies_by_length` is a check rather than a heuristic: a span inside
+        one opening means the exact grouping split a family.
+        """
+        from codess.coverage_report import repeated_prompts
+
+        self._templated(store, 5)
+        family = repeated_prompts(store)["families"][0]
+        assert family["varies_by_length"] is True
+        assert family["chars_min"] < family["chars_max"]
+
+    def test_one_repeated_text_does_not_vary_by_length(self, store):
+        """The negative case, which is what makes the flag falsifiable."""
+        from codess.coverage_report import repeated_prompts
+
+        add_session(store, session_id="s2")
+        self._prompt(store, "e1", 1, "continue", session_id="s1")
+        self._prompt(store, "e2", 1, "continue", session_id="s2")
+        store.commit()
+        family = repeated_prompts(store)["families"][0]
+        assert family["varies_by_length"] is False
+        assert family["chars_min"] == family["chars_max"]
+
+    def test_unrelated_prompts_form_no_family(self, store):
+        from codess.coverage_report import repeated_prompts
+
+        add_session(store, session_id="s2")
+        self._prompt(store, "e1", 1, "review the parser changes", session_id="s1")
+        self._prompt(store, "e2", 1, "write the migration guide", session_id="s2")
+        store.commit()
+        assert repeated_prompts(store)["families"] == []
+
+    def test_the_prefix_length_is_not_configurable(self):
+        """One corpus and one observed family cannot inform a setting.
+
+        W84's precedent: a vocabulary guessed from a single value is worse than
+        none.
+        """
+        from codess import coverage_report
+        from codess.settings import BY_NAME
+
+        assert coverage_report.FAMILY_PREFIX_CHARS == 200
+        assert not any("prefix" in name for name in BY_NAME)

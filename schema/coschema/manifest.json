@@ -4,7 +4,7 @@
   "files": {
     "contract": {
       "path": "schema/coschema/contract.json",
-      "sha256": "fa0d8a358a4fd2a896ab701bf773a60bb5493a8b7c8397d77080c2d8b5b7cf9c"
+      "sha256": "a1a65d3d65ef0d295d5034598f11aaff09010feefbfdb043c9d0c19bb2509910"
     },
     "fixture_compatibility_store_meta_v2": {
       "path": "schema/coschema/fixtures/compatibility/store-meta-v2.json",
@@ -25,6 +25,10 @@
     "fixture_hazard_claude_error_tool_results": {
       "path": "schema/coschema/fixtures/hazard/claude-error-tool-results.json",
       "sha256": "8c9168d42f701c3e338a732e681083fb09ff36e9570bcc363d457839c91db4a9"
+    },
+    "fixture_hazard_codex_reasoning_encrypted": {
+      "path": "schema/coschema/fixtures/hazard/codex-reasoning-encrypted.json",
+      "sha256": "93b5b351cd1bb6c9a582f76d6aa242f70fefa938dbc1d28bb8f3d32915d60085"
     },
     "fixture_hazard_cursor_nonmessage_copies": {
       "path": "schema/coschema/fixtures/hazard/cursor-nonmessage-copies.json",
@@ -60,15 +64,15 @@
     },
     "mapping_cursor": {
       "path": "schema/mappings/cursor.json",
-      "sha256": "a1b5a4e81de47d332c0aa83dfe88d98d0494d3acafd78dccdd2b4b9ed3526b77"
+      "sha256": "27b93b2997999cc39d315747f74d06182768fece1b530b1fc83e8d4b1a5c4edc"
     },
     "sqlite_schema": {
       "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "b8207362d940c1eb83423c1425dddbc2c5650f6121efb4a540c8c0d6c1751157"
+      "sha256": "295ac7708fd0635018672801439ab984c82e16d1a0429d95401b394725b28403"
     }
   },
   "format_id": "codess.coschema",
-  "format_version": 9,
+  "format_version": 10,
   "reader_compatibility": {
     "legacy_read": [
       1

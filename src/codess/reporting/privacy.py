@@ -38,6 +38,36 @@ REJECTED = "<non-scalar>"
 
 Named for what happened rather than showing a repr: a repr of the rejected
 value is exactly the content the type check exists to keep out.
+
+**Why a field must be scalar.** Three reasons, and each is why the rejection is
+a rendering rule rather than a caller's responsibility:
+
+- *Bounded output.* `MAX_FIELD_BYTES` bounds one field. A list has no bound a
+  caller can promise -- `stores=[...]` is three entries in a test and could be
+  three hundred -- and a progress line that grows with the data is not a
+  progress line.
+- *Privacy classification is per field.* A path is redacted against registered
+  roots and a digest is truncated, both by *name*. A container hides values the
+  classifier never sees, so a list of paths would ship verbatim under a name
+  registered as safe.
+- *A line is parseable.* `key=value` has no separator a collection could use
+  without ambiguity: a comma is a value character, so `stores=a,b` reads as one
+  value or two depending on the reader.
+
+**What a caller does instead.** Report the *measure*, not the collection: a
+count where the number is the fact (`stores=3`), a single identity where one
+element is (`snapshot_id=...`), or several named fields where each element
+means something different. The names themselves belong in the structured trace,
+which every sink already carries per event.
+
+**The rejection is the mitigation, and it is deliberate.** Rendering
+`<non-scalar>` loses the value and keeps the line: the alternative is a repr
+that defeats the classification, or an exception raised from inside the
+reporting facility, which R10 forbids because a reporting failure must never
+abort the operation it reports on. A `<non-scalar>` in a log is a defect to fix
+at the call site, and it says so where it happened -- `stores=<non-scalar>`
+during a real ingest is exactly how the one instance in this codebase was
+found.
 """
 
 TRUNCATED_MARKER = "...<truncated>"

@@ -2828,6 +2828,11 @@ included depending on where the scan started, which is why an earlier
 inventory listed it with 15 Sessions. Matching is now on path segments, so
 exclusion is a property of the directory rather than of the invocation.
 
+`EXCLUDE_REVIEW_DIRS` has since been retired into `exclude_paths`, which takes
+an absolute path and settles the same question by construction: there is no
+root for the match to depend on. Retained under its original name because this
+records what was measured at the time.
+
 **Roots and aggregators.** `AGGREGATORS` names directories that group
 Projects rather than being Projects -- the seven containers `<C1>` to `<C7>`
 above. A directory named in that set is never reported as a Project itself;

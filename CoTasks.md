@@ -48,7 +48,27 @@ the short list a reader needs first.
 
 | ID | Work | State |
 |---|---|---|
-| **Sprint 1** | Wire-format change: token columns, time triple, `duplicate_of`, W50+W51 renames, `page_size` | Decisions captured in `experiments/format-decisions.md`; not applied |
+| **Sprint 1** | Wire-format change: the token columns and `duplicate_of` **landed at format 10**; W50+W51 renames and `page_size` remain | The corpus is at format 9 and every published store is unreadable until reingested |
+
+**The rebuild ran: 21 of 21 Projects, 0 failures.** Every published store is
+format 10, holding 436 Sessions and 273,594 Events across 63 stores.
+`project_inventory` reported 0 Projects with vanished Sources before it started,
+which is what made it safe, and reports 0 after.
+
+**The rebuild found a defect the suite could not.** A Cursor source was aborting
+with "Cursor session rows are not grouped": `agentKv` Events were emitted after
+every composer, and the consumer flushes on each change of `session_id` and
+refuses a Session it has already flushed. Blobs are content-addressed, so they
+arrive in hash order and a trailing pass revisits every Session. Fixed by
+decoding the corpus once before the bubble loop and emitting each Session's
+share with its own bubbles. Zero400 went from 3 Sessions and 5,600 Events to 29
+and 65,154 -- the failure had been discarding the whole Cursor source, not only
+the `agentKv` part.
+
+**`redacted-reasoning` outnumbers exposed reasoning about 47 to 1.** Of 2,763
+`agentKv` reasoning Events in one store, 2,705 carry `reasoning_redacted` and
+empty content, which is the correct representation of text the vendor withheld:
+the flag is the evidence, and an absent field would say something different.
 
 ### Ready
 
@@ -56,13 +76,26 @@ Unblocked, decided, and startable without waiting on anything.
 
 | ID | Work | Note |
 |---|---|---|
-| **W04** | Candidate-record contract, steps 3-4 | Unblocked: W35 closed, so the per-vendor hazard fixtures the strict/diagnostic semantics need are reachable and tested |
-| **W71** | Nine `warn` sites to the facility | Unblocked: every command module now attaches a sink |
-| **W94** | Reduce four format-number declarations toward one | The unchecked fifth location is removed; what remains is a pre-commit check moving detection from test run to commit |
-| **W89** | Path inclusion and exclusion belong in the discovery policy | Specification settled on the item; `exclude_dirs`/`exclude_paths`/`include_paths`, with Operations documenting the design ahead of the rename |
-| **W95** | Tighten message and comment wording | Low priority, batches with anything |
-| -- | Cursor `agentKv` tier-1 decode | Attribution solved via `toolFormerData.toolCallId`; supplies model names and 111,000+ tool invocations |
-| -- | Codex declared parentage | `forked_from_id`, `parent_thread_id`, `agent_role`, `thread_source` are declared in the protocol |
+| **W103** | Rescan the decode and source-access layers for the five crash-site classes | The three adapters are fuzzed and hold; the source-access layer has not been driven with hostile input |
+| **W05** | Real investigations against the query surface | Unchanged, and now the only queue item whose output is evidence rather than machinery. Wait for the reingest, so it runs against current-format stores |
+| **W50 + W51 + W98** | The naming resolutions no format has yet carried | Wire-format. Format 10 has just been paid for, so landing these now costs a second rebuild; batching them into the *next* format change is what the item argues for |
+
+**The two unnumbered items are resolved and one changed shape.** Cursor
+`agentKv` decode landed: the harness system prompt, `reasoning`, and
+`redacted-reasoning` map, and the corpus is classified by content kind before
+any parse. But the attribution the entry assumed does not exist. Measured over
+20,000 blobs, every row carrying a `requestId` is a `user` message holding only
+`text` -- 382 of them -- while all 779 reasoning parts and the system prompt sit
+on messages with none. No bubble references a blob hash and `agentKv:blob:` is
+the only key shape, so **780 blobs hold evidence no Session can claim**. They
+are counted under their own reason code rather than mapped by adjacency.
+
+Codex declared parentage needed no work: `parent_thread_id`, `forked_from_id`,
+and `thread_source` already reach `parent_session_id` with `lineage_provenance`
+naming the field. What cannot be done here is the audit --
+`audit_codex_parentage` reports 37 Sessions with `session_meta` and **0 carrying
+any parent field**, so positive, missing, and dangling are indistinguishable on
+this machine.
 
 ### Blocked on a Decision
 
@@ -110,6 +143,16 @@ Recorded so closed work is not re-derived. Outcomes are in
 
 | ID | Work |
 |---|---|
+| W04 | Steps 3-4: strict and diagnostic modes have equal semantics for all three vendors, each proven against its own hazard fixture, and a non-conformance records an inspectable row rather than only raising |
+| W65 | `RecordContext` carries `session_id`, `source_file`, `line_num`, and `opts`; a census test fails when a decode function takes three of them separately |
+| W66 | A config file between the variable and the built-in, with a test per precedence pair |
+| W71 | Eight status sites to the facility; `HumanSink` renders a warning as `warning` rather than as `progress`, which is what made the direct writes necessary |
+| W89 | `exclude_paths`/`include_paths` in the policy file; precedence, syntax, and the no-symlink rule each tested |
+| W94 | `tools/format_agreement.py` is the one checker; `pytest_configure` and a pre-commit hook both call it |
+| W95 | The operator-message standard, recorded in AGENTS.md with its worked example |
+| -- | Format 10: `duplicate_of`, `input_tokens`, `output_tokens`. A recorded zero is stored rather than nulled, because it says the vendor measured no usage |
+| -- | Cursor `agentKv` tier-1 decode. `toolCallId` binds the reasoning to a Session -- 344 Events across 20 Sessions -- because 76 of 80 reasoning messages carry a tool call stating the same identity a bubble records |
+| -- | `AGGREGATORS` and `EXCLUDE_REVIEW_DIRS` retired into `exclude_paths`; the structural limit went with them, so a reference tree below the work root's first level can now be named |
 | W04.1-2, .5 | `validate_mapped_event` at one vendor-neutral boundary, the candidate contract declared as a type, and a per-vendor conformance count in `decode_audit` that found an undeclared Cursor rule |
 | W35 | Every released manifest entry has a consumer that reads it through the manifest; four fixtures had none, and one was stale |
 | W99 | Receipts under one tree, `receipts/<kind>/`; a misplaced retention receipt is what the old prefix glob silently ignored |
@@ -154,9 +197,9 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 
 | ID | Priority | Status | Work | Blocked by |
 |---|---|---|---|---|
-| W04 | High | Planned | Candidate-record contract. Steps 1, 2, and 5 landed; steps 3-4 are unblocked now that W35 is closed | -- |
+| W04 | Normal | Closed | Candidate-record contract. All five steps landed: strict and diagnostic modes now have equal semantics across the three vendors, and a non-conformance records an inspectable row | -- |
 | W05 | High | Planned | Run named real investigations against the query surface | -- |
-| W14 | High | Planned | Require or mark Project identity. The 2026-08-25 recreation reingested all 21 Projects and minted no duplicate, so the guard holds for a reingest; the direct-library-write path is still unguarded | -- |
+| W14 | High | Planned | The registry binding index is authoritative and the in-project file confirms; a lost binding no longer mints. Steps 1-5 are in code and **not applied to the operator's registry**, which is a deliberate hold rather than remaining work | -- |
 | W16 | Normal | Postponed | Evaluate external investigation interfaces | No consumer |
 | W17 | Normal | Postponed | Expand cross-Project analysis inputs | Baseline 2 |
 | W35 | Normal | Closed | Every released entry has a consumer that reads it through the manifest | -- |
@@ -165,13 +208,13 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W51 | Normal | Planned | Resolve source-identity naming and suffix rules | Batches with W50 |
 | W55 | Normal | Closed | Text and record parsing unified on `codess.timeval`; the `datetime.now` sites remain and batch with W67 | -- |
 | W64 | Normal | Closed | Typing posture decided and enforced; `warn_return_any` recorded at 26 errors against W04 | -- |
-| W65 | Normal | Planned | Consolidate remaining relay parameter groups | W04 (partly) |
-| W66 | Normal | Planned | Configuration unification: table, `parents=`, help, types, the leaf mechanism, and the precedence sweep landed; a config file as a source remains | -- |
+| W65 | Normal | Closed | `RecordContext` carries the record-context group; a census test holds the rule over every adapter | -- |
+| W66 | Normal | Closed | Configuration unification complete: a config file is admitted as a source between the variable and the built-in, with each precedence pair tested | -- |
 | W67 | Normal | Closed | Every relay takes an object; the builder/relay distinction is a test; the three structures share no field | -- |
 | W70 | Normal | Planned | Re-partition documentation; remove cross-document redundancy | -- |
-| W71 | Normal | Planned | Fatal channel done; `admin` and `query` now configure a sink and report start/done. Nine `warn` sites remain to convert | -- |
+| W71 | Normal | Closed | Eight status sites moved to the facility and `HumanSink` renders a warning as a warning. One site keeps the direct write, with the reason recorded beside it | -- |
 | W72 | Normal | Closed | One Event-record builder per adapter; no adapter constructs an Event dict outside it | -- |
-| W73 | High | Analysis | Resolve or close the twenty-one open vendor decode gaps CoPlan records; Codex half answered by the protocol source | -- |
+| W73 | Normal | Planned | Every CoPlan row is closed with evidence or carries a named owner. The coverage group landed; the Artifact-linkage, parentage, and inheritance groups remain, each routed | -- |
 | W74 | High | Planned | Cursor Session times dropped; unread populated fields; two vendor facts to record | Retrieved-reference policy split to W79 |
 | W75 | Normal | Postponed | Harness experiments for conditions no stored data records | Execution deferred; restart criteria on the item |
 | W76 | Normal | Postponed | Characterise current Cursor terminal-agent storage; the decoded store is obsolete | Restart criteria on the item |
@@ -187,17 +230,18 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W86 | High | Closed | Skipped and refused records are counted but not attributed | -- |
 | W87 | Normal | Planned | Group the test corpus by subsystem; find superseded and uncovered cases | -- |
 | W88 | Normal | Planned | Cursor KV decode: classify by content kind before parsing | -- |
-| W89 | Normal | Planned | Path inclusion and exclusion belong in the discovery policy file; specification settled, not applied | -- |
+| W89 | Normal | Closed | Three settings, not two: `exclude_dirs` for names, `exclude_paths` and `include_paths` for absolute paths. `AGGREGATORS` and `EXCLUDE_REVIEW_DIRS` are retired into `exclude_paths` and removed from the code; a path is validated per segment, not only in total | -- |
 | W90 | High | Closed | Scanned Projects are never ingested unless named again | -- |
 | W91 | High | Closed | One authoritative Project record spanning scanned, ingested, moved, and removed | Structural half tracked on W14 |
 | W92 | Normal | Planned | Event-kind aggregation: most volume is machine traffic, not human work | -- |
 | W93 | Normal | Postponed | Session utilization: report counts and `surface_kind`, not a derived class | Link-detection design recorded; inclusion policy undecided |
-| W94 | Normal | Planned | Four files carry the format number; two drift silently | -- |
-| W95 | Low | Planned | Tighten message and comment wording against a worked example | -- |
-| W96 | High | Planned | Project location changes: detect, report, and direct the operator | W14 (partly) |
+| W94 | Normal | Closed | One checker with three callers; `tools/install_hooks.py` moves detection to the commit that breaks it | -- |
+| W95 | Low | Closed | The standard is recorded where a contributor meets it, with the worked example; the two named messages are revised | -- |
+| W96 | High | Planned | Steps 1-4 landed: every finding names its remedy, the Claude slug split is detected, `sources_vanished` is reported, and `catalog relocate` is documented as the pre-move step. The copy case remains undecidable by design | W14 (partly) |
 | W97 | Normal | Planned | Read the Codex thread name; reconcile archive location with archive state | -- |
 | W98 | Low | Planned | Ten field names still spell the algorithm rather than the value: `*_sha256` against the `*_digest` rule | Each is wire-format or a released document, so each costs a regeneration or a version bump |
 | W99 | Normal | Closed | One tree `receipts/<kind>/`; the refresh reader globs `*.json` and the directory states the kind | -- |
+| W103 | High | Planned | Rescan for the five crash-site classes beyond the fuzzed adapters, and for exact-value grouping that understates a templated family | -- |
 | W102 | Low | Planned | Review the option classification against what each flag actually does: 110 flag-only, 34 default-only, 24 with a variable | The classification is recorded in CoNames and has not been critiqued per flag |
 | W101 | Normal | Closed | `reasoning_fidelity` set by the adapter that read it; verified `summary` on Codex and `full` on Cursor in one store set | -- |
 | W100 | Normal | Closed | One retention count, current included, read by both paths through one implementation; `--keep` and `create_snapshot(keep_total=)` override it per run | -- |
@@ -4222,6 +4266,9 @@ policy file, where the directory-name rules already live.
 
 **Where the rules are today**, which is three places:
 
+**This table records the state the item was opened against.** What it
+describes is fixed; the current arrangement is the three settings below.
+
 | Rule | Location | Editable how |
 |---|---|---|
 | Pruned directory names (`.git`, `node_modules`, caches) | `schema/discovery-policy.json` | **A file**, with an `editing_note` and a `security_note` |
@@ -4230,6 +4277,12 @@ policy file, where the directory-name rules already live.
 | Backup conventions (`OLD`, `Save`) | `schema/discovery-policy.json` | **A file**, with per-name match rules |
 | Grouping directories (`AGGREGATORS`) | Environment variable | `CODESS_AGGREGATORS`, ships empty |
 | Third-party trees (`EXCLUDE_REVIEW_DIRS`) | Environment variable | `CODESS_EXCLUDE_REVIEW_DIRS`, ships empty |
+
+**As applied**, the last two rows are gone and the first is renamed. All three
+settings now take a variable *or* a policy-file key, variable first:
+`exclude_dirs` for names, `exclude_paths` and `include_paths` for absolute
+paths. The two compiled-in refusal lists stay compiled in, which the item
+argues for: they are safety rails rather than preferences.
 
 **Progress is real and partial.** The redesign did produce a policy file, and
 it is the right shape: checked in, versioned by `policy_format`, carrying its
@@ -5038,6 +5091,71 @@ sitting beside evidence it does.
 one exists, distinguishable from a Codess alias; and a rollout's archive
 location and its `archive_state` agree, or the disagreement is recorded as a
 vendor observation with its reason.
+
+### W103 -- Rescan for the Crash-Site Classes
+
+**Work.** Apply the five crash-site classes in
+[Decode Resilience](Designs.md#decode-resilience) to every module that reads
+vendor data, not only the three adapters a fuzz corpus reached.
+
+**Why it is High.** Each class passed code review before it was found: the
+defective sites read as null guards, and the defect is that the guard is for
+the wrong condition. Fuzzing found them in the adapters because that is where
+the corpus was pointed. The same shapes reach `cursor_source`, `codex_source`,
+`walk_sessions`, `token_usage`, and the `vendor_audits` modules, none of which
+has been driven with hostile input.
+
+**The measured blast radius is what sets the priority.** One bubble holding a
+string where an object belonged aborted a whole global-store read: the Project
+ingested 3 Sessions instead of 29, and the loss was invisible except as one
+`cursor.source.failed` line.
+
+**Scope.** Two passes, because they find different things:
+
+| Pass | Finds |
+|---|---|
+| Static | `(x or {}).get`, `x.get("k", {}).get`, and iteration over a field that could be a string. Mechanical, and a lint rule may express it |
+| Fuzz | Everything else. Extend the per-vendor hostile corpus to the source-access layer, where a container is opened rather than a record parsed |
+
+**A note on the static half.** `(x or {}).get` is not always wrong -- it is
+correct where `x` is Codess's own construction, and `opts`, `diagnostics`, and
+the catalog documents are exactly that. The rule is about *provenance*: a value
+read from a vendor record needs the type guard, and a value Codess built does
+not. A checker that cannot tell them apart would report the safe majority.
+
+**A second instance of the same root, one level up.** The five crash classes
+are unguarded assumptions about vendor *shape*; this is an unguarded assumption
+about vendor *distribution*, and it was found the same way -- by measurement
+contradicting a report rather than by review.
+
+`repeated_prompts` keyed on exact text and reported a 327-prompt scripted run
+as 13. The prompts are templated: 6 preambles and 24 generated transcripts
+reduce to 34 exact texts, and the largest holds 13. Resolved by
+[Grouping and Family Size](Designs.md#grouping-and-family-size) -- a prefix
+roll-up beside the exact grouping, with a length span that *proves* when the
+exact keying split a family.
+
+**What the rescan adds here.** The fix is in one report; the question is
+whether another does the same. Any count grouped by exact value over data a
+vendor may generate from a template is the same shape: `by_source_record_type`,
+`by_mapping_rule`, the tool-name and model-name distributions, and the
+turn-pattern digest W93 describes. Each is worth one check -- does a length or
+size span appear inside a group that a coarser key would merge -- and most will
+be fine, because most group over vocabularies rather than over generated text.
+
+**The reading that matters more than the fix.** The disconfirming evidence was
+already emitted: eight rows sharing one opening, with eight different lengths.
+Identical texts cannot have different lengths. The report was right and was
+read past, so the mitigation is to *state the conclusion* -- `varies_by_length`
+-- rather than to leave a reader to derive it from an adjacent column.
+
+**Evidence to close.** Every module that reads vendor data is driven with the
+hostile corpus and completes; each of the five classes has either no remaining
+instance on a vendor-data path or a recorded reason; and a new adapter is
+covered by the same corpus without anyone adding a case.
+
+**Cost.** No rebuild. The store is unaffected: this changes what happens when a
+decode meets a shape it has not seen, not what it writes when it does not.
 
 ### W102 -- The Option Classification, Reviewed per Flag
 

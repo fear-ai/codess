@@ -37,70 +37,22 @@ def _require_released_schema_agreement() -> None:
     stops with the file named, rather than after the suite has exercised
     everything that happens to open a store.
 
-    A missing or unreadable released file is left to the tests that cover it,
-    since failing the whole run on an absent path would hide which check was
-    actually broken.
+    The check itself lives in `tools/format_agreement.py`, which the pre-commit
+    hook also calls, so the same rule is enforced at the commit and at the run
+    from one implementation rather than two that can disagree.
     """
-    import re
-
+    tools = Path(__file__).resolve().parent.parent / "tools"
+    if str(tools) not in sys.path:
+        sys.path.insert(0, str(tools))
     try:
-        from codess.schema_contract import (
-            CONTRACT_PATH,
-            DDL_PATH,
-            FORMAT_VERSION,
-            MANIFEST_PATH,
-        )
+        from format_agreement import failure_message
     except ImportError:
         return
-
-    stale: list[str] = []
-    remedies: list[str] = []
-    manifest_version = _json_format_version(MANIFEST_PATH)
-    if manifest_version is not None and manifest_version != FORMAT_VERSION:
-        stale.append(f"{MANIFEST_PATH.name} states {manifest_version}")
-        remedies.append("run tools/refresh_schema_manifest.py")
-    contract_version = _json_format_version(CONTRACT_PATH)
-    if contract_version is not None and contract_version != FORMAT_VERSION:
-        stale.append(f"{CONTRACT_PATH.name} states {contract_version}")
-        remedies.append(f"edit {CONTRACT_PATH.name}")
-    try:
-        stamped = re.search(
-            r"PRAGMA\s+user_version\s*=\s*(\d+)",
-            DDL_PATH.read_text(encoding="utf-8"),
-        )
-    except OSError:
-        stamped = None
-    if stamped and int(stamped.group(1)) != FORMAT_VERSION:
-        stale.append(f"{DDL_PATH.name} stamps {stamped.group(1)}")
-        remedies.append(f"edit {DDL_PATH.name}")
-
-    # A released file edited without refreshing its recorded digest fails the
-    # same way and worse: the version checks above name a file, while a stale
-    # digest surfaces as several hundred store-opening tests failing on a hash.
-    try:
-        from codess.schema_contract import contract_digest
-        contract_digest()
-    except ImportError:
-        pass
-    except Exception as exc:  # SchemaContractError, and anything it wraps
-        stale.append(str(exc))
-        remedies.append("run tools/refresh_schema_manifest.py")
-
-    if stale:
-        raise pytest.UsageError(
-            f"declared CoSchema {FORMAT_VERSION}, {'; '.join(stale)}: "
-            f"{', '.join(dict.fromkeys(remedies))}"
-        )
+    message = failure_message()
+    if message:
+        raise pytest.UsageError(message)
 
 
-def _json_format_version(path):
-    """The `format_version` a released JSON file states, or None."""
-    import json
-
-    try:
-        return json.loads(path.read_text(encoding="utf-8")).get("format_version")
-    except (OSError, ValueError):
-        return None
 
 
 def _enable_subprocess_coverage() -> None:

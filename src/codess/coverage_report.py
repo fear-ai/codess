@@ -195,6 +195,73 @@ def undecoded_evidence(source_system_id: str | None) -> dict[str, Any]:
     }
 
 
+def projection_coverage(source_system_id: str | None) -> dict[str, Any]:
+    """Which vendor fields the decoder projects, and which it drops.
+
+    A coverage report that states only what was mapped cannot say what a
+    *projection* dropped: the decoder selects a field subset before an Event is
+    built, so a field never projected leaves no trace in the store and reads as
+    absent from the vendor rather than as declined by Codess.
+
+    Cursor is where this bites, because its bubble carries 98 fields and the
+    projection admits a fraction. The count is derived from the decoder's own
+    declared set rather than restated here, so it cannot drift from what the
+    decoder actually reads.
+
+    `BUBBLE_FIELD_TOTAL` is the measured shape of the vendor record -- 98 fields
+    sampled over 20,000 bubbles, of which roughly 40 are present on every bubble
+    and populated on none. Recorded as a measurement with its sample size, which
+    is what lets a later release contradict it.
+    """
+    if source_system_id != "cursor.composer":
+        return {"available": False, "reason": "no projection measured"}
+    from codess.adapters.cursor import _MAPPED_BUBBLE_FIELDS, BUBBLE_FIELD_TOTAL
+
+    projected = len(_MAPPED_BUBBLE_FIELDS)
+    return {
+        "available": True,
+        "container": "cursorDiskKV.bubbleId",
+        "observed_fields": BUBBLE_FIELD_TOTAL,
+        "projected_fields": projected,
+        "unprojected_fields": max(BUBBLE_FIELD_TOTAL - projected, 0),
+        "projected": sorted(_MAPPED_BUBBLE_FIELDS),
+        "disposition": "projected set is declared; the remainder is recorded "
+                       "as measured-empty or decided per field",
+    }
+
+
+def unbound_composers(source_system_id: str | None) -> dict[str, Any]:
+    """Composers holding decodable bubbles that no index binds to a Project.
+
+    Cursor prunes `composerHeaders` on age while retaining the `composerData:`
+    row and every bubble, so a composer older than the retention window has no
+    header and states no workspace. Codess reads it, records where it came from,
+    and does not attribute it -- which is the correct handling of a Session whose
+    binding the vendor no longer records.
+
+    Reported because the condition is otherwise invisible: these Sessions are
+    excluded from ingest by design, so a store cannot count them and a clean
+    coverage report would overstate what the corpus holds.
+    """
+    if source_system_id != "cursor.composer":
+        return {"available": False, "reason": "not a Cursor store"}
+    from codess.cursor_source import get_global_db, unbound_composer_count
+
+    database = get_global_db()
+    if database is None:
+        return {"available": False, "reason": "global container absent"}
+    try:
+        measured = unbound_composer_count(database)
+    except Exception:
+        return {"available": False, "reason": "global container unreadable"}
+    return {
+        "available": True,
+        "container": "cursorDiskKV.composerData",
+        **measured,
+        "disposition": "visible and unattributed; a binding is operator-stated",
+    }
+
+
 def profile_conformance(
     conn: sqlite3.Connection, source_system_id: str | None,
 ) -> dict[str, Any]:
@@ -283,6 +350,174 @@ def _store_source_system(conn: sqlite3.Connection) -> str | None:
     return str(row[0]) if row and row[0] else None
 
 
+# The window inside which a repeat is more likely a resubmission than a second
+# decision. Measured: of the consecutive identical prompts in the corpus, the
+# median gap is 98 minutes and only a handful fall within a minute, so the
+# window separates a small class rather than describing the common case.
+RESUBMISSION_WINDOW_MS = 60_000
+
+# How much of a prompt's opening identifies its family. A templated prompt --
+# a scripted run that embeds varying content into a fixed preamble -- shares an
+# opening and diverges later, so a key over the opening groups what exact text
+# splits apart. 200 characters is well inside the shortest observed preamble
+# (7,889 characters before the divergence marker) and well past the point where
+# two unrelated prompts would still agree.
+#
+# Deliberately not configurable. One corpus, one observed family: a setting
+# would offer a choice the evidence cannot inform, which is the trap W84
+# records for a vocabulary guessed from a single value.
+FAMILY_PREFIX_CHARS = 200
+
+
+def _prompt_families(seen_texts: dict[str, set[str]]) -> list[dict[str, Any]]:
+    """Group prompts by their opening, beside the exact-text grouping.
+
+    **An exact-keyed group count is a floor, not a family size.** A templated
+    prompt embeds varying content into a fixed preamble, so one scripted run
+    splits into as many groups as it has variants and each is reported
+    honestly and separately. Measured on this corpus: 327 prompts of an
+    LLM-judge harness share one opening, carry 6 distinct preambles and 24
+    distinct generated transcripts, and reduce to 34 exact texts -- the largest
+    of which holds 13. Reading that 13 as the family understates the run by a
+    factor of 25.
+
+    **`chars_min` and `chars_max` are the falsifiable part**, and the reason
+    this is worth emitting rather than leaving to a reader. Identical texts
+    cannot have different lengths, so a span inside one prefix group *proves*
+    the family is larger than any exact group within it. That is a check rather
+    than a heuristic: `chars_min == chars_max` means the grouping found nothing
+    the exact keying missed.
+
+    **The exact grouping is kept, not replaced.** Exact identity is the honest
+    answer to "is this the same text", and it is what a resubmission check
+    needs -- two identical submissions seconds apart is a different observation
+    from two similar ones. The two questions are different and both are asked.
+
+    **A shared opening is an observation; similarity is an inference.** This
+    deliberately stops at a prefix rather than shingling or edit distance.
+    Those would catch more and would begin asserting that two prompts *are* the
+    same thing, which is a claim about meaning that belongs to a reader rather
+    than to a projection of what the vendor wrote.
+    """
+    grouped: dict[str, dict[str, Any]] = {}
+    for text, sessions in seen_texts.items():
+        prefix = text[:FAMILY_PREFIX_CHARS]
+        family = grouped.setdefault(prefix, {
+            "prefix": prefix[:80],
+            "exact_texts": 0,
+            "sessions": set(),
+            "chars_min": len(text),
+            "chars_max": len(text),
+        })
+        family["exact_texts"] += 1
+        family["sessions"] |= sessions
+        family["chars_min"] = min(int(family["chars_min"]), len(text))
+        family["chars_max"] = max(int(family["chars_max"]), len(text))
+    families = [
+        {
+            "prefix": item["prefix"],
+            "exact_texts": item["exact_texts"],
+            "sessions": len(item["sessions"]),
+            "chars_min": item["chars_min"],
+            "chars_max": item["chars_max"],
+            # The proof, stated rather than left for a reader to derive: a
+            # length span inside one opening means the exact grouping split a
+            # family, and the count beside it is a floor.
+            "varies_by_length": item["chars_min"] != item["chars_max"],
+        }
+        for item in grouped.values()
+        if item["exact_texts"] > 1 or len(item["sessions"]) > 1
+    ]
+    families.sort(key=lambda item: -int(item["sessions"]))
+    return families
+
+
+def repeated_prompts(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Human prompts submitted verbatim more than once, and how far apart.
+
+    **Repetition is the signal, not brevity.** An earlier version of this
+    filtered to prompts of 40 characters or fewer, which is wrong twice over:
+    40 characters is the 25th percentile of human prompts here, so it is not
+    short; and the most repeated text in the corpus is **8,670 characters
+    repeated 13 times** -- a scripted evaluation prompt, which a length filter
+    would have hidden entirely. Length is a property of the prompt; repetition
+    is the observation.
+
+    Two shapes are reported because they mean different things:
+
+    - `consecutive` is the same text twice in a row within one Session. This is
+      where a resubmission would appear.
+    - `recurring` is a text appearing in several Sessions. `continue` (49
+      times) and `go` (13) are the operator's vocabulary; an 8,670-character
+      prompt repeated 13 times is a scripted run, and both are worth seeing.
+
+    **The cause is not classified.** A repeat is either the operator asking
+    again or a timed-out request submitted a second time, and the local
+    evidence does not distinguish them: each repeat is a distinct vendor record
+    with its own identity, so the store is not double-counting one submission,
+    and the elapsed gap is usually large. `within_window` counts the subset
+    tight enough that a resolution would act on it.
+    """
+    rows = conn.execute(
+        "SELECT session_id, sequence_no, event_at, content FROM events "
+        "WHERE event_kind='message.prompt' AND actor_kind='human' "
+        "AND content IS NOT NULL AND trim(content) != '' "
+        "ORDER BY session_id, sequence_no",
+    ).fetchall()
+    consecutive: list[dict[str, Any]] = []
+    seen_texts: dict[str, set[str]] = {}
+    previous: Any = None
+    for row in rows:
+        text = str(row[3] or "").strip()
+        folded = text.casefold()
+        seen_texts.setdefault(folded, set()).add(str(row[0]))
+        if (
+            previous is not None
+            and previous[0] == row[0]
+            and str(previous[3] or "").strip().casefold() == folded
+        ):
+            gap = (
+                (row[2] - previous[2])
+                if row[2] is not None and previous[2] is not None
+                else None
+            )
+            consecutive.append({
+                "session_id": row[0],
+                "sequence_no": row[1],
+                "chars": len(text),
+                # Bounded: the text may be thousands of characters, and the
+                # report states what repeated rather than reproducing it.
+                "text": text[:80],
+                "gap_ms": gap,
+            })
+        previous = row
+    within = [
+        item for item in consecutive
+        if item["gap_ms"] is not None and 0 <= item["gap_ms"] < RESUBMISSION_WINDOW_MS
+    ]
+    # Typed as the literal it is, so the sort key is an `int` rather than the
+    # `object` a heterogeneous dict value infers to.
+    recurring: list[dict[str, Any]] = [
+        {"chars": len(text), "text": text[:80], "sessions": len(sessions)}
+        for text, sessions in seen_texts.items()
+        if len(sessions) > 1
+    ]
+    recurring.sort(key=lambda item: -int(item["sessions"]))
+    families = _prompt_families(seen_texts)
+    return {
+        "prompts": len(rows),
+        "consecutive": len(consecutive),
+        "within_window": len(within),
+        "window_ms": RESUBMISSION_WINDOW_MS,
+        "recurring_texts": len(recurring),
+        "families": families[:20],
+        "examples": consecutive[:50],
+        "recurring": recurring[:20],
+        "disposition": "reported, not classified: the local evidence does not "
+                       "distinguish a resubmission from a second request",
+    }
+
+
 def store_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
     """Coverage, shapes, and loss for one vendor store.
 
@@ -297,4 +532,11 @@ def store_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
         "conformance": profile_conformance(conn, source_system_id),
         "loss": loss(conn),
         "undecoded": undecoded_evidence(source_system_id),
+        # Two shapes of loss a store cannot report on itself: a field the
+        # decoder never projected leaves no row, and a composer no index binds
+        # is excluded from ingest by design. Both read as absent-from-the-vendor
+        # unless the report states them.
+        "projection": projection_coverage(source_system_id),
+        "unbound": unbound_composers(source_system_id),
+        "repeated_prompts": repeated_prompts(conn),
     }

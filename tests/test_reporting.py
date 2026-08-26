@@ -631,3 +631,131 @@ class TestClock:
         first = clock.ANCHOR_TICK_NS
         clock.tick()
         assert first == clock.ANCHOR_TICK_NS
+
+
+class TestRenderedShapeNamesTheLevel:
+    """A warning must not render as progress.
+
+    This is why status sites wrote to stderr directly rather than through the
+    facility: a condition an operator has to act on read as a step that
+    completed, so the direct write carried information the sink destroyed.
+    """
+
+    def _rendered(self, code_name, stream):
+        from codess import reporting
+        from codess.reporting.sinks import HumanSink
+
+        # The gate is the minimum across attached sinks, so the sink's own
+        # `min_level` is what admits a debug or info event here.
+        sink = HumanSink(stream=stream, min_level=10)
+        reporting.configure(sinks=(sink,))
+        try:
+            reporting.event(reporting.code(code_name))
+            reporting.flush()
+        finally:
+            reporting.configure(sinks=())
+        return stream.getvalue()
+
+    def test_a_warning_renders_as_a_warning(self):
+        import io
+
+        assert "codess: warning " in self._rendered(
+            "scan.registry_empty", io.StringIO(),
+        )
+
+    def test_an_error_renders_as_an_error(self):
+        import io
+
+        assert "codess: error " in self._rendered("command.failed", io.StringIO())
+
+    def test_an_informational_step_still_renders_as_progress(self):
+        import io
+
+        assert "codess: progress " in self._rendered("scan.start", io.StringIO())
+
+
+class TestNonScalarFieldsAreRejectedNotRendered:
+    """A collection field loses its value and keeps the line.
+
+    The alternative is a repr that defeats the per-field privacy
+    classification, or an exception from inside the reporting facility -- which
+    R10 forbids, because a reporting failure must not abort the operation it
+    reports on.
+    """
+
+    def _rendered(self, **fields):
+        import io
+
+        from codess import reporting
+        from codess.reporting.sinks import HumanSink
+
+        stream = io.StringIO()
+        sink = HumanSink(stream=stream, min_level=10)
+        reporting.configure(sinks=(sink,))
+        try:
+            reporting.event(reporting.code("scan.start"), **fields)
+            reporting.flush()
+        finally:
+            reporting.configure(sinks=())
+        return stream.getvalue()
+
+    def test_a_list_is_named_rather_than_shown(self):
+        from codess.reporting.privacy import REJECTED
+
+        rendered = self._rendered(root=["/a", "/b"])
+        assert REJECTED in rendered
+        assert "/a" not in rendered, (
+            "a repr of the value is what the type check exists to keep out"
+        )
+
+    def test_a_dict_is_named_rather_than_shown(self):
+        from codess.reporting.privacy import REJECTED
+
+        assert REJECTED in self._rendered(root={"secret": "/private"})
+
+    def test_the_line_survives_the_rejection(self):
+        """Losing a field must not lose the event."""
+        rendered = self._rendered(root=["/a"])
+        assert "scan.start" in rendered
+
+    def test_a_count_is_the_shape_a_caller_should_pass(self):
+        from codess.reporting.privacy import REJECTED
+
+        rendered = self._rendered(events=2)
+        assert "events=2" in rendered
+        assert REJECTED not in rendered
+
+
+def test_no_ingest_call_site_passes_a_literal_collection() -> None:
+    """A field that is plainly a container never reaches a sink.
+
+    Static, so it cannot see a runtime type -- `stores=published.promoted_stores`
+    was a `list[str]` and rendered `<non-scalar>` through a whole real ingest
+    before anyone read the line. It catches the literal case, which is the one
+    a reviewer would otherwise have to notice by eye.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "src"
+    emitters = {"progress_trace", "event", "emit", "emit_named", "_progress"}
+    offenders = []
+    for source in root.rglob("*.py"):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name not in emitters:
+                continue
+            for keyword in node.keywords:
+                if keyword.arg is None:
+                    continue  # a **mapping splat, whose values are checked at runtime
+                if isinstance(keyword.value, ast.List | ast.Dict | ast.Set):
+                    offenders.append(
+                        f"{source.name}:{node.lineno} {keyword.arg}"
+                    )
+    assert not offenders, (
+        "these emit a literal collection, which renders as <non-scalar>: "
+        f"{', '.join(offenders)}"
+    )

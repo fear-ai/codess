@@ -619,11 +619,11 @@ and remaining work are:
 
 | Source case | Current decision | Remaining action |
 |---|---|---|
-| Image-only user record | Record `attachment_only_records`; do not emit empty human text | Define Artifact/content-link mapping before retaining the image as searchable content |
-| `attachment` product-state record | Emit bounded attachment type, item count, initial/command flags, and content-presence metadata; do not copy an unbounded body | Validate newer attachment shapes and decide which fields support search |
+| Image-only user record | Record `attachment_only_records`; do not emit empty human text | **Owner: the Artifact-linkage group.** One mapping serves this, the attachment row below, and Cursor's file-backed content |
+| `attachment` product-state record | Emit bounded attachment type, item count, initial/command flags, and content-presence metadata; do not copy an unbounded body | **Owner: the Artifact-linkage group**, with the row above. Recurring rather than closable on its own: a vendor release adding an attachment shape reopens it |
 | `toolUseResult.persistedOutputPath` | Accept only a path inside the selected Session tree and retain it as related external content | Done: the size is checked before the read and an oversize body is refused with a recorded locator |
-| `isSidechain`, `agentId`, fork context, or parent field | Preserve each observed field; create a Session relation only when an explicit parent identity resolves | Measure field availability by Claude Code release and report unresolved parentage |
-| Mode, permission, title, queue, snapshot, and similar product state | Emit the currently mapped bounded subtypes; retain unknown shapes as diagnostics rather than message text | Add a subtype only when it has defined query or reconstruction value |
+| `isSidechain`, `agentId`, fork context, or parent field | Preserve each observed field; create a Session relation only when an explicit parent identity resolves | **Owner: the Session-parentage group** (Claude half). Measurement first, then a narrow relation; blocked on evidence rather than on code |
+| Mode, permission, title, queue, snapshot, and similar product state | Emit the currently mapped bounded subtypes; retain unknown shapes as diagnostics rather than message text | **Owner: none, and deliberately.** A retention decision made only where a query need exists; absent one, the standing answer is declined. Recorded so the row is not read as pending work |
 
 `vendor_audits.claude_features` inventories these shapes and field-presence
 rates without retaining content bodies.
@@ -653,12 +653,12 @@ reasoning, or omitted request/response traffic.
 
 | Source case | Current decision | Remaining action |
 |---|---|---|
-| Canonical `response_item` plus an `event_msg` notification carrying the same message or reasoning | Retain the `response_item`; count the notification as a known duplicate envelope | Extend duplicate-shape fixtures when Codex adds notification variants |
-| `response_item.reasoning.summary` and `encrypted_content` | Store exposed summary text as reasoning-summary content; never decode encrypted reasoning. Encrypted compaction content remains bounded opaque context | Verify each placement of `encrypted_content`; field spelling alone cannot determine its meaning |
-| `turn_context` or settings update followed by Events | Attach only directly observed settings and explicitly inherited settings to subsequent Model Turns; keep provenance for each value | Define and test termination at the next replacement setting, Turn, or Session boundary for every supported field |
-| Collaboration begin/end records | Emit lifecycle/activity Events; do not create a separate Session merely because an agent nickname or operation appears | Create parent/child Sessions only from stable child and parent identifiers observed in rollout metadata |
-| `parent_thread_id` or `forked_from_id` | Preserve the exact field and create the corresponding relation only when the referenced Session resolves | Audit positive, missing, and dangling identifiers by supported release |
-| `compacted` envelope plus `context_compacted` notification | Emit the replacement-history compaction once from `compacted`; suppress the notification duplicate | Verify that newer compaction item variants retain the complete searchable summary or mark opaque/partial content explicitly |
+| Canonical `response_item` plus an `event_msg` notification carrying the same message or reasoning | Retain the `response_item`; count the notification as a known duplicate envelope | **Owner: none; recurring by nature.** A vendor release adding a notification shape reopens it, so it is maintenance rather than a closable item. The hazard fixture `codex-reasoning-encrypted.json` carries the current shape |
+| `response_item.reasoning.summary` and `encrypted_content` | Store exposed summary text as reasoning-summary content; never decode encrypted reasoning. Encrypted compaction content remains bounded opaque context | Done: both placements are covered by `codex-reasoning-encrypted.json`, which asserts that a summary maps and that encrypted state is never retained. `reasoning_fidelity` distinguishes this précis from Cursor's full reasoning |
+| `turn_context` or settings update followed by Events | Attach only directly observed settings and explicitly inherited settings to subsequent Model Turns; keep provenance for each value | **Owner: the setting-inheritance group.** A correctness risk with narrow scope: needs one stated termination rule and a test per supported field, and nothing blocks it but the decision |
+| Collaboration begin/end records | Emit lifecycle/activity Events; do not create a separate Session merely because an agent nickname or operation appears | **Owner: the Session-parentage group** (Codex half). The protocol declares the identifiers; what is missing is a local Session that carries one |
+| `parent_thread_id` or `forked_from_id` | Preserve the exact field and create the corresponding relation only when the referenced Session resolves | Decode is **done** -- both fields, plus `thread_source`, reach `parent_session_id` and `session_relation_kind` with `lineage_provenance` naming which field supplied it. The audit is **not measurable here**: `audit_codex_parentage` reports 37 Sessions with `session_meta` and 0 carrying any parent field, so positive, missing, and dangling cannot be distinguished on this machine |
+| `compacted` envelope plus `context_compacted` notification | Emit the replacement-history compaction once from `compacted`; suppress the notification duplicate | **Owner: none; recurring by nature**, with the duplicate-envelope row above. A new compaction variant reopens it; the suppression itself is tested |
 
 `vendor_audits.codex_features` measures general record and setting shapes;
 `codex_parent_audit` measures resolvable, missing, and dangling parent evidence.
@@ -695,11 +695,11 @@ retained as source evidence.
 
 | Source case | Current decision | Remaining action |
 |---|---|---|
-| Composer absent from headers but present in workspace `composerData` | Use the workspace index only as a provenance-labelled fallback | Measure false attribution and stale entries before treating the fallback as equivalent to a header |
-| Composer absent from both indexes | Do not attribute it to a Project from content or chronology alone | Report it as unbound source evidence and require an explicit catalog binding if it matters (coverage reporting) |
-| Agent/subagent-looking Composer state without a stable parent ID | Preserve the source fields; do not manufacture a parent Session | Identify and validate an explicit Cursor parent/child field before adding the relation |
-| File-backed or oversized context/tool content | Keep the reference and bounded metadata; do not load it as an ordinary message | Define Artifact linkage for observed reference shapes; the content access is bounded |
-| Adapter projection omits a source field | The omitted field is neither normalized nor silently claimed as supported | Compare audit shape inventories with projected keys and report loss or unknown fields (coverage reporting) |
+| Composer absent from headers but present in workspace `composerData` | Use the workspace index only as a provenance-labelled fallback | **Owner: W85.** Measure false attribution and stale entries before treating the fallback as equivalent to a header. Blocked on evidence rather than effort: the header set is a retention window, so the ground truth a measurement needs is what the vendor has already pruned |
+| Composer absent from both indexes | Do not attribute it to a Project from content or chronology alone | Done: `coverage_report.unbound_composers` reports the count per store -- 164 composers, 66 with a header, 98 without -- so an unattributed Session is visible rather than silently excluded. An operator-stated binding remains the only way to attribute one |
+| Agent/subagent-looking Composer state without a stable parent ID | Preserve the source fields; do not manufacture a parent Session | **Owner: W75**, machine part. No stored Session on this machine carries such a field, so inspection cannot settle whether one exists; a harness run that delegates is what would produce it |
+| File-backed or oversized context/tool content | Keep the reference and bounded metadata; do not load it as an ordinary message | **Owner: the Artifact-linkage group**, one CoSchema mapping serving this row and the two Claude rows above it. Highest value per unit of work in this table; the three close together or not at all |
+| Adapter projection omits a source field | The omitted field is neither normalized nor silently claimed as supported | Done: `coverage_report.projection_coverage` compares the decoder's declared projection against the measured bubble shape and reports both counts, so a field dropped before an Event existed is stated rather than reading as absent from the vendor |
 
 `cursor_feature_audit` performs the structure-only inventory. Measurement verifies that
 selection remains bounded as unrelated global-database content grows.

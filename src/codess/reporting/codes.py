@@ -227,6 +227,23 @@ _EVENT_SPECS: tuple[tuple[str, int, int], ...] = (
     # and "which command ran" is the first thing a later reader wants.
     ("admin.start", INFO, SCOPE_ADMIN),
     ("admin.done", INFO, SCOPE_ADMIN),
+
+    # --- Status sites converted from the fatal channel --------------------
+    #
+    # These reported through `cli.failure.warn`, which writes to stderr
+    # directly. They belong here now that `admin` and `query` attach a sink and
+    # `HumanSink` renders a warning as a warning rather than as progress. Each
+    # level is decided on what the site reports rather than on where it sits: a
+    # diagnostic total is INFO because it states what a completed run did, while
+    # a condition that leaves a result incomplete is WARNING.
+    ("ingest.diagnostics", INFO, SCOPE_INGEST),
+    ("scan.diagnostics", INFO, SCOPE_SCAN),
+    ("scan.projects_hidden", INFO, SCOPE_SCAN),
+    ("scan.registry_empty", WARNING, SCOPE_SCAN),
+    ("cursor.cohort.capture_failed", WARNING, SCOPE_INGEST),
+    ("project.vendor_dir_absent", WARNING, SCOPE_INGEST),
+    ("query.store_absent", WARNING, SCOPE_QUERY),
+    ("query.snapshot_unverified", WARNING, SCOPE_QUERY),
 )
 
 EVENT_NAMES: tuple[str, ...] = tuple(name for name, _level, _scope in _EVENT_SPECS)

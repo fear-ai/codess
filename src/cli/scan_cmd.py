@@ -8,7 +8,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from cli.failure import fail, fail_configuration, warn
+from cli.failure import fail, fail_configuration
 from codess import reporting
 from codess.codex_source import build_session_index as build_codex_session_index
 from codess.config import (
@@ -71,13 +71,17 @@ def _print_scan_diagnostics(diagnostics: dict) -> None:
         "failed_roots": diagnostics.get("failed_roots", 0),
     }
     if any(counts.values()):
-        warn('codess: scan diagnostics: ' + ' '.join((f'{key}={value}' for key, value in counts.items())))
+        reporting.event(reporting.code("scan.diagnostics"), **counts)
     # A Project omitted by the recency window is not a diagnostic among
     # others: the result is incomplete in a way the reader cannot see from
     # the output, so it is stated separately with the way to widen it.
     hidden = diagnostics.get("projects_outside_recency_window", 0)
     if hidden:
-        warn(f'codess: {hidden} project(s) have coding work older than the {DAYS}-day window and are not listed; use --days 0 for all, or CODESS_DAYS to change the default')
+        reporting.event(
+            reporting.code("scan.projects_hidden"),
+            projects=hidden, window_days=DAYS,
+            widen_with="--days 0, or CODESS_DAYS",
+        )
 
 
 def run(args: argparse.Namespace) -> int:
@@ -180,7 +184,7 @@ def run(args: argparse.Namespace) -> int:
         if reg_err:
             return fail(reg_err)
         if not registry_entries:
-            warn('codess: warning: registry has no projects; scan output is empty')
+            reporting.event(reporting.code("scan.registry_empty"))
         initial_keys = set(registry_entries.keys())
         merged = [(f, r) for f, r in merged if f in initial_keys]
 

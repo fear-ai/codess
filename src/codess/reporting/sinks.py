@@ -29,6 +29,7 @@ from codess.reporting.clock import elapsed_seconds, wall_ns
 from codess.reporting.codes import (
     DEBUG,
     ERROR,
+    EVENT_LEVELS,
     EVENT_NAMES,
     INFO,
     LEVEL_NAMES,
@@ -43,6 +44,16 @@ CODE, TICK, LEVEL, SCOPE, FIELDS = range(5)
 The literal position is the documentation on the hot path, the same trade
 CoSchema field names make: the literal names what it reads.
 """
+
+# What a rendered line calls itself. `progress` is right for the steps that
+# make up a run and wrong for a condition the operator has to act on, which is
+# why status sites wrote to stderr directly rather than through this sink.
+_SHAPE_BY_LEVEL = {
+    DEBUG: "progress",
+    INFO: "progress",
+    WARNING: "warning",
+    ERROR: "error",
+}
 
 
 # --- Absent fields: rendered text drops them, structured data keeps them ------
@@ -155,8 +166,13 @@ class HumanSink:
                 if value is not None
             )
             suffix = f" {rendered}" if rendered else ""
+            # The shape names what the event *is*, not the one thing this sink
+            # was first built to carry. Rendering a warning as `progress` was
+            # the reason status sites wrote to stderr directly instead: a
+            # condition an operator must act on read as a step that completed.
+            shape = _SHAPE_BY_LEVEL.get(EVENT_LEVELS[event[CODE]], "progress")
             lines.append(
-                f"codess: progress {wall_text(event[TICK])} "
+                f"codess: {shape} {wall_text(event[TICK])} "
                 f"+{elapsed_seconds(event[TICK]):.3f}s "
                 f"{EVENT_NAMES[event[CODE]]}{suffix}"
             )
@@ -407,6 +423,8 @@ class NullSink:
     min_level = ERROR
 
     def emit(self, events: list[tuple]) -> None:  # noqa: ARG002
+        # Accepts and discards, which is the whole point: the null sink exists
+        # so a measured workload reports ingest rather than instrumentation.
         return None
 
     def close(self) -> None:

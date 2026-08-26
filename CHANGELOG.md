@@ -13,6 +13,30 @@ change, and is minutes of machine time for a corpus of this scale.
 
 ## Unreleased
 
+### CoSchema Format 10
+
+**Every published store must be reingested.** `require_store` accepts only the
+current format for reading as well as writing, so a store written under format 9
+is refused until its Project is rebuilt: install the contract,
+`codess ingest --dir <project> --force` each Project, republish. Run
+`python tools/project_inventory.py` first -- it exits nonzero when a Project's
+vendor Sources are gone, and a store whose Sources no longer exist is the only
+remaining record of those Sessions.
+
+- **`events.input_tokens` and `events.output_tokens`** retain recorded usage for
+  all three vendors, **including when the vendor records zero**. A recorded zero
+  says the vendor reported no usage, which is not the same as the field being
+  absent, and only the first can be revisited when a release changes. Cursor
+  writes `tokenCount` on essentially every bubble.
+
+- **`events.duplicate_of`** names the Event a record repeats. A long-lived Cursor
+  composer is re-synced and the sync writes server-identified copies of bubbles
+  that already exist locally, so one `toolCallId` survives on two bubbles after
+  dedup. Both are real vendor records -- field by field they differ in three
+  fields of ninety-eight -- so the relationship is recorded rather than a record
+  deleted. A reader wanting the raw count ignores the column; one excluding
+  replays selects on it.
+
 ### Time
 
 - **`codess.timeval` is the time subsystem**, and it is standalone by

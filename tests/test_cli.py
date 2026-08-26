@@ -280,7 +280,10 @@ def test_query_warns_for_root_without_store_and_counts_it_as_zero():
         )
 
         assert r.returncode == 0
-        assert f"warning: no store found for {empty.resolve()}" in r.stderr
+        # Reported through the facility, so it renders as a warning rather
+        # than as a progress step and carries the root as a field.
+        assert "query.store_absent" in r.stderr
+        assert f"root={empty.resolve()}" in r.stderr
         data = json.loads((registry / "projects_state.json").read_text())
         counts = {entry["path"]: entry["query"]["sessions"] for entry in data["projects"]}
         assert counts[str(populated.resolve())] == 1
@@ -511,7 +514,7 @@ def test_ingest_no_cc_dir_exit_1(durable_tmp_path):
     env["CODESS_CC_PROJECTS"] = str(tmp)
     r = _run(["ingest", "--source", "cc", "--dir", str(proj), "--min-size", "0"], env=env)
     assert r.returncode == 1
-    assert "No CC project" in r.stderr
+    assert "project.vendor_dir_absent" in r.stderr
 
 
 def test_ingest_empty_jsonl_dir_success(durable_tmp_path):
@@ -830,7 +833,7 @@ def test_ingest_malformed_record_reports_aggregate_and_continues(durable_tmp_pat
     # can, so absence is the clearer statement. Read from the diagnostics line
     # itself rather than from all of stderr, which carries other messages.
     line = next(
-        text for text in r.stderr.splitlines() if "ingest diagnostics:" in text
+        text for text in r.stderr.splitlines() if "ingest.diagnostics" in text
     )
     assert "malformed_records=1" in line
     assert "failed_sources" not in line
@@ -1718,9 +1721,9 @@ def test_config_discovery_reports_the_resolved_configuration():
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)["configuration"]
     assert payload["work_root"]["value"]
-    assert payload["pruned_names"], "the prune set must be reported"
+    assert payload["exclude_dirs"], "the excluded-name set must be reported"
     assert "lib" in payload["traversed_on_purpose"], (
         "names deliberately traversed are what an operator needs in order to "
         "decide what to exclude for their own tree"
     )
-    assert payload["aggregators"]["source"].startswith(("default", "CODESS_"))
+    assert payload["exclude_paths"]["source"].startswith(("default", "CODESS_"))

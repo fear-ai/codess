@@ -178,3 +178,100 @@ class TestFormatNumberAgreement:
             f"released schema files disagree with the manifest; run "
             f"tools/refresh_schema_manifest.py\n{result.stdout}"
         )
+
+
+class TestFormatAgreementIsCheckableAtTheCommit:
+    """The four declarations are checked from one implementation, not three.
+
+    Detection moved outward in three steps: the next store open, then the test
+    run (`pytest_configure`), and now the commit that broke it. Each reads the
+    same checker, so the hook cannot enforce a different rule than the suite.
+    """
+
+    def test_the_released_files_agree_today(self):
+        import sys
+        from pathlib import Path
+
+        tools = Path(__file__).resolve().parent.parent / "tools"
+        if str(tools) not in sys.path:
+            sys.path.insert(0, str(tools))
+        from format_agreement import failure_message
+
+        assert failure_message() is None
+
+    def test_a_stale_contract_is_named_with_its_remedy(self, monkeypatch, tmp_path):
+        """The message names the file, not the symptom a layer away."""
+        import json
+        import sys
+        from pathlib import Path
+
+        tools = Path(__file__).resolve().parent.parent / "tools"
+        if str(tools) not in sys.path:
+            sys.path.insert(0, str(tools))
+        import format_agreement
+
+        from codess.schema_contract import CONTRACT_PATH, FORMAT_VERSION
+
+        stale = tmp_path / "contract.json"
+        document = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+        document["format_version"] = FORMAT_VERSION + 90
+        stale.write_text(json.dumps(document), encoding="utf-8")
+        monkeypatch.setattr(
+            "codess.schema_contract.CONTRACT_PATH", stale, raising=False,
+        )
+        found, remedies = format_agreement.disagreements()
+        assert any("contract.json states" in item for item in found)
+        assert any("contract.json" in item for item in remedies)
+
+    def test_the_conftest_gate_and_the_hook_share_one_checker(self):
+        """Two copies of this rule could disagree about what is stale."""
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        conftest = (root / "tests" / "conftest.py").read_text(encoding="utf-8")
+        hook_tool = (root / "tools" / "install_hooks.py").read_text(encoding="utf-8")
+        assert "from format_agreement import failure_message" in conftest
+        assert "format_agreement.py" in hook_tool
+
+    def test_the_hook_leaves_an_escape_hatch(self):
+        """A hook with no bypass is one an operator disables permanently."""
+        from pathlib import Path
+
+        hook = (
+            Path(__file__).resolve().parent.parent / "tools" / "install_hooks.py"
+        ).read_text(encoding="utf-8")
+        assert "--no-verify" in hook
+
+    def test_installing_does_not_overwrite_a_foreign_hook(self, tmp_path):
+        import sys
+        from pathlib import Path
+
+        tools = Path(__file__).resolve().parent.parent / "tools"
+        if str(tools) not in sys.path:
+            sys.path.insert(0, str(tools))
+        from install_hooks import install
+
+        hooks = tmp_path / "hooks"
+        hooks.mkdir()
+        existing = hooks / "pre-commit"
+        existing.write_text("#!/bin/sh\necho mine\n", encoding="utf-8")
+        message = install(hooks)
+        assert "already exists" in message
+        assert existing.read_text(encoding="utf-8") == "#!/bin/sh\necho mine\n"
+
+    def test_installing_writes_an_executable_hook(self, tmp_path):
+        import os
+        import sys
+        from pathlib import Path
+
+        tools = Path(__file__).resolve().parent.parent / "tools"
+        if str(tools) not in sys.path:
+            sys.path.insert(0, str(tools))
+        from install_hooks import install
+
+        hooks = tmp_path / "hooks"
+        message = install(hooks)
+        assert "installed" in message
+        target = hooks / "pre-commit"
+        assert os.access(target, os.X_OK)
+        assert "format_agreement.py" in target.read_text(encoding="utf-8")

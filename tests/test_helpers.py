@@ -587,8 +587,8 @@ class TestDiscoveryPolicyIsExternal:
     def test_a_configured_policy_replaces_the_set(self, tmp_path, monkeypatch):
         policy = self._policy(tmp_path, {
             "policy_format": "codess.discovery-policy/1",
-            "pruned": {"mine": ["scratchwork"]},
-            "pruned_prefixes": ["gen-"],
+            "exclude_dirs": ["scratchwork"],
+            "exclude_dir_prefixes": ["gen-"],
         })
         monkeypatch.setenv("CODESS_DISCOVERY_POLICY", str(policy))
         import importlib
@@ -629,7 +629,7 @@ class TestDiscoveryPolicyIsExternal:
     def test_an_unsupported_format_is_refused(self, tmp_path, monkeypatch):
         policy = self._policy(tmp_path, {
             "policy_format": "codess.discovery-policy/99",
-            "pruned": {"mine": ["anything"]},
+            "exclude_dirs": ["anything"],
         })
         monkeypatch.setenv("CODESS_DISCOVERY_POLICY", str(policy))
         import importlib
@@ -643,3 +643,196 @@ class TestDiscoveryPolicyIsExternal:
         finally:
             monkeypatch.delenv("CODESS_DISCOVERY_POLICY")
             importlib.reload(helpers)
+
+
+class TestDiscoveryPathSettings:
+    """Path inclusion and exclusion, configured rather than assumed.
+
+    Every test states its own paths and asserts which rule matched. A test
+    naming a real directory would test this machine's layout, and the rule is
+    what has to hold on every other one.
+    """
+
+    def _reloaded(self, monkeypatch, **variables):
+        import importlib
+
+        import codess.helpers as helpers
+
+        for name, value in variables.items():
+            monkeypatch.setenv(name, value)
+        return importlib.reload(helpers)
+
+    def _restored(self, monkeypatch, *names):
+        import importlib
+
+        import codess.helpers as helpers
+
+        for name in names:
+            monkeypatch.delenv(name, raising=False)
+        importlib.reload(helpers)
+
+    def test_both_path_lists_ship_empty(self):
+        """A shipped path misclassifies every tree but the one it came from."""
+        import json
+
+        from codess.helpers import DISCOVERY_POLICY_PATH
+
+        document = json.loads(DISCOVERY_POLICY_PATH.read_text(encoding="utf-8"))
+        assert document["exclude_paths"] == []
+        assert document["include_paths"] == []
+
+    def test_a_variable_replaces_the_shipped_names(self, monkeypatch):
+        """The three settings resolve the same way: variable, then file.
+
+        An operator should not have to remember which one is file-only.
+        """
+        try:
+            helpers = self._reloaded(monkeypatch, CODESS_EXCLUDE_DIRS="mine,other")
+            assert frozenset({"mine", "other"}) == helpers.TRAVERSAL_PRUNE_DIRS
+        finally:
+            self._restored(monkeypatch, "CODESS_EXCLUDE_DIRS")
+
+    def test_an_empty_name_variable_states_that_there_are_none(self, monkeypatch):
+        """Replaces rather than extends, so "none of these" is expressible."""
+        try:
+            helpers = self._reloaded(monkeypatch, CODESS_EXCLUDE_DIRS="")
+            assert frozenset() == helpers.TRAVERSAL_PRUNE_DIRS
+        finally:
+            self._restored(monkeypatch, "CODESS_EXCLUDE_DIRS")
+
+    def test_names_ship_non_empty(self):
+        """A name means the same thing on every machine, so it is safe to ship."""
+        from codess.helpers import TRAVERSAL_PRUNE_DIRS
+
+        assert "node_modules" in TRAVERSAL_PRUNE_DIRS
+
+    def test_an_excluded_tree_is_excluded(self, tmp_path, monkeypatch):
+        tree = tmp_path / "reference"
+        try:
+            helpers = self._reloaded(
+                monkeypatch, CODESS_EXCLUDE_PATHS=str(tree),
+            )
+            assert helpers.is_excluded(tree / "vendored")
+        finally:
+            self._restored(monkeypatch, "CODESS_EXCLUDE_PATHS")
+
+    def test_include_outranks_exclude_for_a_nested_tree(self, tmp_path, monkeypatch):
+        """The reason `include_paths` exists: name exclusion over-reaches."""
+        tree = tmp_path / "reference"
+        kept = tree / "mine"
+        try:
+            helpers = self._reloaded(
+                monkeypatch,
+                CODESS_EXCLUDE_PATHS=str(tree),
+                CODESS_INCLUDE_PATHS=str(kept),
+            )
+            assert helpers.is_excluded(tree / "vendored")
+            assert not helpers.is_excluded(kept / "project")
+        finally:
+            self._restored(
+                monkeypatch, "CODESS_EXCLUDE_PATHS", "CODESS_INCLUDE_PATHS",
+            )
+
+    def test_a_variable_overrides_the_file(self, tmp_path, monkeypatch):
+        """A variable names one shell's scope; the file states the machine's."""
+        import json
+
+        policy = tmp_path / "policy.json"
+        policy.write_text(json.dumps({
+            "policy_format": "codess.discovery-policy/1",
+            "exclude_paths": ["/from/the/file"],
+        }), encoding="utf-8")
+        try:
+            helpers = self._reloaded(
+                monkeypatch,
+                CODESS_DISCOVERY_POLICY=str(policy),
+                CODESS_EXCLUDE_PATHS="/from/the/variable",
+            )
+            assert helpers.EXCLUDE_PATHS == ("/from/the/variable",)
+        finally:
+            self._restored(
+                monkeypatch, "CODESS_DISCOVERY_POLICY", "CODESS_EXCLUDE_PATHS",
+            )
+
+    def test_the_file_supplies_a_durable_machine_decision(self, tmp_path, monkeypatch):
+        import json
+
+        policy = tmp_path / "policy.json"
+        policy.write_text(json.dumps({
+            "policy_format": "codess.discovery-policy/1",
+            "exclude_paths": ["/from/the/file"],
+        }), encoding="utf-8")
+        try:
+            helpers = self._reloaded(
+                monkeypatch, CODESS_DISCOVERY_POLICY=str(policy),
+            )
+            assert helpers.EXCLUDE_PATHS == ("/from/the/file",)
+        finally:
+            self._restored(monkeypatch, "CODESS_DISCOVERY_POLICY")
+
+    def test_a_traversal_segment_is_rejected_in_either_list(self):
+        """`..` lets an entry escape the scope it appears to name."""
+        from codess.helpers import parse_policy_list, valid_policy_name
+
+        assert parse_policy_list("/a/../b", as_path=True) == ()
+        assert not valid_policy_name("..")
+
+    def test_a_relative_path_is_rejected(self):
+        from codess.helpers import parse_policy_list
+
+        assert parse_policy_list("relative/tree", as_path=True) == ()
+
+    def test_lists_are_comma_separated_not_colon_separated(self):
+        """A colon is excluded from the value set, so a comma is unambiguous."""
+        from codess.helpers import parse_policy_list
+
+        assert parse_policy_list("/a,/b", as_path=True) == ("/a", "/b")
+        assert parse_policy_list("/a:/b", as_path=True) == ()
+
+    def test_whitespace_is_stripped(self):
+        from codess.helpers import parse_policy_list
+
+        assert parse_policy_list(" /a , /b ", as_path=True) == ("/a", "/b")
+
+    def test_a_name_admits_only_its_stated_characters(self):
+        from codess.helpers import valid_policy_name
+
+        assert valid_policy_name("node_modules")
+        assert valid_policy_name(".venv")
+        assert not valid_policy_name("has/separator")
+        assert not valid_policy_name("x" * 256)
+
+    def test_dot_codess_is_read_by_path_rather_than_traversal(self):
+        """The hidden-name rule must not reach the directories Codess reads.
+
+        `.codess` and `.claude` are opened by explicit path, so the rule does
+        not apply to them -- asserted because it is the kind of thing that
+        breaks silently.
+        """
+        from pathlib import Path
+
+        from codess.config import PROJECT_FILE, STORE_DIR
+        from codess.project_catalog import _binding_path
+
+        assert _binding_path(Path("/p")) == Path("/p") / STORE_DIR / PROJECT_FILE
+
+
+class TestDiscoveryFollowsNoSymlink:
+    """A link inside an excluded tree would re-admit excluded content."""
+
+    def test_traversal_does_not_follow_a_symlink(self, tmp_path):
+        import ast
+        import inspect
+
+        import codess.review_project as review_project
+
+        source = inspect.getsource(review_project.discover_git_roots)
+        walks = [
+            node for node in ast.walk(ast.parse(source.strip()))
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "attr", None) == "walk"
+        ]
+        assert walks, "discovery no longer calls os.walk; re-check the rule"
+        for call in walks:
+            follow = [k for k in call.keywords if k.arg == "followlinks"]
+            assert follow and follow[0].value.value is False

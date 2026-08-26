@@ -50,6 +50,32 @@ duplicating its content elsewhere.
   do not wrap narrower than 80
 - A comment restating the line below it is noise; delete it
 
+## Operator Messages
+
+Applies to error messages, log lines, and progress events. Not to documentation,
+where a reader is looking for explanation.
+
+- State the observation and the action. Omit the explanation a reader did not
+  ask for: every error is met while something is already wrong
+- Put the values first and the remedy last, so the line reads as a fact followed
+  by what to do about it
+- The reason a rule exists belongs in a comment beside the message, where a
+  maintainer needs it, rather than in the message, where an operator does not
+
+Worked example, from the DDL version check. Before -- four lines, two of them
+explanation a reader did not ask for:
+
+```text
+released DDL stamps user_version 6 while the declared CoSchema format is 7;
+update schema.sql to match
+```
+
+After -- the same two facts and the same action:
+
+```text
+DDL user_version 6, declared CoSchema 7: update schema.sql
+```
+
 ## Code Naming
 
 Applies to Python identifiers. Domain designators -- vendors, columns, keys --

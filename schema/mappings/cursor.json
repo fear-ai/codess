@@ -99,6 +99,20 @@
       "target": "sessions.session_relation_kind",
       "operation": "from",
       "retention": "core"
+    },
+    {
+      "id": "cursor.agent-system-prompt",
+      "source": "cursorDiskKV.agentKv:blob:*.content[]",
+      "target": "events",
+      "operation": "from_each",
+      "retention": "core"
+    },
+    {
+      "id": "cursor.agent-reasoning",
+      "source": "cursorDiskKV.agentKv:blob:*.content[]",
+      "target": "events",
+      "operation": "from_each",
+      "retention": "core"
     }
   ],
   "hazards": [
@@ -109,6 +123,8 @@
     "repeated-server-bubble-copies",
     "whitespace-only-assistant-envelopes-are-not-messages",
     "toolResults-may-be-present-but-empty",
-    "default-model-selection-is-not-an-exact-model-name"
+    "default-model-selection-is-not-an-exact-model-name",
+    "agent-kv-blob-holds-several-encodings-under-one-key-space",
+    "agent-kv-request-may-name-no-decoded-session"
   ]
 }

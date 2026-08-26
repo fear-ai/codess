@@ -3,7 +3,36 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, NotRequired, TypedDict
+
+
+@dataclass(frozen=True, slots=True)
+class RecordContext:
+    """Which record is being decoded, and under which options.
+
+    The four values travel together through every decode function that reads a
+    vendor record: they identify the record rather than describe it, and none
+    of them changes within one record's decode. Passed as four parameters they
+    were four chances to mis-order two strings at a call site -- `session_id`
+    and `source_file` are both `str`, so a transposition type-checks and
+    produces an Event citing the wrong Source.
+
+    Frozen because the identity of the record under decode is decided before
+    the decode starts and is not a working value. `opts` stays a plain dict: it
+    is the caller's option bag, read rather than rewritten here, and freezing it
+    would mean copying it per record for no property this needs.
+    """
+
+    session_id: str
+    source_file: str
+    line_num: int
+    opts: dict[str, Any]
+
+    @property
+    def locator(self) -> str:
+        """The vendor's own address for this record, as an Event carries it."""
+        return str(self.line_num)
 
 
 class CandidateEvent(TypedDict):
@@ -56,6 +85,32 @@ class CandidateEvent(TypedDict):
     subtype: NotRequired[str | None]
     role: NotRequired[str | None]
     timestamp: NotRequired[Any]
+
+
+def as_mapping(value: Any) -> dict[str, Any]:
+    """One vendor value read as a mapping, or an empty one.
+
+    `(value or {}).get(...)` reads as a null guard and is not one: it guards
+    absence and not *type*. A vendor writing a string where an object belongs
+    therefore raised `AttributeError` from inside the decode and rolled back
+    the whole Source -- measured, one such bubble discarded 26 Sessions.
+
+    A decoder is strict about meaning and tolerant about shape. A malformed
+    field is an observation about the vendor; it is not a reason to abandon the
+    Session it sits in.
+    """
+    return value if isinstance(value, dict) else {}
+
+
+def is_decodable_record(value: Any) -> bool:
+    """Whether one JSONL line is an object a decoder can read.
+
+    JSONL guarantees each line is valid JSON, **not** that it is an object: a
+    bare list, string, or number is well-formed and is not a record. Counted as
+    malformed at the iteration boundary rather than raising from inside
+    whichever decode function reached it first.
+    """
+    return isinstance(value, dict)
 
 
 def canonical_json(value: Any) -> str:

@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from cli.failure import fail, fail_configuration, warn
+from cli.failure import fail, fail_configuration
 from codess import reporting
 from codess.config import (
     DEFAULT_QUERY_BYTE_LIMIT,
@@ -482,9 +482,14 @@ def _run(args: argparse.Namespace) -> int:
         return fail('No store found. Run session-ingest first.')
     scope.session_names = alias_index(registry)
     for root in missing_roots:
-        warn(f'codess: warning: no store found for {sanitize_tabular(root)}')
+        reporting.event(
+            reporting.code("query.store_absent"), root=sanitize_tabular(root),
+        )
     if snapshot_id and contract_policy == "read-compatible":
-        warn('codess: warning: historical snapshot package differs or was not required to match; hashes and format were verified, mapping parity was not')
+        reporting.event(
+            reporting.code("query.snapshot_unverified"),
+            verified="hashes, format", unverified="mapping parity",
+        )
 
     try:
         if getattr(args, "query_action", None):

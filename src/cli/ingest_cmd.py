@@ -637,7 +637,10 @@ def _report_ingest_outcome(
         # decode boundary was counted and never printed -- and a zero for a
         # condition that cannot occur in this run reads the same as a zero for
         # one that can. Sorted so two runs are comparable line to line.
-        warn('codess: ingest diagnostics: ' + ' '.join((f'{name}={count}' for name, count in sorted(diagnostics.items()) if count)))
+        progress_trace(
+            "ingest.diagnostics",
+            **{name: count for name, count in sorted(diagnostics.items()) if count},
+        )
 
 
 def _progress_events(project: str | None = None) -> list[dict]:
@@ -799,9 +802,15 @@ def _publish_project(
             project.catalog_changed_vendors.clear()
             published.derived_changed = False
         progress_trace(
+            # A count, as the sibling `snapshot.start` reports: the field is a
+            # list, and the sink renders one as `<non-scalar>` rather than
+            # guessing a separator. The names are already in the trace's own
+            # per-vendor lines, so the number is what this line adds.
             "fresh_rebuild.promoted", project=str(project_path),
-            stores=published.promoted_stores,
-            retained_prior=(project.tally.errors and rebuild_had_existing_store),
+            stores=len(published.promoted_stores),
+            retained_prior=bool(
+                project.tally.errors and rebuild_had_existing_store
+            ),
         )
 
     published.snapshot_required = (
@@ -1051,7 +1060,9 @@ def _cursor_preflight(
                     "ingest.failed", stage="cursor.cohort",
                     error_type=type(exc).__name__,
                 )
-                warn(f'codess: Cursor cohort capture failed: {exc}')
+                progress_trace(
+                    "cursor.cohort.capture_failed", error=str(exc),
+                )
                 # The caller cleans up on a returned code, so the temporary is
                 # released here and reported as absent rather than handed back
                 # already-cleaned.
@@ -1192,7 +1203,10 @@ def _ingest_project(
             store_path = store.path
             cc_dir = get_cc_session_dir(project_path)
             if cc_dir is None and sources == ["cc"]:
-                warn(f'No CC project dir for {project_path}')
+                progress_trace(
+                    "project.vendor_dir_absent",
+                    vendor="Claude", project=str(project_path),
+                )
                 project.tally.note_error()
                 if settings["stop_on_error"]:
                     progress_trace(
@@ -1338,6 +1352,13 @@ def _ingest_project(
                 # publishing work under an identity that no longer names it.
                 current = read_project_binding(project_path)
                 if current and current["project_id"] != opts["project_id"]:
+                    # The one status site that keeps the direct write, and the
+                    # event beside it is not a duplicate of it. This runs inside
+                    # an ingest subprocess, which attaches no sink, so the event
+                    # reaches a structured reader and nobody else. A raised
+                    # exception reaches the same exit code, so without the
+                    # written line an operator cannot tell a set-aside Project
+                    # from a crash.
                     warn(f"codess: Project identity changed during ingest of {project_path}: {opts['project_id']} became {current['project_id']}; not publishing this Project")
                     progress_trace(
                         "project.identity_changed", project=str(project_path),

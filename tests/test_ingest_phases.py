@@ -693,13 +693,21 @@ class TestCursorPreflight:
             ingest_cmd, "get_cursor_selection_markers",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("injected")),
         )
+        emitted: list[tuple] = []
         code, temporary = self._preflight(
             workspace_ids={tmp_path: {"ws1"}},
             global_db=database,
+            progress_trace=lambda name, **fields: emitted.append((name, fields)),
         )
         assert code == 1
         assert temporary is None
-        assert "Cursor cohort capture failed" in capsys.readouterr().err
+        # The failure reports on both channels: `ingest.failed` carries the
+        # exception family for a structured reader, and
+        # `cursor.cohort.capture_failed` carries its text. Asserted from the
+        # emitted events rather than from stderr because this calls the
+        # function directly, with no sink attached.
+        assert emitted[-1][0] == "cursor.cohort.capture_failed"
+        assert "injected" in emitted[-1][1]["error"]
 
     def _cursor_db(self, tmp_path):
         """A global store: bubbles plus the Composer headers a scan needs."""

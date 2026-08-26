@@ -18,7 +18,12 @@ from codess.config import (
 )
 from codess.context_content import bound_context_content, truncate_content
 from codess.hashing import codess_bytes_hash
-from codess.mapping import annotate_mapping
+from codess.mapping import (
+    RecordContext,
+    annotate_mapping,
+    as_mapping,
+    is_decodable_record,
+)
 from codess.sanitize import apply_sanitization, sanitize_value
 from codess.timeval import epoch_ms
 from codess.tool_result_status import application_failure_evidence
@@ -169,6 +174,22 @@ def iter_cc_records(
                 continue
             try:
                 record = json.loads(line)
+                # A JSONL line is guaranteed to be valid JSON and not to be an
+                # *object*: a vendor writing a bare list or string produces a
+                # record every consumer would call `.get` on. Counted as
+                # malformed here rather than raising from inside whichever
+                # decode function reached it first.
+                if not is_decodable_record(record):
+                    if diagnostics is not None:
+                        diagnostics["malformed_records"] = (
+                            diagnostics.get("malformed_records", 0) + 1
+                        )
+                    if warn:
+                        log.warning(
+                            "non-object record at %s:%d: %s",
+                            path, line_num, type(record).__name__,
+                        )
+                    continue
                 yield line_num, record, raw
             except json.JSONDecodeError as e:
                 if diagnostics is not None:
@@ -270,7 +291,7 @@ def should_skip(record: dict) -> bool:
     """Return True for progress, file-history-snapshot, queue-operation, last-prompt, system (empty)."""
     rtype = record.get("type")
     if rtype == "system":
-        content = record.get("message", {}).get("content")
+        content = as_mapping(record.get("message")).get("content")
         if content and (not isinstance(content, list) or content):
             return False  # Include system with content
         return True
@@ -283,14 +304,12 @@ def _is_permission_denial(text: str) -> bool:
     return any(marker in lowered for marker in PERMISSION_DENIAL_MARKERS)
 
 
-def _normalize_compaction(
-    record: dict,
-    line_num: int,
-    session_id: str,
-    source_file: str,
-) -> dict:
+def _normalize_compaction(record: dict, context: RecordContext) -> dict:
     """Retain an explicit compact boundary and its observed accounting."""
-    compact = record.get("compactMetadata") or {}
+    session_id, source_file, line_num = (
+        context.session_id, context.source_file, context.line_num,
+    )
+    compact = as_mapping(record.get("compactMetadata"))
     metadata = {"audit_kind": "context_compaction"}
     field_names = {
         "trigger": "trigger",
@@ -441,7 +460,7 @@ def _build_tool_map(path: Path) -> dict[str, str]:
     for _line_num, record, _ in iter_cc_records(path, warn=False):
         if record.get("type") != "assistant":
             continue
-        content = record.get("message", {}).get("content") or []
+        content = as_mapping(record.get("message")).get("content") or []
         for block in content:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 tid = block.get("id")
@@ -559,11 +578,9 @@ def _diagnostic(opts: dict, name: str, count: int = 1) -> None:
 
 
 def _record_refused(
-    opts: dict,
+    context: RecordContext,
     reason_code: str,
     *,
-    source_file: str | None = None,
-    line_num: int | None = None,
     record_type: str | None = None,
     detail: str | None = None,
 ) -> None:
@@ -579,6 +596,9 @@ def _record_refused(
     so these accumulate on `opts` and `store` persists them against the Source
     once it is known.
     """
+    opts, source_file, line_num = (
+        context.opts, context.source_file, context.line_num,
+    )
     _diagnostic(opts, reason_code)
     pending = opts.get("record_diagnostics")
     if pending is None:
@@ -752,10 +772,11 @@ def _product_state_kind(subtype: str | None) -> str:
     return _PRODUCT_STATE_KINDS.get(subtype or "", "state.product")
 
 
-def normalize_product_state(
-    record: dict, line_num: int, session_id: str, source_file: str, opts: dict,
-) -> dict | None:
+def normalize_product_state(record: dict, context: RecordContext) -> dict | None:
     """Map bounded Claude product/lifecycle state without copying envelopes."""
+    session_id, source_file, line_num, opts = (
+        context.session_id, context.source_file, context.line_num, context.opts,
+    )
     rtype = record.get("type")
     subtype = record.get("subtype")
     event = None
@@ -903,13 +924,12 @@ def normalize_product_state(
 
 
 def normalize_assistant(
-    record: dict,
-    line_num: int,
-    session_id: str,
-    source_file: str,
-    opts: dict,
+    record: dict, context: RecordContext,
 ) -> tuple[list[dict], dict[str, str]]:
     """Extract assistant events; return (events, tool_map)."""
+    session_id, source_file, line_num, opts = (
+        context.session_id, context.source_file, context.line_num, context.opts,
+    )
     events = []
     tool_map = {}
     message = record.get("message")
@@ -1013,14 +1033,12 @@ def normalize_assistant(
 
 
 def normalize_user(
-    record: dict,
-    line_num: int,
-    session_id: str,
-    source_file: str,
-    tool_map: dict[str, str],
-    opts: dict,
+    record: dict, context: RecordContext, tool_map: dict[str, str],
 ) -> list[dict]:
     """Extract user events."""
+    session_id, source_file, line_num, opts = (
+        context.session_id, context.source_file, context.line_num, context.opts,
+    )
     events = []
     message = record.get("message")
     message = message if isinstance(message, dict) else {}
@@ -1035,8 +1053,7 @@ def normalize_user(
     if record.get("isCompactSummary"):
         if not isinstance(content, str):
             _record_refused(
-                opts, "unsupported_records",
-                source_file=source_file, line_num=line_num,
+                context, "unsupported_records",
                 record_type="compact_summary",
                 detail="compact summary content is not text",
             )
@@ -1158,8 +1175,7 @@ def normalize_user(
         content = []
     elif not isinstance(content, list):
         _record_refused(
-            opts, "unsupported_records",
-            source_file=source_file, line_num=line_num,
+            context, "unsupported_records",
             record_type=record.get("type"),
             detail=f"user content is {type(content).__name__}, not a list",
         )
@@ -1415,8 +1431,7 @@ def normalize_user(
             )
             if before.st_size > limit:
                 _record_refused(
-                    opts, "external_content_oversize",
-                    source_file=source_file, line_num=line_num,
+                    context, "external_content_oversize",
                     record_type="external.tool_result",
                     detail=(
                         f"persisted tool output is {before.st_size} bytes, "
@@ -1514,16 +1529,20 @@ def process_file(
     diagnostics = opts.get("diagnostics")
 
     for line_num, record, raw_line in iter_cc_records(path, diagnostics):
+        # Built once per record and passed whole: the four values identify the
+        # record under decode and none of them varies within it.
+        context = RecordContext(
+            session_id=session_id, source_file=source_file,
+            line_num=line_num, opts=opts,
+        )
         if record.get("type") == "system" and record.get("subtype") == "compact_boundary":
             yield _annotate_source(
-                _normalize_compaction(record, line_num, session_id, source_file),
+                _normalize_compaction(record, context),
                 record,
                 line_num,
             )
             continue
-        product_state = normalize_product_state(
-            record, line_num, session_id, source_file, opts
-        )
+        product_state = normalize_product_state(record, context)
         if product_state is not None:
             if opts.get("include_product_state", True):
                 yield _annotate_source(product_state, record, line_num)
@@ -1533,8 +1552,7 @@ def process_file(
                 # names the setting: a reader asking why these are absent needs
                 # to know the answer is a flag, not a decode gap.
                 _record_refused(
-                    opts, "record_product_state_excluded",
-                    source_file=source_file, line_num=line_num,
+                    context, "record_product_state_excluded",
                     record_type=str(record.get("type") or ""),
                 )
             continue
@@ -1544,8 +1562,7 @@ def process_file(
             # into `progress` would move the number with nothing saying which
             # type moved.
             _record_refused(
-                opts, "record_kind_not_mapped",
-                source_file=source_file, line_num=line_num,
+                context, "record_kind_not_mapped",
                 record_type=str(record.get("type") or ""),
             )
             continue
@@ -1558,9 +1575,9 @@ def process_file(
         )
 
         if rtype == "assistant":
-            evs, _ = normalize_assistant(record, line_num, session_id, source_file, opts)
+            evs, _ = normalize_assistant(record, context)
             if not evs and diagnostics is not None:
-                blocks = (record.get("message") or {}).get("content") or []
+                blocks = as_mapping(record.get("message")).get("content") or []
                 block_types = {
                     block.get("type") for block in blocks
                     if isinstance(block, dict)
@@ -1575,14 +1592,12 @@ def process_file(
                         if empty_thinking else "record_fallback_state"
                     )
                     _record_refused(
-                        opts, reason,
-                        source_file=source_file, line_num=line_num,
+                        context, reason,
                         record_type=str(record.get("type") or ""),
                     )
                 else:
                     _record_refused(
-                        opts, "record_unclassified",
-                        source_file=source_file, line_num=line_num,
+                        context, "record_unclassified",
                         record_type=str(record.get("type") or ""),
                     )
             for ev in evs:
@@ -1590,9 +1605,7 @@ def process_file(
                     ev["source_raw"] = source_raw
                 yield _annotate_source(ev, record, line_num)
         elif rtype == "user":
-            evs = normalize_user(
-                record, line_num, session_id, source_file, tool_map, opts
-            )
+            evs = normalize_user(record, context, tool_map)
             if not evs and diagnostics is not None:
                 # Image-only records used to land here and be counted
                 # unsupported; they now decode as bounded attachment prompts,

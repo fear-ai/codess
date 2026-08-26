@@ -111,13 +111,13 @@ application state.
 
 ### Scan Scoping
 
-**This section describes the decided design; the code still uses the previous
-variable names.** `CODESS_AGGREGATORS` and `CODESS_EXCLUDE_REVIEW_DIRS` are what
-a running Codess reads today, and the rest of this document shows them in the
-setup sequences below. The rename to the three settings here lands with the
-discovery-configuration work; until it does, read the table as what each
-question is called *after* that change, and the sequences below as what to type
-now.
+**The three settings below are what a running Codess reads.**
+`CODESS_AGGREGATORS` and `CODESS_EXCLUDE_REVIEW_DIRS` are retired: both took
+work-root-relative segments and both asked the same question -- is this a tree
+kept for reference rather than developed in -- so `exclude_paths` is now both.
+The structural restriction went with them: an aggregator had to be a direct
+child of the work root, so a reference tree one level deeper could not be named
+at all, and an absolute path carries no such limit.
 
 Scan decides which directories are candidate Projects. Three settings bound
 that, and they answer different questions:
@@ -541,8 +541,8 @@ configuration exercise: scan broadly, review what was found, then narrow.
   2. review          which rows are Projects, which are containers,
         │            which are review or vendored trees
         ▼
-  3. configure       CODESS_AGGREGATORS   -- containers, reported as children
-        │            CODESS_EXCLUDE_REVIEW_DIRS -- trees holding others' code
+  3. configure       CODESS_EXCLUDE_PATHS -- trees you keep but do not develop
+        │            CODESS_INCLUDE_PATHS -- one to admit despite a rule
         ▼
   4. rescan          confirm the same Projects, minus the excluded trees
 ```
@@ -551,9 +551,13 @@ configuration exercise: scan broadly, review what was found, then narrow.
 # 1. Discover with nothing configured.
 codess scan --dir ~/Work --days 0 --out -
 
-# 3. Narrow, using names from your own tree.
-export CODESS_AGGREGATORS='Clients,Research,Sandbox'
-export CODESS_EXCLUDE_REVIEW_DIRS='Tools,Vendor/Bundled,Research/Archive'
+# 3. Narrow, using absolute paths from your own tree. Comma-separated, not
+#    colon: a colon is excluded from the value set so a comma is unambiguous.
+export CODESS_EXCLUDE_PATHS='/home/user/work/reference,/home/user/work/vendor'
+
+# A tree inside an excluded one that you *do* develop in. This outranks every
+# other rule, which is why it exists: name-based exclusion over-reaches.
+export CODESS_INCLUDE_PATHS='/home/user/work/reference/mine'
 
 # 4. Confirm the narrowing removed only what you intended.
 codess scan --dir ~/Work --days 0 --out -
@@ -583,7 +587,7 @@ home-relative and costs nothing when absent.
 
 Two exclusion mechanisms exist, and they differ in what they name:
 
-| | Discovery policy | `CODESS_EXCLUDE_REVIEW_DIRS` |
+| | Discovery policy | `CODESS_EXCLUDE_PATHS` |
 |---|---|---|
 | Where | `schema/discovery-policy.json`, replaced by `CODESS_DISCOVERY_POLICY` | Environment variable |
 | Names | Directory **names**, matched case-folded on any segment | **Paths** relative to the work root |
@@ -656,8 +660,7 @@ codess config discovery
 codess scan --dir ~ --days 30 --out -
 
 # 3. Configure from what the probe showed.
-export CODESS_AGGREGATORS='<containers>'
-export CODESS_EXCLUDE_REVIEW_DIRS='<review trees>'
+export CODESS_EXCLUDE_PATHS='<absolute paths to trees you keep, not develop>'
 
 # 4. The long pass, now bounded.
 codess scan --dir ~/work --days 0 --out -
@@ -1030,7 +1033,7 @@ directory holds. Nothing infers a state from a path.
 | `codess catalog state --project-id <id> --state <s> [--related-project-id <id>] [--note ...]` | A disposition: `priority`, `candidate`, `deferred`, `excluded`, `needs_review`, `worktree`. `worktree` requires the related Project |
 | `codess catalog location retire --project-id <id> --directory <p>` | One location is no longer live; the Project's other locations stand |
 | `codess catalog location add --project-id <id> --directory <p>` | A second location for one Project |
-| `codess catalog relocate --project-id <id> --old-path <p> --new-path <q>` | A move, in one step. **Usable before the move as well as after** |
+| `codess catalog relocate --project-id <id> --from <p> --to <q>` | A move, in one step. **Run it before the move where you can.** Afterwards is strictly harder: Claude's storage slug encodes the absolute path, so a move already made leaves the Project's history split across two slug directories with nothing joining them, and the repair is a `path_aliases` entry rather than a rename |
 | `codess catalog lifecycle [--state <s>]` | Reports the derived state per Project; exits nonzero on `scanned` |
 
 **A disposition records what it left.** Setting a state stores

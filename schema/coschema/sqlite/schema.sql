@@ -8,7 +8,7 @@
 -- a stale header here did while the pragma stayed correct.
 
 PRAGMA application_id = 1129268293; -- 0x434F4445, "CODE"
-PRAGMA user_version = 9;
+PRAGMA user_version = 10;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE store_meta (
@@ -241,6 +241,24 @@ CREATE TABLE events (
   subtype TEXT,
   role TEXT,
   file_path TEXT,
+
+  -- An advisory reference to the Event this one repeats, with the evidence
+  -- that justified it in `metadata`. Both records are real vendor records: a
+  -- long-lived Cursor composer is re-synced and the sync writes
+  -- server-identified copies of bubbles that already exist locally, so
+  -- deleting either loses evidence and would be unrecoverable. A reader
+  -- wanting the raw record count ignores this column; one excluding replays
+  -- selects on it.
+  duplicate_of TEXT,
+
+  -- Recorded usage, retained whenever the vendor states it -- including when it
+  -- states zero. An explicitly recorded zero is evidence the vendor reported no
+  -- usage, which is not the same as the field being absent, and that
+  -- distinction is exactly what a usage question needs. `field_state` already
+  -- separates absent from null from empty; storing the zero is what lets the
+  -- distinction reach a query.
+  input_tokens INTEGER CHECK (input_tokens IS NULL OR input_tokens >= 0),
+  output_tokens INTEGER CHECK (output_tokens IS NULL OR output_tokens >= 0),
 
   UNIQUE(session_id, event_id)
 );

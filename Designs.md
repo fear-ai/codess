@@ -218,6 +218,105 @@ No individual source value should crash the complete ingest. This tolerance is
 not silent coercion. The resulting Event, diagnostic, or Source failure must
 show which field or structure could not be used and why.
 
+### Decode Resilience
+
+**A vendor data surprise must not stop the program.** Codess reads records it
+did not write, in formats that change between releases, so a shape it has not
+seen is expected rather than exceptional. A decoder is strict about *meaning* --
+it does not guess an Actor, a relationship, or a time -- and tolerant about
+*shape*: a malformed field is an observation about the vendor, and raising from
+inside a decode discards every Session in that Source rather than the one record
+that was wrong.
+
+The blast radius is what makes this a design rule rather than a robustness
+preference. One Cursor bubble holding `"toolFormerData": "a string"` aborted an
+entire global-store read, and the Project ingested 3 Sessions instead of 29.
+
+#### Crash Site Classes
+
+Each was found by fuzzing an adapter with shapes a vendor could plausibly
+emit. They are listed by the assumption that fails, because that is what a
+reviewer can look for:
+
+| Class | The assumption | What it looks like |
+|---|---|---|
+| **Null guard mistaken for a type guard** | `(value or {}).get(k)` is safe | Guards absence only; a string passes the `or` and raises on `.get` |
+| **Default mistaken for a type guard** | `record.get("k", {}).get(j)` is safe | Same defect in a second spelling: the default applies only when the key is absent |
+| **Record assumed to be an object** | A JSONL line is a record | JSONL guarantees valid JSON, not an object; a bare list, string, or number is well-formed |
+| **Field accessor assumed a mapping** | A helper receives a record | The narrowest shared boundary, so one unguarded accessor reaches every field of every vendor |
+| **Container assumed to be a list** | An array field can be iterated | A string is iterable and yields characters, so this fails late and quietly rather than at the read |
+
+#### Detection
+
+**Fuzzing, not review.** Every class above passed code review: each site reads
+as a null guard, and the defect is that the guard is for the wrong condition.
+`tests/test_decode_resilience.py` drives each adapter with a fixed corpus of
+hostile shapes and asserts the run completes, reports, and still decodes the
+well-formed records beside them.
+
+The corpus is per-vendor and deliberately small. It states the shapes rather
+than generating them, so a failure names the shape that broke and a new one is
+added when a vendor produces it.
+
+#### Mitigation
+
+| Mechanism | Where |
+|---|---|
+| `mapping.as_mapping` | One vendor value read as a mapping, or an empty one. Guards type, not absence |
+| `mapping.is_decodable_record` | One JSONL line is an object, checked at the iteration boundary so no consumer sees a non-record |
+| `field_state.get_state` | A non-mapping record reads as ABSENT, which covers every field of every vendor at one point |
+| Per-source exception handling | A source that fails anyway is rolled back, reported, counted, and the run continues with the next |
+
+**Coercion and counting are different decisions.** `as_mapping` is right where a
+*field* may be malformed and the record is still worth decoding. It is wrong
+where a whole payload is malformed: coercing there makes the diagnostic
+unreachable and converts a crash into silence, which is worse. A record-level
+failure is counted; a field-level one is tolerated and recorded through
+`field_state`.
+
+### Grouping and Family Size
+
+**A count grouped by exact value is a floor.** Where the values are generated
+from a template -- a scripted run embedding varying content into a fixed
+preamble -- one logical family splits into as many groups as it has variants,
+and each group is reported honestly and separately. A reader taking the largest
+group for the family understates it by however many variants there are.
+
+Measured on one corpus: 327 prompts from an LLM-judge harness share a single
+opening, carry 6 distinct preambles and 24 distinct generated transcripts, and
+reduce to 34 exact texts. The largest exact group holds 13. The family is 327.
+
+#### The Rule
+
+Where a report groups by exact value and the values may be templated, emit
+**both** the exact grouping and a prefix roll-up beside it, with the length
+span of each group.
+
+**The length span is the falsifiable part.** Identical texts cannot have
+different lengths, so a span inside one prefix group *proves* the exact
+grouping split a family. `chars_min == chars_max` means the roll-up found
+nothing the exact keying missed. This is a check rather than a heuristic, which
+is what makes it worth storing rather than leaving to a reader's eye: the
+disconfirming evidence was present in the first report of this condition -- same
+opening, eight different lengths -- and was read past.
+
+#### What This Does Not Do
+
+**Exact grouping is kept, not replaced.** Exact identity is the honest answer
+to "is this the same text", and a resubmission check needs it: two identical
+submissions seconds apart is a different observation from two similar ones.
+The two questions are different and both are asked.
+
+**A shared opening is an observation; similarity is an inference.** The rule
+stops at a prefix rather than shingling or edit distance. Those catch more and
+begin asserting that two values *are* the same thing, which is a claim about
+meaning. CoSchema records what the vendor wrote and leaves that judgment to a
+reader.
+
+**The prefix length is not configurable.** One corpus and one observed family
+cannot inform a setting, and offering one would present a choice the evidence
+does not support.
+
 ### Mapping and Retention
 
 Each supported normalized value names the source field or structure and the

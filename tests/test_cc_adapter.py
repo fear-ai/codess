@@ -18,7 +18,21 @@ from codess.adapters.cc import (
     truncate_content,
 )
 from codess.content_processing import ContentPolicy, ContentProcessor
+from codess.mapping import RecordContext
 from codess.schema_contract import validate_mapped_event
+
+
+def _ctx(line_num, session_id, source_file, opts=None):
+    """The record under decode, in the order these tests already read.
+
+    Positional and in the spelling the call sites used before the structure
+    existed, so a test states which record it is decoding rather than naming
+    four fields to say it.
+    """
+    return RecordContext(
+        session_id=session_id, source_file=source_file,
+        line_num=line_num, opts=opts or {},
+    )
 
 
 class TestShouldSkip:
@@ -156,7 +170,7 @@ class TestNormalizeUser:
 
     def test_text_prompt(self):
         rec = {"message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}}
-        evs = normalize_user(rec, 1, "s1", "/f", {}, {"redact": False})
+        evs = normalize_user(rec, _ctx(1, "s1", "/f", {"redact": False}), {})
         assert len(evs) == 1
         assert evs[0]["event_type"] == "user_message" and evs[0]["subtype"] == "prompt"
 
@@ -168,7 +182,7 @@ class TestNormalizeUser:
             "permissionMode": "acceptEdits",
             "message": {"role": "user", "content": "repair the build"},
         }
-        evs = normalize_user(rec, 7, "s1", "/f", {}, {"redact": False})
+        evs = normalize_user(rec, _ctx(7, "s1", "/f", {"redact": False}), {})
         assert len(evs) == 1
         assert evs[0]["event_type"] == "user_message"
         assert evs[0]["subtype"] == "prompt"
@@ -185,7 +199,7 @@ class TestNormalizeUser:
             "promptSource": "system",
             "message": {"role": "user", "content": "scheduled task completed"},
         }
-        event = normalize_user(rec, 8, "s1", "/f", {}, {"redact": False})[0]
+        event = normalize_user(rec, _ctx(8, "s1", "/f", {"redact": False}), {})[0]
         assert event["event_type"] == "system_event"
         assert event["subtype"] == "task_notification"
         assert event["actor_kind"] == "harness"
@@ -195,13 +209,14 @@ class TestNormalizeUser:
         rec = {"message": {"role": "user", "content": {"unexpected": True}}}
         with pytest.raises(SourceCompatibilityError, match="user content"):
             normalize_user(
-                rec, 9, "s1", "/f", {},
-                {"redact": False, "strict_mapping": True},
+                rec,
+                _ctx(9, "s1", "/f", {"redact": False, "strict_mapping": True}),
+                {},
             )
 
     def test_slash_command(self):
         rec = {"message": {"role": "user", "content": [{"type": "text", "text": "/fix"}]}}
-        evs = normalize_user(rec, 1, "s1", "/f", {}, {"redact": False})
+        evs = normalize_user(rec, _ctx(1, "s1", "/f", {"redact": False}), {})
         assert evs[0]["subtype"] == "slash_command"
 
     @pytest.mark.parametrize(
@@ -232,9 +247,7 @@ class TestNormalizeUser:
             "userType": "external",
             "message": {"role": "user", "content": text},
         }
-        event = normalize_user(
-            rec, 1, "s1", "/f", {}, {"redact": False}
-        )[0]
+        event = normalize_user(rec, _ctx(1, "s1", "/f", {"redact": False}), {})[0]
         assert event["event_type"] == event_type
         assert event["subtype"] == subtype
         assert event["actor_kind"] == actor_kind
@@ -246,7 +259,7 @@ class TestNormalizeUser:
         rec = {"message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": "ok", "is_error": False}
         ]}}
-        evs = normalize_user(rec, 1, "s1", "/f", {"t1": "Bash"}, {"redact": False})
+        evs = normalize_user(rec, _ctx(1, "s1", "/f", {"redact": False}), {"t1": "Bash"})
         assert len(evs) == 1 and evs[0]["subtype"] == "tool_result" and evs[0]["tool_name"] == "Bash"
         assert evs[0]["normalized_status"] == "succeeded"
 
@@ -255,7 +268,7 @@ class TestNormalizeUser:
             {"type": "tool_result", "tool_use_id": "t1",
              "content": "Permission for this tool use was denied.", "is_error": True}
         ]}}
-        evs = normalize_user(rec, 1, "s1", "/f", {"t1": "Edit"}, {"redact": False})
+        evs = normalize_user(rec, _ctx(1, "s1", "/f", {"redact": False}), {"t1": "Edit"})
         assert evs[0]["subtype"] == "permission_denied" and evs[0]["tool_name"] == "Edit"
         assert evs[0]["normalized_status"] is None
 
@@ -264,7 +277,7 @@ class TestNormalizeUser:
             {"type": "tool_result", "tool_use_id": "t1",
              "content": "<tool_use_error>File missing.</tool_use_error>", "is_error": True}
         ]}}
-        evs = normalize_user(rec, 1, "s1", "/f", {"t1": "Read"}, {"redact": False})
+        evs = normalize_user(rec, _ctx(1, "s1", "/f", {"redact": False}), {"t1": "Read"})
         assert evs[0]["subtype"] == "tool_failure"
 
     def test_is_error_is_kept_as_source_status(self):
@@ -281,7 +294,7 @@ class TestNormalizeUser:
              "is_error": True},
         ]}}
         events = normalize_user(
-            record, 1, "s1", "/f", {"t1": "Read"}, {"redact": False},
+            record, _ctx(1, "s1", "/f", {"redact": False}), {"t1": "Read"},
         )
         assert events[0]["source_status"] == "is_error"
 
@@ -291,7 +304,7 @@ class TestNormalizeUser:
              "content": "ok", "is_error": False},
         ]}}
         events = normalize_user(
-            record, 1, "s1", "/f", {"t1": "Read"}, {"redact": False},
+            record, _ctx(1, "s1", "/f", {"redact": False}), {"t1": "Read"},
         )
         assert events[0]["source_status"] is None
 
@@ -305,9 +318,8 @@ class TestNormalizeUser:
             }
         ]}}
         evs = normalize_user(
-            rec, 1, "s1", "/f",
+            rec, _ctx(1, "s1", "/f", {"redact": False}),
             {"t1": "mcp__visualize__read_me"},
-            {"redact": False},
         )
         assert evs[0]["subtype"] == "tool_failure"
         assert evs[0]["source_status"] == "application_error"
@@ -325,7 +337,7 @@ class TestNormalizeUser:
                 {"type": "text", "text": "line2"},
             ], "is_error": False}
         ]}}
-        evs = normalize_user(rec, 1, "s1", "/f", {"t1": "Read"}, {"redact": False})
+        evs = normalize_user(rec, _ctx(1, "s1", "/f", {"redact": False}), {"t1": "Read"})
         assert [event["event_id"] for event in evs] == ["1", "1:1"]
         assert "line1" in evs[1]["content"] and "line2" in evs[1]["content"]
         assert json.loads(evs[1]["metadata"]) == {
@@ -343,9 +355,10 @@ class TestNormalizeUser:
             "message": {"role": "user", "content": "Investigate this"},
         }
         event = normalize_user(
-            rec, 1, "s1",
-            "/tmp/session/subagents/agent-1.jsonl", {},
-            {"redact": False},
+            rec,
+            _ctx(1, "s1", "/tmp/session/subagents/agent-1.jsonl",
+                 {"redact": False}),
+            {},
         )[0]
         assert event["event_type"] == "system_event"
         assert event["subtype"] == "delegated_prompt"
@@ -370,8 +383,9 @@ class TestNormalizeUser:
             },
         }
         event = normalize_user(
-            rec, 1, "s1", "/tmp/subagents/agent.jsonl", {},
-            {"redact": False},
+            rec,
+            _ctx(1, "s1", "/tmp/subagents/agent.jsonl", {"redact": False}),
+            {},
         )[0]
         assert event["actor_kind"] == "harness"
         assert event["origin_kind"] == "harness_delegated"
@@ -380,7 +394,7 @@ class TestNormalizeUser:
         rec = {"message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "unknown", "content": "x", "is_error": False}
         ]}}
-        evs = normalize_user(rec, 1, "s1", "/f", {}, {"redact": False})
+        evs = normalize_user(rec, _ctx(1, "s1", "/f", {"redact": False}), {})
         assert evs[0]["tool_name"] is None
 
 
@@ -389,7 +403,7 @@ class TestNormalizeAssistant:
 
     def test_response_no_tool_use(self):
         rec = {"message": {"role": "assistant", "content": [{"type": "text", "text": "Here you go."}]}}
-        evs, _ = normalize_assistant(rec, 1, "s1", "/f", {"redact": False})
+        evs, _ = normalize_assistant(rec, _ctx(1, "s1", "/f", {"redact": False}))
         assert len(evs) == 1 and evs[0]["subtype"] == "response"
 
     def test_dialog_tool_use_follows(self):
@@ -398,7 +412,7 @@ class TestNormalizeAssistant:
             {"type": "text", "text": "I'll run it."},
             {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
         ]}}
-        evs, tm = normalize_assistant(rec, 1, "s1", "/f", {"redact": False})
+        evs, tm = normalize_assistant(rec, _ctx(1, "s1", "/f", {"redact": False}))
         assert len(evs) == 2
         assert evs[0]["subtype"] == "dialog"
         assert evs[1]["event_type"] == "tool_call" and evs[1]["tool_name"] == "Bash"
@@ -414,14 +428,14 @@ class TestNormalizeAssistant:
         """CC adapter reads stop_reason from message."""
         rec = {"message": {"role": "assistant", "stop_reason": "max_tokens",
                "content": [{"type": "text", "text": "x" * 500}]}}
-        evs, _ = normalize_assistant(rec, 1, "s1", "/f", {"redact": False})
+        evs, _ = normalize_assistant(rec, _ctx(1, "s1", "/f", {"redact": False}))
         assert evs[0]["subtype"] == "truncated"
 
     def test_tool_use_only(self):
         rec = {"message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "a.py"}}
         ]}}
-        evs, _ = normalize_assistant(rec, 1, "s1", "/f", {"redact": False})
+        evs, _ = normalize_assistant(rec, _ctx(1, "s1", "/f", {"redact": False}))
         assert len(evs) == 1 and evs[0]["event_type"] == "tool_call"
 
     def test_tool_input_is_recursively_sanitized_and_redacted(self):
@@ -429,7 +443,7 @@ class TestNormalizeAssistant:
             {"type": "tool_use", "id": "t1", "name": "UnknownTool",
              "input": {"nested": ["safe\u0000", "sk-abcdefghij1234567890xyz"]}}
         ]}}
-        evs, _ = normalize_assistant(rec, 1, "s1", "/f", {"redact": True})
+        evs, _ = normalize_assistant(rec, _ctx(1, "s1", "/f", {"redact": True}))
         tool_input = evs[0]["tool_input"]
         assert "\\u0000" not in tool_input
         assert "sk-" not in tool_input
@@ -930,7 +944,7 @@ class TestFileHistoryDelta:
     def decode(self, record: dict) -> dict:
         from codess.adapters.cc import normalize_product_state
 
-        event = normalize_product_state(record, 1, "s1", "/sources/a.jsonl", {})
+        event = normalize_product_state(record, _ctx(1, "s1", "/sources/a.jsonl", {}))
         assert event is not None, "the record decoded to nothing"
         return event
 
@@ -1006,7 +1020,9 @@ class TestImageOnlyPrompt:
     def decode(self, record: dict, opts: dict | None = None) -> list[dict]:
         from codess.adapters.cc import normalize_user
 
-        return normalize_user(record, 1, "s1", "/sources/a.jsonl", {}, opts or {})
+        return normalize_user(
+            record, _ctx(1, "s1", "/sources/a.jsonl", opts or {}), {},
+        )
 
     def test_it_is_a_human_prompt(self):
         [event] = self.decode(self.record())
@@ -1184,7 +1200,7 @@ class TestModelFallback:
         model that was asked for is lost."""
         from codess.adapters.cc import normalize_product_state
 
-        event = normalize_product_state(self.record(), 1, "s1", "/f", {})
+        event = normalize_product_state(self.record(), _ctx(1, "s1", "/f", {}))
         assert event["subtype"] == "model_fallback"
         metadata = json.loads(event["metadata"])
         assert metadata["requested_model"] == "claude-fable-5"
@@ -1196,7 +1212,7 @@ class TestModelFallback:
         would drop it; the named branch runs first."""
         from codess.adapters.cc import normalize_product_state
 
-        assert normalize_product_state(self.record(), 1, "s1", "/f", {}) is not None
+        assert normalize_product_state(self.record(), _ctx(1, "s1", "/f", {})) is not None
 
 
 class TestProductStatePartition:

@@ -90,8 +90,17 @@ def classify(value: Any) -> str:
     return PRESENT
 
 
-def get_state(record: dict, key: str) -> tuple[Any, str]:
-    """Return ``(value, state)`` for ``record[key]``, distinguishing absent."""
+def get_state(record: object, key: str) -> tuple[Any, str]:
+    """Return ``(value, state)`` for ``record[key]``, distinguishing absent.
+
+    A non-mapping record reads as ABSENT rather than raising. This is the
+    narrowest point every vendor field passes through, so guarding the type
+    here covers the whole decode: a vendor writing a string where an object
+    belongs is a field observation, and an `AttributeError` raised from inside
+    a decode discards the Session that record sits in.
+    """
+    if not isinstance(record, dict):
+        return None, ABSENT
     value = record.get(key, _MISSING)
     state = classify(value)
     return (None if value is _MISSING else value), state

@@ -11,9 +11,6 @@ it.
 
 from pathlib import Path
 
-import pytest
-
-from codess.config import env_path_list
 from codess.helpers import is_excluded, slug_to_path
 
 
@@ -31,49 +28,77 @@ class TestSlugToPath:
 
 
 class TestReviewExclusion:
-    """Review and backup trees are excluded by segment, not by substring.
+    """A reference tree is excluded by absolute path.
 
-    The exclusion set is empty by default (`config.DEFAULT_EXCLUDE_REVIEW_DIRS`)
-    because which trees hold copies of other repositories is a property of one
-    machine. These configure it explicitly, which is also how an operator uses
-    it.
+    `EXCLUDE_REVIEW_DIRS` took work-root-relative segments and was retired into
+    `exclude_paths`, which takes absolute paths. The change is not cosmetic: a
+    segment list could not name a tree outside the work root, and matched by
+    segment anywhere in a path, so `Tools` excluded every directory of that
+    name at any depth rather than the one the operator meant.
+
+    Ships empty, so these configure it explicitly -- which is also how an
+    operator uses it.
     """
 
-    @pytest.fixture(autouse=True)
-    def _configured(self, monkeypatch):
-        monkeypatch.setenv(
-            "CODESS_EXCLUDE_REVIEW_DIRS", "Tools,Mirror/Bundled,Research/Archive"
-        )
-        monkeypatch.setattr(
-            "codess.helpers.EXCLUDE_REVIEW_DIRS",
-            env_path_list("CODESS_EXCLUDE_REVIEW_DIRS", ()),
-        )
+    def _with_exclusions(self, monkeypatch, *paths):
+        import importlib
 
-    def test_a_configured_prefix_is_excluded(self):
-        assert is_excluded(Path("/w/Tools/vendor-checkout"), Path("/w"))
+        import codess.helpers as helpers
 
-    def test_a_multi_segment_prefix_is_excluded(self):
-        assert is_excluded(Path("/w/Mirror/Bundled/library"), Path("/w"))
+        monkeypatch.setenv("CODESS_EXCLUDE_PATHS", ",".join(str(p) for p in paths))
+        importlib.reload(helpers)
+        return helpers
 
-    def test_the_parent_of_a_multi_segment_prefix_is_not(self):
+    def _restored(self, monkeypatch):
+        import importlib
+
+        import codess.helpers as helpers
+
+        monkeypatch.delenv("CODESS_EXCLUDE_PATHS", raising=False)
+        importlib.reload(helpers)
+        importlib.reload(importlib.import_module("codess.project"))
+
+    def test_a_configured_tree_is_excluded(self, monkeypatch):
+        helpers = self._with_exclusions(monkeypatch, "/w/Tools")
+        try:
+            assert helpers.is_excluded(Path("/w/Tools/vendor-checkout"), Path("/w"))
+        finally:
+            self._restored(monkeypatch)
+
+    def test_a_nested_tree_is_excluded(self, monkeypatch):
+        helpers = self._with_exclusions(monkeypatch, "/w/Mirror/Bundled")
+        try:
+            assert helpers.is_excluded(Path("/w/Mirror/Bundled/library"), Path("/w"))
+        finally:
+            self._restored(monkeypatch)
+
+    def test_the_parent_of_an_excluded_tree_is_not(self, monkeypatch):
         """`Mirror/Bundled` is excluded; `Mirror` alone is a real location."""
-        assert not is_excluded(Path("/w/Mirror"), Path("/w"))
+        helpers = self._with_exclusions(monkeypatch, "/w/Mirror/Bundled")
+        try:
+            assert not helpers.is_excluded(Path("/w/Mirror"), Path("/w"))
+        finally:
+            self._restored(monkeypatch)
 
-    def test_an_unlisted_tree_is_not_excluded(self):
-        assert not is_excluded(Path("/w/Clients/active-project"), Path("/w"))
+    def test_a_same_named_tree_elsewhere_is_not_excluded(self, monkeypatch):
+        """The defect the absolute form removes.
 
-    def test_exclusion_is_independent_of_the_scan_root(self):
-        """The defect this fixed: matching was a prefix of the relative path.
-
-        The same directory was excluded or included depending on where the
-        scan started, so a Project appeared and disappeared with the argument
-        rather than with its own location. Matching on segments means the two
-        roots below agree.
+        A segment list matched `Tools` at any depth under any parent, so
+        excluding one reference tree excluded every directory sharing its name.
         """
-        assert is_excluded(Path("/one/Mirror/Bundled/library"), Path("/one"))
-        assert is_excluded(
-            Path("/another/root/Mirror/Bundled/library"), Path("/another/root")
-        )
+        helpers = self._with_exclusions(monkeypatch, "/w/Tools")
+        try:
+            assert not helpers.is_excluded(Path("/w/project/Tools/src"), Path("/w"))
+        finally:
+            self._restored(monkeypatch)
+
+    def test_a_tree_outside_the_work_root_can_be_named(self, monkeypatch):
+        """A work-root-relative segment could not express this at all."""
+        helpers = self._with_exclusions(monkeypatch, "/elsewhere/reference")
+        try:
+            assert helpers.is_excluded(Path("/elsewhere/reference/clone"), Path("/w"))
+        finally:
+            self._restored(monkeypatch)
 
 
 class TestBackupExclusion:
@@ -119,26 +144,33 @@ class TestBackupExclusion:
         assert not is_excluded(Path("/elsewhere/OLD/project"), Path("/w"))
 
 
-class TestAggregators:
-    """Grouping directories are configured, never assumed.
+class TestAggregatorsRetired:
+    """`CODESS_AGGREGATORS` is gone; `exclude_paths` answers what it asked.
 
-    The default is empty: shipping one developer's grouping names would
-    exclude directories on every other machine for a reason the operator
-    could not see.
+    It named a container by structure -- "holds many repositories" -- while the
+    operator's criterion is intent: a collection kept for reference rather than
+    developed in, which may hold one repository or fifty. On that definition it
+    and `EXCLUDE_REVIEW_DIRS` were the same setting under two names.
     """
 
-    def test_the_default_is_empty(self):
-        from codess.config import DEFAULT_AGGREGATORS
+    def test_the_setting_is_gone(self):
+        import codess.config as config
 
-        assert DEFAULT_AGGREGATORS == ()
+        assert not hasattr(config, "AGGREGATORS")
+        assert not hasattr(config, "DEFAULT_AGGREGATORS")
 
-    def test_configuration_supplies_them(self, monkeypatch):
-        monkeypatch.setenv("CODESS_AGGREGATORS", "Clients,Research,Sandbox")
-        assert env_path_list("CODESS_AGGREGATORS", ()) == (
-            "Clients", "Research", "Sandbox",
-        )
+    def test_paths_still_ship_empty(self):
+        """A path describes one machine's layout, so no default is portable."""
+        import json
 
-    def test_an_empty_value_states_that_there_are_none(self, monkeypatch):
-        """Distinct from unset, which would fall back to the default."""
-        monkeypatch.setenv("CODESS_AGGREGATORS", "")
-        assert env_path_list("CODESS_AGGREGATORS", ("Fallback",)) == ()
+        from codess.helpers import DISCOVERY_POLICY_PATH
+
+        document = json.loads(DISCOVERY_POLICY_PATH.read_text(encoding="utf-8"))
+        assert document["exclude_paths"] == []
+        assert document["include_paths"] == []
+
+    def test_names_still_ship_non_empty(self):
+        """A name means the same thing everywhere, so shipping one is correct."""
+        from codess.helpers import TRAVERSAL_PRUNE_DIRS
+
+        assert "node_modules" in TRAVERSAL_PRUNE_DIRS

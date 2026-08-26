@@ -450,63 +450,68 @@ def reload_config(monkeypatch, **environment):
     return importlib.reload(module)
 
 
-def test_discovery_scoping_defaults_are_documented_names(monkeypatch):
-    module = reload_config(
-        monkeypatch, CODESS_AGGREGATORS=None, CODESS_EXCLUDE_REVIEW_DIRS=None,
+def _reload_helpers(monkeypatch, **environment):
+    """Reload `helpers`, which owns the path settings, under one environment.
+
+    They live there rather than in `config` because a leaf module reads them
+    and cannot import `config` without a cycle.
+    """
+    import importlib
+
+    import codess.helpers as module
+
+    for key, value in environment.items():
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+    reloaded = importlib.reload(module)
+    importlib.reload(importlib.import_module("codess.project"))
+    return reloaded
+
+
+def test_discovery_path_settings_ship_empty(monkeypatch):
+    """A path describes one machine's layout, so no shipped default is right."""
+    module = _reload_helpers(
+        monkeypatch, CODESS_EXCLUDE_PATHS=None, CODESS_INCLUDE_PATHS=None,
     )
     try:
-        assert frozenset(module.DEFAULT_AGGREGATORS) == module.AGGREGATORS
-        assert module.EXCLUDE_REVIEW_DIRS == module.DEFAULT_EXCLUDE_REVIEW_DIRS
+        assert module.EXCLUDE_PATHS == ()
+        assert module.INCLUDE_PATHS == ()
     finally:
-        reload_config(monkeypatch)
-
-
-def test_aggregators_can_be_replaced(monkeypatch):
-    """Another operator's tree has different grouping directories."""
-    module = reload_config(monkeypatch, CODESS_AGGREGATORS="Projects, Work ,src")
-    try:
-        assert frozenset({"Projects", "Work", "src"}) == module.AGGREGATORS
-    finally:
-        reload_config(monkeypatch, CODESS_AGGREGATORS=None)
-
-
-def test_an_empty_setting_means_no_aggregators(monkeypatch):
-    """A tree with no grouping directories must be able to say so.
-
-    The frozen set could not express this: an operator whose every directory
-    is a candidate Project had no way to turn the default off.
-    """
-    module = reload_config(monkeypatch, CODESS_AGGREGATORS="")
-    try:
-        assert frozenset() == module.AGGREGATORS
-    finally:
-        reload_config(monkeypatch, CODESS_AGGREGATORS=None)
+        _reload_helpers(monkeypatch)
 
 
 def test_exclusions_can_be_replaced_and_emptied(monkeypatch):
-    module = reload_config(
-        monkeypatch, CODESS_EXCLUDE_REVIEW_DIRS="backups,old/reviews",
+    """Another operator's tree holds its reference trees elsewhere."""
+    module = _reload_helpers(
+        monkeypatch, CODESS_EXCLUDE_PATHS="/w/backups, /w/old/reviews",
     )
     try:
-        assert module.EXCLUDE_REVIEW_DIRS == ("backups", "old/reviews")
+        assert module.EXCLUDE_PATHS == ("/w/backups", "/w/old/reviews")
     finally:
-        reload_config(monkeypatch, CODESS_EXCLUDE_REVIEW_DIRS=None)
-    module = reload_config(monkeypatch, CODESS_EXCLUDE_REVIEW_DIRS="")
+        _reload_helpers(monkeypatch, CODESS_EXCLUDE_PATHS=None)
+    module = _reload_helpers(monkeypatch, CODESS_EXCLUDE_PATHS="")
     try:
-        assert module.EXCLUDE_REVIEW_DIRS == ()
+        assert module.EXCLUDE_PATHS == ()
     finally:
-        reload_config(monkeypatch, CODESS_EXCLUDE_REVIEW_DIRS=None)
+        _reload_helpers(monkeypatch, CODESS_EXCLUDE_PATHS=None)
 
 
-def test_an_absolute_scoping_entry_is_reported(monkeypatch):
-    """Both are matched relative to the work root, so an absolute path never
-    matches -- silently scoping nothing rather than what was intended."""
-    module = reload_config(monkeypatch, CODESS_AGGREGATORS="/absolute/tree,Fine")
+def test_a_relative_scoping_entry_is_refused(monkeypatch):
+    """The inverse of the rule the retired settings had.
+
+    `AGGREGATORS` and `EXCLUDE_REVIEW_DIRS` matched relative to the work root,
+    so an absolute entry silently scoped nothing. `exclude_paths` is absolute,
+    so a relative entry is the one that cannot match -- and it is dropped with
+    a warning rather than admitted, because an exclusion the operator wrote and
+    Codess ignored is the case they would otherwise never see.
+    """
+    module = _reload_helpers(monkeypatch, CODESS_EXCLUDE_PATHS="relative/tree,/w/ok")
     try:
-        errors = module.validate_config()
-        assert any("must be relative to the work root" in e for e in errors)
+        assert module.EXCLUDE_PATHS == ("/w/ok",)
     finally:
-        reload_config(monkeypatch, CODESS_AGGREGATORS=None)
+        _reload_helpers(monkeypatch, CODESS_EXCLUDE_PATHS=None)
 
 
 def test_default_configuration_reports_no_errors(monkeypatch):
@@ -824,3 +829,81 @@ def test_a_wide_signature_is_a_builder_or_takes_a_structure() -> None:
         + "; ".join(unclassified)
     )
 
+
+
+def test_a_decode_function_takes_the_record_context_rather_than_its_fields() -> None:
+    """The four values identifying a record travel as one object.
+
+    `session_id`, `source_file`, `line_num`, and `opts` say *which* record is
+    being decoded and none varies within one record's decode. As four
+    parameters they were four chances to transpose two strings at a call site:
+    `session_id` and `source_file` are both `str`, so swapping them type-checks
+    and produces an Event citing the wrong Source.
+
+    Builders are exempt for the reason the relay census already states -- their
+    parameter list is the record's shape, so an object would name every field
+    twice. `codex._base_event` is the measured instance.
+    """
+    import ast
+    from pathlib import Path
+
+    group = {"session_id", "source_file", "line_num", "opts"}
+    builders = {"_base_event"}
+    offenders = []
+    adapters = Path(__file__).resolve().parent.parent / "src" / "codess" / "adapters"
+    for source in sorted(adapters.glob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef) or node.name in builders:
+                continue
+            names = {argument.arg for argument in node.args.args}
+            names |= {argument.arg for argument in node.args.kwonlyargs}
+            if len(group & names) >= 3:
+                offenders.append(f"{source.name}:{node.name}")
+    assert not offenders, (
+        "these take three or more record-context fields separately rather than "
+        f"a RecordContext: {', '.join(offenders)}"
+    )
+
+
+def test_the_cli_and_the_tool_report_one_configuration() -> None:
+    """`codess config discovery` routes to the tool rather than restating it.
+
+    Two reporters would drift the moment a setting is added to one: the CLI
+    reports what *this process* resolved, and a separately runnable tool exists
+    for a checkout with no install. They must not be two answers.
+    """
+    import ast
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parent.parent / "src" / "cli" / "admin_cmd.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    handler = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_config_discovery"
+    )
+    imported = {
+        alias.name
+        for node in ast.walk(handler)
+        if isinstance(node, ast.ImportFrom) and node.module == "setup_discovery"
+        for alias in node.names
+    }
+    assert "report_configuration" in imported, (
+        "the CLI must route to the tool; a second reporter drifts"
+    )
+
+
+def test_the_reported_configuration_names_the_three_settings() -> None:
+    """The report is what an operator reads to check what is in effect."""
+    import sys
+    from pathlib import Path
+
+    tools = Path(__file__).resolve().parent.parent / "tools"
+    if str(tools) not in sys.path:
+        sys.path.insert(0, str(tools))
+    from setup_discovery import report_configuration
+
+    reported = report_configuration()
+    assert {"exclude_dirs", "exclude_paths", "include_paths"} <= set(reported)

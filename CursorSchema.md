@@ -233,15 +233,15 @@ understates what the vendor retains. None is decoded.
 
 ### Adjacent Key Spaces
 
-`cursorDiskKV` holds far more than the two key spaces Codess decodes. Recorded
-because a reader estimating coverage from the bubble tables alone will
-overstate it: of 444,476 rows, `bubbleId:` and `composerData:` are the decoded
-share.
+`cursorDiskKV` holds far more than the key spaces Codess decodes by default.
+Recorded because a reader estimating coverage from the bubble tables alone will
+overstate it: of 444,476 rows, `bubbleId:` and `composerData:` are decoded
+always and `agentKv:` on request.
 
 | Key space | Rows | Holds |
 |---|---|---|
 | `bubbleId:` | 210,152 | Conversation bubbles -- decoded |
-| `agentKv:` | 209,951 | Content blobs, mixed plain text and binary -- not decoded |
+| `agentKv:` | 209,951 | A second message corpus: JSON conversation messages, protobuf, and file bodies under one key space -- **decoded on request** ([Reasoning Fidelity](#reasoning-fidelity)) |
 | `composer:` | 11,616 | Composer state -- not decoded |
 | `checkpointId:` | 7,718 | `files`, `activeInlineDiffs`, `newlyCreatedFolders`, `nonExistentFiles` per checkpoint |
 | `codeBlockDiff:` | 1,417 | `newModelDiffWrtV0` and `originalModelDiffWrtV0` per code block |
@@ -601,6 +601,105 @@ Some sidecar-free workspace databases cannot be opened with ordinary SQLite
 only with `immutable=1` after confirming that neither `-wal` nor `-shm` exists.
 An indexed prefix existence probe then advances ingest state without parsing or
 retaining workspace databases that contain no `bubbleId:*` records.
+
+## Harness System Prompts
+
+`agentKv` holds the harness system prompt, which no other Cursor structure
+records. 23 were observed and **every one is textually unique**, so a store
+that retained each body would hold 23 near-duplicates. They group into families
+by the model they address: two prompts of the same family measured 97.6%
+similar and differed in one line, while different families differ in length by
+a factor of ten -- 1,877 characters for a Grok variant against 25,152 for a
+Fable 5 one.
+
+Codess therefore decodes the structure beside the body:
+
+| Field | Holds |
+|---|---|
+| `harness_prompt_model` | The model the prompt's first line names |
+| `harness_prompt_sections` | The ordered `<section>` tags, which are the prompt's own structure |
+| `harness_prompt_digest` | The exact text's identity, so two Sessions can be compared without either body being read |
+| `harness_prompt_chars` | Length, which separates families at a glance |
+
+**The named model is what the harness told the model it was**, not necessarily
+the model that served the turn: Cursor's router says `You are Auto` while a
+model name appears on the bubble. The two are separate observations and are
+stored separately.
+
+Observed models, by the prompt's own statement: `Composer`, `Auto`, `Cursor`,
+`Cursor Grok 4.5`, `Cursor Grok 4.6`, `gpt-5.3-codex`, `Opus 4.6`, `Fable 5`,
+`claude-4.6-opus-high-thinking`, and `claude-4.6-sonnet-medium-thinking`.
+Section vocabularies differ per family: the Composer family uses
+`communication`, `tool_calling`, `maximize_parallel_tool_calls`; the Claude
+family uses `tone_and_style`, `linter_errors`, `inline_line_numbers`.
+
+**A system prompt states no join key and is therefore unattributed.** It
+carries neither `requestId` nor a `toolCallId`, and no bubble references it, so
+nothing in the store binds one to a Session. They are counted under
+`record_agent_kv_unattributed` rather than dropped, so the corpus is countable;
+attributing one by key order would be adjacency inference on a content hash.
+
+## Reasoning Fidelity
+
+Cursor records model reasoning in two shapes, and which one appears is a
+property of the model rather than of the Session or the operator. Both reach
+CoSchema as `message.reasoning_summary` with `reasoning_fidelity` stating
+which, so a cross-vendor query can compare them without conflating them.
+
+| Shape | Where | Carries |
+|---|---|---|
+| `thinking.text` on a bubble | `bubbleId:` | The reasoning itself, with `redactedThinking` marking a withheld chunk |
+| `reasoning` part | `agentKv:` message | The reasoning itself |
+| `redacted-reasoning` part | `agentKv:` message | **Nothing.** The part's presence is the whole evidence: the vendor states reasoning existed and withheld it |
+
+**A redacted part is retained with empty content and `reasoning_redacted`
+set.** An absent field would say something different -- that no reasoning was
+produced -- and only the first can be revisited when a release changes.
+
+### Measured Distribution
+
+Joined through `toolCallId` from `agentKv` messages to the bubbles that state
+the same identity, so each reasoning message inherits its composer's date and
+model. Both dimensions separate cleanly, which is why both are recorded.
+
+By month of the bubble that carries the tool call:
+
+| Month | Redacted | Exposed |
+|---|---|---|
+| 2026-02 | 0 | 212 |
+| 2026-03 | 0 | 351 |
+| 2026-04 | 468 | 63 |
+| 2026-05 | 233 | 0 |
+| 2026-06 | 36,069 | 88 |
+| 2026-07 | 1,964 | 6,146 |
+| 2026-08 | 862 | 26,965 |
+
+By the composer's stated model, which is the sharper signal:
+
+| Model | Redacted | Exposed | Composers |
+|---|---|---|---|
+| `grok-4.5` | 35,810 | 10,735 | 7 |
+| `grok-4.6` | 12 | 22,073 | 1 |
+| `composer-2.5` | 2,469 | 127 | 8 |
+| `composer-2-fast` | 281 | 0 | 12 |
+| `composer-2.5-fast` | 228 | 0 | 5 |
+| `cursor-grok-4.5-high-fast` | 0 | 391 | 6 |
+| `composer-1.5` | 0 | 306 | 3 |
+| `composer-2` | 6 | 177 | 2 |
+| `claude-4.6-sonnet-medium-thinking` | 0 | 16 | 3 |
+
+**The month pattern is the model pattern seen through time.** June is
+overwhelmingly redacted and August overwhelmingly exposed, and the models in
+use differ across that boundary: `grok-4.5` redacts most of its reasoning while
+`grok-4.6` exposes nearly all of it. Reading the months alone would suggest a
+vendor policy that changed; the per-model split shows a model property that the
+operator's model choice moved through.
+
+**What this does not establish.** One machine, and the model column is a
+composer-level default rather than a per-turn statement -- a composer that
+switched models mid-Session attributes all of its reasoning to one name. The
+distribution is evidence about these composers, not a claim about how any model
+behaves generally.
 
 ## Limitations
 

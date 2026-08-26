@@ -199,7 +199,7 @@ def test_now_iso_reads_a_naive_clock_as_utc() -> None:
     Read as local time instead, a receipt's stamp shifts by the operator's
     offset with nothing recording why.
     """
-    naive = datetime(2026, 8, 23, 12, 0, 0)  # noqa: DTZ001 -- naive is the case under test
+    naive = datetime(2026, 8, 23, 12, 0, 0)
     assert now_iso(lambda: naive) == "2026-08-23T12:00:00+00:00"
 
 

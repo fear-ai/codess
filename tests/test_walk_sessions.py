@@ -13,12 +13,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from codess.walk_sessions import (
     canonicalize,
     in_work_root,
-    is_aggregator,
     project_boundary,
 )
 
@@ -96,31 +93,55 @@ class TestProjectBoundary:
         assert project_boundary(plain, tmp_path, {plain}) == plain
 
 
-class TestIsAggregator:
-    @pytest.fixture(autouse=True)
-    def _configured(self, monkeypatch):
-        monkeypatch.setattr(
-            "codess.walk_sessions.AGGREGATORS", ("Clients", "Research")
-        )
+class TestAggregatorsRetired:
+    """`AGGREGATORS` is gone, and `exclude_paths` answers what it asked.
 
-    def test_a_configured_child_of_the_root_is_one(self, tmp_path):
-        assert is_aggregator(tmp_path / "Clients", tmp_path)
+    It named a container by structure -- "holds many repositories" -- while the
+    operator's criterion is intent: a collection kept for reference rather than
+    developed in, which may hold one repository or fifty. On that definition it
+    and `EXCLUDE_REVIEW_DIRS` were one setting.
+    """
 
-    def test_a_deeper_directory_is_not(self, tmp_path):
-        """An aggregator groups Projects; deeper than that is inside one."""
-        assert not is_aggregator(tmp_path / "Clients" / "project", tmp_path)
+    def test_the_setting_is_gone(self):
+        import codess.config as config
 
-    def test_an_unconfigured_name_is_not(self, tmp_path):
-        assert not is_aggregator(tmp_path / "Elsewhere", tmp_path)
+        assert not hasattr(config, "AGGREGATORS")
+        assert not hasattr(config, "DEFAULT_AGGREGATORS")
 
-    def test_a_path_outside_the_root_is_not(self, tmp_path):
-        assert not is_aggregator(tmp_path.parent / "Clients", tmp_path / "root")
+    def test_the_predicate_is_gone(self):
+        import codess.walk_sessions as walk_sessions
+
+        assert not hasattr(walk_sessions, "is_aggregator")
+
+    def test_an_excluded_tree_is_dropped_at_any_depth(self, tmp_path, monkeypatch):
+        """The structural limit went with the name.
+
+        Only a direct child of the work root could be an aggregator, so a
+        reference tree one level deeper could not be named at all. An absolute
+        path carries no such limit.
+        """
+        import importlib
+
+        import codess.helpers as helpers
+
+        deep = tmp_path / "work" / "vendor" / "reference"
+        monkeypatch.setenv("CODESS_EXCLUDE_PATHS", str(deep))
+        importlib.reload(helpers)
+        try:
+            assert helpers.is_excluded(deep / "someclone", tmp_path / "work")
+        finally:
+            monkeypatch.delenv("CODESS_EXCLUDE_PATHS")
+            importlib.reload(helpers)
+            importlib.reload(importlib.import_module("codess.project"))
 
 
 class TestCanonicalize:
-    @pytest.fixture(autouse=True)
-    def _configured(self, monkeypatch):
-        monkeypatch.setattr("codess.walk_sessions.AGGREGATORS", ("Clients",))
+    """Exclusion now comes from `exclude_paths` rather than a name list.
+
+    The fixture that patched `AGGREGATORS` is gone with the setting; a test
+    needing an excluded tree configures `CODESS_EXCLUDE_PATHS` and reloads,
+    which is what an operator does.
+    """
 
     def test_a_parent_is_dropped_when_a_child_is_present(self, tmp_path):
         parent = tmp_path / "parent"
@@ -135,11 +156,36 @@ class TestCanonicalize:
             path.mkdir()
         assert canonicalize({first, second}, tmp_path) == {first, second}
 
-    def test_an_aggregator_is_dropped(self, tmp_path):
-        aggregator = tmp_path / "Clients"
-        project = aggregator / "project"
+    def test_an_excluded_tree_is_dropped(self, tmp_path, monkeypatch):
+        """A tree the operator excluded is not a candidate Project.
+
+        Configured by absolute path rather than by a name that had to be a
+        direct child of the work root, which is what the retired setting
+        required and could not express otherwise.
+        """
+        import importlib
+
+        import codess.helpers as helpers
+        import codess.walk_sessions as walk_sessions
+
+        reference = tmp_path / "Clients"
+        project = reference / "project"
         project.mkdir(parents=True)
-        assert canonicalize({aggregator, project}, tmp_path) == {project}
+        monkeypatch.setenv("CODESS_EXCLUDE_PATHS", str(reference))
+        importlib.reload(helpers)
+        importlib.reload(walk_sessions)
+        try:
+            assert walk_sessions.canonicalize(
+                {reference, project}, tmp_path,
+            ) == set()
+        finally:
+            monkeypatch.delenv("CODESS_EXCLUDE_PATHS")
+            importlib.reload(helpers)
+            importlib.reload(walk_sessions)
+            # `project` re-exports `helpers`' slug functions, so a reload here
+            # leaves it holding the previous objects and an identity assertion
+            # elsewhere fails on a difference this test caused.
+            importlib.reload(importlib.import_module("codess.project"))
 
     def test_a_sibling_prefix_is_not_treated_as_a_child(self, tmp_path):
         """`/w/app` must not swallow `/w/application`.

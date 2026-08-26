@@ -1,0 +1,48 @@
+{
+  "hazards": [
+    "encrypted-reasoning-state-is-never-decoded",
+    "a-reasoning-item-may-carry-no-exposed-summary",
+    "an-event_msg-notification-repeats-a-canonical-response_item"
+  ],
+  "note": "The Codex half of the per-vendor hazard set. Claude and Cursor had one each and Codex had none, so the strict-versus-diagnostic disposition could be compared for two vendors and asserted for three.",
+  "reasoning_with_summary": {
+    "type": "response_item",
+    "payload": {
+      "type": "reasoning",
+      "summary": [{"type": "summary_text", "text": "Checking the failing test"}],
+      "encrypted_content": "gAAAAAB-opaque-state-that-is-never-decoded"
+    }
+  },
+  "reasoning_without_summary": {
+    "type": "response_item",
+    "payload": {
+      "type": "reasoning",
+      "summary": [],
+      "encrypted_content": "gAAAAAB-opaque-state-that-is-never-decoded"
+    }
+  },
+  "duplicate_envelope": {
+    "type": "event_msg",
+    "payload": {
+      "type": "agent_message",
+      "message": "The same text a response_item already carried"
+    }
+  },
+  "expected": {
+    "reasoning_with_summary": {
+      "event_kind": "message.reasoning_summary",
+      "mapping_rule": "codex.reasoning-summary",
+      "reasoning_fidelity": "summary",
+      "content": "Checking the failing test",
+      "encrypted_content_retained": false
+    },
+    "reasoning_without_summary": {
+      "emitted": false,
+      "reason_code": "record_reasoning_without_summary"
+    },
+    "duplicate_envelope": {
+      "emitted": false,
+      "reason_code": "record_duplicate_envelope_records"
+    }
+  }
+}

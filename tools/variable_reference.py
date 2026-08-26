@@ -43,8 +43,6 @@ ZERO_MEANING = {
     "CODESS_CODEX_ARCHIVED_SESSIONS": "absolute",
     "CODESS_CURSOR_DATA": "absolute",
     "CODESS_RAW_MODE": "one of the declared modes",
-    "CODESS_AGGREGATORS": "relative to the work root",
-    "CODESS_EXCLUDE_REVIEW_DIRS": "relative to the work root",
     "CODESS_MAX_TRANSCRIPT_BYTES": "> 0",
     "CODESS_MAX_CURSOR_CONTAINER_BYTES": "> 0",
     "CODESS_MAX_EVENTS_PER_SOURCE": "> 0",
@@ -128,7 +126,38 @@ def render() -> str:
         lines.append(
             f"| `{variable}` | `{reader}` | `{default}` | `{flag}` | {bound} |"
         )
+    lines.extend(_leaf_variable_section())
     return "\n".join(lines) + "\n"
+
+
+def _leaf_variable_section() -> list[str]:
+    """Variables read outside `config`'s table, and why each is.
+
+    The table above is generated from `config._IS_ENV_TABLE`, so a variable a
+    leaf module reads directly is absent from it -- which made this reference
+    silently incomplete rather than visibly partial. These are listed by hand
+    because the reason each sits outside the table is the point: a module that
+    cannot import `config` without a cycle has to read its own variable.
+    """
+    return [
+        "",
+        "## Read Outside the Table",
+        "",
+        "These are read by a module that cannot import `config` without a cycle,",
+        "so they do not appear in `_IS_ENV_TABLE` and are listed here instead.",
+        "Absent from the generated table is not the same as absent from the",
+        "program, which is what this section exists to say.",
+        "",
+        "| Variable | Read by | Supplies |",
+        "|---|---|---|",
+        "| `CODESS_DISCOVERY_POLICY` | `helpers` | A replacement discovery policy file |",
+        "| `CODESS_EXCLUDE_DIRS` | `helpers` | Directory names never traversed; replaces the policy file's `exclude_dirs`, which ships non-empty |",
+        "| `CODESS_EXCLUDE_PATHS` | `helpers` | Trees on this machine that are not the operator's work; ships empty |",
+        "| `CODESS_INCLUDE_PATHS` | `helpers` | Trees admitted despite a rule that would skip them; outranks every other rule |",
+        "| `CODESS_CONFIG` | `settings` | The configuration file, which loses to a variable and wins over a built-in |",
+        "| `CODESS_NO_HASH` | `fileio` | Declared leaf-visible; `apply_leaf_visible` writes it from the flag |",
+        "| `CODESS_NO_CONTRACT_CHECK` | `schema_contract` | Declared leaf-visible, as above |",
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -103,6 +103,11 @@ _IS_ENV_TABLE = (
     ("CODESS_CLAUDE_WORKTREES", env_bool, "0"),
     ("CODESS_REDACT", env_bool, "0"),
     ("CODESS_STRICT_MAPPING", env_bool, "0"),
+    # Cursor's `agentKv` corpus: a 200,000-row key space holding the harness
+    # system prompt and reasoning parts. Off by default because reading it adds
+    # evidence a Session-level question does not need, so admitting it is the
+    # operator's choice rather than a cost every ingest pays.
+    ("CODESS_AGENT_KV", env_bool, "0"),
     ("CODESS_MAX_TRANSCRIPT_BYTES", env_int, BUILTIN_MAXIMUMS["transcript_bytes"]),
     (
         "CODESS_MAX_CURSOR_CONTAINER_BYTES", env_int,
@@ -214,35 +219,16 @@ CURSOR_DATA = _cursor_data()
 CURSOR_WS = CURSOR_DATA / "workspaceStorage"
 
 # --- Discovery ---
-# Top-level folder names under a work root treated as “aggregator” parents (skip as leaf projects in scan canonicalize).
-DEFAULT_AGGREGATORS: tuple[str, ...] = ()
-"""Directory names that group Projects rather than being one.
-
-Empty by default, because there is no portable answer: a grouping directory
-is a property of one operator's tree, and shipping one developer's names
-would exclude directories on every other machine for no reason the operator
-could see. `CODESS_AGGREGATORS` supplies them -- for example
-`Clients,Research,Sandbox` -- and an empty value states that every directory
-is a candidate Project, which a frozen set could not say.
-"""
-
-DEFAULT_EXCLUDE_REVIEW_DIRS: tuple[str, ...] = ()
-"""Path prefixes, relative to a work root, excluded as review or backup trees.
-
-Empty for the same reason as the aggregators: which trees hold copies of
-other repositories rather than work of their own is specific to one machine.
-`CODESS_EXCLUDE_REVIEW_DIRS` supplies them -- for example
-`Tools,Vendor/Bundled` -- and matching is on path segments relative to the
-work root, so a directory is excluded by where it sits rather than by where
-a scan happened to start.
-"""
-
-AGGREGATORS = frozenset(
-    env_path_list("CODESS_AGGREGATORS", DEFAULT_AGGREGATORS)
-)
-EXCLUDE_REVIEW_DIRS = env_path_list(
-    "CODESS_EXCLUDE_REVIEW_DIRS", DEFAULT_EXCLUDE_REVIEW_DIRS
-)
+# Path-based inclusion and exclusion live in the discovery policy file, read by
+# `helpers.EXCLUDE_PATHS` and `helpers.INCLUDE_PATHS`. They are not declared
+# here because a leaf module reads them and cannot import this one.
+#
+# `CODESS_AGGREGATORS` and `CODESS_EXCLUDE_REVIEW_DIRS` were retired into
+# `exclude_paths`. Both named work-root-relative segments and both asked the
+# same question -- is this a tree the operator keeps for reference rather than
+# develops in -- while differing only in a structural restriction that was
+# itself the defect: an aggregator had to be a direct child of the work root,
+# so a reference tree one level deeper could not be named at all.
 DAYS = _IS_ENV_VALUES["CODESS_DAYS"]
 
 # --- Store layout ---
@@ -352,6 +338,13 @@ STATE_FILE = "ingest_state.json"
 PROJECT_STATE_FILE = "projects_state.json"
 LAST_INGEST_REPORT_FILE = "last-ingest-report.json"
 PROJECT_FILE = "project.json"
+# The registry-side binding index, mapping a resolved path to the identity the
+# machine has already established for it. It is authoritative over the
+# in-project `PROJECT_FILE` because it outlives the working tree: a Project
+# directory that is cleaned, re-cloned, or restored from a copy predating its
+# binding loses that file, and a lost binding is indistinguishable from a
+# Project never ingested, so resolution mints a second identity for one path.
+PROJECT_BINDINGS_FILE = "project-bindings.json"
 SOURCE_LINKS_FILE = "source-links.json"
 SOURCE_LINKS_FORMAT = "codess.source-links/1"
 WORKING_ARCHIVES_DIR = "working-archives"
@@ -513,6 +506,7 @@ KEEP_SNAPSHOTS = _IS_ENV_VALUES["CODESS_KEEP_SNAPSHOTS"]
 MAX_SCAN_DIRECTORIES = _IS_ENV_VALUES["CODESS_MAX_SCAN_DIRECTORIES"]
 SCAN_TIMEOUT = _IS_ENV_VALUES["CODESS_SCAN_TIMEOUT"]
 STRICT_MAPPING = _IS_ENV_VALUES["CODESS_STRICT_MAPPING"]
+AGENT_KV = _IS_ENV_VALUES["CODESS_AGENT_KV"]
 CONTENT_POLICY = _IS_ENV_VALUES["CODESS_CONTENT_POLICY"]
 RESOURCE_POLICY = _IS_ENV_VALUES["CODESS_RESOURCE_POLICY"]
 MAX_TRANSCRIPT_BYTES = _IS_ENV_VALUES["CODESS_MAX_TRANSCRIPT_BYTES"]
@@ -684,17 +678,6 @@ def validate_config() -> list[str]:
                 f"{name}={value} must be > 0; this bound has no disabled value, "
                 "and 0 would reject everything rather than nothing"
             )
-    for name, values in (
-        ("CODESS_AGGREGATORS", sorted(AGGREGATORS)),
-        ("CODESS_EXCLUDE_REVIEW_DIRS", EXCLUDE_REVIEW_DIRS),
-    ):
-        for value in values:
-            # An absolute path would silently never match, since both are
-            # compared against a path relative to the work root.
-            if Path(value).is_absolute():
-                errs.append(
-                    f"{name} entry {value!r} must be relative to the work root"
-                )
     for name, limit in (
         ("CODESS_MAX_TRANSCRIPT_BYTES", MAX_TRANSCRIPT_BYTES),
         ("CODESS_MAX_CURSOR_CONTAINER_BYTES", MAX_CURSOR_CONTAINER_BYTES),

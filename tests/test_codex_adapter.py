@@ -1255,3 +1255,66 @@ class TestUnrolledHistorySessions:
         )
 
         assert result["available"] is False
+
+
+class TestDeclaredParentage:
+    """The four parentage branches, and what the local corpus actually holds.
+
+    Measured across all 37 rollouts on the development machine: `thread_source`
+    is present on 15 and its only value is `user`; `parent_thread_id`,
+    `forked_from_id`, `agent_role`, and `agent_nickname` appear on none. So the
+    decode cannot be validated against stored data and is exercised here
+    against the shapes the protocol declares.
+
+    `user` producing no relation is the case the corpus does cover, and it is
+    the one worth pinning: a top-level thread must not acquire a parent from a
+    field that says it has none.
+    """
+
+    def _meta(self, tmp_path, payload):
+        import json
+
+        from codess.adapters.codex import get_session_metadata
+
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "s1", **payload}})
+            + "\n",
+            encoding="utf-8",
+        )
+        return get_session_metadata(path)
+
+    def test_a_user_thread_gets_no_relation(self, tmp_path):
+        """The only value present in the local corpus, on 15 of 37 rollouts."""
+        values = self._meta(tmp_path, {"thread_source": "user"})
+        assert values.get("session_relation_kind") is None
+        assert values.get("parent_session_id") is None
+
+    def test_a_parent_thread_id_is_a_continuation(self, tmp_path):
+        values = self._meta(tmp_path, {"parent_thread_id": "p1"})
+        assert values["parent_session_id"] == "p1"
+        assert values["session_relation_kind"] == "continuation"
+        assert values["lineage_provenance"] == "session_meta.parent_thread_id"
+
+    def test_a_subagent_parent_is_a_subagent(self, tmp_path):
+        values = self._meta(
+            tmp_path, {"parent_thread_id": "p1", "thread_source": "subagent"},
+        )
+        assert values["parent_session_id"] == "p1"
+        assert values["session_relation_kind"] == "subagent"
+
+    def test_a_fork_names_the_thread_it_forked_from(self, tmp_path):
+        values = self._meta(tmp_path, {"forked_from_id": "f1"})
+        assert values["parent_session_id"] == "f1"
+        assert values["session_relation_kind"] == "fork"
+        assert values["lineage_provenance"] == "session_meta.forked_from_id"
+
+    def test_a_subagent_without_a_parent_states_the_kind_and_no_parent(self, tmp_path):
+        """A relation Codess can name without an identity it can resolve.
+
+        The kind is vendor-stated; the parent is not, and inventing one is what
+        the null-rather-than-guess rule forbids.
+        """
+        values = self._meta(tmp_path, {"thread_source": "subagent"})
+        assert values["session_relation_kind"] == "subagent"
+        assert values.get("parent_session_id") is None

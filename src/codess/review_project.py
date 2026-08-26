@@ -21,7 +21,11 @@ from codess.config import (
     VENDOR_KEYS,
 )
 from codess.fileio import check_policy_format, read_json, write_json_atomic
-from codess.helpers import should_prune_directory, unsafe_traversal_root_reason
+from codess.helpers import (
+    path_scope_excludes,
+    should_prune_directory,
+    unsafe_traversal_root_reason,
+)
 from codess.path_label import classify_project_path, local_path_key
 from codess.settings import resolve
 from codess.timeval import now_iso
@@ -303,7 +307,14 @@ def discover_git_roots(
             root_device = root.stat().st_dev
         except OSError:
             root_device = None
-        for current, directories, _ in os.walk(root):
+        # `followlinks=False` is os.walk's default and is stated because the
+        # rule is load-bearing rather than incidental: a link inside an
+        # excluded tree pointing into an included one would re-admit excluded
+        # content by a path that never matches `exclude_paths`, so an exclusion
+        # the operator wrote would be silently void. Links also admit cycles and
+        # report one Project twice under two paths. A tree behind a link is
+        # admitted by naming its real location in `include_paths`.
+        for current, directories, _ in os.walk(root, followlinks=False):
             if budget is not None and not budget.visit():
                 # Stop the whole traversal, not just this subtree: the budget is
                 # a bound on the scan, and continuing into the next root would
@@ -322,6 +333,12 @@ def discover_git_roots(
                     if same_filesystem:
                         directories[:] = []
                         continue
+            # The path-scope precedence, applied from its one implementation
+            # rather than restated: most specific wins, so an `include_paths`
+            # entry is honoured even where a parent is excluded.
+            if path_scope_excludes(path):
+                directories[:] = []
+                continue
             if ".git" in directories or (path / ".git").is_file():
                 found.add(path.resolve())
                 # A repository is one candidate boundary. Do not turn nested

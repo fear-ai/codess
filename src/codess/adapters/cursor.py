@@ -8,26 +8,51 @@ or key range (see the ownership table in `cursor_source`).
 
 import json
 import logging
+import re
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
 from codess import field_state
-from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
+from codess.config import (
+    AGENT_KV,
+    TRUNCATE_PROMPT,
+    TRUNCATE_RESPONSE,
+    TRUNCATE_TOOL_RESULT,
+)
 from codess.content_processing import apply_processing
 from codess.context_content import bound_context_content, truncate_content
 from codess.cursor_source import (
+    classify_kv_value,
+    open_agent_kv_rows,
     open_bubble_rows,
     open_message_request_context_rows,
 )
 from codess.cursor_source import (
     parse_timestamp as _parse_timestamp,
 )
-from codess.mapping import annotate_mapping, structured_json
+from codess.hashing import codess_text_hash
+from codess.mapping import (
+    RecordContext,
+    annotate_mapping,
+    as_mapping,
+    structured_json,
+)
+from codess.settings import resolve_named
 from codess.tool_result_status import application_failure_evidence
 
 log = logging.getLogger(__name__)
+
+BUBBLE_FIELD_TOTAL = 98
+"""Distinct keys observed on a Cursor bubble, sampled over 20,000 bubbles.
+
+Roughly 40 are present on essentially every bubble and non-empty on none --
+`lints`, `commits`, `pullRequests`, `gitDiffs`, `images`, and the rest. Kept as
+a measurement with its sample size rather than as a live count, because the
+figure a coverage report needs is what the *vendor record* holds, and deriving
+it from one store would report that store's population instead.
+"""
 
 _MAPPED_BUBBLE_FIELDS = frozenset({
     "type", "text", "createdAt", "timingInfo", "serverBubbleId",
@@ -49,6 +74,10 @@ _MAPPED_BUBBLE_FIELDS = frozenset({
     # column would erase the direction. `requestId` appears only on user
     # bubbles and `usageUuid` only on assistant bubbles, never both.
     "requestId", "usageUuid",
+    # Retained whenever the vendor states it, including when it states zero: a
+    # recorded zero says the vendor reported no usage, which is not the same as
+    # the field being absent, and only the first can be revisited.
+    "tokenCount",
 })
 
 # Nine leaves inside `context` carry values; the outer container is mostly
@@ -310,6 +339,29 @@ def _bubble_evidence(data: dict) -> dict:
     return values
 
 
+def _enrich_from_bubble(event: dict, data: dict) -> None:
+    """Apply every per-bubble value an Event carries, columns and metadata.
+
+    One function rather than two calls per site, for the reason
+    `_bubble_evidence` already records: four construction sites drift, which is
+    how `contextWindowStatusAtCreation` came to be merged at three of them and
+    not the fourth. A value that acquires a column later is added here and
+    reaches every site at once.
+    """
+    _merge_metadata(event, _bubble_evidence(data))
+    counts = data.get("tokenCount")
+    if not isinstance(counts, dict):
+        return
+    # A recorded zero states that the vendor measured no usage, which a query
+    # distinguishes from an absent field only if the zero is stored.
+    for vendor_key, column in (
+        ("inputTokens", "input_tokens"), ("outputTokens", "output_tokens"),
+    ):
+        value = counts.get(vendor_key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            event[column] = value
+
+
 def _merge_metadata(event: dict, values: dict) -> None:
     if not values:
         return
@@ -383,6 +435,36 @@ def _base_event(
     return event
 
 
+def _repeat_references(ordered: list[tuple[str, dict]]) -> dict[str, str]:
+    """Map each repeated bubble to the earlier one it repeats.
+
+    A long-lived composer is re-synced and the sync writes server-identified
+    copies of bubbles that already exist locally, so one `toolCallId` survives
+    on two bubbles after dedup. Both are real vendor records: field by field
+    they differ only in `bubbleId`, `serverBubbleId`, and `createdAt` and agree
+    on the other ninety-five.
+
+    The reference names the *earlier* bubble because `ordered` is sorted, so
+    the first occurrence is the original and every later one repeats it.
+    Recording the relationship rather than deleting a record is the standard
+    the rest of the schema already uses -- an exact vendor value beside a mapped
+    one -- and deleting would be unrecoverable where an advisory reference can
+    simply be ignored.
+    """
+    first: dict[str, str] = {}
+    references: dict[str, str] = {}
+    for bubble_id, data in ordered:
+        call_id = as_mapping(data.get("toolFormerData")).get("toolCallId")
+        if not call_id:
+            continue
+        key = str(call_id)
+        if key in first:
+            references[bubble_id] = first[key]
+        else:
+            first[key] = bubble_id
+    return references
+
+
 def _count_surviving_repeats(
     ordered: list[tuple[str, dict]], diagnostics: dict | None,
 ) -> None:
@@ -408,7 +490,7 @@ def _count_surviving_repeats(
         return
     seen: dict[str, int] = {}
     for _bubble_id, data in ordered:
-        call_id = (data.get("toolFormerData") or {}).get("toolCallId")
+        call_id = as_mapping(data.get("toolFormerData")).get("toolCallId")
         if call_id:
             seen[str(call_id)] = seen.get(str(call_id), 0) + 1
     repeats = sum(count - 1 for count in seen.values() if count > 1)
@@ -479,6 +561,322 @@ def _request_context_event(
     )
 
 
+def _carries_unique_evidence(role: str, data: dict) -> bool:
+    """Whether a blob holds evidence no other Cursor structure records.
+
+    The system prompt and the reasoning parts do; text and tool parts duplicate
+    what the bubble tables already carry. The distinction decides which reason
+    code an unattributed blob is counted under, so a reader can tell a corpus
+    that is merely redundant from one that is lost.
+    """
+    if role == "system":
+        # Its content is a plain string rather than typed parts, so a list
+        # check would answer False for the one record that most needs a True.
+        return True
+    content = data.get("content")
+    return isinstance(content, list) and any(
+        isinstance(part, dict)
+        and part.get("type") in ("reasoning", "redacted-reasoning")
+        for part in content
+    )
+
+
+_PROMPT_SECTION = re.compile(r"^<([a-z_][a-z0-9_]*)>\s*$", re.MULTILINE)
+# `powered by <model>` is the form every observed prompt uses to name the model
+# it addressed, and the name runs to end-of-sentence or end-of-line. A dot is
+# not a terminator: `claude-4.6-opus-high-thinking` contains one, and stopping
+# at the first produced `claude-4`. `You are gpt-5.3-codex.` has no `powered
+# by`, so the bare form is a second alternative rather than an optional group --
+# optional matched the prose in `You are a powerful agentic AI coding
+# assistant powered by Cursor` and captured the adjective.
+_PROMPT_MODEL = re.compile(
+    r"^You are (?:.*?powered by )?([A-Za-z0-9][\w.\- ]*?)\.?\s*(?:$|\. )",
+    re.MULTILINE,
+)
+
+
+def harness_prompt_evidence(text: str) -> dict[str, Any]:
+    """What a harness system prompt states about itself, as queryable fields.
+
+    Every prompt observed is textually unique and they fall into families: two
+    prompts of the same family measured 97.6% similar and differed in one line,
+    while prompts of different families differ in length by a factor of ten.
+    Storing 23 near-duplicate bodies would answer no question the body alone
+    cannot; storing the *structure* lets a reader group them, diff two
+    variants, and see which model each addressed.
+
+    Three facts, each read rather than inferred:
+
+    - `harness_prompt_model` is the model the prompt names in its first line.
+      It is what the *harness told the model it was*, which is not necessarily
+      the model that served the turn -- Cursor's `Auto` router says "You are
+      Auto" while a model name appears on the bubble.
+    - `harness_prompt_sections` is the ordered list of `<section>` tags. These
+      are the prompt's own structure and are what differs between versions:
+      a release that adds `mode_selection` adds the tag.
+    - `harness_prompt_digest` identifies the exact text, so two Sessions can be
+      compared for having received the same instruction without either body
+      being read.
+
+    The body itself is retained as ordinary Event content under the content
+    policy, so a reader who wants the text has it and a reader who wants the
+    shape does not have to parse it.
+    """
+    sections = _PROMPT_SECTION.findall(text)
+    model = _PROMPT_MODEL.search(text)
+    values: dict[str, Any] = {
+        "harness_prompt_digest": codess_text_hash(256, 256, text),
+        "harness_prompt_chars": len(text),
+        "harness_prompt_sections": sections,
+        "harness_prompt_section_count": len(sections),
+    }
+    if model:
+        values["harness_prompt_model"] = model.group(1).strip()
+    return values
+
+
+def _agent_kv_tool_ids(data: dict) -> list[str]:
+    """Every tool-call identity stated on one `agentKv` message."""
+    content = data.get("content")
+    if not isinstance(content, list):
+        return []
+    found = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") not in ("tool-call", "tool-result"):
+            continue
+        call_id = part.get("toolCallId")
+        if isinstance(call_id, str) and call_id.strip():
+            found.append(call_id.strip())
+    return found
+
+
+def agent_kv_events(
+    rows: Iterable[tuple[str, object]],
+    *,
+    source_file: str,
+    request_sessions: dict[str, str],
+    tool_call_sessions: dict[str, str] | None = None,
+    opts: dict,
+) -> Iterator[dict]:
+    """Map the `agentKv` message corpus that no other Cursor structure records.
+
+    Three things here exist nowhere else in what Codess decodes: the harness
+    system prompt, which is the only record of what the model was instructed to
+    do; `redacted-reasoning` as a first-class content part, where the bubble
+    format has only a flag saying reasoning was withheld; and reasoning text on
+    requests whose bubbles the vendor has since pruned.
+
+    **Text and tool parts are deliberately not mapped.** Every `tool-call` and
+    `tool-result` here already produces an Event from the bubble tables, and
+    user and assistant text duplicates bubble text for the requests that join.
+    Mapping both would double-count every tool interaction and double the
+    searchable corpus for no new evidence -- which is the rule already applied
+    to `toolResults` and `conversationState`.
+
+    **Two join keys, both vendor-stated.** `providerOptions.cursor.requestId`
+    binds a message to a request the bubbles also record, but it reaches only
+    user messages: over 20,000 sampled blobs, 382 user messages carry one and
+    6,919 assistant, tool, and system messages carry none.
+
+    `toolCallId` is the second and it reaches what the first cannot. A
+    `tool-call` or `tool-result` part states the same identity Cursor writes to
+    `toolFormerData.toolCallId` on a bubble, so a message carrying one is bound
+    to whichever composer holds that bubble -- measured, 6,258 matches reaching
+    20 composers. **76 of the 80 messages carrying reasoning also carry a
+    tool-call**, so the reasoning is bound with it: the binding is a vendor-
+    stated identifier on the *same record*, not an inference from adjacency.
+
+    **What remains unattributed has no key, and the near-miss was tested.**
+    Measured over the whole corpus rather than a sample: 23 system messages and
+    1,230 reasoning messages carry neither identifier. Every one of those 1,230
+    carries assistant `text` beside the reasoning, and that text matches a
+    bubble exactly 6,054 times across 47 composers -- so matching on it looks
+    like a binding and is not one. **1,943 distinct bubble texts appear in more
+    than one composer**, one of them (`"continue"`) in eleven, so a text match
+    resolves to the wrong Session often enough to be worse than no binding.
+    That is the textual-resemblance case CoSchema forbids, and the measurement
+    is why rather than the rule alone.
+
+    Attributing by key order is equally refused: the key is a content hash, so
+    order carries no sequence. Both classes are counted under a reason code
+    naming the condition, so the corpus is countable rather than silently
+    absent.
+    """
+    tool_call_sessions = tool_call_sessions or {}
+    for key, value in rows:
+        kind = classify_kv_value(value)
+        if kind != "json":
+            # Counted by content kind rather than as a parse failure: most of
+            # these are protobuf and file bodies, and calling them malformed
+            # counts real content as a decoder defect.
+            _record_refused(
+                opts, f"record_agent_kv_{kind}",
+                source_file=source_file, bubble_id=str(key),
+                record_type="agentKv.blob",
+            )
+            continue
+        try:
+            data = json.loads(
+                value if isinstance(value, str | bytes | bytearray) else str(value)
+            )
+        except (ValueError, TypeError):
+            _record_refused(
+                opts, "record_unparseable",
+                source_file=source_file, bubble_id=str(key),
+                record_type="agentKv.blob",
+            )
+            continue
+        if not isinstance(data, dict):
+            continue
+        provider = data.get("providerOptions")
+        cursor_options = provider.get("cursor") if isinstance(provider, dict) else None
+        request_id = (
+            cursor_options.get("requestId") if isinstance(cursor_options, dict) else None
+        )
+        role = str(data.get("role") or "")
+        content = data.get("content")
+        # A system message states its content as a plain string; every other
+        # role states a list of typed parts. Reading only the list form skipped
+        # all 23 system prompts silently, which is the shape this normalizes.
+        parts = (
+            [{"type": "text", "text": content}]
+            if isinstance(content, str) and content.strip()
+            else content if isinstance(content, list) else []
+        )
+        session_id = request_sessions.get(str(request_id or ""))
+        if not session_id:
+            # The tool-call identity on this same message, which is what binds
+            # the reasoning beside it. First match wins: a message states one
+            # exchange, so its tool ids resolve to one composer or to none.
+            for call_id in _agent_kv_tool_ids(data):
+                session_id = tool_call_sessions.get(call_id)
+                if session_id:
+                    break
+        if not session_id:
+            # Named by what is lost rather than by the join that failed. A
+            # system prompt or a reasoning part with no binding is evidence
+            # that exists and cannot be placed; a tool or text part is a
+            # duplicate of what the bubbles already carry, and losing it costs
+            # nothing. Counting them together would report the second volume
+            # and hide the first.
+            _record_refused(
+                opts,
+                "record_agent_kv_unattributed"
+                if _carries_unique_evidence(role, data)
+                else "record_agent_kv_unbound_duplicate",
+                source_file=source_file, bubble_id=str(key),
+                record_type=f"agentKv.{role or 'unknown'}",
+            )
+            continue
+        for index, part in enumerate(parts):
+            if not isinstance(part, dict):
+                continue
+            event = _agent_kv_part_event(
+                part, index,
+                RecordContext(
+                    session_id=session_id, source_file=source_file,
+                    line_num=index, opts=opts,
+                ),
+                key=str(key), role=role, request_id=str(request_id),
+            )
+            if event is not None:
+                yield event
+
+
+def _agent_kv_part_event(
+    part: dict,
+    index: int,
+    context: RecordContext,
+    *,
+    key: str,
+    role: str,
+    request_id: str,
+) -> dict | None:
+    """One `agentKv` content part, where it carries evidence nothing else does.
+
+    The blob key is the locator rather than `context.line_num`: a blob is
+    content-addressed, so there is no line to cite, and `line_num` carries the
+    part's index within the message instead.
+    """
+    session_id, source_file, opts = (
+        context.session_id, context.source_file, context.opts,
+    )
+    part_type = str(part.get("type") or "")
+    if role == "system":
+        subtype, rule = "harness_instruction", "cursor.agent-system-prompt"
+        event_kind, content_role = "message.context", "context"
+        text = part.get("text") if part_type == "text" else None
+        origin_kind = "harness_injected"
+        prompt_evidence = (
+            harness_prompt_evidence(text) if isinstance(text, str) else {}
+        )
+    elif part_type in ("reasoning", "redacted-reasoning"):
+        subtype, rule = "reasoning_summary", "cursor.agent-reasoning"
+        event_kind, content_role = "message.reasoning_summary", "reasoning"
+        text = part.get("text")
+        origin_kind = "model_generated"
+    else:
+        # Every other part duplicates evidence the bubble tables already carry.
+        return None
+    if not isinstance(text, str) or not text.strip():
+        if part_type == "redacted-reasoning":
+            text = ""
+        else:
+            return None
+    text = apply_processing(
+        text, opts, vendor="Cursor", record_type=f"agentKv.{part_type}",
+        event_kind=event_kind, phase="pre",
+    )
+    if text is None:
+        return None
+    text, content_len, truncated = bound_context_content(text, opts)
+    metadata = {
+        "agent_kv_role": role,
+        "agent_kv_part_type": part_type,
+        "request_id": request_id,
+        "content_truncated": truncated,
+    }
+    if role == "system":
+        # Structure beside the body: every observed prompt is textually unique
+        # and they group into families, so the sections and the digest are what
+        # make them comparable without reading 23 near-identical texts.
+        metadata.update(prompt_evidence)
+    if part_type in ("reasoning", "redacted-reasoning"):
+        # The same distinction `reasoning_fidelity` draws for the bubble path:
+        # this is the reasoning itself rather than a vendor précis of it.
+        metadata["reasoning_fidelity"] = "full"
+        if part_type == "redacted-reasoning":
+            # A first-class part saying the vendor withheld it, which is a
+            # different fact from the field being absent.
+            metadata["reasoning_redacted"] = True
+    event = _base_event(
+        session_id=session_id,
+        event_id=f"{key}:{index}",
+        event_type="system_event" if role == "system" else "assistant_message",
+        subtype=subtype,
+        role="harness" if role == "system" else "assistant",
+        content=text,
+        content_len=content_len,
+        timestamp=None,
+        source_file=source_file,
+        metadata=json.dumps(metadata, separators=(",", ":"), sort_keys=True),
+        event_kind=event_kind,
+        actor_kind="harness" if role == "system" else "model",
+        content_role=content_role,
+        origin_kind=origin_kind,
+    )
+    return annotate_mapping(
+        event,
+        source_record_type="cursorDiskKV.agentKv",
+        source_record_subtype=part_type or None,
+        source_record_locator=key,
+        mapping_rule=rule,
+        source_path=f"$.content[{index}]",
+    )
+
+
 def _iter_bubbles(
     db_path: Path,
     stats: dict[str, int] | None = None,
@@ -527,6 +925,58 @@ def _iter_bubbles(
         log.warning("Cannot read Cursor bubbles from %s: %s", db_path, exc)
 
 
+def _agent_kv_by_session(
+    db_path: Path,
+    source_file: str,
+    composer_ids: set[str] | None,
+    opts: dict,
+) -> dict[str, list[dict]]:
+    """Decode the `agentKv` corpus once, grouped by the Session it binds to.
+
+    A prior pass rather than an accumulation, because the join map must be
+    complete before the first Session is emitted: the blobs are
+    content-addressed and arrive in hash order, so a message binding to the
+    first composer can appear after a message binding to the last.
+
+    Reads only the bubbles' identifiers, not their content, so the cost is one
+    scan of the selected key ranges rather than a second decode.
+    """
+    request_sessions: dict[str, str] = {}
+    tool_call_sessions: dict[str, str] = {}
+    for key, value in open_bubble_rows(db_path, composer_ids):
+        parts = str(key).split(":", 2)
+        if len(parts) < 2 or not isinstance(value, str | bytes | bytearray):
+            continue
+        try:
+            data = json.loads(value)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        composer_id = parts[1]
+        request = data.get("requestId")
+        if isinstance(request, str) and request.strip():
+            request_sessions[request.strip()] = composer_id
+        usage = data.get("usageUuid")
+        if isinstance(usage, str) and usage.strip():
+            request_sessions.setdefault(usage.strip(), composer_id)
+        call_id = as_mapping(data.get("toolFormerData")).get("toolCallId")
+        if isinstance(call_id, str) and call_id.strip():
+            tool_call_sessions.setdefault(call_id.strip(), composer_id)
+    if not (request_sessions or tool_call_sessions):
+        return {}
+    grouped: dict[str, list[dict]] = {}
+    for event in agent_kv_events(
+        open_agent_kv_rows(db_path),
+        source_file=source_file,
+        request_sessions=request_sessions,
+        tool_call_sessions=tool_call_sessions,
+        opts=opts,
+    ):
+        grouped.setdefault(str(event["session_id"]), []).append(event)
+    return grouped
+
+
 def process_db(
     db_path: Path,
     project_path: str,
@@ -544,6 +994,17 @@ def process_db(
 
     current_composer: str | None = None
     bubbles: list[tuple[str, dict]] = []
+    # Decoded once, before any composer is emitted, and consumed per Session
+    # below. The consumer flushes on each change of `session_id` and refuses a
+    # Session it has already flushed, so an `agentKv` Event must travel with
+    # its Session's bubbles rather than after all of them -- and the join map
+    # has to be complete before the first Session is emitted, which is why this
+    # is a prior pass rather than an accumulation.
+    agent_kv_by_session: dict[str, list[dict]] = {}
+    if resolve_named(opts.get("include_agent_kv"), "include_agent_kv", AGENT_KV):
+        agent_kv_by_session = _agent_kv_by_session(
+            db_path, source_file, composer_ids, opts,
+        )
     composer_start_tick: float | None = None
     last_progress: float | None = None
 
@@ -581,6 +1042,8 @@ def process_db(
                 diagnostics,
                 (session_headers or {}).get(current_composer),
             )
+            for event in agent_kv_by_session.pop(current_composer, ()):
+                yield current_composer, event
             bubbles.clear()
         if composer_id != current_composer:
             current_composer = composer_id
@@ -611,6 +1074,8 @@ def process_db(
             diagnostics,
             (session_headers or {}).get(current_composer),
         )
+        for event in agent_kv_by_session.pop(current_composer, ()):
+            yield current_composer, event
 
     skipped = sum(
         stats.get(key, 0)
@@ -675,6 +1140,7 @@ def _process_composer(
     ordered = without_server_identity + list(canonical.values())
     _count_surviving_repeats(ordered, diagnostics)
     ordered.sort(key=sort_key)
+    repeated = _repeat_references(ordered)
     for bubble_id, data in ordered:
         events = list(
             _bubble_to_events(
@@ -682,6 +1148,13 @@ def _process_composer(
                 session_header=session_header,
             )
         )
+        original = repeated.get(bubble_id)
+        if original is not None:
+            for event in events:
+                # Advisory, not a deletion: both bubbles are real vendor
+                # records, so a reader wanting the raw count ignores this and
+                # one excluding replays selects on it.
+                event["duplicate_of"] = original
         if not events and diagnostics is not None:
             empty_assistant_envelope = (
                 data.get("type") == 2
@@ -866,7 +1339,7 @@ def _bubble_to_events(
             event, field="prompt_origin", state=field_state.ABSENT,
             source_field="bubble.origin",
         )
-        _merge_metadata(event, _bubble_evidence(data))
+        _enrich_from_bubble(event, data)
         yield mapped(event, "cursor.bubble")
         return
 
@@ -888,7 +1361,7 @@ def _bubble_to_events(
                 "assistant_message", "response", "assistant",
                 truncated, content_len,
             )
-            _merge_metadata(response, _bubble_evidence(data))
+            _enrich_from_bubble(response, data)
             yield mapped(response, "cursor.bubble")
 
         # Reasoning is its own Event, because Cursor never puts it beside a
@@ -928,7 +1401,7 @@ def _bubble_to_events(
                     think_ev["actor_kind"] = "model"
                     think_ev["content_role"] = "reasoning"
                     think_ev["origin_kind"] = "model_generated"
-                    _merge_metadata(think_ev, _bubble_evidence(data))
+                    _enrich_from_bubble(think_ev, data)
                     yield mapped(think_ev, "cursor.reasoning")
 
         summary_value = data.get("conversationSummary")
@@ -984,10 +1457,10 @@ def _bubble_to_events(
                     ):
                         if summary.get(key) is not None:
                             metadata[key] = summary[key]
-                    metadata.update(_bubble_evidence(data))
                     compact["metadata"] = json.dumps(
                         metadata, separators=(",", ":")
                     )
+                    _enrich_from_bubble(compact, data)
                     yield mapped(
                         compact,
                         "cursor.compaction-summary",

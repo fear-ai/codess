@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import uuid
@@ -17,10 +18,12 @@ from codess.fileio import hash_file
 from codess.project_annotations import build_project_annotations
 from codess.project_catalog import (
     add_project_location,
+    backfill_binding_index,
     catalog_readiness,
     durable_project_root,
     ensure_project_binding,
     get_project_entry,
+    load_binding_index,
     load_catalog,
     load_project_set,
     register_workspace_bindings,
@@ -1104,8 +1107,17 @@ class TestLostBindingIsReported:
         assert second["project_id"] == first["project_id"]
         assert not [r for r in caplog.records if "minting" in r.message]
 
-    def test_a_binding_disagreeing_with_the_catalog_warns(self, tmp_path, caplog):
-        """A stale binding wins by design; the disagreement is reported."""
+    def test_a_binding_disagreeing_with_the_registry_loses_and_is_reported(
+        self, tmp_path, caplog,
+    ):
+        """The registry decides; the in-project file confirms or is reported.
+
+        A directory that is cleaned, re-cloned, or restored from an older copy
+        carries a binding naming an identity the machine has moved off. Letting
+        that file decide is what split one Project across two identities, so
+        the registry's value is kept and the disagreement is named rather than
+        resolved silently.
+        """
         registry = tmp_path / "registry"
         project = tmp_path / "proj"
         project.mkdir()
@@ -1117,10 +1129,102 @@ class TestLostBindingIsReported:
         caplog.clear()
         with caplog.at_level(logging.WARNING):
             second = ensure_project_binding(registry, project)
-        assert second["project_id"] != first["project_id"]
+        assert second["project_id"] == first["project_id"]
         assert any(
-            "several Projects" in record.message for record in caplog.records
+            "moved, copied, or restored" in record.message
+            for record in caplog.records
         )
+
+
+class TestRegistryBindingIndex:
+    """The registry holds identity because it outlives the working tree.
+
+    A Project directory is cleaned, re-cloned, or restored from a copy
+    predating its binding, and each of those loses the in-project file. The
+    catalog fallback was meant to repair exactly that and could not run,
+    because a fresh binding was written before anything asked whether the
+    machine already knew the path.
+    """
+
+    def test_a_lost_binding_on_a_cleaned_directory_does_not_mint(
+        self, tmp_path, caplog,
+    ):
+        """The condition that minted nine duplicate Projects in one session.
+
+        The whole `.codess` directory is removed, which is what a clean or a
+        re-clone does -- so neither the binding nor anything else under the
+        Project states an identity. The registry still does.
+        """
+        registry = tmp_path / "registry"
+        project = tmp_path / "proj"
+        project.mkdir()
+        first = ensure_project_binding(registry, project)
+        shutil.rmtree(project / ".codess")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            second = ensure_project_binding(registry, project)
+        assert second["project_id"] == first["project_id"]
+        assert not [r for r in caplog.records if "minting" in r.message]
+
+    def test_the_index_records_every_resolved_path(self, tmp_path):
+        registry = tmp_path / "registry"
+        project = tmp_path / "proj"
+        project.mkdir()
+        binding = ensure_project_binding(registry, project)
+        assert load_binding_index(registry) == {
+            str(project.resolve()): binding["project_id"],
+        }
+
+    def test_backfill_derives_the_index_from_catalog_locations(self, tmp_path):
+        """Derivable rather than observed, so it starts complete."""
+        registry = tmp_path / "registry"
+        project = tmp_path / "proj"
+        project.mkdir()
+        binding = ensure_project_binding(registry, project)
+        (registry / "project-bindings.json").unlink()
+        assert load_binding_index(registry) == {}
+        backfilled = backfill_binding_index(registry)
+        assert backfilled[str(project.resolve())] == binding["project_id"]
+
+    def test_a_damaged_index_falls_through_rather_than_refusing(self, tmp_path):
+        """It caches a fact the catalog also holds, so it is not load-bearing."""
+        registry = tmp_path / "registry"
+        project = tmp_path / "proj"
+        project.mkdir()
+        first = ensure_project_binding(registry, project)
+        (registry / "project-bindings.json").write_text("{not json", encoding="utf-8")
+        assert load_binding_index(registry) == {}
+        assert ensure_project_binding(registry, project)["project_id"] == (
+            first["project_id"]
+        )
+
+    def test_the_in_project_file_states_that_the_registry_decides(self, tmp_path):
+        """Marked in the file so a later reader does not restore its precedence."""
+        registry = tmp_path / "registry"
+        project = tmp_path / "proj"
+        project.mkdir()
+        ensure_project_binding(registry, project)
+        binding = json.loads(
+            (project / ".codess" / PROJECT_FILE).read_text(encoding="utf-8"),
+        )
+        assert binding["authority"] == "registry"
+
+    def test_backfill_skips_a_retired_location(self, tmp_path):
+        """A retired location names where a Project used to be.
+
+        Admitting it would let an abandoned path resolve to the identity that
+        has since moved off it, which is the move case reported as a copy.
+        """
+        registry = tmp_path / "registry"
+        project = tmp_path / "proj"
+        project.mkdir()
+        ensure_project_binding(registry, project)
+        catalog = load_catalog(registry)
+        for location in catalog["projects"][0]["locations"]:
+            location["state"] = "retired"
+        (registry / "projects.json").write_text(json.dumps(catalog), encoding="utf-8")
+        (registry / "project-bindings.json").unlink()
+        assert backfill_binding_index(registry) == {}
 
 
 class TestStateTransitionRecord:

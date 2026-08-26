@@ -1,6 +1,6 @@
 {
   "format_id": "codess.coschema",
-  "format_version": 9,
+  "format_version": 10,
   "application_id": 1129268293,
   "compatibility_policy": {
     "unknown_change": "manual_review",
@@ -595,6 +595,20 @@
         "metadata": {
           "type": "json_extension",
           "nullable": true
+        },
+        "duplicate_of": {
+          "type": "text",
+          "nullable": true
+        },
+        "input_tokens": {
+          "type": "integer",
+          "nullable": true,
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "nullable": true,
+          "minimum": 0
         }
       }
     },

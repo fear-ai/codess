@@ -438,7 +438,7 @@ def test_scan_source_filter_ignores_other_vendor_corruption(tmp_path):
     )
 
     assert result.returncode == 0
-    assert "scan diagnostics" not in result.stderr
+    assert "scan.diagnostics" not in result.stderr
 
 
 def test_scan_cursor_metric_failure_exits_1_and_stop_suppresses_csv(tmp_path):
@@ -876,7 +876,7 @@ def test_scan_empty_registry_warns_and_outputs_only_header(tmp_path):
         env=_scan_env(tmp_path),
     )
     assert r.returncode == 0
-    assert "registry has no projects" in r.stderr.lower()
+    assert "scan.registry_empty" in r.stderr
     assert len(r.stdout.strip().splitlines()) == 1
 
 
@@ -1058,7 +1058,7 @@ def test_debug_does_not_change_which_projects_are_listed():
         # The project is outside the window, so neither run lists it ...
         assert project_names(plain) == []
         # ... and the omission is stated rather than left as an empty result.
-        assert "older than the" in plain.stderr
+        assert "scan.projects_hidden" in plain.stderr
 
 
 def test_projects_outside_the_window_are_listed_with_days_zero():
@@ -1088,4 +1088,4 @@ def test_projects_outside_the_window_are_listed_with_days_zero():
 
         result = _run(["scan", "--dir", str(work), "--days", "0", "--out", "-"], env=env)
         assert "old" in result.stdout
-        assert "older than the" not in result.stderr
+        assert "scan.projects_hidden" not in result.stderr

@@ -24,16 +24,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from codess.config import (  # noqa: E402
-    AGGREGATORS,
     CC_PROJECTS,
     CODEX_SESSIONS,
     CURSOR_DATA,
     DEFAULT_WORK,
-    EXCLUDE_REVIEW_DIRS,
     STORE_ROOT,
 )
 from codess.helpers import (  # noqa: E402
     DISCOVERY_POLICY_PATH,
+    EXCLUDE_PATHS,
+    INCLUDE_PATHS,
     TRAVERSAL_PRUNE_DIRS,
     TRAVERSED_ON_PURPOSE,
 )
@@ -66,15 +66,15 @@ def report_configuration() -> dict:
             "codex": {"path": str(CODEX_SESSIONS), "exists": CODEX_SESSIONS.exists()},
             "cursor": {"path": str(CURSOR_DATA), "exists": CURSOR_DATA.exists()},
         },
-        "aggregators": {
-            "value": list(AGGREGATORS),
-            "source": _origin("CODESS_AGGREGATORS", AGGREGATORS),
+        "exclude_paths": {
+            "value": list(EXCLUDE_PATHS),
+            "source": _origin("CODESS_EXCLUDE_PATHS", EXCLUDE_PATHS),
         },
-        "exclude_review_dirs": {
-            "value": list(EXCLUDE_REVIEW_DIRS),
-            "source": _origin("CODESS_EXCLUDE_REVIEW_DIRS", EXCLUDE_REVIEW_DIRS),
+        "include_paths": {
+            "value": list(INCLUDE_PATHS),
+            "source": _origin("CODESS_INCLUDE_PATHS", INCLUDE_PATHS),
         },
-        "pruned_names": sorted(TRAVERSAL_PRUNE_DIRS),
+        "exclude_dirs": sorted(TRAVERSAL_PRUNE_DIRS),
         "traversed_on_purpose": TRAVERSED_ON_PURPOSE,
     }
 
@@ -182,11 +182,15 @@ def propose(work_root: Path, *, depth: int = 2) -> dict:
         "work_root": str(work_root),
         "exists": True,
         "containers": containers,
-        "suggested_aggregators": [
-            c["path"] for c in containers if c["suggest"] == "aggregator"
-        ],
+        # One list, absolute. `exclude_paths` absorbed both settings, because
+        # a grouping directory and a reference tree were the same judgment
+        # under two names: a tree the operator keeps rather than develops in.
+        # Absolute because the setting is, and because a work-root-relative
+        # segment could not name a tree outside the work root at all.
         "suggested_exclusions": [
-            c["path"] for c in containers if c["suggest"] == "exclude"
+            str((work_root / c["path"]).resolve())
+            for c in containers
+            if c["suggest"] in ("aggregator", "exclude")
         ],
     }
 
@@ -201,15 +205,15 @@ def _render(configuration: dict, proposal: dict | None) -> None:
         print(f"  {vendor:8s} {mark:7s} {info['path']}")
 
     for key, label in (
-        ("aggregators", "aggregators"),
-        ("exclude_review_dirs", "exclusions"),
+        ("exclude_paths", "excluded paths"),
+        ("include_paths", "included paths"),
     ):
         entry = configuration[key]
         shown = ", ".join(entry["value"]) if entry["value"] else "(none)"
         print(f"\n{label}: {shown}\n  from {entry['source']}")
 
-    print(f"\npruned names ({len(configuration['pruned_names'])}), never traversed:")
-    names = configuration["pruned_names"]
+    print(f"\nexcluded names ({len(configuration['exclude_dirs'])}), never traversed:")
+    names = configuration["exclude_dirs"]
     for index in range(0, len(names), 6):
         print("  " + "  ".join(f"{n:16s}" for n in names[index:index + 6]).rstrip())
 
@@ -226,14 +230,18 @@ def _render(configuration: dict, proposal: dict | None) -> None:
             print("  none -- every child is a repository or holds none")
         for container in proposal["containers"]:
             print(f"  {container['path']:22s} {container['why']}")
-        if proposal["suggested_aggregators"]:
-            print("\n  export CODESS_AGGREGATORS='"
-                  + ",".join(proposal["suggested_aggregators"]) + "'")
         if proposal["suggested_exclusions"]:
-            print("  export CODESS_EXCLUDE_REVIEW_DIRS='"
+            print("\n  For one shell:")
+            print("  export CODESS_EXCLUDE_PATHS='"
                   + ",".join(proposal["suggested_exclusions"]) + "'")
-        print("\n  Review before exporting: a container holding many repositories is a\n"
-              "  review tree only if you have not worked in it. Exclusions matter for\n"
+            print("\n  For this machine, which is where a durable decision"
+                  " belongs -- add to")
+            print(f"  {DISCOVERY_POLICY_PATH}:")
+            print(json.dumps(
+                {"exclude_paths": proposal["suggested_exclusions"]}, indent=2,
+            ))
+        print("\n  Review before applying: a container holding many repositories is a\n"
+              "  reference tree only if you have not worked in it. Exclusions matter for\n"
               "  trees where you HAVE worked and do not want reported.")
 
 

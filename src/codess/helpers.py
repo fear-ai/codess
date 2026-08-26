@@ -4,10 +4,10 @@ import csv
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from codess.config import EXCLUDE_REVIEW_DIRS
 from codess.sanitize import protect_csv_row
 
 log = logging.getLogger(__name__)
@@ -32,53 +32,163 @@ start because a policy has a trailing comma is not.
 """
 
 
+# A directory name, as a filesystem bounds one. 255 is `NAME_MAX` on Linux and
+# macOS: it bounds one path *segment*, not a whole path, which is why it is
+# applied per name here and per segment in `valid_policy_path`.
+NAME_MAX = 255
+PATH_MAX = 1023
+_NAME_CHARACTERS = re.compile(rf"^[A-Za-z0-9._-]{{1,{NAME_MAX}}}$")
+
+
+def valid_policy_name(value: str) -> bool:
+    """One directory name: alphanumeric with `-`, `_`, `.`, and no separator.
+
+    `.` and `..` are both rejected. `..` lets an entry escape the scope it
+    appears to name; `.` names the current directory, so excluding it would
+    exclude everything the scan is standing in.
+
+    The regex bounds the length, so no separate emptiness test is needed: it
+    matches one character at minimum and cannot match an empty string.
+    """
+    name = value.strip()
+    return name not in (".", "..") and bool(_NAME_CHARACTERS.match(name))
+
+
+def valid_policy_path(value: str) -> bool:
+    """An absolute path whose every segment is a valid directory name.
+
+    Three bounds, each for its own reason. The whole path is capped at
+    `PATH_MAX`, because a longer one cannot be opened. **Every segment is
+    checked against `valid_policy_name`**, because a filesystem bounds each
+    segment at `NAME_MAX` independently -- a path under the total limit can
+    still carry a 300-character segment no filesystem will hold, and checking
+    only the total accepts it. And `..` is rejected wherever it appears, since
+    one traversal segment lets an entry escape the scope it names.
+
+    A colon is refused rather than merely undocumented: it is excluded from the
+    value character set so that a comma is unambiguous, and admitting one would
+    let `/a:/b` read as either one path or two depending on who split it.
+    """
+    path = value.strip()
+    if not path or len(path) > PATH_MAX or not path.startswith("/") or ":" in path:
+        return False
+    segments = [part for part in Path(path).parts if part != "/"]
+    return all(valid_policy_name(segment) for segment in segments)
+
+
 def _load_discovery_policy() -> tuple[
     frozenset[str], tuple[str, ...], dict[str, str], tuple[tuple[str, ...], tuple[str, ...]],
 ]:
-    """Read the pruned names, prefixes, documented exceptions, and backup names."""
+    """Read the excluded names, prefixes, documented exceptions, and backup names.
+
+    `exclude_dirs` is one flat list rather than the seven groups it replaced:
+    the groups were documentation, and nothing read them apart. A name that
+    fails `valid_policy_name` is dropped with a warning rather than admitted,
+    so a `/` or a `..` in the file cannot become a segment match that silently
+    excludes more than the operator wrote.
+    """
     configured = os.environ.get("CODESS_DISCOVERY_POLICY")
     path = Path(configured).expanduser() if configured else DISCOVERY_POLICY_PATH
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
         if document.get("policy_format") != "codess.discovery-policy/1":
             raise ValueError(f"unsupported discovery policy format in {path}")
-        names = {
-            str(name).casefold()
-            for group in document.get("pruned", {}).values()
-            for name in group
-        }
-        prefixes = tuple(str(p).casefold() for p in document.get("pruned_prefixes", ()))
-        traversed = {
-            str(k): str(v) for k, v in document.get("traversed_on_purpose", {}).items()
-        }
-        backup_group = document.get("backup_conventions") or {}
-        backups = (
-            tuple(str(n) for n in backup_group.get("exact", ())),
-            tuple(str(n) for n in backup_group.get("prefix", ())),
-        )
-        return frozenset(names), prefixes, traversed, backups
+        return _policy_values(document)
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         log.warning(
             "cannot load discovery policy from %s (%s); using the released set", path, exc
         )
         if configured:
             try:
-                document = json.loads(DISCOVERY_POLICY_PATH.read_text(encoding="utf-8"))
-                return (
-                    frozenset(
-                        str(n).casefold()
-                        for g in document.get("pruned", {}).values() for n in g
-                    ),
-                    tuple(str(p).casefold() for p in document.get("pruned_prefixes", ())),
-                    {str(k): str(v) for k, v in document.get("traversed_on_purpose", {}).items()},
-                    (
-                        tuple(str(n) for n in (document.get("backup_conventions") or {}).get("exact", ())),
-                        tuple(str(n) for n in (document.get("backup_conventions") or {}).get("prefix", ())),
-                    ),
+                return _policy_values(
+                    json.loads(DISCOVERY_POLICY_PATH.read_text(encoding="utf-8"))
                 )
-            except (OSError, ValueError):
+            except (OSError, ValueError, TypeError, AttributeError):
                 pass
         return frozenset(), (), {}, ((), ())
+
+
+def _policy_values(document: dict) -> tuple[
+    frozenset[str], tuple[str, ...], dict[str, str], tuple[tuple[str, ...], tuple[str, ...]],
+]:
+    """Project one policy document into the four values discovery reads.
+
+    `CODESS_EXCLUDE_DIRS` replaces the file's list rather than extending it,
+    which is the same rule the two path settings follow: a variable states one
+    shell's answer, and an answer that could only ever be added to could not
+    say "none of these".
+    """
+    configured = os.environ.get("CODESS_EXCLUDE_DIRS")
+    stated = (
+        parse_policy_list(configured, as_path=False)
+        if configured is not None
+        else [str(name) for name in document.get("exclude_dirs", ())]
+    )
+    names = frozenset(
+        str(name).casefold()
+        for name in stated
+        if valid_policy_name(str(name))
+    )
+    prefixes = tuple(
+        str(prefix).casefold()
+        for prefix in document.get("exclude_dir_prefixes", ())
+        if valid_policy_name(str(prefix))
+    )
+    traversed = {
+        str(key): str(value)
+        for key, value in (document.get("traversed_on_purpose") or {}).items()
+    }
+    backup_group = document.get("backup_conventions") or {}
+    backups = (
+        tuple(str(name) for name in backup_group.get("exact", ())),
+        tuple(str(name) for name in backup_group.get("prefix", ())),
+    )
+    return names, prefixes, traversed, backups
+
+
+def parse_policy_list(raw: str, *, as_path: bool) -> tuple[str, ...]:
+    """Split a comma-separated setting, dropping entries that fail the syntax.
+
+    Comma rather than colon: a colon is excluded from the value character set,
+    so a comma is unambiguous, and PATH notation would wrongly imply precedence
+    by position. An invalid entry is dropped with a warning rather than
+    raising -- a malformed exclusion should not stop discovery, and silence
+    would leave the operator believing a tree was excluded when it was not.
+    """
+    validator = valid_policy_path if as_path else valid_policy_name
+    accepted: list[str] = []
+    for item in raw.split(","):
+        entry = item.strip()
+        if not entry:
+            continue
+        if not validator(entry):
+            log.warning(
+                "discovery policy entry %r is not a valid %s and is ignored",
+                entry, "path" if as_path else "name",
+            )
+            continue
+        accepted.append(str(Path(entry)) if as_path else entry)
+    return tuple(dict.fromkeys(accepted))
+
+
+def _load_policy_paths(key: str, variable: str) -> tuple[str, ...]:
+    """Read one path list: the environment for a shell, the file for a machine.
+
+    The variable wins because it names one invocation's scope, while the file
+    states a durable fact about this machine -- which is the home the setting
+    lacked when it existed only as a variable a later shell forgets.
+    """
+    raw = os.environ.get(variable)
+    if raw:
+        return parse_policy_list(raw, as_path=True)
+    configured = os.environ.get("CODESS_DISCOVERY_POLICY")
+    path = Path(configured).expanduser() if configured else DISCOVERY_POLICY_PATH
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        entries = document.get(key) or ()
+        return parse_policy_list(",".join(str(item) for item in entries), as_path=True)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return ()
 
 
 TRAVERSAL_PRUNE_DIRS, TRAVERSAL_PRUNE_PREFIXES, TRAVERSED_ON_PURPOSE, BACKUP_CONVENTIONS = (
@@ -88,7 +198,7 @@ TRAVERSAL_PRUNE_DIRS, TRAVERSAL_PRUNE_PREFIXES, TRAVERSED_ON_PURPOSE, BACKUP_CON
 
 Names rather than paths, so the set is portable: `obj` under a .NET solution
 and `obj` under a Makefile are both build output, and neither is anchored to
-one tree. This is the opposite of `EXCLUDE_REVIEW_DIRS`, which names *where*
+one tree. This is the opposite of `EXCLUDE_PATHS`, which names *where*
 on one machine and therefore ships empty.
 
 `TRAVERSED_ON_PURPOSE` records the names that look skippable and are not,
@@ -96,6 +206,50 @@ each with the reason -- `lib`, `data`, `etc`, and `secrets` among them. It is
 data rather than a comment so `tools/setup_discovery.py` can report it to an
 operator deciding what to exclude for their own tree.
 """
+
+EXCLUDE_PATHS = _load_policy_paths("exclude_paths", "CODESS_EXCLUDE_PATHS")
+"""Trees on this machine that are not the operator's own work.
+
+Ships empty and is supplied per machine, because a path describes one layout: a
+shipped default derived from one tree silently misclassifies directories on
+every other machine, and the operator cannot see why.
+"""
+
+INCLUDE_PATHS = _load_policy_paths("include_paths", "CODESS_INCLUDE_PATHS")
+"""Trees admitted despite a rule that would skip them.
+
+Outranks every other rule, which is the whole reason it exists: name-based
+exclusion over-reaches by design, and without an override the only repair is to
+weaken the name rule for every tree at once.
+"""
+
+
+def within_policy_paths(candidate: Path, roots: tuple[str, ...]) -> bool:
+    """True where `candidate` is one of `roots` or sits beneath one."""
+    return any(
+        candidate == Path(root) or candidate.is_relative_to(Path(root))
+        for root in roots
+    )
+
+
+def path_scope_excludes(candidate: Path) -> bool:
+    """Whether the *path* settings alone exclude `candidate`.
+
+    The `include_paths > exclude_paths` half of the precedence, in one place.
+    It was written twice -- here and in the discovery traversal -- and two
+    copies of a precedence rule is how they come to disagree: the rule exists
+    because name-based exclusion over-reaches, so an `include_paths` entry has
+    to win even where a parent is excluded and a segment name is on the list.
+
+    Separate from `is_excluded` because the two callers ask different
+    questions. `is_excluded` asks whether a path is excluded *at all*, applying
+    the name rules and the work-root anchor as well; the traversal asks only
+    whether to descend, before it knows whether the directory is a Project.
+    """
+    return not within_policy_paths(candidate, INCLUDE_PATHS) and within_policy_paths(
+        candidate, EXCLUDE_PATHS,
+    )
+
 
 _BROAD_TRAVERSAL_ROOTS = frozenset(
     Path(value).resolve()
@@ -268,6 +422,14 @@ def is_excluded(p: Path, work_root: Path | None = None) -> bool:
     """
     from codess.config import CLAUDE_WORKTREES, DEFAULT_WORK
     root = work_root or DEFAULT_WORK
+    # Precedence: include_paths > exclude_paths > exclude_dirs > hidden names >
+    # default traversal. The path half is `path_scope_excludes`, applied before
+    # the work-root check below, which returns False for anything outside the
+    # anchor -- an operator's exclusion must hold wherever the scan started.
+    if within_policy_paths(p, INCLUDE_PATHS):
+        return False
+    if path_scope_excludes(p):
+        return True
     try:
         rel = str(p.relative_to(root))
     except ValueError:
@@ -287,24 +449,11 @@ def is_excluded(p: Path, work_root: Path | None = None) -> bool:
     # tree using different ones replaces the list without editing code.
     segments = Path(rel).parts
     exact_names, prefix_names = BACKUP_CONVENTIONS
-    if any(segment in exact_names for segment in segments):
-        return True
-    if any(segment.startswith(prefix_names) for segment in segments if prefix_names):
-        return True
-    # Match on path segments rather than a root-relative prefix: the same
-    # directory must be excluded whether it is reached as `<group>/<tree>`
-    # from a work root or `Work/<group>/<tree>` from the home directory above
-    # it. Anchoring to one root
-    # made exclusion depend on where the scan started.
-    parts = p.parts
-    for entry in EXCLUDE_REVIEW_DIRS:
-        needle = tuple(entry.split("/"))
-        if any(
-            parts[i:i + len(needle)] == needle
-            for i in range(len(parts) - len(needle) + 1)
-        ):
-            return True
-    return False
+    return any(segment in exact_names for segment in segments) or any(
+        segment.startswith(prefix_names) for segment in segments if prefix_names
+    )
+
+
 def write_csv(path: Path, rows: list[list], headers: list[str] | None = None) -> None:
     """Write rows to CSV file. headers optional.
 

@@ -1571,6 +1571,111 @@ class TestMappingProfileConformance:
         codes = self._commit(tmp_path, "vendor.user_message.prompt", source_name)
         assert codes.count("mapping_profile_nonconformance") == 1
 
+    @pytest.mark.parametrize(
+        "source_name", ["Claude", "Codex", "Cursor"],
+    )
+    def test_strict_mode_refuses_identically_per_vendor(
+        self, tmp_path, source_name, monkeypatch,
+    ):
+        """Strict mode raises for every vendor, not only the one it was built on.
+
+        The coverage previously reached one adapter, so "strict refuses a
+        non-conforming candidate" was a Claude property that the other two were
+        assumed to share. A vendor that tolerated where another raised would
+        give one conformance figure two meanings.
+        """
+        from codess.schema_contract import SchemaContractError
+
+        monkeypatch.setenv("CODESS_STRICT_MAPPING", "1")
+        with pytest.raises(SchemaContractError, match="released mapping profile"):
+            self._commit(tmp_path, "vendor.user_message.prompt", source_name)
+
+    @pytest.mark.parametrize(
+        "source_name", ["Claude", "Codex", "Cursor"],
+    )
+    def test_diagnostic_mode_records_rather_than_raises_per_vendor(
+        self, tmp_path, source_name, monkeypatch,
+    ):
+        """The other half of the same equivalence, stated explicitly.
+
+        Diagnostic mode is the default, so this passing while the strict case
+        above also passes is what makes the two modes a *choice* rather than one
+        behaviour with an unreachable branch.
+        """
+        monkeypatch.setenv("CODESS_STRICT_MAPPING", "0")
+        codes = self._commit(tmp_path, "vendor.user_message.prompt", source_name)
+        assert codes.count("mapping_profile_nonconformance") == 1
+
+    @pytest.mark.parametrize(
+        "source_name", ["Claude", "Codex", "Cursor"],
+    )
+    def test_a_diagnostic_row_is_inspectable_after_the_run(
+        self, tmp_path, source_name, monkeypatch,
+    ):
+        """Diagnostic mode records rather than only raising.
+
+        A run that reports a non-conformance to stderr and exits has said it
+        once, to whoever was watching. The row is what lets a store answer
+        "what did this decode refuse" after the run that produced it has
+        scrolled away, which is what coverage reporting reads.
+        """
+        from codess.ingest_pipeline import commit_source_replacement
+
+        monkeypatch.setenv("CODESS_STRICT_MAPPING", "0")
+        db = tmp_path / f"inspectable-{source_name}.db"
+        init_db(db)
+        commit_source_replacement(
+            db,
+            session={"id": "s1", "source": source_name, "type": "Code",
+                     "project_path": str(tmp_path)},
+            events=[{
+                "session_id": "s1", "event_id": "e0",
+                "event_type": "user_message", "subtype": "prompt",
+                "role": "user", "content": "x",
+                "source_record_type": "user", "source_record_locator": "line:42",
+                "mapping_rule": "vendor.user_message.prompt",
+                "mapping_trace": '{"applied_rules": []}',
+            }],
+            session_id="s1",
+        )
+        conn = connect(db, read_only=True)
+        try:
+            rows = conn.execute(
+                "SELECT reason_code, granularity, source_value, detail "
+                "FROM mapping_diagnostics "
+                "WHERE reason_code='mapping_profile_nonconformance'"
+            ).fetchall()
+        finally:
+            conn.close()
+        assert len(rows) == 1
+        _reason_code, granularity, source_value, detail = rows[0]
+        # The row states which rule was refused and why, so the condition is
+        # actionable from the store rather than only countable.
+        assert granularity == "record"
+        assert source_value == "vendor.user_message.prompt"
+        assert detail
+
+    def test_every_vendor_has_a_hazard_fixture(self):
+        """Equivalent dispositions need equivalent inputs to be compared on.
+
+        Claude and Cursor had hazard fixtures and Codex had none, so the
+        per-vendor comparison rested on two vendors and an assumption about the
+        third. Resolved through the manifest rather than by path, because a
+        test opening a known path keeps passing after the manifest stops naming
+        the file.
+        """
+        from codess.schema_contract import load_manifest
+
+        entries = load_manifest()["files"]
+        hazards = {
+            key for key in entries if key.startswith("fixture_hazard_")
+        }
+        for vendor in ("claude", "codex", "cursor"):
+            assert any(vendor in key for key in hazards), (
+                f"no hazard fixture names {vendor}; the strict/diagnostic "
+                f"comparison would rest on the other two"
+            )
+
     def test_an_event_without_a_rule_is_not_reported_twice(self, tmp_path):
         """No rule means no profile to measure against.
 
@@ -1602,3 +1707,84 @@ class TestMappingProfileConformance:
             conn.close()
         assert "mapping_profile_nonconformance" not in codes
 
+
+
+class TestRecordedUsageAndRepeats:
+    """Two columns the wire format gained, and the rule each encodes."""
+
+    def _stored(self, tmp_path, events):
+        from codess.ingest_pipeline import commit_source_replacement
+
+        db = tmp_path / "usage.db"
+        init_db(db)
+        commit_source_replacement(
+            db,
+            session={"id": "c1", "source": "Cursor", "type": "Code",
+                     "project_path": str(tmp_path)},
+            events=events,
+            session_id="c1",
+        )
+        conn = connect(db, read_only=True)
+        try:
+            return {
+                row["event_id"]: row for row in conn.execute(
+                    "SELECT event_id, input_tokens, output_tokens, duplicate_of "
+                    "FROM events"
+                )
+            }
+        finally:
+            conn.close()
+
+    def _event(self, event_id, **extra):
+        base = {
+            "session_id": "c1", "event_id": event_id,
+            "event_type": "user_message", "subtype": "prompt", "role": "user",
+            "content": "x", "source_record_type": "bubbleId",
+            "source_record_locator": event_id,
+            "mapping_rule": "cursor.bubble",
+            "mapping_trace": '{"applied_rules":[]}',
+        }
+        base.update(extra)
+        return base
+
+    def test_a_recorded_zero_is_stored_rather_than_nulled(self, tmp_path):
+        """A vendor reporting no usage is not the same as reporting nothing.
+
+        `field_state` already separates absent from null from empty; storing
+        the zero is what lets that distinction reach a usage query.
+        """
+        rows = self._stored(tmp_path, [
+            self._event("e1", input_tokens=0, output_tokens=0),
+        ])
+        assert rows["e1"]["input_tokens"] == 0
+        assert rows["e1"]["output_tokens"] == 0
+
+    def test_an_absent_count_stays_null(self, tmp_path):
+        rows = self._stored(tmp_path, [self._event("e1")])
+        assert rows["e1"]["input_tokens"] is None
+        assert rows["e1"]["output_tokens"] is None
+
+    def test_a_vendor_token_count_object_populates_the_columns(self, tmp_path):
+        """The vendor spelling reaches the columns without a caller mapping it."""
+        rows = self._stored(tmp_path, [
+            self._event("e1", tokenCount={"inputTokens": 12, "outputTokens": 7}),
+        ])
+        assert rows["e1"]["input_tokens"] == 12
+        assert rows["e1"]["output_tokens"] == 7
+
+    def test_a_boolean_is_not_read_as_a_count(self, tmp_path):
+        """`isinstance(True, int)` holds, so a flag would otherwise store 1."""
+        rows = self._stored(tmp_path, [
+            self._event("e1", tokenCount={"inputTokens": True}),
+        ])
+        assert rows["e1"]["input_tokens"] is None
+
+    def test_duplicate_of_is_advisory_and_both_records_survive(self, tmp_path):
+        """Deleting either would be unrecoverable; both are real vendor records."""
+        rows = self._stored(tmp_path, [
+            self._event("b1"),
+            self._event("b2", duplicate_of="b1"),
+        ])
+        assert len(rows) == 2
+        assert rows["b1"]["duplicate_of"] is None
+        assert rows["b2"]["duplicate_of"] == "b1"

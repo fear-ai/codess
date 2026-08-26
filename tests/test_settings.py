@@ -174,3 +174,157 @@ def test_the_table_covers_the_settings_the_command_layer_resolves() -> None:
     attributes = {setting.attribute for setting in SETTINGS}
     missing = routed - attributes
     assert not missing, f"declare these in the settings table: {sorted(missing)}"
+
+
+class TestConfigurationFileAsASource:
+    """A file states one machine's standing choice, below the shell's.
+
+    It is the only source that adds a precedence *level* rather than
+    documenting an existing one, so each pair below is asserted rather than
+    inferred from the order the code happens to check in.
+    """
+
+    def _written(self, tmp_path, monkeypatch, settings, fmt="codess.settings/1"):
+        import json
+
+        from codess.settings import reload_config_file
+
+        path = tmp_path / "settings.json"
+        path.write_text(
+            json.dumps({"format": fmt, "settings": settings}), encoding="utf-8",
+        )
+        monkeypatch.setenv("CODESS_CONFIG", str(path))
+        reload_config_file()
+        return path
+
+    def _cleared(self):
+        from codess.settings import reload_config_file
+
+        reload_config_file()
+
+    def test_a_file_value_beats_the_built_in(self, tmp_path, monkeypatch):
+        import argparse
+
+        from codess.settings import resolve
+
+        self._written(tmp_path, monkeypatch, {"raw_mode": "stated"})
+        try:
+            value = resolve(argparse.Namespace(raw_mode=None), "raw_mode", "built-in")
+            assert value == "stated"
+        finally:
+            self._cleared()
+
+    def test_a_flag_beats_the_file(self, tmp_path, monkeypatch):
+        import argparse
+
+        from codess.settings import resolve
+
+        self._written(tmp_path, monkeypatch, {"raw_mode": "stated"})
+        try:
+            value = resolve(
+                argparse.Namespace(raw_mode="from-flag"), "raw_mode", "built-in",
+            )
+            assert value == "from-flag"
+        finally:
+            self._cleared()
+
+    def test_a_variable_beats_the_file(self, tmp_path, monkeypatch):
+        """A shell is the narrower scope, so a file written weeks ago loses."""
+        import argparse
+
+        from codess.settings import resolve
+
+        self._written(tmp_path, monkeypatch, {"raw_mode": "stated"})
+        monkeypatch.setenv("CODESS_RAW_MODE", "from-variable")
+        try:
+            # `config` resolves the variable into the default at import, which
+            # is what a real caller passes.
+            value = resolve(
+                argparse.Namespace(raw_mode=None), "raw_mode", "from-variable",
+            )
+            assert value == "from-variable"
+        finally:
+            self._cleared()
+
+    def test_resolve_named_applies_the_same_order(self, tmp_path, monkeypatch):
+        """A second spelling of the precedence is how two come to disagree."""
+        from codess.settings import resolve_named
+
+        self._written(tmp_path, monkeypatch, {"raw_mode": "stated"})
+        try:
+            assert resolve_named(None, "raw_mode", "built-in") == "stated"
+            assert resolve_named("supplied", "raw_mode", "built-in") == "supplied"
+            monkeypatch.setenv("CODESS_RAW_MODE", "from-variable")
+            assert resolve_named(None, "raw_mode", "built-in") == "from-variable"
+        finally:
+            self._cleared()
+
+    def test_a_boolean_composes_from_the_file(self, tmp_path, monkeypatch):
+        import argparse
+
+        from codess.settings import resolve
+
+        self._written(tmp_path, monkeypatch, {"force": True})
+        try:
+            assert resolve(argparse.Namespace(force=False), "force", False) is True
+        finally:
+            self._cleared()
+
+    def test_an_unsupported_format_is_ignored(self, tmp_path, monkeypatch):
+        import argparse
+
+        from codess.settings import resolve
+
+        self._written(
+            tmp_path, monkeypatch, {"raw_mode": "stated"}, fmt="codess.settings/99",
+        )
+        try:
+            value = resolve(argparse.Namespace(raw_mode=None), "raw_mode", "built-in")
+            assert value == "built-in"
+        finally:
+            self._cleared()
+
+    def test_a_malformed_file_does_not_stop_a_command(self, tmp_path, monkeypatch):
+        """The lowest source above the default must not be able to abort a run."""
+        import argparse
+
+        from codess.settings import reload_config_file, resolve
+
+        path = tmp_path / "settings.json"
+        path.write_text("{not json", encoding="utf-8")
+        monkeypatch.setenv("CODESS_CONFIG", str(path))
+        reload_config_file()
+        try:
+            value = resolve(argparse.Namespace(raw_mode=None), "raw_mode", "built-in")
+            assert value == "built-in"
+        finally:
+            self._cleared()
+
+    def test_an_unknown_setting_is_named_rather_than_dropped(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        """A misspelled name otherwise reads as a value that took effect."""
+        import logging
+
+        from codess.settings import config_file_values
+
+        self._written(tmp_path, monkeypatch, {"raw_mdoe": "typo"})
+        try:
+            with caplog.at_level(logging.WARNING):
+                assert config_file_values() == {}
+            assert any("raw_mdoe" in record.message for record in caplog.records)
+        finally:
+            self._cleared()
+
+    def test_no_file_is_not_an_error(self, tmp_path, monkeypatch):
+        import argparse
+
+        from codess.settings import reload_config_file, resolve
+
+        monkeypatch.setenv("CODESS_CONFIG", str(tmp_path / "absent.json"))
+        reload_config_file()
+        try:
+            value = resolve(argparse.Namespace(raw_mode=None), "raw_mode", "built-in")
+            assert value == "built-in"
+        finally:
+            self._cleared()
