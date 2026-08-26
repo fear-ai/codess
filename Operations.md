@@ -803,6 +803,63 @@ Choose `same`, `compatible`, `breaking`, or `manual` only after reviewing the
 reported contract changes. Then run the full test suite and the smallest real
 source-system example that exercises the changed translation.
 
+## Comparative Measures
+
+`tools/model_metrics.py` reports what the published stores show about tools,
+vendors, and models; `--html` renders it as one self-contained page. Both read
+the current pointer per Project, so a superseded snapshot is never counted.
+
+```bash
+python tools/model_metrics.py                     # every measure, as JSON
+python tools/model_metrics.py --measure tools     # one measure
+python tools/model_metrics.py --html report.html  # the visual report
+```
+
+**Comparability is stated per measure rather than assumed**, because three
+findings make the obvious comparisons wrong:
+
+| Measure | Compare across vendors? |
+|---|---|
+| Human prompts | **Yes.** Actor classification is what CoSchema normalizes for all three |
+| Tool calls | No. A call is harness-mediated: Cursor records one where Claude does the same work another way |
+| Events, events per Session | No. 45-78% of a store is tool traffic, so the count measures how much a harness writes down |
+| Tool durations | Only where `resolution` is `measured`. Cursor stamps a call and its result identically, so most of its pairs state ordering rather than elapsed time |
+
+**A duration measure states whether it measured anything.** `resolution` is
+`measured`, `same_timestamp`, or `none`, and the report omits the second rather
+than publishing a p50 of zero as though a tool returned instantly.
+
+## Analysis and Visualization
+
+Four tools read published stores and write self-contained HTML -- no network, no
+build step, no external asset -- so a report is readable from an archive.
+
+```bash
+python tools/model_metrics.py --html metrics.html      # tools, vendors, models
+python tools/dialog_extract.py --out dialog.jsonl      # step 1: flat dataset
+python tools/dialog_report.py dialog.jsonl --html d.html  # step 2: analysis
+python tools/timeline_report.py --project X --repo ~/X --html t.html
+python tools/friction_signals.py --examples            # preliminary miss signals
+```
+
+**Extraction and analysis are separate steps on purpose.** `dialog_extract`
+writes JSONL, CSV, or a labelled transcript; `dialog_report` reads that file and
+never opens a store. A figure can then be recomputed from a file a reader
+already has, and either half can be replaced without the other.
+
+**What each is for, and what it may not be used for:**
+
+| Tool | Answers | Does not |
+|---|---|---|
+| `model_metrics` | Tool volume, failure rate, duration, vendor recording shape | Compare tool counts across vendors -- a call is harness-mediated |
+| `dialog_extract` / `dialog_report` | Exchange shape: bouts, prompt and reply size, reply fan-out | Claim causality; the pairing is derived from Session sequence |
+| `timeline_report` | Which vendor worked on which day, against commits | Read a gap as a decline; an empty cell is absence |
+| `friction_signals` | Interrupts, denials, failures, corrective openings | Rate the work, or compare rates between Projects |
+
+**`friction_signals` reports candidates, not findings.** A tool failure is often
+the work -- a failing test being driven -- and a corrective rate depends on how
+an operator writes. What travels is a Project's change over time.
+
 ## Repository Tools
 
 The `codess` command is the supported interface. The scripts under `tools/`

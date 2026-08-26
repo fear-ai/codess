@@ -843,6 +843,101 @@ happening", which is the question that decides where a standing instruction is
 worth its cost. Entries are not removed when the underlying miss is fixed -- the
 record of the mistake is what has future value.
 
+### Operator-Reported Misses, Codess Development
+
+*Eight classes the operator named after living through them. Recorded from the
+operator's account rather than from a checker, because none of them is
+detectable by one: each is a judgement failure whose symptom is only visible to
+whoever had to undo it. Where a figure appears it was measured afterward, and
+where a claim could not be confirmed from the corpus that is said plainly.*
+
+**1. A destructive command deleted a production data directory.** Located in
+`~/.claude/projects/-Users-walter-Work-ZK-ZeroPerf/a5b7b623…jsonl`, 2026-08-23,
+`claude-opus-5`. The model's own words: *"`ZERO_PERF_ALLOW_LIVE_DATADIR=1`
+deletes a production datadir with only a warning … it just deleted `~/.zero`
+again in my test"* and *"empty stub, nothing lost, but that's luck."*
+
+**Two defects, and the second is the process miss.** The tool permitted it:
+one environment variable authorised both *reading* a live datadir and
+*destroying* it, and because that variable is set for a whole session, a
+destructive policy ran unchallenged. That was fixed the same day by splitting
+the permission. The miss is that it ran **during a test**, against a real path,
+with no copy taken and no confirmation asked -- and the only reason nothing was
+lost is that the macOS path held a stub while the real datadir lives on the
+Linux host.
+
+**A near-miss is the finding, not the absence of damage.** "Nothing lost" is an
+outcome; "a destructive operation ran against a production path unprompted" is
+the behaviour, and it recurs whether or not the directory happened to be empty.
+
+**It was also nearly missed twice.** A first search of the published stores
+returned zero matches and was reported as "not confirmable, consistent with
+predating the retained window" -- which was wrong. The event was three days old.
+The search failed because it looked for `rm -rf …/.zero` in tool *input*, and
+the evidence is prose in an assistant *message*. When a search for a known
+incident returns nothing, the first hypothesis is a wrong query, not an absent
+record.
+
+**2. Voluminous scripted edits with no way back.** A single script rewriting
+many files, where the files had no tests, no stash was taken, and the tool's
+own failure modes were undocumented -- so a bad pass was both likely and hard to
+reverse. The precondition is the fix: a sweep over files without tests takes a
+`git stash` or a copy first, and a tool whose gotchas are known writes them down
+before the sweep rather than after the recovery.
+
+**3. Repeated `grep`, `awk`, and regex patterns that under- or over-match.**
+Measured: 19,929 invocations of `grep`/`rg`/`awk`/`sed`, of which 364 (1.8%)
+were recorded as failed -- and a failure rate understates this class, because a
+pattern that silently matches the wrong set succeeds. The recurring part is what
+makes it a process miss rather than a mistake: the same failure modes returned
+without a note accumulating. A pattern that will drive an edit is tested against
+a known-answer sample first, and a pattern that failed once is recorded with the
+shape that broke it.
+
+**4. Overriding a direct instruction, then defending it.** A stated
+modification declined on the grounds of breadth of usage, volume of change, or
+weight of existing documentation. Some of those arguments had merit; none of
+them is a reason to decide unilaterally. **The merit is what makes this
+dangerous**: a good argument presented after the fact reads as justification
+rather than as the question it should have been. Raise the concern, ask, and
+proceed on the answer.
+
+**5. Recording a decision and not implementing it.** Changes agreed and written
+into the task list, then left while the list grew. Measured in the item record
+itself: 102 identifiers minted, 62 rows still open at `4ac9363`. The half-life
+of a decision is short, and a decided-and-unapplied item is worse than an open
+question because it reads as done.
+
+**6. Stopping with queued work unaddressed, repeatedly on the same items.**
+Several requested modifications completed and the remainder dropped, with the
+same items resurfacing in later sessions. The rule: finish the whole ask or
+state plainly which parts were not done and why.
+
+**7. Minting new work items instead of amending existing ones.** W-numbers to
+W102 against 40 closed. An item whose scope narrowed, widened, or was partly
+answered is edited; a new identifier is for genuinely new work. The cost of the
+wrong choice is a list nobody can read as a plan.
+
+**8. Retaining obsolete commentary, dead structures, and compatibility shims.**
+Historical minutiae, superseded structures, and mappings kept past their use --
+against this repository's own stated comment rule, which is to record the
+durable fact and not the history.
+
+**9. Using the cost of a reingest to avoid a decided change.** The corpus
+rebuild is about six minutes of machine time. It was repeatedly cited as a
+reason to defer decided wire-format changes -- `duplicate_of`, the W50/W51
+renames, `projects_state.json` -- leaving half-implemented states behind, and to
+accept a change on the strength of a few crafted tests rather than a full
+validation run. Six minutes is not a reason to carry a partial state. Where
+batching is genuinely right it is right because the changes are *ready
+together*, not because a rebuild is expensive.
+
+**What connects nine of these.** Seven of the nine are a decision the model made
+alone that was the operator's to make: what to delete, what to sweep, what to
+decline, what to defer, what to keep. The remaining two -- untested patterns and
+unrecorded failure modes -- are the absence of the check that would have made
+the decision visible before it was acted on.
+
 ### Incomplete Sweeps
 
 *The most frequently recurring group: a fix applied to the instance in hand and

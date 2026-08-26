@@ -48,7 +48,7 @@ the short list a reader needs first.
 
 | ID | Work | State |
 |---|---|---|
-| **Sprint 1** | Wire-format change: the token columns and `duplicate_of` **landed at format 10**; W50+W51 renames and `page_size` remain | The corpus is at format 9 and every published store is unreadable until reingested |
+| **Sprint 1** | **Shipped as format 10**: token columns and `duplicate_of`. The W50+W51+W98 renames did not travel with it and are queued at rank 1 | The corpus is rebuilt and readable -- 21 Projects, 0 failures, 0 vanished Sources |
 
 **The rebuild ran: 21 of 21 Projects, 0 failures.** Every published store is
 format 10, holding 436 Sessions and 273,594 Events across 63 stores.
@@ -77,8 +77,9 @@ Unblocked, decided, and startable without waiting on anything.
 | ID | Work | Note |
 |---|---|---|
 | **W103** | Rescan the decode and source-access layers for the five crash-site classes | The three adapters are fuzzed and hold; the source-access layer has not been driven with hostile input |
+| **W85** | Step 1 landed; steps 2-3 are a store column and an operator binding | The 98 unbound composers are now reported per store, so the condition is visible rather than silent |
+| **W50 + W51 + W98** | The naming resolutions, still unapplied | Wire-format. Format 10 was just paid for, so these are the next format's content rather than blocked work |
 | **W05** | Real investigations against the query surface | Unchanged, and now the only queue item whose output is evidence rather than machinery. Wait for the reingest, so it runs against current-format stores |
-| **W50 + W51 + W98** | The naming resolutions no format has yet carried | Wire-format. Format 10 has just been paid for, so landing these now costs a second rebuild; batching them into the *next* format change is what the item argues for |
 
 **The two unnumbered items are resolved and one changed shape.** Cursor
 `agentKv` decode landed: the harness system prompt, `reasoning`, and
@@ -135,6 +136,20 @@ Design and analysis proceed; implementation is postponed.
 
 Exception: the **time and datetime module** is not postponed. It is standalone,
 takes an injected clock, and is developed, validated, and deployed in this round.
+
+### Backlog Hygiene
+
+**The open table carried 48 rows and 20 of them were closed.** A closed row is
+retained only while an open item depends on it, and that rule had stopped being
+applied: the register read as a 48-item backlog when the real figure was 28.
+Removed the 20 whose `Blocked by` column was empty; W91 stays because its
+blocker names W14, which is the case the rule exists for.
+
+**Two postponements were stale rather than blocked.** W85 step 1 said "nothing
+currently says the number" after `coverage_report.unbound_composers` had begun
+saying it. W50/W51/W98 were deferred on rebuild cost through a session in which
+the rebuild ran twice. A stated dependency is checked when the item is next
+read, not assumed to still hold.
 
 ### Recently Closed
 
@@ -197,54 +212,34 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 
 | ID | Priority | Status | Work | Blocked by |
 |---|---|---|---|---|
-| W04 | Normal | Closed | Candidate-record contract. All five steps landed: strict and diagnostic modes now have equal semantics across the three vendors, and a non-conformance records an inspectable row | -- |
 | W05 | High | Planned | Run named real investigations against the query surface | -- |
 | W14 | High | Planned | The registry binding index is authoritative and the in-project file confirms; a lost binding no longer mints. Steps 1-5 are in code and **not applied to the operator's registry**, which is a deliberate hold rather than remaining work | -- |
 | W16 | Normal | Postponed | Evaluate external investigation interfaces | No consumer |
 | W17 | Normal | Postponed | Expand cross-Project analysis inputs | Baseline 2 |
-| W35 | Normal | Closed | Every released entry has a consumer that reads it through the manifest | -- |
 | W43 | Low | Withdrawn | Table-drive request validation | -- |
 | W50 | Normal | Planned | Reconcile schema names with defined terminology | Batches with W51 |
 | W51 | Normal | Planned | Resolve source-identity naming and suffix rules | Batches with W50 |
-| W55 | Normal | Closed | Text and record parsing unified on `codess.timeval`; the `datetime.now` sites remain and batch with W67 | -- |
-| W64 | Normal | Closed | Typing posture decided and enforced; `warn_return_any` recorded at 26 errors against W04 | -- |
-| W65 | Normal | Closed | `RecordContext` carries the record-context group; a census test holds the rule over every adapter | -- |
-| W66 | Normal | Closed | Configuration unification complete: a config file is admitted as a source between the variable and the built-in, with each precedence pair tested | -- |
-| W67 | Normal | Closed | Every relay takes an object; the builder/relay distinction is a test; the three structures share no field | -- |
 | W70 | Normal | Planned | Re-partition documentation; remove cross-document redundancy | -- |
-| W71 | Normal | Closed | Eight status sites moved to the facility and `HumanSink` renders a warning as a warning. One site keeps the direct write, with the reason recorded beside it | -- |
-| W72 | Normal | Closed | One Event-record builder per adapter; no adapter constructs an Event dict outside it | -- |
 | W73 | Normal | Planned | Every CoPlan row is closed with evidence or carries a named owner. The coverage group landed; the Artifact-linkage, parentage, and inheritance groups remain, each routed | -- |
 | W74 | High | Planned | Cursor Session times dropped; unread populated fields; two vendor facts to record | Retrieved-reference policy split to W79 |
 | W75 | Normal | Postponed | Harness experiments for conditions no stored data records | Execution deferred; restart criteria on the item |
 | W76 | Normal | Postponed | Characterise current Cursor terminal-agent storage; the decoded store is obsolete | Restart criteria on the item |
 | W77 | Normal | Withdrawn | Time module -- W55 already specifies it | -- |
-| W78 | Low | Closed | Guard the module-level import graph against cycles | -- |
 | W79 | Normal | Postponed | Content policy for retrieved, attacker-influenced Artifact references | Needs a retrieval-bearing corpus |
-| W80 | High | Closed | Read `composerData.modelConfig` for every composer, not only headered ones | -- |
 | W81 | Normal | Postponed | Cursor Artifact evidence in adjacent key spaces: patch graphs, checkpoints, file snapshots | Restart criteria on the item |
-| W82 | High | Closed | Tools carry unchecked SQL; a renamed column broke the mandated audit silently | -- |
 | W83 | High | Postponed | Early-access release readiness | Postponed entire, including the licence split; restarts on the owner's licence decision |
 | W84 | Low | Postponed | Characterise `selectedModels` parameters beyond `fast` and `effort` | Both observed ids are mapped; no third has appeared |
 | W85 | Normal | Postponed | Composers older than the header retention window are unattributed by design | Handling can improve; the condition itself is vendor retention |
-| W86 | High | Closed | Skipped and refused records are counted but not attributed | -- |
 | W87 | Normal | Planned | Group the test corpus by subsystem; find superseded and uncovered cases | -- |
 | W88 | Normal | Planned | Cursor KV decode: classify by content kind before parsing | -- |
-| W89 | Normal | Closed | Three settings, not two: `exclude_dirs` for names, `exclude_paths` and `include_paths` for absolute paths. `AGGREGATORS` and `EXCLUDE_REVIEW_DIRS` are retired into `exclude_paths` and removed from the code; a path is validated per segment, not only in total | -- |
-| W90 | High | Closed | Scanned Projects are never ingested unless named again | -- |
 | W91 | High | Closed | One authoritative Project record spanning scanned, ingested, moved, and removed | Structural half tracked on W14 |
 | W92 | Normal | Planned | Event-kind aggregation: most volume is machine traffic, not human work | -- |
 | W93 | Normal | Postponed | Session utilization: report counts and `surface_kind`, not a derived class | Link-detection design recorded; inclusion policy undecided |
-| W94 | Normal | Closed | One checker with three callers; `tools/install_hooks.py` moves detection to the commit that breaks it | -- |
-| W95 | Low | Closed | The standard is recorded where a contributor meets it, with the worked example; the two named messages are revised | -- |
 | W96 | High | Planned | Steps 1-4 landed: every finding names its remedy, the Claude slug split is detected, `sources_vanished` is reported, and `catalog relocate` is documented as the pre-move step. The copy case remains undecidable by design | W14 (partly) |
 | W97 | Normal | Planned | Read the Codex thread name; reconcile archive location with archive state | -- |
 | W98 | Low | Planned | Ten field names still spell the algorithm rather than the value: `*_sha256` against the `*_digest` rule | Each is wire-format or a released document, so each costs a regeneration or a version bump |
-| W99 | Normal | Closed | One tree `receipts/<kind>/`; the refresh reader globs `*.json` and the directory states the kind | -- |
 | W103 | High | Planned | Rescan for the five crash-site classes beyond the fuzzed adapters, and for exact-value grouping that understates a templated family | -- |
 | W102 | Low | Planned | Review the option classification against what each flag actually does: 110 flag-only, 34 default-only, 24 with a variable | The classification is recorded in CoNames and has not been critiqued per flag |
-| W101 | Normal | Closed | `reasoning_fidelity` set by the adapter that read it; verified `summary` on Codex and `full` on Cursor in one store set | -- |
-| W100 | Normal | Closed | One retention count, current included, read by both paths through one implementation; `--keep` and `create_snapshot(keep_total=)` override it per run | -- |
 
 ## Queue
 
@@ -253,12 +248,16 @@ not a preference.
 
 | Rank | Item | Why here |
 |---|---|---|
-| 1 | **W05** | Unchanged, and now more clearly first: it is the only item whose output is evidence about whether the query surface answers real questions rather than machinery that supports them. The corpus was just rebuilt and audited, so the work starts against current data with no rebuild of its own. |
-| 2 | **W67** | Promoted from 5. Its prerequisite landed -- the setting table declares each value once, so a policy object built at the command adapter no longer encodes duplication. It also carries the twelve remaining ambient clock reads, which are in four of its five relay modules. |
-| 3 | **W04** (steps 3-4) | Steps 1, 2, and 5 landed, and step 5 found a real non-conformance on its first run. W35 is closed, so the per-vendor hazard fixtures the strict/diagnostic semantics need are now reachable and tested. |
-| 4 | **W50 + W51 + W98** | The naming resolutions no format has yet carried, now three rather than two. All are wire-format, so they land as one regeneration or they cost three. |
-| 5 | **W66** (config file) | Everything measured has landed, including the precedence sweep. What remains is admitting a config file as a source, which is a design question rather than a sweep and blocks nothing. |
-| 6 | **W65** | W64 closed. W65's record-context cluster is adapter signatures, so it still wants W04's steps to settle first -- which is why it now trails rank 3 rather than sharing a row with a closed item. |
+| 1 | **W50 + W51 + W98** | The only decided-and-unapplied work left. All three are wire-format, so they land as one regeneration or they cost three. Format 10 is published and the corpus is rebuilt, so the next bump starts from a clean base rather than compounding a deferral. |
+| 2 | **W103** | The rescan for the five crash-site classes, plus exact-value grouping that understates a templated family. Both were found by measurement contradicting a report, and neither is reachable by review. |
+| 3 | **W05** | Real investigations against the query surface: the only item whose output is evidence about whether the surface answers questions rather than machinery that supports them. Runs against current-format stores now. |
+| 4 | **W14** (steps 1-5 applied) | The code is written and deliberately not applied to the operator's registry. What remains is the operator's decision to run it, not further work. |
+| 5 | **W96** (steps 1-4 landed) | Detection, directed reports, and `sources_vanished` are in. The copy case is undecidable by design and waits on an operator answer rather than on effort. |
+| 6 | **W85** (steps 2-3) | Step 1 reports the 98 unbound composers. A store column and an operator-stated binding remain, and neither blocks anything. |
+
+**Closed this session, so they are not re-derived:** W04 (steps 3-4), W65, W66,
+W67, W71, W89, W94, W95, and W85 step 1. The previous ranking listed four of
+those as pending, which is the staleness the register exists to prevent.
 
 ### Resuming: Project Location Changes
 
@@ -573,7 +572,7 @@ either not started or has a stated boundary.
 | Time parsing consolidation | `codess.timeval` is the standalone module: `epoch_ms`, `parse_iso`, `iso_to_ms`, `to_iso`, `month_key`, `is_sane`, `now_ms`, and `now_iso`. `codess.wallclock.system_clock` is the ambient clock the last two are handed, and is a separate module because `timeval`'s constraint forbids a clock read inside it. Three tests assert the constraints -- no `codess` import in `timeval`, no ambient clock in `timeval`, and no `datetime.now` anywhere in the package outside `wallclock` and `reporting.clock`. **Done:** the `fromisoformat` callers, the `epoch_milliseconds` importers, and 44 of the 56 clock reads. **Remaining:** 12 reads in four relay modules, listed in the test's `DEFERRED` set -- threading a clock through them changes the signatures W67 rewrites, so doing it first converts them twice. | W55, W67 |
 | Cursor Session times | **Closed in code, unverified against the corpus.** The header fallback is written and the suite covers it; the 2 Sessions of 86 that carry no `started_at` are still null in the published stores, because closing them needs the reingest that W74.3's column change also needs. | W74.1 |
 | Cursor field mapping | The Sprint 2 pass landed: timings, error details, terminal cwd, symbol and file links, todos, code blocks, `context` leaves, and the request and response identifiers. **Remaining:** `richText` mention nodes and `isAgentic`, both populated on 390 of 4,984 sampled bubbles. | W74.5a, W79 |
-| `duplicate_of` reference | Decided and not built. Needs a column, so it batches with the next wire-format change rather than landing alone. | W74.3 |
+| `duplicate_of` reference | **Built at format 10.** `_repeat_references` names the earlier Event a repeat repeats, and the column carries it; 14,920 references are stored across the rebuilt corpus. | W74.3 |
 | Mechanical enforcement | Import boundaries, SQL ownership, module-level cycles, rejection vectors, subprocess coverage, and now mapping-profile conformance each have a check. **Remaining:** the strict/diagnostic semantics of a non-conformance are not yet equal across vendors (W04 step 3), which needs the per-vendor hazard fixtures W35 inventories. | W04 |
 | Terminal-agent storage | The obsolete `chats/` store is characterised; the current `~/.cursor/projects/` tree is identified and not examined. | W76 |
 | Harness conditions | Designed, segregated into machine and human parts, and not run. | W75 |
@@ -3644,9 +3643,10 @@ unattributed composer from an absent one.
 **Rounding out the handling.** Three things would make this condition
 first-class rather than merely non-fatal, in increasing order of cost:
 
-1. **Report it.** A scan or coverage line stating "98 composers hold bubbles
-   older than the header retention window" turns an invisible condition into an
-   observation. Nothing currently says the number.
+1. **Report it. Done.** `coverage_report.unbound_composers` states the count
+   per store -- measured 164 composers, 66 with a header, 98 without -- so the
+   condition is an observation rather than an invisible exclusion. It travels
+   with every store's coverage report.
 2. **Name the condition in the store.** A Session admitted without a workspace
    would need a binding basis -- the `session_model_basis` pattern -- so a
    query could include or exclude unbound Sessions deliberately. This is the
@@ -4516,11 +4516,20 @@ report, and they answer different questions.
 
 #### Remaining
 
-**Re-ingesting a catalogued Project can still add an entry**, which is W14's
-structural half: the binding inside the Project directory wins over the
-catalog, so a lost binding still splits a Project. The guard reports it; the
-fix moves the authoritative binding to the registry. That is tracked on W14
-rather than here.
+**W14's structural half is now written, and W91 stays open on one point.**
+The registry binding index is authoritative and the in-project file confirms it,
+so a lost binding no longer mints a second identity -- the case that split nine
+Projects. `test_a_lost_binding_on_a_cleaned_directory_does_not_mint` holds it.
+
+**What keeps this row is that the code is not applied to the operator's
+registry.** `backfill_binding_index` has not been run against `~/.codess`, by
+deliberate hold rather than by oversight, so a machine that has not run it still
+resolves identity the old way. Until it does, W91's claim -- one authoritative
+record per Project -- is true of the code and not yet of this machine.
+
+**This row is retained under the closed-item rule**: a closed item stays listed
+only while an open item continues it, and W14 is that item. When W14's backfill
+is applied, both rows go.
 
 **Evidence to close.** A single query answers "every Project this machine has
 known, with what happened to it and when"; each fact in it names its writer;
@@ -5305,8 +5314,13 @@ produced per run and read immediately, so it cost one version bump and no stored
 data. `manifest_sha256` is the sharp one: it appears in every `current.json`, so
 renaming it makes every published pointer unreadable until republished.
 
-**Batches with the next wire-format change**, which is Sprint 1. Renaming them
-alone would pay a full regeneration for a change with no behavioural content.
+**Batches with W50 and W51**, which are the next wire-format change and are
+queued at rank 1. Renaming these alone would pay a full regeneration for a
+change with no behavioural content; landing all three together pays it once.
+
+Sprint 1 -- which this previously named -- shipped as format 10 and carried the
+token columns and `duplicate_of`. It did **not** carry the naming resolutions,
+so they are the next format's content rather than work Sprint 1 left behind.
 
 **Evidence to close.** No field name outside `hashing` names an algorithm; a test
 asserts it over the released schema and the documents Codess writes.
