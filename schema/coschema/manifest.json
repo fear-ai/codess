@@ -3,76 +3,76 @@
   "decoder_version": "0.2",
   "files": {
     "contract": {
-      "path": "schema/coschema/contract.json",
-      "sha256": "a1a65d3d65ef0d295d5034598f11aaff09010feefbfdb043c9d0c19bb2509910"
+      "digest": "75eb7cf4f1cfea983fd73f32918cd70e93db9981a6f7ed8ea1760f5fa5225c16",
+      "path": "schema/coschema/contract.json"
     },
     "fixture_compatibility_store_meta_v2": {
-      "path": "schema/coschema/fixtures/compatibility/store-meta-v2.json",
-      "sha256": "35ee5178443f2abd1b1c1d5f1f220af8720ceede674822ed20ab9fbed58003f4"
+      "digest": "35ee5178443f2abd1b1c1d5f1f220af8720ceede674822ed20ab9fbed58003f4",
+      "path": "schema/coschema/fixtures/compatibility/store-meta-v2.json"
     },
     "fixture_compatibility_store_meta_v3": {
-      "path": "schema/coschema/fixtures/compatibility/store-meta-v3.json",
-      "sha256": "37aedfccad754b88e887be9b66c1c813b25c68c84f6b9c0207a7f6acd4332717"
+      "digest": "37aedfccad754b88e887be9b66c1c813b25c68c84f6b9c0207a7f6acd4332717",
+      "path": "schema/coschema/fixtures/compatibility/store-meta-v3.json"
     },
     "fixture_edge_null_session_times": {
-      "path": "schema/coschema/fixtures/edge/null-session-times.json",
-      "sha256": "39c2a84e683860d3f8e5ff01795bd0144d3f0bda752d38d1e215dbad577633a1"
+      "digest": "39c2a84e683860d3f8e5ff01795bd0144d3f0bda752d38d1e215dbad577633a1",
+      "path": "schema/coschema/fixtures/edge/null-session-times.json"
     },
     "fixture_golden_cross_vendor_artifact": {
-      "path": "schema/coschema/fixtures/golden/cross-vendor-artifact.json",
-      "sha256": "32c745e2c2dc2df70d04693e63ec8a3925e0248a62a729bb7a5486f30f67961b"
+      "digest": "32c745e2c2dc2df70d04693e63ec8a3925e0248a62a729bb7a5486f30f67961b",
+      "path": "schema/coschema/fixtures/golden/cross-vendor-artifact.json"
     },
     "fixture_hazard_claude_error_tool_results": {
-      "path": "schema/coschema/fixtures/hazard/claude-error-tool-results.json",
-      "sha256": "8c9168d42f701c3e338a732e681083fb09ff36e9570bcc363d457839c91db4a9"
+      "digest": "8c9168d42f701c3e338a732e681083fb09ff36e9570bcc363d457839c91db4a9",
+      "path": "schema/coschema/fixtures/hazard/claude-error-tool-results.json"
     },
     "fixture_hazard_codex_reasoning_encrypted": {
-      "path": "schema/coschema/fixtures/hazard/codex-reasoning-encrypted.json",
-      "sha256": "93b5b351cd1bb6c9a582f76d6aa242f70fefa938dbc1d28bb8f3d32915d60085"
+      "digest": "93b5b351cd1bb6c9a582f76d6aa242f70fefa938dbc1d28bb8f3d32915d60085",
+      "path": "schema/coschema/fixtures/hazard/codex-reasoning-encrypted.json"
     },
     "fixture_hazard_cursor_nonmessage_copies": {
-      "path": "schema/coschema/fixtures/hazard/cursor-nonmessage-copies.json",
-      "sha256": "87df2ba00329c95e37b60dcf8118f2a9218ace1525c7dd77c8b9ef30e2b04452"
+      "digest": "87df2ba00329c95e37b60dcf8118f2a9218ace1525c7dd77c8b9ef30e2b04452",
+      "path": "schema/coschema/fixtures/hazard/cursor-nonmessage-copies.json"
     },
     "fixture_hazard_cursor_tool_former": {
-      "path": "schema/coschema/fixtures/hazard/cursor-tool-former.json",
-      "sha256": "3943cc4ed5da0599cd4d933522be96afed7ccfee472fddf884e9cca81708a334"
+      "digest": "3943cc4ed5da0599cd4d933522be96afed7ccfee472fddf884e9cca81708a334",
+      "path": "schema/coschema/fixtures/hazard/cursor-tool-former.json"
     },
     "fixture_maximal_event": {
-      "path": "schema/coschema/fixtures/maximal/event.json",
-      "sha256": "b6861b0624d79c41ddb613df7ab512850fbb8bfb2e637cd56110c0ab7498ee2d"
+      "digest": "b6861b0624d79c41ddb613df7ab512850fbb8bfb2e637cd56110c0ab7498ee2d",
+      "path": "schema/coschema/fixtures/maximal/event.json"
     },
     "fixture_minimal_session": {
-      "path": "schema/coschema/fixtures/minimal/session.json",
-      "sha256": "e643cb0c162386b56ec0627d065e17519feae71b5360ebc32d2567f814863014"
+      "digest": "e643cb0c162386b56ec0627d065e17519feae71b5360ebc32d2567f814863014",
+      "path": "schema/coschema/fixtures/minimal/session.json"
     },
     "fixture_negative_event_sequence_zero": {
-      "path": "schema/coschema/fixtures/negative/event-sequence-zero.json",
-      "sha256": "d123c812edcd665eacf7e85dcbca06d2ea3b0d52598c59cded4df5e5e42e7433"
+      "digest": "d123c812edcd665eacf7e85dcbca06d2ea3b0d52598c59cded4df5e5e42e7433",
+      "path": "schema/coschema/fixtures/negative/event-sequence-zero.json"
     },
     "mapping_claude": {
-      "path": "schema/mappings/claude.json",
-      "sha256": "3ac4866dc42996f7b14bbc41ae3259e2b67650a8af27762bdd3d2a7ac1731d36"
+      "digest": "d2febe4432dbe65afefb73f9393c7e375e07f4fb39a123fe74778aede836ae89",
+      "path": "schema/mappings/claude.json"
     },
     "mapping_codex": {
-      "path": "schema/mappings/codex.json",
-      "sha256": "f9d44e822b445e1cc3f8e1a5026db32396177c6f0ece4b05f17c5649f295ae28"
+      "digest": "66c0d6c06ef92da42d2d68d26c2e263954912021006e96ef263c4fcd3c957483",
+      "path": "schema/mappings/codex.json"
     },
     "mapping_contract": {
-      "path": "schema/coschema/mapping-contract.json",
-      "sha256": "366a45902d0b24d8399e9f0e92a891adcebfd8c0a5529f3ac7df0c17b9e88f51"
+      "digest": "3b2f540cd6d7612a067042981964fe2e1a849c1419a6f6f742cbda22a9cb0ae9",
+      "path": "schema/coschema/mapping-contract.json"
     },
     "mapping_cursor": {
-      "path": "schema/mappings/cursor.json",
-      "sha256": "27b93b2997999cc39d315747f74d06182768fece1b530b1fc83e8d4b1a5c4edc"
+      "digest": "7a4298bee857fc2c5911ad8571de8e8a308f00bae9cf1104da37caba6b59cbd7",
+      "path": "schema/mappings/cursor.json"
     },
     "sqlite_schema": {
-      "path": "schema/coschema/sqlite/schema.sql",
-      "sha256": "295ac7708fd0635018672801439ab984c82e16d1a0429d95401b394725b28403"
+      "digest": "fb54cd5138056c694c474b3137eb7249c2d5a66a228c8991895a9e60b0d69db4",
+      "path": "schema/coschema/sqlite/schema.sql"
     }
   },
   "format_id": "codess.coschema",
-  "format_version": 10,
+  "format_version": 12,
   "reader_compatibility": {
     "legacy_read": [
       1

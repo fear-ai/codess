@@ -67,7 +67,7 @@ def _captured_project(tmp_path: Path) -> tuple[Path, Path, str]:
         conn.close()
     raw = RawStore(registry / "raw")
     record = raw.observe(
-        source, source_system_id="openai.codex",
+        source, source_system_key="openai.codex",
         storage_format="codex-jsonl", mode="capture",
     )
     create_snapshot(
@@ -167,7 +167,7 @@ def test_ingest_discovered_workspace_binding_is_stable(tmp_path):
     )
     entry = get_project_entry(registry, binding["project_id"])
     assert entry["workspace_bindings"] == [{
-        "source_system_id": "cursor.composer",
+        "source_system_key": "cursor.composer",
         "workspace_id": "workspace-1",
         "relation_kind": "local_workspace_path_binding",
         "source_project_path": str(project.resolve()),
@@ -196,9 +196,8 @@ def test_a_relocated_location_identity_does_not_abort_the_ingest(tmp_path):
     """One directory, two derived identities, one row.
 
     `location_id` is derived from `(machine_id, path)`, so changing the
-    derivation -- as the format-5 identity change did, moving every value from
-    `sha256:` to `id1:` -- produces a second identity for a directory already
-    recorded. `project_locations` declares `UNIQUE(machine_id, observed_path)`,
+    derivation produces a second identity for a directory already recorded --
+    which an identity change has done, giving every value a new scheme. `project_locations` declares `UNIQUE(machine_id, observed_path)`,
     and an insert handling only the `id` conflict raised `IntegrityError`
     mid-ingest, aborting the Project. Every affected Project was unrebuildable
     until this was fixed, which is exactly when a rebuild was required.
@@ -214,7 +213,7 @@ def test_a_relocated_location_identity_does_not_abort_the_ingest(tmp_path):
     # A registry written across an identity change: the same place twice.
     observed = dict(entry["locations"][0])
     stale = dict(observed)
-    stale["location_id"] = "codess:location:sha256:" + "0" * 40
+    stale["location_id"] = "codess:location:id0:" + "0" * 40
     stale["observed_at"] = "2020-01-01T00:00:00+00:00"
     entry = {**entry, "locations": [stale, observed]}
 
@@ -239,7 +238,7 @@ def test_the_catalog_keeps_one_entry_per_place():
     from codess.project_catalog import _merged_locations
 
     stale = {
-        "location_id": "codess:location:sha256:" + "1" * 40,
+        "location_id": "codess:location:id0:" + "1" * 40,
         "machine_id": "machine:m1",
         "path": "/w/p",
         "state": "active",
@@ -391,7 +390,7 @@ def test_exact_project_id_resolves_central_snapshot_without_mutation(tmp_path):
     )
     assert scopes[0]["snapshot_id"]
     assert scopes[0]["selection_kind"] == "project_ids"
-    assert len(scopes[0]["resolved_selection_sha256"]) == 64
+    assert len(scopes[0]["resolved_selection_digest"]) == 64
     assert (registry / "projects.json").read_bytes() == before
 
     result = subprocess.run(
@@ -427,7 +426,7 @@ def test_saved_project_set_and_all_current_resolve_exact_snapshots(tmp_path):
     }), encoding="utf-8")
 
     loaded = load_project_set(saved_path)
-    assert len(loaded["selection_sha256"]) == 64
+    assert len(loaded["selection_digest"]) == 64
     saved = resolve_project_query_scopes(
         registry, project_set=saved_path
     )
@@ -595,16 +594,16 @@ def test_catalog_query_names_project_and_snapshot_on_incompatibility(tmp_path):
         / "manifest.json"
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["contract_digest"] = "sha256:" + ("0" * 64)
+    manifest["contract_digest"] = "digest:" + ("0" * 64)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     # Isolate the package-digest incompatibility this test targets: recompute
-    # the pointer's manifest_sha256 to match the edited bytes above, so
+    # the pointer's manifest_digest to match the edited bytes above, so
     # current_snapshot's hash check does not fire first and mask it
     # behind a generic "manifest hash mismatch" before the package-digest
     # comparison in snapshot_store_paths_from_base ever runs.
     pointer_path = Path(scope["snapshot_base"]) / "current.json"
     pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-    pointer["manifest_sha256"] = hash_file(manifest_path)
+    pointer["manifest_digest"] = hash_file(manifest_path)
     pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
 
     result = subprocess.run(
@@ -657,16 +656,16 @@ def test_catalog_status_distinguishes_contract_mismatch(tmp_path):
         / "manifest.json"
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["contract_digest"] = "sha256:" + ("0" * 64)
+    manifest["contract_digest"] = "digest:" + ("0" * 64)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     # Isolate the package-digest check this test targets: recompute the
-    # pointer's manifest_sha256 to match the edited bytes above, so
+    # pointer's manifest_digest to match the edited bytes above, so
     # current_snapshot's hash check does not fire first and mask it
     # behind a generic "manifest hash mismatch" before the package-digest
     # comparison in snapshot_store_paths_from_base ever runs.
     pointer_path = Path(scope["snapshot_base"]) / "current.json"
     pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-    pointer["manifest_sha256"] = hash_file(manifest_path)
+    pointer["manifest_digest"] = hash_file(manifest_path)
     pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
 
     row = next(
@@ -859,6 +858,38 @@ def test_locations_are_ordered_deterministically():
     assert ids == sorted(ids)
 
 
+def test_a_link_written_under_the_old_key_still_binds(tmp_path):
+    """`codess.source-links/1` states `source_system_id`, not `_key`.
+
+    An operator writes this file and Codess never regenerates it, so a schema
+    rename cannot reach documents already on disk. Reading only the current
+    name leaves an approved link unmatched, and the Sessions it admits stop
+    being selected with no error and no diagnostic -- which is what happened to
+    two real documents when the column was renamed in CoSchema format 11.
+
+    The fixtures below were updated with the rename and kept passing, which is
+    why this case needs its own test rather than a spelling in a shared helper.
+    """
+    from codess.config import SOURCE_LINKS_FILE, SOURCE_LINKS_FORMAT, STORE_DIR
+    from codess.project_catalog import _apply_source_links
+
+    project = tmp_path / "project"
+    (project / STORE_DIR).mkdir(parents=True)
+    (project / STORE_DIR / SOURCE_LINKS_FILE).write_text(json.dumps({
+        "format": SOURCE_LINKS_FORMAT,
+        "links": [{
+            "source_system_id": "cursor.composer",
+            "source_identity": {"workspace_id": "ws-1"},
+            "selection_state": "approved",
+        }],
+    }), encoding="utf-8")
+    bindings, _aliases = _apply_source_links(
+        {}, project, "codess:location:a", str(project),
+    )
+    assert [b["workspace_id"] for b in bindings] == ["ws-1"]
+    assert bindings[0]["source_system_key"] == "cursor.composer"
+
+
 def test_only_an_approved_source_link_binds_a_workspace(tmp_path):
     """A proposed link records a decision pending, not authority to bind."""
     from codess.config import SOURCE_LINKS_FILE, SOURCE_LINKS_FORMAT, STORE_DIR
@@ -869,7 +900,7 @@ def test_only_an_approved_source_link_binds_a_workspace(tmp_path):
     (project / STORE_DIR / SOURCE_LINKS_FILE).write_text(json.dumps({
         "format": SOURCE_LINKS_FORMAT,
         "links": [{
-            "source_system_id": "cursor.composer",
+            "source_system_key": "cursor.composer",
             "source_identity": {"workspace_id": "ws-1"},
             "selection_state": "proposed",
         }],
@@ -889,7 +920,7 @@ def test_an_approved_link_binds_its_workspace(tmp_path):
     (project / STORE_DIR / SOURCE_LINKS_FILE).write_text(json.dumps({
         "format": SOURCE_LINKS_FORMAT,
         "links": [{
-            "source_system_id": "cursor.composer",
+            "source_system_key": "cursor.composer",
             "source_identity": {"workspace_id": "ws-1"},
             "selection_state": "approved",
             "source_project_path": str(project),
@@ -912,7 +943,7 @@ def test_a_link_from_another_path_marks_that_path_obsolete(tmp_path):
     (project / STORE_DIR / SOURCE_LINKS_FILE).write_text(json.dumps({
         "format": SOURCE_LINKS_FORMAT,
         "links": [{
-            "source_system_id": "cursor.composer",
+            "source_system_key": "cursor.composer",
             "source_identity": {"workspace_id": "ws-1"},
             "selection_state": "approved",
             "source_project_path": "/former/location",

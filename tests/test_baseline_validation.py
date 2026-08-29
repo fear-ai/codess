@@ -78,7 +78,7 @@ def _snapshot(tmp_path: Path, *, orphan_tool_result: bool = False) -> tuple[Path
     raw_store = RawStore(raw_root)
     raw_record = raw_store.observe(
         source,
-        source_system_id="claude-code",
+        source_system_key="claude-code",
         storage_format="claude-jsonl",
         mode="capture",
     )
@@ -230,7 +230,7 @@ def test_ci_fixture_policy_covers_three_vendors_without_home_data(tmp_path):
         raw_records.append(
             raw_store.observe(
                 raw_source,
-                source_system_id=source_system,
+                source_system_key=source_system,
                 storage_format=f"fixture-{suffix}",
                 mode="capture",
             )
@@ -306,21 +306,21 @@ def test_frozen_reference_validation_does_not_require_live_locator(tmp_path):
         }
     )
     for key in (
-        "object_id", "stored_sha256", "compression", "uncompressed_size",
+        "object_id", "stored_digest", "compression", "uncompressed_size",
         "stored_size", "object_relpath",
     ):
         record.pop(key, None)
     manifest_path.write_text(lines[0] + "\n" + json.dumps(record) + "\n")
     manifest = json.loads((snapshot / "manifest.json").read_text())
     import hashlib
-    manifest["raw_manifest_sha256"] = hashlib.sha256(
+    manifest["raw_manifest_digest"] = hashlib.sha256(
         manifest_path.read_bytes()
     ).hexdigest()
     snapshot_manifest = snapshot / "manifest.json"
     snapshot_manifest.write_text(json.dumps(manifest))
     current_path = project / ".codess/current.json"
     current = json.loads(current_path.read_text())
-    current["manifest_sha256"] = hashlib.sha256(
+    current["manifest_digest"] = hashlib.sha256(
         snapshot_manifest.read_bytes()
     ).hexdigest()
     current_path.write_text(json.dumps(current))
@@ -332,17 +332,17 @@ def test_frozen_reference_validation_does_not_require_live_locator(tmp_path):
     assert not frozen["errors"]
 
 
-def test_reference_validation_rejects_legacy_md5_revision(tmp_path):
+def test_reference_validation_rejects_an_unsupported_revision(tmp_path):
     source = tmp_path / "legacy.jsonl"
     source.write_text('{"legacy":true}\n', encoding="utf-8")
     legacy_revision = "unsupported-fingerprint:" + ("0" * 32)
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     (snapshot / "raw-manifest.jsonl").write_text(
-        json.dumps({"raw_format": "codess.raw/1"}) + "\n"
+        json.dumps({"raw_format": "codess.raw/2"}) + "\n"
         + json.dumps({
             "availability": "reference",
-            "source_system_id": "openai.codex",
+            "source_system_key": "openai.codex",
             "source_locator": str(source),
             "source_revision_id": legacy_revision,
         }) + "\n",
@@ -365,17 +365,17 @@ def test_reference_validation_rejects_legacy_md5_revision(tmp_path):
     assert any("current_reference" in error for error in report["errors"])
 
 
-def test_reference_validation_keeps_sha256_mismatch_fatal(tmp_path):
+def test_reference_validation_keeps_a_digest_mismatch_fatal(tmp_path):
     source = tmp_path / "current.jsonl"
     source.write_text('{"current":true}\n', encoding="utf-8")
     current_revision = read_source_revision(source)[0]
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     (snapshot / "raw-manifest.jsonl").write_text(
-        json.dumps({"raw_format": "codess.raw/1"}) + "\n"
+        json.dumps({"raw_format": "codess.raw/2"}) + "\n"
         + json.dumps({
             "availability": "reference",
-            "source_system_id": "openai.codex",
+            "source_system_key": "openai.codex",
             "source_locator": str(source),
             "source_revision_id": current_revision,
         }) + "\n",

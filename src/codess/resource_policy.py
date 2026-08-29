@@ -32,7 +32,7 @@ class ResourcePolicy:
     maximums: dict[str, int | None]
     origins: dict[str, str]
     file_path: str | None = None
-    file_sha256: str | None = None
+    file_digest: str | None = None
 
     def with_overrides(
         self,
@@ -58,7 +58,7 @@ class ResourcePolicy:
         return {
             "format": RESOURCE_POLICY_FORMAT,
             "file": self.file_path,
-            "file_sha256": self.file_sha256,
+            "file_digest": self.file_digest,
             "effective_maximums": dict(self.maximums),
             "origins": dict(self.origins),
         }
@@ -115,5 +115,5 @@ def load_resource_policy(path: str | Path | None = None) -> ResourcePolicy:
         maximums=maximums,
         origins=origins,
         file_path=str(policy_path),
-        file_sha256=codess_bytes_hash(256, 256, payload),
+        file_digest=codess_bytes_hash(256, 256, payload),
     )

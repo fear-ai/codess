@@ -69,14 +69,14 @@ class TestAgainstACopiedTree:
     def test_check_reports_a_stale_entry_without_writing(self, tree):
         """`--check` is the verification mode, so it must not repair."""
         ddl = tree / "schema/coschema/sqlite/schema.sql"
-        before = self._manifest(tree)["files"]["sqlite_schema"]["sha256"]
+        before = self._manifest(tree)["files"]["sqlite_schema"]["digest"]
         ddl.write_text(ddl.read_text(encoding="utf-8") + "\n-- edit\n", encoding="utf-8")
 
         result = self._run_in(tree, "--check")
 
         assert result.returncode == 1
         assert "stale: sqlite_schema" in result.stdout
-        assert self._manifest(tree)["files"]["sqlite_schema"]["sha256"] == before
+        assert self._manifest(tree)["files"]["sqlite_schema"]["digest"] == before
 
     def test_refresh_updates_only_the_changed_entry(self, tree):
         ddl = tree / "schema/coschema/sqlite/schema.sql"
@@ -87,11 +87,11 @@ class TestAgainstACopiedTree:
 
         assert result.returncode == 0
         after = self._manifest(tree)["files"]
-        assert after["sqlite_schema"]["sha256"] != before["sqlite_schema"]["sha256"]
+        assert after["sqlite_schema"]["digest"] != before["sqlite_schema"]["digest"]
         unchanged = {
             role for role in before
             if role != "sqlite_schema"
-            and before[role]["sha256"] == after[role]["sha256"]
+            and before[role]["digest"] == after[role]["digest"]
         }
         assert unchanged == set(before) - {"sqlite_schema"}
 

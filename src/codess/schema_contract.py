@@ -25,7 +25,7 @@ DDL_PATH = PACKAGE_ROOT / "sqlite" / "schema.sql"
 MAPPINGS_ROOT = REPO_ROOT / "schema" / "mappings"
 
 FORMAT_ID = "codess.coschema"
-FORMAT_VERSION = 10
+FORMAT_VERSION = 12
 APPLICATION_ID = 0x434F4445
 # Derived from FORMAT_VERSION rather than restated. Codess never migrates a
 # store: a format change is a rebuild from the vendor Sources, because the store
@@ -140,10 +140,10 @@ def _digest_manifest_files(roles: Iterable[str] | None, subject: str) -> str:
             failures.append(f"{role}: missing {entry['path']}")
             continue
         actual = hash_file(path)
-        if actual != entry.get("sha256"):
+        if actual != entry.get("digest"):
             failures.append(
-                f"{role}: hash mismatch for {entry['path']} "
-                f"({actual} != {entry.get('sha256')})"
+                f"{role}: digest mismatch for {entry['path']} "
+                f"({actual} != {entry.get('digest')})"
             )
         combined.update(role.encode("utf-8"))
         combined.update(b"\0")

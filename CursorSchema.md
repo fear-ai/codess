@@ -183,7 +183,7 @@ Codess uses this as the primary global-session index. Composers whose
 classification columns default to null/false; additional columns are ignored.
 Session metadata records `selection_source=composerHeaders`; the selected
 evidence fingerprint includes that designation and uses
-`cursor-workspace-header-source-key-length-edge-sha256-fingerprint-v2`.
+`cursor-workspace-header-source-key-length-edge-digest-fingerprint-v2`.
 The table is not a complete Session catalog: Cursor can retain full
 `composerData:*` and `bubbleId:*` rows after removing a composer header.
 
@@ -195,6 +195,111 @@ source role remain metadata. In the reviewed local layouts the corresponding
 parent composer/session is not consistently available, so
 `parent_session_id` remains NULL instead of being inferred from time, content,
 or workspace proximity.
+
+### Header Coverage and What Cursor Removes
+
+**Cursor does not prune conversations on age; it prunes the index and it
+deletes empties.** Three distinct behaviours produce a smaller Session count,
+and they need separating because only one is a Codess limitation.
+
+**Why the index and not the data?** The obvious reading -- that dropping entries
+reclaims space -- is contradicted by the sizes: the index is ~36 KiB against
+~4.2 GiB of conversation across 420,000 rows, a ratio near 119,000 to 1.
+Discarding the index saves nothing. The behaviour is consistent with a migration
+that had to populate a new central index and only had the information to do so
+for composers it saw opened: the index is the *new* structure and the data is
+what predates it, so the data was never a candidate for removal.
+
+The published account adds that a conversation reopened after the migration
+gains its header. **Not verified here** -- `composerHeaders.createdAt` records
+when the conversation was created, not when its index entry was written, so this
+store cannot distinguish a composer indexed at migration from one indexed on a
+later reopen. Recorded as the vendor's account rather than a measured property;
+verifying it needs a before-and-after observation of one composer.
+
+**Nothing is lost; 36% of the corpus is unattributable.** The distinction
+matters because the two have different remedies and only one is urgent. Measured
+on one store:
+
+| | Composers | Bubbles |
+|---|---|---|
+| Headered, bindable to a Project | 66 | 134,654 |
+| Unbound -- data intact, no workspace | 98 | 75,257 |
+| Unbound **and** empty | 0 | -- |
+
+Every one of the 98 holds real conversation. No bubble is missing, no
+`composerData:` row is absent for them, and a query over the whole store reads
+them. What is absent is the workspace binding, so Codess cannot say which
+Project they belong to and does not guess. The remedy is an operator statement,
+not a recovery: the evidence is on disk now and will be on disk later.
+
+**1. The index is a migration boundary.** `composerHeaders` was centralised into
+the global store and tracks only composers opened or created since. Measured on
+one store: 66 headered against 164 total, and the headered set spans
+2026-03-26 to 2026-08-17 -- the whole retained range, not a recent slice. So the
+98 unbound composers are pre-migration, not expired: the set does not grow with
+age, does not shrink by waiting, and shrinks only when a composer is reopened.
+Their `composerData:` rows and every bubble are intact.
+
+**`ItemTable`'s `composer.composerHeaders` is a second index, and it is UI state
+rather than a selection index.** Measured: 39 entries against 66 table rows,
+every one also in the table, and the two agree on the workspace for all 39. So
+it selects nothing the table does not -- an earlier reading of it as the missing
+binding was wrong.
+
+Why the vendor keeps both is legible from the fields. The table holds what
+persists about a conversation -- identity, workspace, times, archived, subagent.
+The `ItemTable` document holds what the sidebar draws: `hasUnreadMessages`,
+`isDraft`, `hasBeenInSidebar`, `hasPendingPlan`, `totalLinesAdded`,
+`numSubComposers`, 19 fields in all. It is written whole on UI state changes,
+which is why it lags -- and why it is a subset rather than a superset.
+
+Two of those fields are evidence Codess had no other source for, so they are
+read as **qualifiers** on a Session the table already selected:
+
+| Field | What it states | Measured |
+|---|---|---|
+| `unifiedMode` | Whether the composer ran as `agent` or `chat` | 15 agent, 24 chat -- recorded nowhere in the table |
+| `workspaceIdentifier.uri.fsPath` | The workspace **path** | 26 of 39. The table holds only the storage hash, which a workspace recreation changes; the path survives it |
+
+The qualifier must never widen a selection: a composer present only in the
+`ItemTable` document stays out, because a UI-state document does not decide
+Project membership. A test asserts that directly.
+
+**2. Empty composers are deleted, and backed up first.**
+`globalStorage/empty_composer_backup.jsonl` holds `composerData` rows Cursor
+removed for holding no conversation -- 140 on one machine. A composer can
+therefore appear in the header index, be selected for a Project, and hold zero
+bubbles; three did on one Project. Storing them would report Sessions that never
+had content.
+
+**3. Tombstones exist: a key with a NULL value.** Measured: 7 `composerData:`
+and 41 `bubbleId:` rows whose key remains and whose payload is gone. This is
+distinct from a missing key, and a reader treating NULL as an empty record would
+manufacture a contentless Session rather than reporting a removed one.
+
+**Reading a falling Event count.** The main file is misleading on its own: in
+WAL mode `state.vscdb` stops being written while `-wal` absorbs changes, so its
+mtime can be a week stale while the database changed minutes ago. One measured
+instance: main at 2026-08-19, a 203 MB WAL at 2026-08-26. Codess's own change
+marker covers both (`sqlite-main-wal-inode-size-mtime-ns`); a hand check that
+looks only at the main file will conclude the source is unchanged when it is not.
+
+**How this differs from Claude Code**, which matters because the mitigations are
+opposite:
+
+| | Claude Code | Cursor |
+|---|---|---|
+| What is removed | The transcript itself | The index entry, and empty composers |
+| Trigger | Age, 30-day default (`cleanupPeriodDays`) | A one-time index migration; emptiness |
+| Recoverable from the vendor | No | Yes -- the data is retained and readable |
+| Grows over time | Yes, continuously | No, fixed at the migration |
+| Mitigation | **Ingest more often than the vendor prunes** | **Read the unbound set**; cadence does not help |
+
+Claude's is data loss a Codess store can outlive, so cadence is the whole
+defence. Cursor's is an attribution gap where the evidence is still present, so
+the defence is reading it and stating that it is unattributed -- ingesting more
+often would not recover a single Session.
 
 ### The Conversation Index
 
@@ -431,6 +536,50 @@ explicitly supported context subset is `conversationSummary`,
 `contextWindowStatusAtCreation`, and top-level `messageRequestContext`; other
 large attachment/context-selection envelopes remain in captured raw evidence.
 
+### Bubbles to Events, Counted
+
+A bubble is a stored record; an Event is one normalized observation. The
+relation is not one-to-one in either direction, and both departures are
+measured rather than asserted. From one Project's store -- 26 Sessions, 72,083
+live bubbles, 59,554 Events:
+
+**Fan-out: only tool bubbles produce two Events, and every other kind produces
+one.** Grouping Events by the bubble they came from gives exactly two shapes:
+
+| Bubble produces | Event kinds | Bubbles |
+|---|---|---|
+| 2 Events | `tool.call` + `tool.result` | 24,204 |
+| 1 Event | `message.reasoning_summary` | 6,374 |
+| 1 Event | `message.response` | 3,576 |
+| 1 Event | `message.prompt` | 1,174 |
+| 1 Event | `message.context` | 22 |
+
+35,350 bubbles yield 59,554 Events, a mean of 1.685. A tool bubble carries the
+invocation and its result in one record; Codess separates them because a call
+without a result and a call with a failed result are different facts, and a
+single Event could state neither.
+
+**Fan-in: half the bubbles produce no Event, and each is counted.** 36,733 of
+the 72,083 emit nothing, which reconciles exactly against the ingest
+diagnostics:
+
+| Reason code | Bubbles |
+|---|---|
+| `duplicate_records` | 32,730 |
+| `record_empty_assistant_envelope` | 4,003 |
+| **Total** | **36,733** |
+
+35,350 + 36,733 = 72,083. Nothing is dropped without a reason code, so the two
+figures reconcile without a remainder -- which is the property that makes a
+falling Event count diagnosable rather than merely alarming.
+
+**The consequence for reading counts.** Comparing an Event total against a
+bubble total is not a validity check: the ratio moves with the tool-call share
+of a Session, so a Session that ran many tools has more Events than bubbles and
+one that ran none has fewer. To detect *removal*, compare a Session's bubbles
+against the same Session's bubbles at an earlier observation, or read the
+reason-code totals, which state where the difference went.
+
 ### Repetition and Deduplication
 
 Cursor evidence has three distinct repetition cases:
@@ -584,9 +733,9 @@ SQLite read transactions and calculates a
 non-authenticating change marker from exact header fields, every key and value
 length, and the first/last 512 bytes of each value. A changed selected marker
 triggers one exact transactional backup for the cohort; unrelated table changes
-do not. Selected-row and combined-cohort markers use SHA-256; the bounded edge
+do not. Selected-row and combined-cohort markers use a complete digest; the bounded edge
 method remains a change detector rather than complete content
-identity. Exact captured evidence remains fully SHA-256 addressed and verified.
+identity. Exact captured evidence remains fully digest-addressed and verified.
 
 An immediate repeat may reuse those selected markers only when a metadata-only
 cache matches the exact Project-to-workspace selection and two observations of

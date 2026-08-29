@@ -104,7 +104,7 @@ def correlate_external_artifacts(conn: sqlite3.Connection, catalog: dict) -> dic
                 """
                 INSERT INTO correlation_assertions(
                   subject_kind, subject_id, object_kind, object_id,
-                  relation_kind, method, evidence, confidence, asserted_at)
+                  relation_kind, method, evidence, confidence, asserted_when)
                 VALUES ('artifact', ?, 'project', ?, ?, ?, ?, ?, ?)
                 """,
                 (

@@ -13,6 +13,8 @@ from pathlib import Path
 from cursor_fixtures import create_bubble_table
 from store_fixtures import insert_event, insert_session
 
+from cli.query_cmd import ROW_FORMAT
+from codess.investigation import INVESTIGATION_FORMAT
 from codess.project import path_to_slug
 from codess.raw_store import RawStore
 from codess.snapshot import create_snapshot
@@ -72,7 +74,7 @@ def test_query_reports_invalid_snapshot_without_traceback():
         state = project / ".codess"
         state.mkdir()
         (state / "current.json").write_text(
-            json.dumps({"path": "snapshots/missing", "manifest_sha256": "bad"}),
+            json.dumps({"path": "snapshots/missing", "manifest_digest": "bad"}),
             encoding="utf-8",
         )
         result = _run(["query", "--dir", str(project), "--stats"])
@@ -104,7 +106,7 @@ def test_no_hash_flag_bypasses_tampered_manifest_hash(durable_tmp_path):
 
     pointer_path = proj / ".codess" / "current.json"
     pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-    pointer["manifest_sha256"] = "0" * 64
+    pointer["manifest_digest"] = "0" * 64
     pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
 
     rejected = _run(["query", "--dir", str(proj), "--sessions"], env=env)
@@ -1380,7 +1382,8 @@ def test_query_jsonl_sessions_and_stats_are_typed():
         conn.close()
         sessions = _run(["query", "--dir", str(project), "--sessions", "--output-format", "jsonl"])
         row = json.loads(sessions.stdout)
-        assert row["schema"] == "codess.query-row/1"
+        assert row["schema"] == ROW_FORMAT
+        assert row["data"]["adapter_key"] == "Claude"
         assert row["data"]["started_at"] == 12.5
         stats = _run(["query", "--dir", str(project), "--stats", "--output-format", "jsonl"])
         rows = [json.loads(line) for line in stats.stdout.splitlines()]
@@ -1670,7 +1673,7 @@ def test_typed_research_workflow_search_expand_and_resolve_evidence(tmp_path):
     investigation = json.loads(
         investigation_path.read_text(encoding="utf-8")
     )
-    assert investigation["format"] == "codess.investigation/1"
+    assert investigation["format"] == INVESTIGATION_FORMAT
     assert investigation["input_result_hash"] == expanded["result_hash"]
     assert investigation["citations"][0]["event_entity_id"] == anchor
 

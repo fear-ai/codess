@@ -16,6 +16,7 @@ from codess.config import (
     SOURCE_LINKS_FORMAT,
     STORE_DIR,
     STORE_ROOT,
+    link_source_system,
 )
 from codess.fileio import write_json_atomic
 from codess.hashing import codess_canonical_hash
@@ -289,11 +290,11 @@ def _merged_locations(
     **Keyed by `(machine_id, path)`, not by `location_id`.** A location's
     identity is the physical place, and `location_id` is derived from it -- so
     keying on the derived value means a change in the derivation produces a
-    second entry for one directory. That happened: the format-5 identity change
-    re-derived every `location_id` from `sha256:` to `id1:`, and a registry
-    written across both carried two entries per location. `project_locations`
-    declares `UNIQUE(machine_id, observed_path)`, so the second insert failed
-    and every re-ingest of an affected Project aborted.
+    second entry for one directory. That has happened: a derivation change gave
+    every location a new `location_id`, and a registry written across both
+    carried two entries per location. `project_locations` declares
+    `UNIQUE(machine_id, observed_path)`, so the second insert failed and every
+    re-ingest of an affected Project aborted.
 
     Deduplicating here rather than at the insert is deliberate: the catalog is
     the operator-visible record, and leaving a duplicate in it to be filtered on
@@ -392,10 +393,10 @@ def _apply_source_links(
     Returns the sorted workspace bindings and path aliases.
     """
     workspaces = {
-        (item.get("source_system_id"), item.get("workspace_id")): dict(item)
+        (item.get("source_system_key"), item.get("workspace_id")): dict(item)
         for item in entry.get("workspace_bindings", [])
         if isinstance(item, dict)
-        and item.get("source_system_id")
+        and item.get("source_system_key")
         and item.get("workspace_id")
     }
     for workspace in workspaces.values():
@@ -406,18 +407,18 @@ def _apply_source_links(
     for link in _source_links(project_path):
         if link.get("selection_state") != "approved":
             continue
-        source_system_id = link.get("source_system_id")
+        source_system_key = link_source_system(link)
         identity = link.get("source_identity") or {}
         workspace_id = (
             identity.get("workspace_id") if isinstance(identity, dict) else None
         )
-        if source_system_id and workspace_id:
+        if source_system_key and workspace_id:
             source_project_path = link.get("source_project_path")
             path_obsolete = bool(link.get("path_obsolete"))
             if source_project_path and source_project_path != resolved_path:
                 path_obsolete = True
-            workspaces[(source_system_id, str(workspace_id))] = {
-                "source_system_id": source_system_id,
+            workspaces[(source_system_key, str(workspace_id))] = {
+                "source_system_key": source_system_key,
                 "workspace_id": str(workspace_id),
                 "relation_kind": link.get("relation_kind") or "workspace_binding",
                 "source_project_path": source_project_path,
@@ -436,7 +437,7 @@ def _apply_source_links(
     return (
         sorted(
             workspaces.values(),
-            key=lambda item: (item["source_system_id"], item["workspace_id"]),
+            key=lambda item: (item["source_system_key"], item["workspace_id"]),
         ),
         sorted(aliases - obsolete_paths),
     )
@@ -659,7 +660,7 @@ def load_project_set(path: Path) -> dict[str, Any]:
         "name": value.get("name"),
         "projects": normalized,
     }
-    canonical["selection_sha256"] = codess_canonical_hash(256, 256, canonical)
+    canonical["selection_digest"] = codess_canonical_hash(256, 256, canonical)
     canonical["path"] = str(path.expanduser().resolve())
     return canonical
 
@@ -668,7 +669,7 @@ def _current_snapshot_id(snapshot_base: Path) -> str | None:
     """Return the current snapshot's verified snapshot_id, or None if unset.
 
     Delegates to `snapshot.current_snapshot` for the pointer read and
-    manifest_sha256 check rather than re-reading current.json directly, so a
+    manifest_digest check rather than re-reading current.json directly, so a
     tampered or stale pointer raises SnapshotError here exactly as it would
     anywhere else in the module that consumes the current snapshot.
     """
@@ -887,12 +888,12 @@ def resolve_project_query_scopes(
             "select exactly one of Project IDs, a Project set, or all-current"
         )
     selection_kind = "project_ids"
-    selection_sha256 = None
+    selection_digest = None
     if project_set is not None:
         saved = load_project_set(project_set)
         requested = saved["projects"]
         selection_kind = "project_set"
-        selection_sha256 = saved["selection_sha256"]
+        selection_digest = saved["selection_digest"]
     elif all_current:
         # A broad selector must be usable as resolved.  In exact mode, omit
         # retained snapshots that the current package cannot open rather than
@@ -976,18 +977,18 @@ def resolve_project_query_scopes(
             "active_location_count": len(active),
             "existing_active_location_count": len(existing),
             "selection_kind": selection_kind,
-            "selection_sha256": selection_sha256,
+            "selection_digest": selection_digest,
         })
     scopes = sorted(
         scopes,
         key=lambda item: (item["project_id"], item["snapshot_id"]),
     )
-    resolved_sha256 = codess_canonical_hash(256, 256, [
+    resolved_digest = codess_canonical_hash(256, 256, [
         {"project_id": item["project_id"], "snapshot_id": item["snapshot_id"]}
         for item in scopes
     ])
     for item in scopes:
-        item["resolved_selection_sha256"] = resolved_sha256
+        item["resolved_selection_digest"] = resolved_digest
     return scopes
 
 
@@ -1100,15 +1101,15 @@ def register_workspace_bindings(
     if entry is None:
         raise ValueError(f"project is absent from catalog: {project_id}")
     bindings = {
-        (item.get("source_system_id"), item.get("workspace_id")): dict(item)
+        (item.get("source_system_key"), item.get("workspace_id")): dict(item)
         for item in entry.get("workspace_bindings", [])
-        if isinstance(item, dict) and item.get("source_system_id") and item.get("workspace_id")
+        if isinstance(item, dict) and item.get("source_system_key") and item.get("workspace_id")
     }
     for workspace_id in sorted(str(value) for value in workspace_ids if value):
         key = ("cursor.composer", workspace_id)
         if key not in bindings:
             bindings[key] = {
-                "source_system_id": "cursor.composer",
+                "source_system_key": "cursor.composer",
                 "workspace_id": workspace_id,
                 "relation_kind": "local_workspace_path_binding",
                 "source_project_path": source_project_path,
@@ -1117,7 +1118,7 @@ def register_workspace_bindings(
                 "selection_state": "approved",
             }
     entry["workspace_bindings"] = sorted(
-        bindings.values(), key=lambda item: (item["source_system_id"], item["workspace_id"])
+        bindings.values(), key=lambda item: (item["source_system_key"], item["workspace_id"])
     )
     _save_catalog_entry(store_root, catalog, entry)
     return dict(entry)

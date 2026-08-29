@@ -280,7 +280,7 @@ def prepare_cursor_cohort(
     raw_store: RawStore,
     cache_path: Path,
     working_path: Path,
-    source_system_id: str,
+    source_system_key: str,
     storage_format: str,
     marker: dict[str, Any],
     force: bool,
@@ -321,7 +321,7 @@ def prepare_cursor_cohort(
 
     record = raw_store.observe(
         source,
-        source_system_id=source_system_id,
+        source_system_key=source_system_key,
         storage_format=storage_format,
         mode="capture",
         working_target=working_path,

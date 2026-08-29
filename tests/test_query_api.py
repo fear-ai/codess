@@ -10,6 +10,7 @@ from codess.fileio import read_source_revision
 from codess.investigation import build_investigation
 from codess.orientation_audit import _compare, _sqlite_observations
 from codess.query_api import (
+    RESULT_FORMAT,
     QueryContractError,
     compare_results,
     content_hash,
@@ -107,7 +108,7 @@ def test_typed_overview_events_search_and_saved_selection(tmp_path, monkeypatch)
 
         saved = tmp_path / "result.json"
         save_document(saved, search)
-        assert load_document(saved, "codess.query-result/1")["result_hash"] == search["result_hash"]
+        assert load_document(saved, RESULT_FORMAT)["result_hash"] == search["result_hash"]
         original = saved.read_bytes()
         monkeypatch.setattr(
             "codess.query_api.os.replace",
@@ -885,11 +886,11 @@ def test_cited_investigation_binds_summary_to_exact_result_rows(tmp_path):
         )
         assert record["input_result_hash"] == result["result_hash"]
         assert record["citations"][0]["event_entity_id"] == event_id
-        assert record["citations"][0]["content_digest"].startswith("sha256:")
-        assert record["citations"][0]["row_sha256"] == content_hash(
+        assert record["citations"][0]["content_digest"].startswith("digest:")
+        assert record["citations"][0]["row_digest"] == content_hash(
             result["rows"][0]
         )
-        assert record["investigation_hash"].startswith("sha256:")
+        assert record["investigation_hash"].startswith("digest:")
         with pytest.raises(QueryContractError, match="absent"):
             build_investigation(
                 result,
@@ -979,13 +980,13 @@ def test_exact_evidence_prefers_verified_sealed_object_over_changed_live(tmp_pat
     project, store, source = _store(tmp_path)
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
-        source, source_system_id="openai.codex", storage_format="codex-jsonl",
+        source, source_system_key="openai.codex", storage_format="codex-jsonl",
         mode="capture",
     )
     conn = connect(store)
     conn.execute(
         "UPDATE sources SET availability='captured',content_digest=?",
-        (record["object_id"].removeprefix("sha256:"),),
+        (record["object_id"].removeprefix("digest:"),),
     )
     event_id = conn.execute("SELECT event_entity_id FROM events WHERE event_id='e1'").fetchone()[0]
     conn.commit()

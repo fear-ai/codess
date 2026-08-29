@@ -22,6 +22,7 @@ from codess.config import (
     VENDOR_KEYS,
     VERBOSE,
     canonical_raw_mode,
+    link_source_system,
 )
 
 # Re-exported: the Claude slug encoding is `helpers`'. `project` carried a
@@ -30,6 +31,8 @@ from codess.config import (
 # hyphen -- a hyphenated directory decoded to a non-existent nested path (3.5.4).
 from codess.helpers import path_to_slug as path_to_slug
 from codess.helpers import slug_to_path as slug_to_path
+from codess.investigation import INVESTIGATION_FORMAT
+from codess.query_api import RESULT_FORMAT
 from codess.reporting.levels import PRIVACY_PROFILES as REPORTING_PRIVACY
 from codess.reporting.levels import PROFILES as REPORTING_PROFILES
 from codess.settings import resolve
@@ -62,15 +65,18 @@ def _git_output(cwd: Path, *arguments: str) -> str | None:
 
 
 def get_project_root(cwd: Path | None = None) -> Path:
-    """The repository a path belongs to, counting worktrees as one Project.
+    """The repository a path belongs to, resolving a worktree to its parent.
 
-    Resolved from `--git-common-dir` rather than `--show-toplevel`, because
-    the latter returns the *worktree* root: two linked worktrees of one
-    repository reported two roots, so they became two Projects with one
-    location each. Codess.md 7 states that one repository is one Project and
-    that worktrees are observations of it, and `project_locations` exists to
-    hold them -- but discovery could not produce the multi-location case at
-    all, which is why every registered Project had exactly one.
+    Resolved from `--git-common-dir` rather than `--show-toplevel`, because the
+    latter returns the *worktree* root, and a clone reached through a second
+    checkout would otherwise be a second repository with one location each.
+
+    **This is repository identity, not Project identity.** A linked worktree is
+    its own Project -- every vendor records it separately, which
+    [CoSchema](../../CoSchema.md#project) states with the evidence -- and the
+    catalog relates the two with `related_project_id` rather than merging them.
+    What this function answers is which repository a path belongs to, which is
+    what `project_locations` and the worktree relation are derived from.
 
     `--git-common-dir` names the shared `.git` directory: identical for every
     worktree of a repository, distinct across repositories. Its parent is the
@@ -118,7 +124,7 @@ def find_slug_for_project(project_path: Path) -> str | None:
                     continue
                 source_path = link.get("source_project_path")
                 if (
-                    link.get("source_system_id") == "anthropic.claude-code"
+                    link_source_system(link) == "anthropic.claude-code"
                     and link.get("selection_state") == "approved"
                     and isinstance(source_path, str)
                     and Path(source_path).is_absolute()
@@ -805,7 +811,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--facet-limit", type=int, default=50, help="typed events/search: maximum values per facet and repetition groups")
     p.add_argument("--request", dest="query_request", help="typed query: load codess.query-request/1 JSON")
     p.add_argument("--save-request", help="typed query: atomically save canonical request JSON")
-    p.add_argument("--save-result", help="typed query: atomically save codess.query-result/1 JSON")
+    p.add_argument(
+        "--save-result",
+        help=f"typed query: atomically save {RESULT_FORMAT} JSON",
+    )
     p.add_argument("--result-input", help="typed query: restrict by stable IDs from a prior result")
     p.add_argument("--compare-result", help="typed query: compare stable row identities with a prior result; exit 3 when changed")
     p.add_argument(
@@ -820,7 +829,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--save-investigation",
         type=Path,
-        help="query cite: atomically save codess.investigation/1",
+        help=f"query cite: atomically save {INVESTIGATION_FORMAT}",
     )
     return p
 

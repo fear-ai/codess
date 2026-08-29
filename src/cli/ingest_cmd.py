@@ -1004,8 +1004,8 @@ def _cursor_preflight(
                             store_root / "cache" / "cursor-cohort-v1.json"
                         ),
                         working_path=cohort_db,
-                        source_system_id=(
-                            SOURCE_PROFILES["Cursor"]["source_system_id"]
+                        source_system_key=(
+                            SOURCE_PROFILES["Cursor"]["source_system_key"]
                         ),
                         storage_format=SOURCE_PROFILES["Cursor"]["storage_format"],
                         marker=marker,

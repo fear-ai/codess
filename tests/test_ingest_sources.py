@@ -128,12 +128,12 @@ def test_progress_forwards_event_and_fields():
 def raw_record(**overrides) -> dict:
     record = {
         "record_type": "source_revision",
-        "source_system_id": "anthropic.claude-code",
+        "source_system_key": "anthropic.claude-code",
         "source_locator": "/sources/a.jsonl",
         "parent_source_locator": None,
         "relation_kind": None,
         "source_revision_id": "rev-1",
-        "object_id": "sha256:aaa",
+        "object_id": "digest:aaa",
     }
     record.update(overrides)
     return record
@@ -182,8 +182,22 @@ def test_merging_a_new_revision_replaces_in_place():
 def test_merging_a_new_object_reports_a_change():
     """Capture can change the stored object while the revision id is stable."""
     records = [raw_record()]
-    assert _merge_raw_record(records, raw_record(object_id="sha256:bbb")) is True
-    assert records[0]["object_id"] == "sha256:bbb"
+    assert _merge_raw_record(records, raw_record(object_id="digest:bbb")) is True
+    assert records[0]["object_id"] == "digest:bbb"
+
+
+def test_a_raw_one_object_id_still_yields_its_hash():
+    """`codess.raw/1` wrote `sha256:`; `/2` writes `digest:`.
+
+    A retained raw manifest is read while the snapshot holding it is being
+    verified or replaced, so the older prefix has to strip to the same hex --
+    otherwise the content hash lands as NULL and the Source loses its object.
+    """
+    from codess.ingest_sources import _object_hash
+
+    assert _object_hash("digest:abc") == "abc"
+    assert _object_hash("sha256:abc") == "abc"
+    assert _object_hash("abc") is None
 
 
 def test_merging_keeps_unrelated_records():
@@ -209,7 +223,7 @@ def test_record_raw_observes_a_source_and_marks_the_change(tmp_path):
     _record_raw(opts, source, "Claude")
     assert opts["raw_records_changed"] is True
     [record] = opts["raw_records"]
-    assert record["source_system_id"] == "anthropic.claude-code"
+    assert record["source_system_key"] == "anthropic.claude-code"
     assert record["source_locator"] == str(source.resolve())
 
 
@@ -237,8 +251,8 @@ def test_record_raw_writes_source_availability_into_the_store(tmp_path):
         conn.execute(
             """
             INSERT INTO sources(
-              source_entity_id, source_system_id, source_path, storage_format,
-              source_revision, observed_at
+              source_entity_id, source_system_key, source_path, storage_format,
+              source_revision, observed_when
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (

@@ -68,7 +68,7 @@ def _project(
     raw = RawStore(registry / "raw")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )

@@ -568,13 +568,13 @@ def test_an_unfiltered_selection_has_no_diagnostics_clause():
 
 def test_the_predicate_binds_one_parameter_per_selected_source():
     predicate, params = scope("cc", "codex").source_predicate()
-    assert predicate == "s.source_system_id IN (?, ?)"
+    assert predicate == "s.source_system_key IN (?, ?)"
     assert params == ("anthropic.claude-code", "openai.codex")
 
 
 def test_the_predicate_names_the_alias_it_was_asked_for():
     predicate, _params = scope("cc").source_predicate("src")
-    assert predicate.startswith("src.source_system_id")
+    assert predicate.startswith("src.source_system_key")
 
 
 def test_source_identifiers_are_ordered_deterministically():
@@ -587,8 +587,8 @@ def test_source_identifiers_are_ordered_deterministically():
 def test_the_diagnostics_clause_filters_both_aliases():
     """A record-level diagnostic often has no Session, only a Source."""
     clause, _params = scope("cc").diagnostics_predicate()
-    assert "s.source_system_id" in clause
-    assert "src.source_system_id" in clause
+    assert "s.source_system_key" in clause
+    assert "src.source_system_key" in clause
     assert clause.startswith("WHERE (") and " OR " in clause
 
 

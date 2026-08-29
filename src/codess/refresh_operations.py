@@ -286,7 +286,7 @@ def resolve_refresh_selection(
                 str(project_list.expanduser().resolve())
                 if project_list is not None else None
             ),
-            "project_list_sha256": (
+            "project_list_digest": (
                 hash_file(project_list.expanduser().resolve())
                 if project_list is not None else None
             ),
@@ -340,9 +340,9 @@ def resolve_refresh_selection(
     return {
         "selector": selector,
         "projects": projects,
-        "selection_sha256": _canonical_hash(selection_core),
+        "selection_digest": _canonical_hash(selection_core),
         "catalog": str(catalog_path),
-        "catalog_sha256": (
+        "catalog_digest": (
             hash_file(catalog_path) if catalog_path.is_file() else None
         ),
         "contract_digest": contract_digest(),
@@ -535,8 +535,8 @@ def refresh_projects(
     current = resolve_refresh_selection(registry, **selection)
     changed = []
     for key, label in (
-        ("selection_sha256", "refresh selection"),
-        ("catalog_sha256", "Project catalog"),
+        ("selection_digest", "refresh selection"),
+        ("catalog_digest", "Project catalog"),
         ("contract_digest", "CoSchema package"),
     ):
         if current[key] != plan[key]:
@@ -549,7 +549,7 @@ def refresh_projects(
         receipt["current_plan_fingerprints"] = {
             key: current[key]
             for key in (
-                "selection_sha256", "catalog_sha256", "contract_digest"
+                "selection_digest", "catalog_digest", "contract_digest"
             )
         }
         checkpoint()

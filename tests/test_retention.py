@@ -24,7 +24,7 @@ def _snapshot(
     conn.commit()
     conn.close()
     raw_root = registry / "raw" / "codess.raw-1"
-    raw = raw_root / "objects" / "sha256" / raw_name[:2] / f"{raw_name}.zst"
+    raw = raw_root / "objects" / "digest" / raw_name[:2] / f"{raw_name}.zst"
     raw.parent.mkdir(parents=True, exist_ok=True)
     raw.write_bytes(raw_name.encode())
     record = {
@@ -35,9 +35,9 @@ def _snapshot(
     if source_locator is not None:
         record.update({
             "availability": "captured",
-            "source_system_id": "cursor.composer",
+            "source_system_key": "cursor.composer",
             "source_locator": source_locator,
-            "source_revision_id": f"sha256:{raw_name}",
+            "source_revision_id": f"digest:{raw_name}",
             "uncompressed_size": uncompressed_size,
         })
     raw_manifest = snapshot / "raw-manifest.jsonl"
@@ -46,15 +46,15 @@ def _snapshot(
     )
     manifest = {
         "snapshot_id": snapshot_id,
-        "raw_manifest_sha256": hash_file(raw_manifest),
-        "stores": {store.name: {"sha256": hash_file(store)}},
+        "raw_manifest_digest": hash_file(raw_manifest),
+        "stores": {store.name: {"digest": hash_file(store)}},
     }
     manifest_path = snapshot / "manifest.json"
     manifest_path.write_text(json.dumps(manifest))
     pointer = {
         "snapshot_id": snapshot_id,
         "path": str(snapshot),
-        "manifest_sha256": hash_file(manifest_path),
+        "manifest_digest": hash_file(manifest_path),
     }
     (root / "current.json").write_text(json.dumps(pointer))
     return snapshot, raw
@@ -73,7 +73,7 @@ def test_plan_keeps_current_and_selects_only_unreferenced_storage(tmp_path):
     # Restore the current pointer overwritten by the old fixture.
     pointer = {
         "snapshot_id": current.name, "path": str(current),
-        "manifest_sha256": hash_file(current / "manifest.json"),
+        "manifest_digest": hash_file(current / "manifest.json"),
     }
     (current.parents[1] / "current.json").write_text(json.dumps(pointer))
 
@@ -93,7 +93,7 @@ def test_apply_replans_deletes_and_records_receipt(tmp_path):
     old, old_raw = _snapshot(registry, snapshot_id="old", raw_name="delete")
     pointer = {
         "snapshot_id": current.name, "path": str(current),
-        "manifest_sha256": hash_file(current / "manifest.json"),
+        "manifest_digest": hash_file(current / "manifest.json"),
     }
     (current.parents[1] / "current.json").write_text(json.dumps(pointer))
     receipt_path = tmp_path / "receipt.json"
@@ -112,7 +112,7 @@ def test_stale_selected_catalog_blocks_apply(tmp_path):
     old, _ = _snapshot(registry, snapshot_id="old", raw_name="delete")
     pointer = {
         "snapshot_id": current.name, "path": str(current),
-        "manifest_sha256": hash_file(current / "manifest.json"),
+        "manifest_digest": hash_file(current / "manifest.json"),
     }
     (current.parents[1] / "current.json").write_text(json.dumps(pointer))
     catalog = tmp_path / "catalog.json"
@@ -193,7 +193,7 @@ def test_a_default_receipt_is_named_the_instant_it_reports(tmp_path):
     _snapshot(registry, snapshot_id="old", raw_name="delete")
     pointer = {
         "snapshot_id": current.name, "path": str(current),
-        "manifest_sha256": hash_file(current / "manifest.json"),
+        "manifest_digest": hash_file(current / "manifest.json"),
     }
     (current.parents[1] / "current.json").write_text(json.dumps(pointer))
 
@@ -217,7 +217,7 @@ def test_retention_depth_matches_what_publication_retains(tmp_path):
     _newer, _newer_raw = _snapshot(registry, snapshot_id="bbb-old", raw_name="b")
     pointer = {
         "snapshot_id": current.name, "path": str(current),
-        "manifest_sha256": hash_file(current / "manifest.json"),
+        "manifest_digest": hash_file(current / "manifest.json"),
     }
     (current.parents[1] / "current.json").write_text(json.dumps(pointer))
 

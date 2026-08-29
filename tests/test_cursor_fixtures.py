@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 
 from cursor_fixtures import (
     HEADER_COLUMNS,
@@ -25,6 +26,55 @@ from codess.cursor_source import get_composer_headers, has_bubble_rows
 
 def columns(conn: sqlite3.Connection, table: str) -> list[str]:
     return [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+
+
+def test_the_item_table_index_qualifies_without_widening(tmp_path):
+    """Cursor keeps two composer indexes; only one selects.
+
+    `ItemTable`'s `composer.composerHeaders` is UI state over a subset of the
+    same composers -- measured 39 against 66 table rows, all also in the table,
+    agreeing on the workspace for every one. It carries two facts the table
+    does not: `unifiedMode` (agent or chat) and the workspace **path**, where
+    the table holds only the storage hash a workspace recreation would change.
+
+    So it qualifies a selected Session and must never add one: a composer
+    present only there stays out, or the index would widen a Project's
+    selection through a document that does not decide membership.
+    """
+    path = build_cursor_db(
+        tmp_path / "state.vscdb", bubbles=[], headers=[("c1", "ws-1")],
+    )
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS ItemTable(key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "INSERT OR REPLACE INTO ItemTable(key, value) VALUES (?, ?)",
+            ("composer.composerHeaders", json.dumps({"allComposers": [
+                {"composerId": "c1", "unifiedMode": "agent",
+                 "workspaceIdentifier": {"id": "ws-1",
+                                         "uri": {"fsPath": "/work/proj"}}},
+                {"composerId": "absent-from-table", "unifiedMode": "chat",
+                 "workspaceIdentifier": {"id": "ws-1"}},
+            ]})),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    headers = get_composer_headers(Path(path), {"ws-1"})
+    assert set(headers) == {"c1"}, "an ItemTable-only composer must not be selected"
+    assert headers["c1"]["interaction_mode"] == "agent"
+    assert headers["c1"]["workspace_path"] == "/work/proj"
+
+
+def test_an_absent_item_table_index_leaves_headers_usable(tmp_path):
+    """The qualifier is optional; a store without it still selects."""
+    path = build_cursor_db(
+        tmp_path / "state.vscdb", bubbles=[], headers=[("c1", "ws-1")],
+    )
+    headers = get_composer_headers(Path(path), {"ws-1"})
+    assert set(headers) == {"c1"}
+    assert "interaction_mode" not in headers["c1"]
 
 
 def test_a_workspace_database_has_no_header_table(tmp_path):

@@ -155,7 +155,7 @@ def _store_records(
             SELECT ti.id,ti.session_id,ti.interaction_id,ti.source_call_id,
                    COALESCE(ti.source_tool_name,ti.canonical_tool_name) tool_name,
                    ti.input_json,ti.source_status,ti.normalized_status,
-                   s.source,s.vendor_name,
+                   s.adapter_key,s.vendor_name,
                    tr.output_text,tr.output_json,tr.source_status result_source_status,
                    tr.normalized_status result_normalized_status
             FROM tool_invocations ti
@@ -190,7 +190,7 @@ def _store_records(
                 "project_name": project.get("logical_name"),
                 "snapshot_id": snapshot_id,
                 "store": db_path.name,
-                "vendor": row["vendor_name"] or row["source"],
+                "vendor": row["vendor_name"] or row["adapter_key"],
                 "session_id": row["session_id"],
                 "interaction_id": row["interaction_id"],
                 "invocation_id": row["id"],

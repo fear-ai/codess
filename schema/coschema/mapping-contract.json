@@ -1,5 +1,5 @@
 {
-  "required": ["mapping_id", "decoder_version", "direction", "vendor", "product", "source_system_id", "storage_formats", "rules", "hazards"],
+  "required": ["mapping_id", "decoder_version", "direction", "vendor", "harness_name", "source_system_key", "storage_formats", "rules", "hazards"],
   "direction_values": ["source_to_common", "common_to_external"],
   "rule_required": ["id", "source", "target", "retention"],
   "retention_values": ["core", "specialized", "extension", "raw_only", "discard"],

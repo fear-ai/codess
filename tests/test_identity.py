@@ -56,8 +56,8 @@ def test_same_vendor_id_in_different_source_namespaces_does_not_collide():
 def test_event_and_observation_ids_have_distinct_scopes():
     session = session_entity_id("openai.codex", "s1")
     event = event_entity_id(session, "e1")
-    one = source_observation_id(event, "openai.codex", "/one.jsonl", "sha256:a", "p1")
-    two = source_observation_id(event, "openai.codex", "/two.jsonl", "sha256:a", "p1")
+    one = source_observation_id(event, "openai.codex", "/one.jsonl", "digest-fingerprint:a", "p1")
+    two = source_observation_id(event, "openai.codex", "/two.jsonl", "digest-fingerprint:a", "p1")
     assert one != two
     assert event != one
 
@@ -67,9 +67,9 @@ def test_location_is_machine_and_path_specific_not_project_identity(tmp_path):
 
 
 def test_source_revision_and_record_identities_are_layered():
-    revision = source_revision_entity_id("openai.codex", "/one.jsonl", "sha256:a")
+    revision = source_revision_entity_id("openai.codex", "/one.jsonl", "digest-fingerprint:a")
     assert revision != source_revision_entity_id(
-        "openai.codex", "/one.jsonl", "sha256:b"
+        "openai.codex", "/one.jsonl", "digest-fingerprint:b"
     )
     assert source_record_entity_id(revision, "line:1") != source_record_entity_id(
         revision, "line:2"
@@ -87,11 +87,11 @@ def test_source_revision_identity_survives_a_different_machine_root():
     assert source_revision_entity_id(
         "anthropic.claude-code",
         "/Users/one/.claude/projects/proj/session.jsonl",
-        "sha256-fingerprint:abc",
+        "digest-fingerprint:abc",
     ) == source_revision_entity_id(
         "anthropic.claude-code",
         "/home/two/.claude/projects/proj/session.jsonl",
-        "sha256-fingerprint:abc",
+        "digest-fingerprint:abc",
     )
 
 
@@ -105,9 +105,9 @@ def test_source_revision_identity_separates_files_sharing_content():
     constraint mid-ingest.
     """
     assert source_revision_entity_id(
-        "anthropic.claude-code", "/root/proj/parent-session.jsonl", "sha256:same"
+        "anthropic.claude-code", "/root/proj/parent-session.jsonl", "digest-fingerprint:same"
     ) != source_revision_entity_id(
-        "anthropic.claude-code", "/root/proj/child-session.jsonl", "sha256:same"
+        "anthropic.claude-code", "/root/proj/child-session.jsonl", "digest-fingerprint:same"
     )
 
 

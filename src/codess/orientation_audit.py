@@ -96,7 +96,7 @@ def _sqlite_observations(
 
         rows = conn.execute(
             """
-            SELECT s.source_system_id,e.event_kind,
+            SELECT s.source_system_key,e.event_kind,
                    e.event_at,
                    LENGTH(COALESCE(e.content,'')),e.tool_name,e.artifact_path,
                    COALESCE(e.actor_kind,'unknown'),e.content_role,s.session_entity_id,

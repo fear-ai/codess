@@ -50,11 +50,11 @@ Each row is one concept. The columns are the places that concept is named.
 
 | Concept | DB column | Code | Values |
 |---|---|---|---|
-| Adapter key | `sessions.source` | `store.SOURCE_PROFILES` keys | `Claude`, `Codex`, `Cursor` |
+| Adapter key | `sessions.adapter_key` | `store.SOURCE_PROFILES` keys | `Claude`, `Codex`, `Cursor` |
 | Vendor | `sessions.vendor_name` | profile `vendor_name` | `anthropic`, `openai`, `cursor` |
 | Harness | `sessions.harness_name` | profile `harness_name`; Codex decodes `originator` | `claude-code`, `codex`, `cursor` |
 | Surface | `sessions.surface_kind` | `adapters/cc._CC_SURFACE`, `adapters/codex._CODEX_SURFACE` | `cli`, `desktop`, `ide`, `api` |
-| Source system | `sessions.source_system_id` | profile, composed `vendor + "." + product` | `anthropic.claude-code`, `openai.codex`, `cursor.composer` |
+| Source system | `sessions.source_system_key` | profile constant, stated per vendor | `anthropic.claude-code`, `openai.codex`, `cursor.composer` |
 | Storage format | `sessions.storage_format` | profile `storage_format` | `claude-jsonl`, `codex-jsonl`, `cursor-sqlite` |
 | Adapter module | -- | `codess/adapters/{cc,codex,cursor}.py` | `cc`, `codex`, `cursor` |
 | Store filename | -- | `config.STORE_DB_{CC,CODEX,CURSOR}` | `sessions_cc.db`, … |
@@ -84,6 +84,24 @@ program and the product were one fact spelled twice, and the copy was dropped.
 
 **Only Codex names its own program.** Claude states a surface (`entrypoint`) and
 no program; Cursor states neither, so both take the profile constant.
+
+### `product` Is Gone
+
+**Removed in CoSchema format 12.** `product` named the program, which is what
+`harness_name` holds, so the mapping contract required a second spelling of one
+fact. It was the last surviving instance of a defect already fixed twice:
+`sessions.product_name` was dropped for being a pure function of the source
+system, and `harness_name` had its surface suffix removed for the same reason.
+
+The three profiles now carry `harness_name`, and Cursor's value changed with the
+rename -- `cursor-composer` to `cursor` -- because the `composer` part named a
+surface that `surface_kind` already carries in its own column.
+
+**The composition rule it was supposed to serve never held.** `source_system_key`
+was documented as `vendor + "." + product`. For Cursor that composes
+`cursor.cursor-composer` against a stored `cursor.composer`, so the value is a
+per-vendor constant that two of three vendors matched by coincidence. The
+designator table says constant, because that is what it is.
 
 ## Model Name Parts
 
@@ -194,19 +212,20 @@ namespace: it belongs to the harness, not a server.
 
 ## Identifier Suffixes
 
-`_id` currently carries four incompatible formats, so a reader cannot tell from
-the suffix whether a value is derived, assigned, or borrowed.
+`_id` carried four incompatible formats, so a reader could not tell from the
+suffix whether a value was derived, assigned, or borrowed. The composed literals
+moved to `_key` in format 11; the three remaining suffixes are distinct.
 
 | Suffix | Means | Example |
 |---|---|---|
 | `_id` on a rowid | SQLite surrogate key, assigned locally | `sources.id`, `model_params.id` |
 | `_id` from a vendor | Identifier the source system assigned | `sessions.id` (vendor UUID) |
 | `entity_id` | Derived by Codess from declared components | `codess:session:id1:…` |
-| `_key` | Composed literal, not an identifier | `sessions.source_system_id` (pending rename) |
+| `_key` | Composed literal, not an identifier | `sessions.source_system_key`, `sessions.adapter_key` |
 
 The rule: **`_id` names an identifier something assigned; a composed or
-descriptive literal takes `_key` or no suffix.** `source_system_id` violates it
-and is renamed. A bare rowid named `id` is unremarkable and stays.
+descriptive literal takes `_key` or no suffix.** A bare rowid named `id` is
+unremarkable and stays.
 
 ### Time Suffixes
 
@@ -290,6 +309,43 @@ joining Sessions to Events now selects both without aliasing either.
 stores, or hand an identifier to a later query by `*_entity_id`. A `*_entity_id` is
 stable across machines; an `id` is not.
 
+## The `source` Family
+
+**Checked against the built schema after format 11, not against the DDL text.**
+27 column names begin `source`, across 13 tables, and the bare `source` column is
+gone. Every survivor falls in one of two groups, and the split is what makes the
+word unambiguous again:
+
+| Group | Names | Reading |
+|---|---|---|
+| The Source entity | `source_entity_id`, `source_path`, `source_revision`, `source_mtime`, `source_size`, `source_id`, `source_locator`, `source_sequence`, `source_record_*`, `source_system_key` | A fact about the upstream evidence container |
+| The vendor's own value | `source_status`, `source_call_id`, `source_tool_name`, `source_started_at`, `source_turn_id`, `source_field`, `source_value`, `source_params`, `source_cwd`, `source_file` | The exact upstream value, retained beside its normalized form |
+
+The second group is why `source` could not simply be banned: `source_status`
+beside `normalized_status` is the pattern that keeps vendor evidence inspectable,
+and it reads correctly. What did not read correctly was a third use --
+`sessions.source` holding an adapter key -- which is neither a Source fact nor a
+vendor value. It is `adapter_key` as of format 11.
+
+**No table was ever renamed.** `git log -S` over the DDL finds no prior spelling
+for `event_content`, and no singular `session` table ever existed. The names have
+been what they are since the schema was introduced; what changed is that one
+column stopped borrowing a word that already had two jobs.
+
+**Two Session listings exist and they answer differently, which is correct.**
+`query --sessions --output-format jsonl` emits `codess.query-row/1`, whose
+`sessionData` requires a non-null `source`; it is built from `selected_sessions`,
+where the column now arrives as `adapter_key` and is emitted under the contract's
+`source` key. The typed `query sessions` action emits `codess.query-result/1`,
+whose `rows` are deliberately unconstrained, and its rows carry no `source` at
+all -- they carry `source_system_key`, `vendor_name`, and `harness_name`, which
+are the three separable facts the adapter key summarises.
+
+Both are right for their contract, and the released schemas say so: one pins the
+row shape, the other pins the envelope and leaves rows open. A reader comparing
+the two should not expect `source` in the typed result, and the absence is not a
+dropped field.
+
 ## Plurality
 
 **The rule: countable entities are plural; mass nouns are singular.**
@@ -297,9 +353,25 @@ stable across machines; an `id` is not.
 CoSchema follows it: 19 of 24 tables are plural, and all five exceptions are
 mass nouns -- `store_meta` and the four `*_content` tables.
 
-`event_artifacts` is correctly plural, and the earlier proposal to pluralize
-`event_content` to match it is withdrawn: the two names disagree because the
+`event_artifacts` is correctly plural, and the proposal to pluralize
+`event_content` to match it is withdrawn. The two names disagree because the
 nouns differ, not because the convention does.
+
+**Re-opened and re-confirmed against the corpus, because the first answer was
+right for a reason that does not hold.** The earlier reasoning was that a link
+table holds at most one row per owner, so the noun is a mass noun. That is false:
+`event_content` is keyed `(event_id, relation_kind)`, and the key is used. Across
+the two populated stores it averages 1.335 and 1.309 rows per Event, and 13,622
+Events in the Claude store carry two -- a `body` beside a `tool.output`. A table
+averaging more than one row per owner is holding a countable set by any test that
+counts.
+
+The name is still right, and the reason is the noun rather than the cardinality.
+`content` is a mass noun in English: two content rows are not "two contents". The
+pluralization test is the noun's own grammar, not how many rows an owner has --
+which is exactly why `event_artifacts`, whose noun *is* countable, is plural
+while sitting on the same shape of key. Recorded because the withdrawn proposal
+would otherwise be re-derived from the cardinality, which points the other way.
 
 ## Command Arguments
 
@@ -451,6 +523,30 @@ changes what a caller types; nothing on disk moves.
 | `--store` | `--store-file` | `demo_model_metrics` | Freed the CLI spelling: this one is a source-system store *file*, not the durable store |
 | `--registry` | `--store` | every command | Selects the machine's durable store; `registry` named one file inside it |
 
+### Digest and Fingerprint
+
+**Both words are kept, because they answer different questions about the same
+value.** `digest` states how it was computed; `fingerprint` states what job it
+does. A revision value spells both -- `full-digest-fingerprint`,
+`bounded-sample-digest-fingerprint` -- and the leading qualifier states a third
+thing, the coverage:
+
+| Part | Answers | Values in use |
+|---|---|---|
+| `full` / `bounded-sample` / `sqlite-main-wal` / `edge` | What was read | Complete file, sampled windows, two SQLite forks, first/last bytes |
+| `digest` | How the read was reduced | Always the `hashing` construction |
+| `fingerprint` | What the value is for | Detecting that content changed |
+
+Dropping `fingerprint` would leave `full-digest`, which says how a value was made
+and not that it identifies content -- and CoSchema is explicit that a fingerprint
+alone does not identify a Source, so the role needs its own word. Dropping
+`digest` would leave `full-fingerprint`, which cannot distinguish a digest from a
+size-and-mtime pair, and Cursor's edge method is exactly that distinction.
+
+A bare `fingerprint` with no `digest` would be the right name for a
+non-cryptographic change detector. None currently exists; if one is added, the
+absence of `digest` is what will say so.
+
 ### Digest Fields
 
 **A field holding a digest is named `*_digest`, never `*_sha256`.** The
@@ -463,14 +559,30 @@ The failure the rule prevents is subtle and has occurred: a value produced by
 nothing to catch it -- the value still exists, still verifies against itself, and
 now lies about what it is.
 
-**Ten field names still carry the algorithm** -- `selection_sha256` (13
-occurrences), `stored_sha256` (8), `resolved_selection_sha256` (5),
-`catalog_sha256` and `raw_manifest_sha256` (4 each), `manifest_sha256` (3), and
-four singletons. They are
-wire-format or released-document fields, so each costs a regeneration or a
-version bump, and they are recorded in [CoTasks](CoTasks.md) rather than renamed
-piecemeal. `plan_digest` was renamed because retention documents are produced per
-run and read immediately, so the rename cost one version bump and no stored data.
+**The ten that carried the algorithm moved in format 11**, batched with the
+identity and time-suffix renames so the regeneration was paid once rather than
+ten times: `selection_digest`, `stored_digest`, `resolved_selection_digest`,
+`catalog_digest`, `raw_manifest_digest`, `manifest_digest`, and four singletons.
+`plan_digest` went earlier and alone, because a retention document is produced
+per run and read immediately, so it cost one version bump and no stored data --
+which is the test for whether a digest rename can travel by itself.
+
+The one exception is `hashlib.sha256`, which names the algorithm because it *is*
+the algorithm. The rule constrains what a stored field is called, not what the
+function that computes it is called, and `hashing.ALGORITHM_TOKENS` holds the
+spellings a checker looks for so no other module keeps its own copy.
+
+**Two shapes a field-name survey cannot see, both moved in format 12.** A
+`"sha256"` *key* nested inside an object -- one per released file in
+`schema/coschema/manifest.json`, one per store in every snapshot manifest -- and
+an emitted `sha256:` *value prefix*, which reached `request_hash`,
+`result_hash`, every citation digest, raw object ids, the raw object directory,
+and the worktree revision suffix. Both are `digest` now.
+
+The lesson is about the survey rather than the names: three passes looked for
+`*_sha256` and found field names each time, because that is the shape a grep for
+a suffix returns. A key inside a per-file object and a prefix inside a value are
+the same defect wearing a shape the search could not match.
 
 ### Stored Names
 
@@ -507,17 +619,92 @@ run and read immediately, so the rename cost one version bump and no stored data
 | `sessions.product_name` | *dropped* | A pure function of `source_system_id` |
 | `mapping_diagnostics.level` | `granularity` | Held `source`/`record`/`field`, a granularity, while `field_state` uses `level` for severity |
 
-**Pending**, for the next regeneration:
+**Landed in CoSchema format 11**, the identity and time-suffix batch:
 
 | From | To | Why |
 |---|---|---|
 | `sessions.source` | `adapter_key` | Holds the `SOURCE_PROFILES` key, not the Source entity |
-| `sessions.source_system_id` | `source_system_key` | A composed literal, not an assigned identifier |
-| `sessions.vendor_name` | *records the company* | `cursor` is a product; Anysphere is the vendor |
+| `sessions.source_system_id`, and the column in `sources` and `workspace_bindings` | `source_system_key` | A composed literal, not an assigned identifier. All three carry the same value, so all three move together |
 | `sources.observed_at`, `sessions.observed_at`, `project_locations.observed_at` | `observed_when` | Codess-recorded RFC 3339 text; see [Time Suffixes](#time-suffixes) |
 | `processing_runs.started_at`, `completed_at` | `started_when`, `completed_when` | Removes the one time name denoting two representations |
 | `mapping_diagnostics.created_at` | `created_when` | Codess-recorded |
 | `correlation_assertions.asserted_at` | `asserted_when` | Codess-recorded |
+| The ten `*_sha256` fields | `*_digest` | [Digest Fields](#digest-fields). `sources.content_sha256` was already gone -- `field-coverage-baseline.json` was still naming a column dropped in format 5, which is what a rename pass finds and a review does not |
+
+`sessions.started_at` keeps its name and is the reason the rule is worth stating:
+it is `REAL` vendor-recorded milliseconds, so it is already correct under the
+suffix rule while the `TEXT` column two rows below it was not.
+
+**What the batch deliberately did not reach, and why.** Three name families carry
+the superseded spellings and are governed by their own versioned contracts, so
+renaming them with CoSchema would break a document the CoSchema bump does not
+otherwise touch:
+
+| Name | Where | Its own version |
+|---|---|---|
+| `source_system_ids` | The typed query request's filter key | `codess.query-request/1` |
+| `observed_at` | Catalog location records, refresh receipts, raw-manifest rows | Each states its own format |
+
+Each is a rename with a real argument and a separate cost. A CoSchema format
+bump is not a licence to renumber every other contract in the repository, and
+batching is only economical among names that regenerate together.
+
+**Landed in CoSchema format 12**, the batch that finished the two rules format 11
+started:
+
+| From | To | Why |
+|---|---|---|
+| `product` in the mapping contract and the three profiles | `harness_name` | Named the program, which `harness_name` already holds. Cursor's value moves `cursor-composer` to `cursor`, because `composer` named a surface `surface_kind` carries in its own column |
+| `"sha256"` key in each `manifest.json` file and store entry | `digest` | The rule's own subject at a nesting level a field-name survey cannot see |
+| `sha256:` value prefix | `digest:` | Reaches `request_hash`, `result_hash`, citation digests, raw object ids, the raw object directory, and the worktree revision suffix |
+| `"source"` in the query row | `adapter_key` | Format 11 renamed the column and left the row emitting the old key, so one value had two names one layer apart |
+
+Six documents carry a version for it: `codess.query-result/2`,
+`codess.investigation/2`, `codess.query-row/2`, `codess.raw/2`,
+`codess.source-verification/2`, and `codess.working-archive/2`.
+
+**A second backward read, on the same rule as the first.** A snapshot manifest's
+store entry is verified while its snapshot is being replaced, and a
+`codess.raw/1` object id is read while its manifest is, so `store_claim` and
+`_object_hash` accept either spelling and write only the current one. Both have a
+test per spelling.
+
+**One renamed key had to stay readable under its old spelling, and the rebuild
+is what proved it.** `manifest_sha256` lives in every `current.json`, and a
+rebuild *reads the pointer it is about to replace*. Renaming the key on both the
+read and the write side made all 21 published Projects refuse to rebuild --
+`invalid current snapshot pointer: 'manifest_digest'` -- with the release that
+renamed it and no other. The same applies to `raw_manifest_sha256` in a stored
+manifest, which is verified while its snapshot is being replaced.
+
+The rule this yields: **a document Codess must read before it can write its
+replacement accepts both spellings on read and emits only the current one on
+write.** It is not a general alias -- a stored column has no such problem,
+because a format change rebuilds the store from vendor Sources rather than
+reading the old one. It applies to exactly the files that bootstrap a rebuild,
+and `raw_manifest_claim` states it in one place with a test per spelling.
+
+**The tolerance is needed only for the upgrade, and that is checkable rather
+than asserted.** `current_snapshot` returns `None` before reading any key when
+no pointer exists, so a **fresh ingest at format 11 never reads a format-10
+name** -- a Project with no `.codess/` is unaffected either way. The read matters
+for exactly one case, an existing published Project moving 10 to 11, which is
+the case all 21 were in. Two tests hold both halves: a format-10 pointer
+resolves, and a strict read of the same pointer raises `KeyError` -- the failure
+that stopped the first rebuild attempt.
+
+The consequence for a future rename is a question worth asking once: *can a
+Project that has never been ingested still be ingested if this key is refused?*
+When the answer is yes, the tolerance is upgrade-only and can be dropped after
+the corpus moves. It has not been dropped here, because a store written by an
+earlier release can be presented at any time -- from a backup, another machine,
+or a Project not rebuilt in this pass.
+
+**Still pending**, and not part of this batch:
+
+| From | To | Why |
+|---|---|---|
+| `sessions.vendor_name` | *records the company* | `cursor` is a product; Anysphere is the vendor. A decode change rather than a rename: the column name is right and its value is wrong, so a regeneration alone would not fix it |
 | `units.epoch_milliseconds` | `timeval.epoch_ms` | `_ms` is the convention the same module already used for `SECOND_MS` and `DAY_MS`; landed, with the old name kept as an alias |
 
 **Not renamed, and why.** `sources.id` -- a bare rowid is unremarkable.

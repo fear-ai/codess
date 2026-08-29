@@ -107,7 +107,7 @@ sources remain the authority.
 **The `package` is the released contract set**, not the Python distribution:
 the SQLite DDL, the logical and mapping contracts, the three vendor mapping
 profiles, and ten conformance fixtures, enumerated in
-`schema/coschema/manifest.json` with a SHA-256 per file. `verify_package()`
+`schema/coschema/manifest.json` with a `digest` per file. `verify_package()`
 hashes each file, compares it to the manifest, and folds the results into one
 digest. Editing any listed file changes that digest and makes existing stores
 unwritable -- including the fixtures, which no runtime code reads. That
@@ -355,7 +355,7 @@ evidence for a decoded record.
 **Source revision identity** answers "which exact state of which file did
 this come from," combining the source-system namespace, the Source URI, and
 a revision value. The revision is a *content fingerprint*, not a timestamp:
-a SHA-256 over the file for ordinary sizes, and a bounded sampling of
+a complete digest over the file for ordinary sizes, and a bounded sampling of
 windows for files above the full-hash limit. Deriving it from content rather
 than modification time is what makes it survive copying, archiving, and
 restoration -- operations that routinely rewrite timestamps while leaving
@@ -388,8 +388,8 @@ Human-readable Session names and source titles are metadata, not identity.
 
 `tool_invocations.source_call_id` is an exact vendor free-text lineage value
 scoped by source system and Session. The relational copy is bounded to 100
-UTF-8 bytes. Longer values use a UTF-8-safe prefix plus a complete SHA-256
-digest; source metadata or retained evidence keeps the original.
+UTF-8 bytes. Longer values use a UTF-8-safe prefix plus a complete digest;
+source metadata or retained evidence keeps the original.
 
 ## Ordering and Time
 
@@ -408,16 +408,24 @@ evidence supporting a normalized value.
 ### Time Column Naming
 
 The rule above -- numeric for source-reported event time, text for
-Codess-recorded time -- is currently stated only in prose, while every column
-carries the same `_at` suffix regardless of which it is. A reader cannot tell
-from `observed_at` and `event_at` that one is RFC 3339 text and the other
-Unix milliseconds, and must consult the DDL for each.
+Codess-recorded time -- was stated only in prose through format 10, while every
+column carried the same `_at` suffix regardless of which it was. A reader could
+not tell from `observed_at` and `event_at` that one was RFC 3339 text and the
+other Unix milliseconds, and had to consult the DDL for each.
 
-The naming does not merely fail to help; it actively misleads in one place.
-`sessions.started_at` is `REAL` while `processing_runs.started_at` is `TEXT`.
-The same column name denotes two different representations in one schema, so
-code reading both must know which table it is in, and a query joining them
-cannot compare the values without conversion.
+The naming did not merely fail to help; it actively misled in one place.
+`sessions.started_at` is `REAL` while `processing_runs.started_at` was `TEXT`.
+The same column name denoted two different representations in one schema, so
+code reading both had to know which table it was in, and a query joining them
+could not compare the values without conversion.
+
+**Resolved in format 11.** The seven Codess-recorded `TEXT` columns took the
+`_when` suffix -- `observed_when` (×3), `started_when`, `completed_when`,
+`created_when`, `asserted_when` -- so `_at` now means Unix milliseconds
+everywhere it appears and `started_at` denotes one representation. The analysis
+below is retained because it is what decided the split, and the counts in it are
+measurements of the format-10 corpus that produced the decision. See
+[CoNames](CoNames.md#time-suffixes) for the rule and the full batch.
 
 The columns already differ by something more durable than their storage
 type. Enumerating all nineteen from the DDL, they fall into three groups by
@@ -793,7 +801,7 @@ tables.
 
 JSONL capture uses bounded streaming. Cursor capture uses SQLite backup so
 committed write-ahead-log state is represented consistently. Exact retained
-objects and source-system stores use complete SHA-256 verification.
+objects and source-system stores use complete-digest verification.
 
 ## Query Contract
 

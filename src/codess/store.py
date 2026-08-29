@@ -75,7 +75,7 @@ SOURCE_PROFILES = {
     description["adapter_key"]: {
         field: description[field]
         for field in (
-            "source_system_id", "vendor_name", "harness_name",
+            "source_system_key", "vendor_name", "harness_name",
             "storage_format", "surface_kind", "mapping",
         )
     }
@@ -99,7 +99,7 @@ def _profile(source: str | None) -> dict[str, str]:
     return SOURCE_PROFILES.get(
         str(source or ""),
         {
-            "source_system_id": "unknown.source-system",
+            "source_system_key": "unknown.source-system",
             "vendor_name": "unknown",
             "harness_name": "unknown",
             "storage_format": "unknown",
@@ -365,7 +365,7 @@ def sync_project_catalog(
         {
             "path": item.get("source_project_path"),
             "path_obsolete": bool(item.get("path_obsolete")),
-            "source": item.get("source_system_id"),
+            "source": item.get("source_system_key"),
         }
         for item in project.get("workspace_bindings", [])
         if item.get("source_project_path")
@@ -419,7 +419,7 @@ def sync_project_catalog(
             """
             INSERT INTO project_locations(
               id, project_id, machine_id, observed_path, path_obsolete,
-              location_kind, state, observed_at, metadata)
+              location_kind, state, observed_when, metadata)
             VALUES (?, ?, ?, ?, ?, 'directory', ?, ?, ?)
             ON CONFLICT(machine_id, observed_path) DO UPDATE SET
               id=excluded.id,
@@ -461,12 +461,12 @@ def sync_project_catalog(
             )
             continue
         binding_id = workspace_binding_id(
-            project_id, workspace["source_system_id"], workspace["workspace_id"]
+            project_id, workspace["source_system_key"], workspace["workspace_id"]
         )
         conn.execute(
             """
             INSERT INTO workspace_bindings(
-              id, project_id, location_id, source_system_id, workspace_id,
+              id, project_id, location_id, source_system_key, workspace_id,
               relation_kind, source_project_path, path_obsolete,
               selection_state, metadata)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
@@ -484,7 +484,7 @@ def sync_project_catalog(
             """,
             (
                 binding_id, project_id, workspace.get("target_location_id"),
-                workspace["source_system_id"], workspace["workspace_id"],
+                workspace["source_system_key"], workspace["workspace_id"],
                 workspace.get("relation_kind") or "workspace_binding",
                 workspace.get("source_project_path"),
                 int(bool(workspace.get("path_obsolete"))),
@@ -533,23 +533,23 @@ def ensure_source(
         consistency = str(observation.get("consistency") or "observed")
         availability = str(observation.get("availability") or availability)
     source_entity_id = source_revision_entity_id(
-        profile["source_system_id"], source_file, revision
+        profile["source_system_key"], source_file, revision
     )
     now = now_iso(system_clock)
     conn.execute(
         """
         INSERT INTO sources(
-          source_entity_id, source_system_id, source_path, storage_format, source_revision,
-          source_mtime, source_size, observed_at, availability,
+          source_entity_id, source_system_key, source_path, storage_format, source_revision,
+          source_mtime, source_size, observed_when, availability,
           capture_method, consistency)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_system_id, source_path, source_revision) DO UPDATE SET
-          observed_at=excluded.observed_at,
+        ON CONFLICT(source_system_key, source_path, source_revision) DO UPDATE SET
+          observed_when=excluded.observed_when,
           availability=excluded.availability
         """,
         (
             source_entity_id,
-            profile["source_system_id"],
+            profile["source_system_key"],
             source_file,
             profile["storage_format"],
             revision,
@@ -564,9 +564,9 @@ def ensure_source(
     row = conn.execute(
         """
         SELECT id FROM sources
-        WHERE source_system_id=? AND source_path=? AND source_revision=?
+        WHERE source_system_key=? AND source_path=? AND source_revision=?
         """,
-        (profile["source_system_id"], source_file, revision),
+        (profile["source_system_key"], source_file, revision),
     ).fetchone()
     return int(row[0])
 
@@ -665,16 +665,16 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
     started_at = session.get("started_at")
     time_basis = session.get("time_basis") or ("event" if started_at is not None else "unknown")
     now = now_iso(system_clock)
-    source_system_id = session.get("source_system_id") or profile["source_system_id"]
+    source_system_key = session.get("source_system_key") or profile["source_system_key"]
     vendor_session_id = session.get("vendor_session_id") or session.get("id")
-    session_identity = session_entity_id(source_system_id, vendor_session_id)
+    session_identity = session_entity_id(source_system_key, vendor_session_id)
     source_row = conn.execute(
         "SELECT source_entity_id, source_path, source_revision FROM sources WHERE id IS ?",
         (session.get("source_id"),),
     ).fetchone()
     observation_id = source_observation_id(
         session_identity,
-        source_system_id,
+        source_system_key,
         source_row["source_path"] if source_row else "unobserved",
         source_row["source_revision"] if source_row else "unobserved",
         project_id,
@@ -700,7 +700,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
         session.get("id"),
         session_identity,
         observation_id,
-        source_system_id,
+        source_system_key,
         vendor_session_id,
         session.get("vendor_name") or profile["vendor_name"],
         session.get("harness_name") or profile["harness_name"],
@@ -736,19 +736,19 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
     conn.execute(
         """
         INSERT INTO sessions(
-          id, session_entity_id, observation_id, source_system_id, vendor_session_id, vendor_name,
+          id, session_entity_id, observation_id, source_system_key, vendor_session_id, vendor_name,
           harness_name, storage_format, surface_kind,
           harness_version, source_id, project_id, source_cwd, source_cwd_count,
           session_label, session_label_basis, vendor_group,
           source_dir_inode, source_dir_mtime, path_obsolete,
-          started_at, ended_at, source_mtime, observed_at, time_basis,
+          started_at, ended_at, source_mtime, observed_when, time_basis,
           parent_session_id, session_relation_kind, archive_state, archive_source,
-          session_model_param_id, metadata, source, type, release, project_path)
+          session_model_param_id, metadata, adapter_key, type, release, project_path)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
           session_entity_id=excluded.session_entity_id,
           observation_id=excluded.observation_id,
-          source_system_id=excluded.source_system_id,
+          source_system_key=excluded.source_system_key,
           vendor_session_id=excluded.vendor_session_id,
           vendor_name=excluded.vendor_name,
           harness_name=excluded.harness_name,
@@ -768,7 +768,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
           started_at=excluded.started_at,
           ended_at=excluded.ended_at,
           source_mtime=excluded.source_mtime,
-          observed_at=excluded.observed_at,
+          observed_when=excluded.observed_when,
           time_basis=excluded.time_basis,
           parent_session_id=excluded.parent_session_id,
           session_relation_kind=excluded.session_relation_kind,
@@ -776,7 +776,7 @@ def upsert_session(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
           archive_source=excluded.archive_source,
           session_model_param_id=excluded.session_model_param_id,
           metadata=excluded.metadata,
-          source=excluded.source,
+          adapter_key=excluded.adapter_key,
           type=excluded.type,
           release=excluded.release,
           project_path=excluded.project_path
@@ -882,7 +882,7 @@ def _check_mapping_conformance(
     if not rule:
         return
     row = conn.execute(
-        "SELECT source_system_id FROM sessions WHERE id=?", (event.get("session_id"),)
+        "SELECT source_system_key FROM sessions WHERE id=?", (event.get("session_id"),)
     ).fetchone()
     profile = MAPPING_PROFILE_FOR_SOURCE_SYSTEM.get(str(row[0])) if row else None
     if profile is None:
@@ -919,7 +919,8 @@ def _check_mapping_conformance(
 def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
     """Upsert one event with common semantics and return its surrogate id."""
     session = conn.execute(
-        "SELECT source, source_system_id, project_id, session_entity_id FROM sessions WHERE id=?",
+        "SELECT adapter_key, source_system_key, project_id, session_entity_id "
+        "FROM sessions WHERE id=?",
         (event.get("session_id"),),
     ).fetchone()
     semantics = _event_classification(event)
@@ -1267,7 +1268,7 @@ def record_processing_run(
         """
         INSERT OR REPLACE INTO processing_runs(
           id, project_id, policy_digest, processor_name, software_version,
-          scope_json, actions_json, rejection_reason, started_at, completed_at)
+          scope_json, actions_json, rejection_reason, started_when, completed_when)
         VALUES (?, ?, ?, 'codess.content_processing', ?, ?, ?, ?, ?, ?)
         """,
         (
@@ -1323,7 +1324,7 @@ def _record_diagnostic(
         """
         INSERT INTO mapping_diagnostics(
           source_id, session_id, event_id, granularity, severity, reason_code, source_field,
-          source_value, mapping_rule, detail, created_at)
+          source_value, mapping_rule, detail, created_when)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
@@ -1402,7 +1403,7 @@ def record_source_diagnostics(
             """
             INSERT INTO mapping_diagnostics(
               source_id, session_id, event_id, granularity, severity, reason_code,
-              source_field, source_value, mapping_rule, detail, created_at)
+              source_field, source_value, mapping_rule, detail, created_when)
             VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?)
             """,
             (
@@ -1663,7 +1664,7 @@ def _prepare_event_groups(
     prepared: list[dict[str, Any]] = []
     _resolve_parent_events(events)
     session_row = conn.execute(
-        "SELECT source,session_model_param_id FROM sessions WHERE id=?",
+        "SELECT adapter_key,session_model_param_id FROM sessions WHERE id=?",
         (session_id,),
     ).fetchone()
     session_source = session_row[0] if session_row else "Unknown"

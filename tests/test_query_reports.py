@@ -52,7 +52,7 @@ class Scope:
         if not self.source_ids:
             return "1", ()
         placeholders = ", ".join("?" for _ in self.source_ids)
-        return f"{alias}.source_system_id IN ({placeholders})", self.source_ids
+        return f"{alias}.source_system_key IN ({placeholders})", self.source_ids
 
     def diagnostics_predicate(self) -> tuple[str, tuple[str, ...]]:
         if not self.source_ids:
@@ -160,7 +160,7 @@ def test_diagnostics_are_ordered_by_when_they_were_recorded(store):
         conn.execute(
             """
             INSERT INTO mapping_diagnostics(
-              granularity, severity, reason_code, created_at, session_id
+              granularity, severity, reason_code, created_when, session_id
             ) VALUES ('record', 'warn', ?, ?, 's1')
             """,
             (reason, created_at),
@@ -174,7 +174,7 @@ def test_diagnostics_are_ordered_by_when_they_were_recorded(store):
 def test_diagnostics_carry_their_project_and_store(store):
     conn, scope = store
     conn.execute(
-        "INSERT INTO mapping_diagnostics(granularity, severity, reason_code, created_at)"
+        "INSERT INTO mapping_diagnostics(granularity, severity, reason_code, created_when)"
         " VALUES ('source', 'error', 'unsupported', '2026-01-01')"
     )
     conn.commit()
@@ -193,7 +193,7 @@ def test_artifacts_lead_with_the_most_source_systems(tmp_path):
         add_session(conn, "s1", source="Claude")
         add_session(
             conn, "s2", source="Codex",
-            source_system_id="openai.codex", vendor_session_id="v2",
+            source_system_key="openai.codex", vendor_session_id="v2",
         )
         for index, (session, locator) in enumerate(
             [("s1", "shared.py"), ("s2", "shared.py"), ("s1", "solo.py")], start=1
@@ -465,7 +465,7 @@ def test_sessions_are_filtered_by_the_scope_source(tmp_path):
         add_session(conn, "s1", source="Claude")
         add_session(
             conn, "s2", source="Codex",
-            source_system_id="openai.codex", vendor_session_id="v2",
+            source_system_key="openai.codex", vendor_session_id="v2",
         )
         conn.commit()
         stores = [{"conn": conn, "path": path, "project_path": tmp_path}]

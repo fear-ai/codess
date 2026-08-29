@@ -14,6 +14,17 @@ Codess requires:
 - write access to the machine store, normally `~/.codess/` (see
   [Two `.codess` Directories](#two-codess-directories)).
 
+`pyproject.toml` states the supported floor (`>=3.11`) and `.python-version`
+states the interpreter this repository is developed and tested against. With
+pyenv installed the second is what `python` resolves to inside the tree; without
+it the file is inert and the floor still applies.
+
+**Use the interpreter, not a shell alias, in any script.** `python` is commonly
+an alias or a pyenv shim that a non-interactive subshell does not inherit, so a
+loop calling `python` can fail with `command not found` on every iteration while
+reporting only that each iteration failed. `python3` resolves through the shim
+and is the spelling to use.
+
 SQLite support is supplied by Python. The `zstandard` package is installed as a
 runtime dependency for bounded raw-object capture.
 
@@ -401,6 +412,29 @@ Use repeated `--project` or a maintained Project list for a bounded batch.
 Failures remain Project-specific unless fail-fast behavior is explicitly
 selected.
 
+**A whole-corpus rebuild is a designator, not a loop.** After a CoSchema format
+change every published store must be rebuilt, and `--designator` selects the
+cohort from the catalog rather than from a list assembled by hand:
+
+```bash
+python3 tools/project_inventory.py           # gate: exits nonzero on vanished Sources
+codess refresh --designator included         # plan; review the selection
+codess refresh --designator included --stage apply --force
+```
+
+**After a format change, `--force` is required.** A routine refresh decodes only
+Sources whose selected evidence changed, which means opening the existing working
+store; a format change has just made that store unreadable, so every Project
+fails with `store CoSchema <n>, supported [<n+1>]: rebuild with ... --force`.
+The message names the remedy, and the failure is reported per Project in the
+receipt rather than aborting the run.
+
+This preflights every selected Project before applying any, and writes a
+`codess.refresh-receipt/1` recording each stage. A hand-written loop over
+Project paths has neither, and it also loses the catalog's own exclusions: a
+linked worktree annotated `worktree_of` is omitted from `included`, so a loop
+that reads `projects.json` directly ingests one repository twice.
+
 Inspect the known Project inventory and its computed annotations with:
 
 ```bash
@@ -707,7 +741,7 @@ snapshot rather than silently accepting stale or tampered content; see
 the check does and does not protect against.
 
 Investigate before bypassing: compare `current.json`'s recorded
-`manifest_sha256` against a fresh hash of the retained `manifest.json`, and
+`manifest_digest` against a fresh digest of the retained `manifest.json`, and
 confirm whether the snapshot directory was touched outside normal Codess
 operation (an interrupted publish, manual editing, or a restored backup are
 the ordinary causes).
@@ -877,7 +911,7 @@ procedure.
 
 ### When the Schema Manifest Needs Refreshing
 
-`schema/coschema/manifest.json` records a SHA-256 per released schema file, and
+`schema/coschema/manifest.json` records a `digest` per released schema file, and
 `tools/refresh_schema_manifest.py` recomputes them. It is separate from a
 snapshot's `manifest.json`, which describes one store set -- the names collide
 and the roles do not.
@@ -981,7 +1015,7 @@ value set once silently governs a later deletion:
 | Flag | Decides | Why it is exposed here |
 |---|---|---|
 | `--apply` | Whether anything is deleted | The one irreversible act in the command; separating plan from apply is what lets a plan be read before it is trusted |
-| `--keep N` | How many snapshots survive per Project, current included: 1 the current alone, 2 the current and one past, 0 every one | Defaults to `CODESS_KEEP_SNAPSHOTS`, so a prune retains what publication retains. Per run because a deliberate reclaim may want to keep less than routine trimming |
+| `--keep N` | How many snapshots survive per Project, current included: 1 the current alone, 3 the current and two past, 0 every one | Defaults to `CODESS_KEEP_SNAPSHOTS`, so a prune retains what publication retains. Per run because a deliberate reclaim may want to keep less than routine trimming |
 | `--reference-catalog PATH` | Which catalogs' references block a deletion | A catalog outside the store cannot be discovered, so it is named. Repeatable because a machine may hold several |
 | `--working-archives` | Whether working archives are candidates | Off by default: they are a working area rather than published evidence, and including them by default would delete on a run an operator asked to be conservative |
 | `--keep-comparison-revisions` | Whether several >=1 GiB revisions of one logical source survive | The default keeps one. A comparison between two large revisions is a deliberate, temporary state, so retaining both is asked for rather than assumed |
@@ -1029,7 +1063,7 @@ key on a receipt, and no `applied` key at all.
 keeps the registry legible after a format change: a machine that upgrades
 mid-project can still enumerate, size, and date every generation it holds
 without downgrading anything. The cost is that the manifest and the store can
-in principle disagree -- the manifest carries a SHA-256 per store precisely so
+in principle disagree -- the manifest carries a `digest` per store precisely so
 that disagreement is detectable, and a manifest that does not match its store
 is a finding rather than a rounding error.
 
@@ -1051,7 +1085,7 @@ python tools/snapshot_inventory.py --csv out.csv   # machine-readable
 ```
 
 **Most of the assessment costs no database open.** The snapshot manifest
-already records per-store row counts, a SHA-256 per store, byte size,
+already records per-store row counts, a `digest` per store, byte size,
 `created_at`, and `parent_snapshot_id` -- so volume, lineage, and identity are
 read from JSON. Only the Session date range opens a store, which is why
 `--ranges` is opt-in.

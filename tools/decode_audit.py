@@ -205,7 +205,7 @@ def _mapping_conformance(conn: sqlite3.Connection) -> dict[str, object]:
     found" from "not compared".
     """
     row = conn.execute(
-        "SELECT source_system_id FROM sessions LIMIT 1"
+        "SELECT source_system_key FROM sessions LIMIT 1"
     ).fetchone()
     if row is None:
         return {"available": False, "reason": "store holds no Sessions"}

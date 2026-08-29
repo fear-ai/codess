@@ -152,7 +152,7 @@ def loss(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
-def undecoded_evidence(source_system_id: str | None) -> dict[str, Any]:
+def undecoded_evidence(source_system_key: str | None) -> dict[str, Any]:
     """Retained vendor evidence Codess located and deliberately did not decode.
 
     Loss has two shapes and the report was only carrying one. `loss()` measures
@@ -170,12 +170,12 @@ def undecoded_evidence(source_system_id: str | None) -> dict[str, Any]:
     prompts and no Model Turns, which changes what a Session is and is a mapping
     decision under 6.5. Reporting it is the honest middle path.
 
-    Keyed by `source_system_id` so a store's own report names only its vendor,
+    Keyed by `source_system_key` so a store's own report names only its vendor,
     and returns `available: False` for a vendor with nothing of this kind rather
     than omitting the key, so a reader can tell "measured, none" from
     "not measured".
     """
-    if source_system_id != "openai.codex":
+    if source_system_key != "openai.codex":
         return {"available": False, "reason": "no undecoded container measured"}
     from codess.codex_source import unrolled_history_sessions
 
@@ -195,7 +195,7 @@ def undecoded_evidence(source_system_id: str | None) -> dict[str, Any]:
     }
 
 
-def projection_coverage(source_system_id: str | None) -> dict[str, Any]:
+def projection_coverage(source_system_key: str | None) -> dict[str, Any]:
     """Which vendor fields the decoder projects, and which it drops.
 
     A coverage report that states only what was mapped cannot say what a
@@ -213,7 +213,7 @@ def projection_coverage(source_system_id: str | None) -> dict[str, Any]:
     and populated on none. Recorded as a measurement with its sample size, which
     is what lets a later release contradict it.
     """
-    if source_system_id != "cursor.composer":
+    if source_system_key != "cursor.composer":
         return {"available": False, "reason": "no projection measured"}
     from codess.adapters.cursor import _MAPPED_BUBBLE_FIELDS, BUBBLE_FIELD_TOTAL
 
@@ -230,12 +230,12 @@ def projection_coverage(source_system_id: str | None) -> dict[str, Any]:
     }
 
 
-def unbound_composers(source_system_id: str | None) -> dict[str, Any]:
+def unbound_composers(source_system_key: str | None) -> dict[str, Any]:
     """Composers holding decodable bubbles that no index binds to a Project.
 
-    Cursor prunes `composerHeaders` on age while retaining the `composerData:`
-    row and every bubble, so a composer older than the retention window has no
-    header and states no workspace. Codess reads it, records where it came from,
+    Cursor's centralised `composerHeaders` indexes only composers touched since
+    it was introduced, while every `composerData:` row and bubble is retained, so
+    a composer predating that migration has no header and states no workspace. Codess reads it, records where it came from,
     and does not attribute it -- which is the correct handling of a Session whose
     binding the vendor no longer records.
 
@@ -243,7 +243,7 @@ def unbound_composers(source_system_id: str | None) -> dict[str, Any]:
     excluded from ingest by design, so a store cannot count them and a clean
     coverage report would overstate what the corpus holds.
     """
-    if source_system_id != "cursor.composer":
+    if source_system_key != "cursor.composer":
         return {"available": False, "reason": "not a Cursor store"}
     from codess.cursor_source import get_global_db, unbound_composer_count
 
@@ -263,7 +263,7 @@ def unbound_composers(source_system_id: str | None) -> dict[str, Any]:
 
 
 def profile_conformance(
-    conn: sqlite3.Connection, source_system_id: str | None,
+    conn: sqlite3.Connection, source_system_key: str | None,
 ) -> dict[str, Any]:
     """Whether the rules a store used are the rules its profile declares.
 
@@ -307,16 +307,16 @@ def profile_conformance(
                 "available": False,
                 "reason": "store was written under a superseded contract",
             }
-    if source_system_id is None:
+    if source_system_key is None:
         return {
             "available": False,
             "reason": "store holds no Sessions, so it names no source system",
         }
-    name = MAPPING_PROFILE_FOR_SOURCE_SYSTEM.get(source_system_id)
+    name = MAPPING_PROFILE_FOR_SOURCE_SYSTEM.get(source_system_key)
     if name is None:
         return {
             "available": False,
-            "reason": f"no released profile for {source_system_id}",
+            "reason": f"no released profile for {source_system_key}",
         }
     try:
         declared = {
@@ -345,7 +345,7 @@ def _store_source_system(conn: sqlite3.Connection) -> str | None:
     if "sessions" not in table_names(conn):
         return None
     row = conn.execute(
-        "SELECT source_system_id FROM sessions LIMIT 1"
+        "SELECT source_system_key FROM sessions LIMIT 1"
     ).fetchone()
     return str(row[0]) if row and row[0] else None
 
@@ -525,18 +525,18 @@ def store_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
     which is why it is resolved here rather than inside `loss`: a store is a
     report of what was mapped, and evidence nothing mapped leaves no row.
     """
-    source_system_id = _store_source_system(conn)
+    source_system_key = _store_source_system(conn)
     return {
         "coverage": mapped_coverage(conn),
         "shapes": source_record_shapes(conn),
-        "conformance": profile_conformance(conn, source_system_id),
+        "conformance": profile_conformance(conn, source_system_key),
         "loss": loss(conn),
-        "undecoded": undecoded_evidence(source_system_id),
+        "undecoded": undecoded_evidence(source_system_key),
         # Two shapes of loss a store cannot report on itself: a field the
         # decoder never projected leaves no row, and a composer no index binds
         # is excluded from ingest by design. Both read as absent-from-the-vendor
         # unless the report states them.
-        "projection": projection_coverage(source_system_id),
-        "unbound": unbound_composers(source_system_id),
+        "projection": projection_coverage(source_system_key),
+        "unbound": unbound_composers(source_system_key),
         "repeated_prompts": repeated_prompts(conn),
     }

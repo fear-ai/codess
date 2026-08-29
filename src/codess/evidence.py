@@ -66,14 +66,14 @@ def summarize_store_evidence(paths: Iterable[Path]) -> dict[str, Any]:
             for row in conn.execute(
                 """
                 SELECT COALESCE(a.relative_path,a.uri,a.observed_absolute_path) locator,
-                       s.source
+                       s.adapter_key
                 FROM artifacts a JOIN event_artifacts ea ON ea.artifact_id=a.id
                 JOIN events e ON e.id=ea.event_id
                 JOIN sessions s ON s.id=e.session_id
                 WHERE COALESCE(a.relative_path,a.uri,a.observed_absolute_path) IS NOT NULL
                 """
             ):
-                artifact_sources[row["locator"]].add(row["source"])
+                artifact_sources[row["locator"]].add(row["adapter_key"])
         finally:
             conn.close()
     shared = sorted(

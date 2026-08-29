@@ -104,7 +104,7 @@ def daily_activity(snapshot: Path) -> dict[str, dict[str, Any]]:
         conn = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
         try:
             vendor_row = conn.execute(
-                "SELECT source_system_id FROM sessions LIMIT 1",
+                "SELECT source_system_key FROM sessions LIMIT 1",
             ).fetchone()
             if not vendor_row or not vendor_row[0]:
                 continue

@@ -40,7 +40,7 @@ def _workspace_project_ids(catalog: dict[str, Any]) -> dict[str, str]:
     for project in catalog.get("projects", []):
         for binding in project.get("workspace_bindings", []):
             if (
-                binding.get("source_system_id") == "cursor.composer"
+                binding.get("source_system_key") == "cursor.composer"
                 and binding.get("workspace_id")
             ):
                 bindings[str(binding["workspace_id"])] = str(project["project_id"])

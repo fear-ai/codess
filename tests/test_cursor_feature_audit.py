@@ -55,7 +55,7 @@ def catalog_binding(workspace_id: str = "ws-1") -> dict:
         "projects": [{
             "project_id": "codess:project:test",
             "workspace_bindings": [
-                {"source_system_id": "cursor.composer", "workspace_id": workspace_id},
+                {"source_system_key": "cursor.composer", "workspace_id": workspace_id},
             ],
         }],
     }
@@ -169,7 +169,7 @@ def test_the_audit_ignores_bindings_from_another_source_system(cursor_db):
         "projects": [{
             "project_id": "codess:project:test",
             "workspace_bindings": [
-                {"source_system_id": "anthropic.claude-code", "workspace_id": "ws-1"},
+                {"source_system_key": "anthropic.claude-code", "workspace_id": "ws-1"},
             ],
         }],
     }

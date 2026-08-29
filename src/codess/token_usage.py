@@ -97,7 +97,7 @@ def _claude(paths: Iterable[Path]) -> dict[str, Any]:
                     values,
                 )
     return {
-        "source_system_id": "anthropic.claude-code",
+        "source_system_key": "anthropic.claude-code",
         "method": "deduplicated_message_usage_sum_v1",
         "confidence": "local_observed",
         "files": files, "malformed_lines": malformed,
@@ -181,7 +181,7 @@ def _codex(paths: Iterable[Path]) -> dict[str, Any]:
                 )
             previous = {**previous, **current}
     return {
-        "source_system_id": "openai.codex",
+        "source_system_key": "openai.codex",
         "method": "cumulative_positive_delta_v1",
         "confidence": "local_derived_provisional",
         "limitations": (
@@ -280,7 +280,7 @@ def validate_codex_token_usage(paths: Iterable[Path]) -> dict[str, Any]:
 
 
 def source_paths(
-    store_paths: Iterable[Path], source_system_id: str,
+    store_paths: Iterable[Path], source_system_key: str,
 ) -> set[Path]:
     """Return distinct live source URIs selected by current CoSchema stores."""
     import sqlite3
@@ -291,8 +291,8 @@ def source_paths(
             conn = open_readonly(store)
             try:
                 for (uri,) in conn.execute(
-                    "SELECT source_path FROM sources WHERE source_system_id=?",
-                    (source_system_id,),
+                    "SELECT source_path FROM sources WHERE source_system_key=?",
+                    (source_system_key,),
                 ):
                     path = Path(str(uri))
                     if path.is_file():
@@ -315,7 +315,7 @@ def collect_token_usage(
             conn = open_readonly(store)
             try:
                 for system, uri in conn.execute(
-                    "SELECT source_system_id, source_path FROM sources"
+                    "SELECT source_system_key, source_path FROM sources"
                 ):
                     path = Path(str(uri))
                     if path.is_file():
@@ -332,7 +332,7 @@ def collect_token_usage(
             except OSError:
                 continue
             fingerprints.append({
-                "source_system_id": system,
+                "source_system_key": system,
                 "path": str(path.resolve()),
                 "size": stat.st_size,
                 "mtime_ns": stat.st_mtime_ns,
@@ -359,7 +359,7 @@ def collect_token_usage(
             claude,
             codex,
             {
-                "source_system_id": "cursor.composer",
+                "source_system_key": "cursor.composer",
                 "method": None,
                 "confidence": "unknown",
                 "availability": "unavailable",

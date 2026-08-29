@@ -1,4 +1,4 @@
-"""codess.raw/1 exact-source capture and content-addressed object storage."""
+"""codess.raw/2 exact-source capture and content-addressed object storage."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - exercised as a user-facing error
     zstandard = None
 
 
-RAW_FORMAT = "codess.raw/1"
+RAW_FORMAT = "codess.raw/2"
 RAW_MODES = frozenset(RAW_MODE_VALUES)
 """The raw modes as a set, for membership tests. `config` owns the vocabulary."""
 CAPTURE_CHUNK_SIZE = RAW_CAPTURE_CHUNK_BYTES
@@ -85,15 +85,15 @@ def verify_raw(path: Path, record: dict[str, Any]) -> dict[str, Any]:
         )
     try:
         stored_size = path.stat().st_size
-        stored_sha256 = hash_file(path, chunk_size=CAPTURE_CHUNK_SIZE)
+        stored_digest = hash_file(path, chunk_size=CAPTURE_CHUNK_SIZE)
         content_hex, uncompressed_size = _read_source_identity(path)
     except (OSError, zstandard.ZstdError) as exc:
         raise RawCaptureError(f"raw verification failed for {path}: {exc}") from exc
     return {
         "stored_size": stored_size,
-        "stored_sha256": stored_sha256,
+        "stored_digest": stored_digest,
         "uncompressed_size": uncompressed_size,
-        "object_id": f"sha256:{content_hex}",
+        "object_id": f"digest:{content_hex}",
     }
 
 
@@ -113,18 +113,18 @@ def restore_raw(
     staged = target.with_name(f".{target.name}.tmp-{os.getpid()}")
     try:
         stored_size = path.stat().st_size
-        stored_sha256 = hash_file(path, chunk_size=CAPTURE_CHUNK_SIZE)
+        stored_digest = hash_file(path, chunk_size=CAPTURE_CHUNK_SIZE)
         with staged.open("wb") as output:
             content_hex, uncompressed_size = _read_source_identity(path, output=output)
             output.flush()
             os.fsync(output.fileno())
         observed = {
             "stored_size": stored_size,
-            "stored_sha256": stored_sha256,
+            "stored_digest": stored_digest,
             "uncompressed_size": uncompressed_size,
-            "object_id": f"sha256:{content_hex}",
+            "object_id": f"digest:{content_hex}",
         }
-        for key in ("stored_size", "stored_sha256", "uncompressed_size", "object_id"):
+        for key in ("stored_size", "stored_digest", "uncompressed_size", "object_id"):
             if observed[key] != record.get(key):
                 raise RawCaptureError(
                     f"raw restore {key} mismatch for {path}: "
@@ -249,7 +249,7 @@ class RawStore:
         self,
         path: Path,
         *,
-        source_system_id: str,
+        source_system_key: str,
         storage_format: str,
         mode: str,
         source_locator: str | None = None,
@@ -266,7 +266,7 @@ class RawStore:
         record: dict[str, Any] = {
             "record_type": "source_revision",
             "raw_format": RAW_FORMAT,
-            "source_system_id": source_system_id,
+            "source_system_key": source_system_key,
             "storage_format": storage_format,
             "source_locator": source_locator or str(path.resolve()),
             "observed_at": now_iso(system_clock),
@@ -351,7 +351,7 @@ class RawStore:
             if storage_format != "cursor-sqlite":
                 source_stat = captured_stat
             object_path = (
-                self.root / "objects" / "sha256" / content_hash[:2]
+                self.root / "objects" / "digest" / content_hash[:2]
                 / f"{content_hash}.zst"
             )
             object_path.parent.mkdir(parents=True, exist_ok=True)
@@ -359,7 +359,7 @@ class RawStore:
                 phase_tick = time.monotonic()
                 if progress is not None:
                     progress(
-                        "raw.object_verify.start", object_id=f"sha256:{content_hash}",
+                        "raw.object_verify.start", object_id=f"digest:{content_hash}",
                         stored_bytes=object_path.stat().st_size,
                     )
                 try:
@@ -370,19 +370,19 @@ class RawStore:
                     raise RawCaptureError(
                         f"existing raw object is corrupt: {object_path}: {exc}"
                     ) from exc
-                if existing["object_id"] != f"sha256:{content_hash}":
+                if existing["object_id"] != f"digest:{content_hash}":
                     raise RawCaptureError(
                         f"raw object content identity collision: {object_path}"
                     )
                 # Content identity names the object.  Different zstd versions
                 # or settings may produce different stored bytes for the same
                 # source, so retain and report the already-promoted encoding.
-                stored_hash = existing["stored_sha256"]
+                stored_hash = existing["stored_digest"]
                 stored_size = existing["stored_size"]
                 uncompressed_size = existing["uncompressed_size"]
                 if progress is not None:
                     progress(
-                        "raw.object_verify.done", object_id=f"sha256:{content_hash}",
+                        "raw.object_verify.done", object_id=f"digest:{content_hash}",
                         stored_bytes=stored_size,
                         phase_seconds=round(time.monotonic() - phase_tick, 3),
                     )
@@ -390,7 +390,7 @@ class RawStore:
                 os.replace(staged_path, object_path)
                 if progress is not None:
                     progress(
-                        "raw.object_promoted", object_id=f"sha256:{content_hash}",
+                        "raw.object_promoted", object_id=f"digest:{content_hash}",
                         stored_bytes=stored_size,
                     )
             if working_target is not None:
@@ -411,12 +411,12 @@ class RawStore:
                 backup_directory.cleanup()
         record.update(
             {
-                "source_revision_id": f"sha256:{content_hash}",
+                "source_revision_id": f"digest:{content_hash}",
                 "availability": "captured",
                 "capture_method": capture_method,
                 "consistency": consistency,
-                "object_id": f"sha256:{content_hash}",
-                "stored_sha256": stored_hash,
+                "object_id": f"digest:{content_hash}",
+                "stored_digest": stored_hash,
                 "compression": "zstd",
                 "uncompressed_size": uncompressed_size,
                 "stored_size": stored_size,
@@ -431,7 +431,7 @@ class RawStore:
         self,
         path: Path,
         *,
-        source_system_id: str,
+        source_system_key: str,
         storage_format: str,
         mode: str,
         parent_source_locator: str,
@@ -446,7 +446,7 @@ class RawStore:
         """
         record = self.observe(
             path,
-            source_system_id=source_system_id,
+            source_system_key=source_system_key,
             storage_format=storage_format,
             mode=mode,
             progress=progress,
@@ -459,7 +459,7 @@ class RawStore:
         ))
         record.update({
             "record_type": "related_content_revision",
-            "record_id": "rawrel:sha256:" + codess_text_hash(256, 256, identity),
+            "record_id": "rawrel:digest:" + codess_text_hash(256, 256, identity),
             "parent_source_locator": parent_source_locator,
             "relation_kind": relation_kind,
         })

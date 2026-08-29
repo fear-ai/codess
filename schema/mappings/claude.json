@@ -1,132 +1,132 @@
 {
-  "mapping_id": "codess.claude-code",
   "decoder_version": "0.2",
   "direction": "source_to_common",
-  "vendor": "anthropic",
-  "product": "claude-code",
-  "source_system_id": "anthropic.claude-code",
-  "storage_formats": [
-    "claude-jsonl"
-  ],
-  "rules": [
-    {
-      "id": "claude.message",
-      "source": "record.message.content[]",
-      "target": "events",
-      "operation": "from_each",
-      "retention": "core"
-    },
-    {
-      "id": "claude.typed-prompt",
-      "source": "user.message.content:string+origin+promptSource",
-      "target": "events.message.prompt|message.context",
-      "operation": "from_any",
-      "retention": "core"
-    },
-    {
-      "id": "claude.tool-use",
-      "source": "message.content[type=tool_use]",
-      "target": "tool_invocations",
-      "operation": "from_each",
-      "retention": "specialized"
-    },
-    {
-      "id": "claude.tool-result",
-      "source": "message.content[type=tool_result]",
-      "target": "tool_results",
-      "operation": "from_each",
-      "retention": "specialized"
-    },
-    {
-      "id": "claude.persisted-tool-result",
-      "source": "toolUseResult.persistedOutputPath",
-      "target": "events.content.external+raw.related_content_revision",
-      "operation": "from",
-      "retention": "specialized"
-    },
-    {
-      "id": "claude.compaction",
-      "source": "system.compact_boundary",
-      "target": "events.context.compact",
-      "operation": "from",
-      "retention": "core"
-    },
-    {
-      "id": "claude.compaction-summary",
-      "source": "user.isCompactSummary.message.content",
-      "target": "events.context.inject",
-      "operation": "from",
-      "retention": "core"
-    },
-    {
-      "id": "claude.session-label",
-      "source": "ai-title|custom-title|agent-name",
-      "target": "events.session.label",
-      "operation": "from_any",
-      "retention": "core"
-    },
-    {
-      "id": "claude.harness-setting",
-      "source": "mode|permission-mode",
-      "target": "events.harness.setting",
-      "operation": "from_any",
-      "retention": "core"
-    },
-    {
-      "id": "claude.content-attachment",
-      "source": "attachment|file-history-snapshot|file-history-delta",
-      "target": "events.content.attachment",
-      "operation": "from_any",
-      "retention": "core"
-    },
-    {
-      "id": "claude.session-marker",
-      "source": "last-prompt",
-      "target": "events.session.marker",
-      "operation": "from_any",
-      "retention": "core"
-    },
-    {
-      "id": "claude.lifecycle",
-      "source": "queue-operation|system.turn_duration|system.scheduled_task_fire",
-      "target": "events.lifecycle.vendor",
-      "operation": "from_any",
-      "retention": "core"
-    },
-    {
-      "id": "claude.fork-context",
-      "source": "fork-context-ref",
-      "target": "events.lifecycle.vendor+sessions.parent_session_id",
-      "operation": "from",
-      "retention": "core"
-    },
-    {
-      "id": "claude.lineage",
-      "source": "uuid,parentUuid,tool_use_id,parentSessionId",
-      "target": "events.mapping_trace+sessions.parent_session_id",
-      "operation": "from_any",
-      "retention": "core"
-    },
-    {
-      "id": "claude.configuration",
-      "source": "assistant.message.model|assistant.message.usage.service_tier",
-      "target": "model_params+model_turns.model_param_id",
-      "operation": "from_any",
-      "retention": "specialized"
-    },
-    {
-      "id": "claude.harness-version",
-      "source": "version|claudeCodeVersion",
-      "target": "sessions.harness_version",
-      "operation": "from_any",
-      "retention": "core"
-    }
-  ],
+  "harness_name": "claude-code",
   "hazards": [
     "source-role-is-not-actor",
     "user-envelope-may-be-harness-origin",
     "sidechain-parent-may-be-unresolved",
     "external-content-path-must-remain-in-session-tree",
     "system-records-are-heterogeneous"
-  ]
+  ],
+  "mapping_id": "codess.claude-code",
+  "rules": [
+    {
+      "id": "claude.message",
+      "operation": "from_each",
+      "retention": "core",
+      "source": "record.message.content[]",
+      "target": "events"
+    },
+    {
+      "id": "claude.typed-prompt",
+      "operation": "from_any",
+      "retention": "core",
+      "source": "user.message.content:string+origin+promptSource",
+      "target": "events.message.prompt|message.context"
+    },
+    {
+      "id": "claude.tool-use",
+      "operation": "from_each",
+      "retention": "specialized",
+      "source": "message.content[type=tool_use]",
+      "target": "tool_invocations"
+    },
+    {
+      "id": "claude.tool-result",
+      "operation": "from_each",
+      "retention": "specialized",
+      "source": "message.content[type=tool_result]",
+      "target": "tool_results"
+    },
+    {
+      "id": "claude.persisted-tool-result",
+      "operation": "from",
+      "retention": "specialized",
+      "source": "toolUseResult.persistedOutputPath",
+      "target": "events.content.external+raw.related_content_revision"
+    },
+    {
+      "id": "claude.compaction",
+      "operation": "from",
+      "retention": "core",
+      "source": "system.compact_boundary",
+      "target": "events.context.compact"
+    },
+    {
+      "id": "claude.compaction-summary",
+      "operation": "from",
+      "retention": "core",
+      "source": "user.isCompactSummary.message.content",
+      "target": "events.context.inject"
+    },
+    {
+      "id": "claude.session-label",
+      "operation": "from_any",
+      "retention": "core",
+      "source": "ai-title|custom-title|agent-name",
+      "target": "events.session.label"
+    },
+    {
+      "id": "claude.harness-setting",
+      "operation": "from_any",
+      "retention": "core",
+      "source": "mode|permission-mode",
+      "target": "events.harness.setting"
+    },
+    {
+      "id": "claude.content-attachment",
+      "operation": "from_any",
+      "retention": "core",
+      "source": "attachment|file-history-snapshot|file-history-delta",
+      "target": "events.content.attachment"
+    },
+    {
+      "id": "claude.session-marker",
+      "operation": "from_any",
+      "retention": "core",
+      "source": "last-prompt",
+      "target": "events.session.marker"
+    },
+    {
+      "id": "claude.lifecycle",
+      "operation": "from_any",
+      "retention": "core",
+      "source": "queue-operation|system.turn_duration|system.scheduled_task_fire",
+      "target": "events.lifecycle.vendor"
+    },
+    {
+      "id": "claude.fork-context",
+      "operation": "from",
+      "retention": "core",
+      "source": "fork-context-ref",
+      "target": "events.lifecycle.vendor+sessions.parent_session_id"
+    },
+    {
+      "id": "claude.lineage",
+      "operation": "from_any",
+      "retention": "core",
+      "source": "uuid,parentUuid,tool_use_id,parentSessionId",
+      "target": "events.mapping_trace+sessions.parent_session_id"
+    },
+    {
+      "id": "claude.configuration",
+      "operation": "from_any",
+      "retention": "specialized",
+      "source": "assistant.message.model|assistant.message.usage.service_tier",
+      "target": "model_params+model_turns.model_param_id"
+    },
+    {
+      "id": "claude.harness-version",
+      "operation": "from_any",
+      "retention": "core",
+      "source": "version|claudeCodeVersion",
+      "target": "sessions.harness_version"
+    }
+  ],
+  "source_system_key": "anthropic.claude-code",
+  "storage_formats": [
+    "claude-jsonl"
+  ],
+  "vendor": "anthropic"
 }

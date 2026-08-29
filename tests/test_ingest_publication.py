@@ -301,11 +301,11 @@ def test_promotion_skips_a_staged_store_that_was_never_written(tmp_path):
 def raw_record(path: Path) -> dict:
     return {
         "record_type": "source_revision",
-        "raw_format": "codess.raw/1",
-        "source_system_id": "anthropic.claude-code",
+        "raw_format": "codess.raw/2",
+        "source_system_key": "anthropic.claude-code",
         "storage_format": "claude-jsonl",
         "source_locator": str(path),
-        "source_revision_id": "sha256:" + "0" * 64,
+        "source_revision_id": "digest:" + "0" * 64,
         "observed_at": "2026-01-01T00:00:00+00:00",
         "availability": "reference",
         "capture_method": "stat",

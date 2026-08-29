@@ -140,7 +140,7 @@ class TestFindSlugForProject:
         (sidecar / "source-links.json").write_text(json.dumps({
             "format": "codess.source-links/1",
             "links": [{
-                "source_system_id": "anthropic.claude-code",
+                "source_system_key": "anthropic.claude-code",
                 "source_project_path": str(old.resolve()),
                 "target_project_path": str(new.resolve()),
                 "relation_kind": "project_relocation",
@@ -191,7 +191,7 @@ class TestGetCursorPaths:
         links.write_text(json.dumps({
             "format": "codess.source-links/1",
             "links": [{
-                "source_system_id": "cursor.composer",
+                "source_system_key": "cursor.composer",
                 "source_identity": {"workspace_id": "workspace-old"},
                 "relation_kind": "renamed_from",
                 "source_project_path": str(tmp_path / "old-name"),
@@ -212,8 +212,8 @@ class TestGetCursorPaths:
         links.write_text(json.dumps({
             "format": "codess.source-links/1",
             "links": [
-                {"source_system_id": "cursor.composer", "source_identity": {"workspace_id": "pending"}, "selection_state": "needs_review"},
-                {"source_system_id": "openai.codex", "source_identity": {"workspace_id": "wrong"}, "selection_state": "approved"},
+                {"source_system_key": "cursor.composer", "source_identity": {"workspace_id": "pending"}, "selection_state": "needs_review"},
+                {"source_system_key": "openai.codex", "source_identity": {"workspace_id": "wrong"}, "selection_state": "approved"},
             ],
         }))
         assert get_cursor_workspace_ids(project) == []

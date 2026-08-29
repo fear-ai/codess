@@ -17,7 +17,7 @@ from codess.config import MANIFEST_FILE, RAW_MANIFEST_FILE
 from codess.fileio import hash_file, read_source_revision
 from codess.raw_store import RawCaptureError, verify_raw
 
-VERIFICATION_FORMAT = "codess.source-verification/1"
+VERIFICATION_FORMAT = "codess.source-verification/2"
 
 
 def _snapshot_root(store_path: Path) -> Path | None:
@@ -72,7 +72,7 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
     matches = conn.execute("""
         SELECT e.event_entity_id,e.event_id,e.session_id,e.source_record_locator,
                e.source_record_type,e.source_file,s.session_entity_id AS session_entity_id,
-               src.id AS source_id,src.source_system_id,src.source_path,
+               src.id AS source_id,src.source_system_key,src.source_path,
                src.source_revision,src.source_mtime,src.source_size,
                src.availability,src.capture_method,
                src.consistency,src.content_digest
@@ -123,7 +123,7 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
                 expected = row["content_digest"]
                 candidate["equality"] = (
                     "exact" if observed["object_id"] == record.get("object_id")
-                    and (expected is None or observed["object_id"] == f"sha256:{expected}")
+                    and (expected is None or observed["object_id"] == f"digest:{expected}")
                     else "mismatch"
                 )
                 candidate["verification"] = observed
@@ -156,9 +156,9 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
                 else:
                     digest = hash_file(live_path)
                     live.update({
-                        "revision": f"sha256:{digest}",
+                        "revision": f"digest:{digest}",
                         "equality": "exact" if digest == row["content_digest"] else "mismatch",
-                        "verification_method": "complete-sha256",
+                        "verification_method": "complete-digest",
                     })
             else:
                 revision, _mtime, _size, method, consistency = (
@@ -196,7 +196,7 @@ def verify_event_source(store: dict[str, Any], event_identifier: str) -> dict[st
             "source_record_type": row["source_record_type"],
         },
         "source": {
-            "source_system_id": row["source_system_id"], "source_path": source_path,
+            "source_system_key": row["source_system_key"], "source_path": source_path,
             "source_revision": row["source_revision"],
             "source_mtime": row["source_mtime"], "source_size": row["source_size"],
             "availability": row["availability"],

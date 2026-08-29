@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://codess.local/schema/query-row-v1.json",
+  "$id": "https://codess.local/schema/query-row-v2.json",
   "title": "Codess query row envelope version 1",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "report", "project_path", "row_number", "data"],
   "properties": {
-    "schema": {"const": "codess.query-row/1"},
+    "schema": {"const": "codess.query-row/2"},
     "report": {"type": "string", "minLength": 1},
     "project_path": {"type": ["string", "null"]},
     "row_number": {"type": ["integer", "null"], "minimum": 1},
@@ -42,11 +42,11 @@
     "sessionData": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["session_id", "session_entity_id", "source", "release", "started_at", "ended_at", "source_project_path", "metadata"],
+      "required": ["session_id", "session_entity_id", "adapter_key", "release", "started_at", "ended_at", "source_project_path", "metadata"],
       "properties": {
         "session_id": {"type": "string"},
         "session_entity_id": {"type": "string"},
-        "source": {"type": "string"},
+        "adapter_key": {"type": "string"},
         "release": {"type": ["string", "null"]},
         "started_at": {"type": ["number", "null"]},
         "ended_at": {"type": ["number", "null"]},

@@ -100,7 +100,7 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
                     }
             if "sessions" in tables and "events" in tables:
                 rows = [dict(zip(("session_id", "source", "events", "characters"), row, strict=False)) for row in conn.execute(
-                    "SELECT s.session_entity_id, s.source, COUNT(e.id), "
+                    "SELECT s.session_entity_id, s.adapter_key, COUNT(e.id), "
                     "COALESCE(SUM(COALESCE(e.content_len,length(e.content),0) + "
                     "COALESCE(length(e.tool_input),0) + COALESCE(length(e.tool_output),0)),0) "
                     "FROM sessions s LEFT JOIN events e ON e.session_id=s.id "
@@ -233,7 +233,7 @@ def _previous(history_dir: Path) -> dict[str, Any] | None:
 def _totals(report: dict[str, Any]) -> dict[str, int]:
     stores = report.get("stores") or []
     tokens = {
-        item.get("source_system_id"): sum(
+        item.get("source_system_key"): sum(
             int(month.get("total_tokens", 0)) for month in item.get("monthly", [])
         )
         for item in (report.get("token_usage") or {}).get("vendors", [])

@@ -48,12 +48,45 @@ the short list a reader needs first.
 
 | ID | Work | State |
 |---|---|---|
-| **Sprint 1** | **Shipped as format 10**: token columns and `duplicate_of`. The W50+W51+W98 renames did not travel with it and are queued at rank 1 | The corpus is rebuilt and readable -- 21 Projects, 0 failures, 0 vanished Sources |
+| **Sprint 2** | **Shipped as format 11 then 12**: the naming resolutions in 11; `product`, the nested digest keys, the emitted value prefixes, and the query row's `adapter_key` in 12. W50, W51, and W98 all closed | The corpus is rebuilt and readable at format 12 -- 21 Projects, 0 failures |
 
 **The rebuild ran: 21 of 21 Projects, 0 failures.** Every published store is
-format 10, holding 436 Sessions and 273,594 Events across 63 stores.
-`project_inventory` reported 0 Projects with vanished Sources before it started,
-which is what made it safe, and reports 0 after.
+format 11, holding 437 Sessions and 292,733 Events. `project_inventory`
+reported 0 Projects with vanished Sources before it started, which is what made
+it safe, and reports 0 after.
+
+**The first attempt failed on all 21, and the cause was the rename itself.**
+`manifest_sha256` lives in every `current.json`, and a rebuild reads the pointer
+it is about to replace: renaming the key on the read side as well as the write
+side meant the only release able to rebuild a published Project was the one
+release that refused to read it. Nothing was written -- the failure lands while
+resolving the pointer, before any store is touched -- so the corpus was intact
+and the fix was to accept both spellings on read. The rule is recorded in
+[CoNames](CoNames.md#stored-names) and holds for exactly the documents that
+bootstrap a rebuild, not as a general alias.
+
+**A format change is the moment this class of defect surfaces, which is an
+argument for batching.** The check that would have caught it is a rebuild
+against a store written by the previous release, and no unit test stands in for
+it: the suite builds its stores under the current contract, so every one of them
+already carried the new key.
+
+**The rebuild was driven by a hand-written loop, and it should not have been.**
+`codess refresh --designator included --stage apply` already does this: it
+resolves the cohort from the catalog, preflights **every** selected Project
+before applying **any**, writes a `codess.refresh-receipt/1` after each stage,
+and records that a partial failure leaves completed snapshots published. The
+loop had none of that -- no preflight gate, no receipt, and it resolved paths by
+reading `projects.json` itself. It also failed silently on the first attempt
+because `python` was a shell alias the subshell did not inherit, which a
+supported entry point would not have done.
+
+`included` selects 20 of 21, and the 21st is correct to omit: ZeroPerf is
+annotated `worktree_of` Zero400, so refreshing both would ingest one repository
+twice. The hand-written loop had no such notion and did exactly that.
+
+**Rule.** A corpus-wide operation uses `codess refresh`; a hand-written loop over
+Projects is a sign the operation should have been a designator.
 
 **The rebuild found a defect the suite could not.** A Cursor source was aborting
 with "Cursor session rows are not grouped": `agentKv` Events were emitted after
@@ -78,8 +111,7 @@ Unblocked, decided, and startable without waiting on anything.
 |---|---|---|
 | **W103** | Rescan the decode and source-access layers for the five crash-site classes | The three adapters are fuzzed and hold; the source-access layer has not been driven with hostile input |
 | **W85** | Step 1 landed; steps 2-3 are a store column and an operator binding | The 98 unbound composers are now reported per store, so the condition is visible rather than silent |
-| **W50 + W51 + W98** | The naming resolutions, still unapplied | Wire-format. Format 10 was just paid for, so these are the next format's content rather than blocked work |
-| **W05** | Real investigations against the query surface | Unchanged, and now the only queue item whose output is evidence rather than machinery. Wait for the reingest, so it runs against current-format stores |
+| **W05** | Real investigations against the query surface | Now unblocked: the corpus is at format 11, so it runs against current-format stores |
 
 **The two unnumbered items are resolved and one changed shape.** Cursor
 `agentKv` decode landed: the harness system prompt, `reasoning`, and
@@ -151,6 +183,46 @@ saying it. W50/W51/W98 were deferred on rebuild cost through a session in which
 the rebuild ran twice. A stated dependency is checked when the item is next
 read, not assumed to still hold.
 
+### A Worktree Is Its Own Project
+
+**Three sources said three things, and the corpus settles it.** CoSchema states
+that a linked worktree is a separate Project, with the reason: every vendor
+records it separately, so joining them would join Sessions no vendor joined.
+`Codess.md` said the opposite -- one repository is one Project, worktrees are
+locations -- and `get_project_root`'s docstring cited that rule while
+implementing repository resolution.
+
+**Measured.** Zero400 and ZeroPerf are linked worktrees of one repository.
+`get_project_root` resolves both to Zero400, the catalog holds them as two
+Projects related by `worktree_of`, and their Claude stores hold **2 Sessions
+each with zero overlap** by `session_entity_id`. The vendors did record distinct
+Sessions per worktree, which is exactly what CoSchema predicts.
+
+CoSchema was right and the other two were stale. `Codess.md` now states the
+exception with its reason, and the docstring says what the function answers --
+repository identity, which the location and relation records are derived from --
+rather than restating a Project rule it does not implement.
+
+**A second gap in the same path: `refresh` needs `--force` after a format
+change, and nothing said so.** A routine refresh decodes only Sources whose
+evidence changed, which means opening the existing working store -- the one the
+format change has just made unreadable. The format-12 apply failed on all 20
+Projects with `store CoSchema 11, supported [12]`, which is the contract check
+working exactly as designed and the migration procedure being wrong. The
+message names the remedy; the documentation did not. Fixed in README,
+Operations, and the CHANGELOG.
+
+Worth noting what the receipt got right: 20 preflights passed, 20 applies failed
+the same way, and each carries its own `stderr_tail`. A hand-written loop would
+have reported 20 failures and no reason.
+
+**One consequence worth stating.** `refresh --designator included` omits a
+Project annotated `worktree_of`, so a corpus rebuild leaves it at the old format
+unless it is named explicitly. That is correct for avoiding a double ingest
+through the parent and wrong as a default for a format migration, where every
+published store must move. The gap is `project_inventory` reporting 21 Projects
+while the designator selects 20.
+
 ### Recently Closed
 
 Recorded so closed work is not re-derived. Outcomes are in
@@ -158,6 +230,10 @@ Recorded so closed work is not re-derived. Outcomes are in
 
 | ID | Work |
 |---|---|
+| W50, W51, W98 | Format 11 carried `adapter_key`, `source_system_key`, seven `_when` columns, twelve `*_digest` fields; format 12 closed the rest -- `product` dropped for `harness_name`, the nested `"sha256"` manifest keys and the emitted `sha256:` value prefixes moved to `digest`. `hashing` is now the only module naming an algorithm |
+| -- | Format 12 also finished what 11 left one layer apart: the query row emitted `source` for a column already renamed `adapter_key`. Six documents took a version -- query-result, investigation, query-row, raw, source-verification, working-archive |
+| -- | The bootstrap-read rule: `current.json` and a stored manifest accept either digest spelling on read and write only the current one. Renaming both sides made all 21 Projects unrebuildable by the only release that could rebuild them |
+| -- | `*_content` plurality, re-measured rather than renamed: `event_content` averages 1.335 rows per Event and 13,622 Events carry two, so the withdrawn proposal was right on the noun and wrong on the cardinality it cited |
 | W04 | Steps 3-4: strict and diagnostic modes have equal semantics for all three vendors, each proven against its own hazard fixture, and a non-conformance records an inspectable row rather than only raising |
 | W65 | `RecordContext` carries `session_id`, `source_file`, `line_num`, and `opts`; a census test fails when a decode function takes three of them separately |
 | W66 | A config file between the variable and the built-in, with a test per precedence pair |
@@ -217,8 +293,8 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W16 | Normal | Postponed | Evaluate external investigation interfaces | No consumer |
 | W17 | Normal | Postponed | Expand cross-Project analysis inputs | Baseline 2 |
 | W43 | Low | Withdrawn | Table-drive request validation | -- |
-| W50 | Normal | Planned | Reconcile schema names with defined terminology | Batches with W51 |
-| W51 | Normal | Planned | Resolve source-identity naming and suffix rules | Batches with W50 |
+| W50 | Normal | Closed | Reconciled in format 11: `adapter_key` freed `source` for the Source entity, and the `*_content` plurality row closed on re-measurement rather than a rename | -- |
+| W51 | Normal | Closed | Suffix rules resolved in format 11; `product` removed in favour of `harness_name` in format 12, which was the last open part | -- |
 | W70 | Normal | Planned | Re-partition documentation; remove cross-document redundancy | -- |
 | W73 | Normal | Planned | Every CoPlan row is closed with evidence or carries a named owner. The coverage group landed; the Artifact-linkage, parentage, and inheritance groups remain, each routed | -- |
 | W74 | High | Planned | Cursor Session times dropped; unread populated fields; two vendor facts to record | Retrieved-reference policy split to W79 |
@@ -237,9 +313,12 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W93 | Normal | Postponed | Session utilization: report counts and `surface_kind`, not a derived class | Link-detection design recorded; inclusion policy undecided |
 | W96 | High | Planned | Steps 1-4 landed: every finding names its remedy, the Claude slug split is detected, `sources_vanished` is reported, and `catalog relocate` is documented as the pre-move step. The copy case remains undecidable by design | W14 (partly) |
 | W97 | Normal | Planned | Read the Codex thread name; reconcile archive location with archive state | -- |
-| W98 | Low | Planned | Ten field names still spell the algorithm rather than the value: `*_sha256` against the `*_digest` rule | Each is wire-format or a released document, so each costs a regeneration or a version bump |
+| W98 | Low | Closed | Twelve `*_digest` renames in format 11; the nested `"sha256"` keys and the emitted `sha256:` value prefixes in format 12. `hashing` is now the only module naming an algorithm | -- |
 | W103 | High | Planned | Rescan for the five crash-site classes beyond the fuzzed adapters, and for exact-value grouping that understates a templated family | -- |
 | W102 | Low | Planned | Review the option classification against what each flag actually does: 110 flag-only, 34 default-only, 24 with a variable | The classification is recorded in CoNames and has not been critiqued per flag |
+| W104 | Normal | Planned | No designator selects every published Project, so a format migration can strand one. `included` omits a `worktree_of` Project, which is right for a routine refresh and wrong for a rebuild | -- |
+| W105 | High | Planned | A strategy per vendor for what each removes: Claude deletes records on age and needs cadence; Cursor removes index entries and needs the unbound set read. Four pieces, no format change | W85 (part 3) |
+| W106 | Normal | Planned | Cursor's `interaction_mode` (agent vs chat) and workspace path are read but reach no column. The read landed; the store waits on a format bump | -- |
 
 ## Queue
 
@@ -248,16 +327,18 @@ not a preference.
 
 | Rank | Item | Why here |
 |---|---|---|
-| 1 | **W50 + W51 + W98** | The only decided-and-unapplied work left. All three are wire-format, so they land as one regeneration or they cost three. Format 10 is published and the corpus is rebuilt, so the next bump starts from a clean base rather than compounding a deferral. |
-| 2 | **W103** | The rescan for the five crash-site classes, plus exact-value grouping that understates a templated family. Both were found by measurement contradicting a report, and neither is reachable by review. |
-| 3 | **W05** | Real investigations against the query surface: the only item whose output is evidence about whether the surface answers questions rather than machinery that supports them. Runs against current-format stores now. |
-| 4 | **W14** (steps 1-5 applied) | The code is written and deliberately not applied to the operator's registry. What remains is the operator's decision to run it, not further work. |
-| 5 | **W96** (steps 1-4 landed) | Detection, directed reports, and `sources_vanished` are in. The copy case is undecidable by design and waits on an operator answer rather than on effort. |
-| 6 | **W85** (steps 2-3) | Step 1 reports the 98 unbound composers. A store column and an operator-stated binding remain, and neither blocks anything. |
+| 1 | **W103** | The rescan for the five crash-site classes, plus exact-value grouping that understates a templated family. Both were found by measurement contradicting a report, and neither is reachable by review. |
+| 2 | **W05** | Real investigations against the query surface: the only item whose output is evidence about whether the surface answers questions rather than machinery that supports them. Unblocked -- the corpus is at format 12. |
+| 3 | **W14** (steps 1-5 applied) | The code is written and deliberately not applied to the operator's registry. What remains is the operator's decision to run it, not further work. |
+| 4 | **W96** (steps 1-4 landed) | Detection, directed reports, and `sources_vanished` are in. The copy case is undecidable by design and waits on an operator answer rather than on effort. |
+| 5 | **W85** (steps 2-3) | Step 1 reports the 98 unbound composers. A store column and an operator-stated binding remain, and neither blocks anything. |
+| 6 | **W104** | No designator names *every published store*, so a format migration can strand a Project. Found by needing two commands where the procedure documents one. A catalog predicate; no rebuild. |
+| 7 | **W105** | Vendor-removal strategy. Step 1 is the only work in the queue that *prevents* evidence loss rather than explaining it: nothing measures how close a Project is to Claude's next 30-day sweep, and that gap has already been crossed once on this machine. |
 
-**Closed this session, so they are not re-derived:** W04 (steps 3-4), W65, W66,
-W67, W71, W89, W94, W95, and W85 step 1. The previous ranking listed four of
-those as pending, which is the staleness the register exists to prevent.
+**Closed this session, so they are not re-derived:** W04 (steps 3-4), W50, W65,
+W66, W67, W71, W89, W94, W95, W85 step 1, W50, W51, and W98. The
+previous ranking listed four of those as pending, which is the staleness the
+register exists to prevent.
 
 ### Resuming: Project Location Changes
 
@@ -1151,18 +1232,25 @@ one defect of the four that made a reader draw a wrong conclusion, since summing
 granularity overstates loss. The `level`/`diagnostic_level` collision resolved
 with it.
 
-**Remaining.**
+**Landed in format 11.** `sessions.source` became `adapter_key`, which was the
+third meaning: the column held a `SOURCE_PROFILES` key while `source_path` held a
+transcript file and `source_system_id` held a vendor-and-product literal. `source`
+now names the Source entity and the six `source_*` columns that state Source facts.
 
-| Defect | Detail |
-|---|---|
-| `source` carries three meanings | A transcript file, a vendor, and an adapter key, across 26 columns |
-| `*_content` plurality | The four link tables disagree with `event_artifacts` |
+**The `*_content` plurality row was closed by re-measurement, not by the rename.**
+It asserted the four link tables disagree with `event_artifacts`. They do, and the
+disagreement is correct: `content` is a mass noun and `artifacts` is countable, so
+the two follow the same rule to different answers. The reasoning recorded in
+[CoNames](CoNames.md#plurality) had been wrong in a way that pointed at the right
+answer -- it argued a link table holds one row per owner, and `event_content`
+averages 1.335 rows per Event with 13,622 Events carrying two. The name stands on
+the noun, which is what the rule actually tests.
 
 **Evidence to close.** Every term in a table or column name is either defined in
 Codess's terminology or is a plain English word carrying no Codess meaning;
-`source` names one thing; plurality has one rule and one stated exception.
+`source` names one thing; plurality has one rule and one stated exception. **Met.**
 
-**Cost.** Wire-format. Batches with W51.
+**Cost.** Paid: one regeneration, batched with W51 and W98.
 
 ### W51 -- Source-Identity Naming
 
@@ -1190,19 +1278,45 @@ says what it is.
 
 **Two contract questions.** `product` is required by `mapping-contract.json` and
 defined nowhere: no vocabulary, no examples, no CoSchema entry. Either define it or
-drop it. `sessions.source` holds the `SOURCE_PROFILES` dict key, confirmed across
+drop it -- **still open**, and the one part of this item format 11 did not settle.
+
+**What `product` holds, measured.** The three profiles supply `claude-code`,
+`codex`, `cursor-composer`, and no code reads the key. Two of the three equal
+`harness_name` exactly; Cursor's does not, and the difference is a surface
+(`composer`) that `surface_kind` already carries in its own column -- the same
+defect that made `harness_name` hold `claude-code-cli`.
+
+**The composition it was supposed to serve does not hold either.**
+`source_system_key` was documented as `vendor + "." + product`. For Cursor that
+composes `cursor.cursor-composer` against a stored `cursor.composer`, so the
+value is a per-vendor constant that two of three vendors match by coincidence.
+[CoNames](CoNames.md#vendor-and-harness-designators) now says constant.
+
+**Recommendation: drop it.** `sessions.product_name` was already dropped for
+being a pure function of the source system; this is the same fact in the mapping
+contract rather than in a column. Dropping costs a contract regeneration and no
+stored data, because nothing reads it.
+`sessions.source` holds the `SOURCE_PROFILES` dict key, confirmed across
 601 real Sessions, so `adapter_key` names it honestly and frees `source` for the
-Source entity.
+Source entity -- **landed**.
 
 **Excluded.** `vendor_name` is the wrong fact for a harness running another
 provider's model, so [CoNames](CoNames.md) owns its disposition rather than this
 item.
 
-**Evidence to close.** One suffix rule states whether a value is derived, assigned,
-or borrowed; `source` names the Source entity only; every contract-required field
-has a definition and examples; plurality follows the mass-noun rule.
+**Landed in format 11.** `source_system_id` became `source_system_key` in all
+three tables that carry it -- `sessions`, `sources`, `workspace_bindings` -- so the
+`_key` suffix now means composed literal wherever it appears and `_id` means an
+identifier something assigned. The seven Codess-recorded `TEXT` time columns took
+`_when` in the same regeneration.
 
-**Cost.** Wire-format. Batches with W50.
+**Evidence to close.** One suffix rule states whether a value is derived, assigned,
+or borrowed -- **met**; `source` names the Source entity only -- **met**;
+plurality follows the mass-noun rule -- **met**, and re-measured on W50; every
+contract-required field has a definition and examples -- **open on `product`**,
+which is what keeps this item open.
+
+**Cost.** Paid: one regeneration, batched with W50 and W98.
 
 ### W55 -- Parsing Consolidation
 
@@ -3606,12 +3720,20 @@ evidence.
 
 ### W85 -- Composers Older Than Their Index
 
-**Status: Postponed. This is a data condition, not a defect.** Cursor prunes
-`composerHeaders` on age while retaining `composerData:` and every bubble, so a
-composer older than the retention window has no header. Codess reads it, states
-where it came from, and does not attribute it to a Project -- which is the
-correct handling of a Session whose binding the vendor no longer records, not a
-failure to decode one.
+**Status: Postponed. This is a data condition, not a defect.** Cursor's
+centralised `composerHeaders` indexes only composers touched since it was
+introduced, while `composerData:` and every bubble are retained, so a composer
+predating that migration has no header. Codess reads it, states where it came
+from, and does not attribute it to a Project -- which is the correct handling of
+a Session whose binding the vendor does not record, not a failure to decode one.
+
+**Corrected: this is a migration boundary, not an age window.** The earlier text
+said the vendor prunes headers on age. Measured, headered composers span
+2026-03-26 to 2026-08-17 -- the whole retained range, not a recent slice -- so
+nothing is expiring. The practical difference matters: an age window would keep
+producing new unbound composers and an operator could wait for a header to
+return, and neither is true. The set is fixed at the migration and shrinks only
+when a composer is reopened.
 
 The item stays open because the *handling* can improve -- these Sessions are
 currently visible only to a caller that asks for every composer -- not because
@@ -5101,6 +5223,114 @@ one exists, distinguishable from a Codess alias; and a rollout's archive
 location and its `archive_state` agree, or the disagreement is recorded as a
 vendor observation with its reason.
 
+### W106 -- Carry the Cursor Interaction Mode Into the Store
+
+**Landed: the read.** `_item_table_headers` reads Cursor's `ItemTable`
+composer index and qualifies each selected header with `interaction_mode`
+(`agent` or `chat`) and `workspace_path`. Measured on one store: mode present on
+all 29 selected headers for a Project, path on 18 of them. A test asserts the
+index cannot widen a selection, only qualify one.
+
+**Not landed: the store.** Neither field reaches a column, so a query cannot
+select on them and they exist only inside the decoder. That is a CoSchema change
+and a rebuild, so it waits for the next format bump rather than forcing one.
+
+**Why the mode is worth a column.** It is the only evidence distinguishing a
+Cursor agent Session from a chat Session, and no other vendor field carries it:
+`unifiedMode` splits 15 agent to 24 chat on the measured store, so it is not a
+constant that could be inferred. Codess already stores `surface_kind` for where
+a Session ran; this states how it ran, which is a different question and the one
+a cross-vendor comparison of agent behaviour needs.
+
+**Why the path is worth a column.** `composerHeaders.workspaceId` is a
+storage-directory hash, and a workspace recreated under a new hash breaks the
+binding. `workspaceIdentifier.uri.fsPath` states the path, which survives that,
+so it is the durable half of the same fact and is directly relevant to the
+unbound composers of [W85](#w85--composers-older-than-their-index).
+
+**Evidence to close.** Both fields are columns with a stated vocabulary, a query
+can filter on the mode, and a rebuilt store carries them for every Cursor
+Session whose header supplies them.
+
+**Cost.** One format bump, batched with whatever else needs one.
+
+### W105 -- A Strategy for Vendor Removal, Per Vendor
+
+**The condition.** Two vendors remove things and the removals have opposite
+shapes, so one mitigation cannot serve both.
+[CursorSchema](CursorSchema.md#header-coverage-and-what-cursor-removes) states
+the comparison; this is what to build.
+
+**Claude Code deletes the record.** Age-triggered, 30-day default, growing
+continuously, and unrecoverable once gone. The only defence is cadence: ingest
+more often than the vendor prunes. Nothing currently measures the gap, and on
+this machine it was crossed -- one Project's format-4 store is the only surviving
+record of 122 Sessions.
+
+**Cursor removes the index entry and empty composers.** The conversation is
+retained and readable; what is missing is the workspace binding. Cadence does not
+help, because nothing is being lost. Reading the unbound set does.
+
+**Four pieces of work, in dependency order.**
+
+1. *Report the exposure Claude creates.* Per Project: the age of the oldest
+   retained Source against the vendor's configured `cleanupPeriodDays`, and the
+   time since the last successful ingest. An operator cannot currently see that
+   a Project is one sweep away from losing evidence. This is the only one of the
+   four that prevents loss rather than explaining it.
+2. *Distinguish the three falling-count causes in the coverage report.* Vendor
+   wrote, empty composer, unbound composer -- all three report `failed_sources=0`
+   and `sources_vanished=0` today, and two sessions of analysis in this
+   repository reached the wrong answer twice for exactly that reason. The figures
+   exist; what is missing is stating them together at the point a count is read.
+3. *Give the unbound composers an operator-stated binding.* This is W85 steps
+   2-3 and it is the whole recovery path for Cursor: 98 composers hold decodable
+   evidence no Project can claim.
+4. *Represent a tombstone as removed rather than empty.* A `bubbleId:` key with a
+   NULL value is a record the vendor deleted, which is not the same as a record
+   with no content, and a decoder that conflates them reports a Session as
+   present-but-empty when it was withdrawn.
+
+**Not proposed: copying the vendor store defensively.** It inverts the product
+boundary -- Codess reads vendor evidence and does not become its backup -- and
+raw capture already exists for the case where an operator decides a Source is
+worth retaining exactly.
+
+**Evidence to close.** An operator can see, per Project, how close it is to
+Claude's next sweep; a falling Event count resolves to one of three named causes
+without reading the vendor store by hand; and an unbound Cursor composer can be
+bound by decision rather than staying unattributed.
+
+**Cost.** No format change. (1) and (2) are reports over data already collected;
+(3) is a store column and a catalog field; (4) is a decoder distinction and a
+reason code.
+
+### W104 -- No Designator Covers a Format Migration
+
+**The condition.** `refresh --designator included` selects 20 of 21 published
+Projects. The omitted one is annotated `worktree_of`, and omitting it is correct
+for a routine refresh: its Sessions would otherwise be ingested a second time
+through the parent repository. It is not correct for a **format migration**,
+where every published store must move or be refused on the next read.
+
+**How it surfaced.** The format-12 rebuild needed two commands rather than one --
+the designator, then an explicit `ingest --force` for the worktree Project --
+and nothing in the tooling says the second is required. `project_inventory`
+reports 21 Projects and the designator selects 20, so the discrepancy is
+visible only by comparing two outputs that no procedure compares.
+
+**Work.** A cohort that means *every published store*, distinct from `included`.
+The natural spelling is a designator -- `published`, selecting on the presence of
+a current pointer rather than on catalog annotation -- because that is the
+question a migration asks: which stores will the next release refuse.
+
+**Evidence to close.** One command rebuilds every published Project after a
+format change; a Project omitted from that cohort is omitted for a stated reason
+that a migration procedure can check, and `project_inventory` and the migration
+designator agree on their count or explain the difference.
+
+**Cost.** No rebuild and no format change. A designator is a catalog predicate.
+
 ### W103 -- Rescan for the Crash-Site Classes
 
 **Work.** Apply the five crash-site classes in
@@ -5322,8 +5552,54 @@ Sprint 1 -- which this previously named -- shipped as format 10 and carried the
 token columns and `duplicate_of`. It did **not** carry the naming resolutions,
 so they are the next format's content rather than work Sprint 1 left behind.
 
-**Evidence to close.** No field name outside `hashing` names an algorithm; a test
-asserts it over the released schema and the documents Codess writes.
+**Landed in format 11**, with W50 and W51, so the regeneration was paid once.
+All twelve renamed -- the ten the table names plus `resolved_sha256` and
+`specification_sha256`, which the earlier count missed because it surveyed field
+names in released documents and these two are locals that compose them.
+
+**The pass found a stale name the count could not.**
+`schema/field-coverage-baseline.json` documented `sources.content_sha256`, a column
+renamed to `content_digest` in format 5. Nothing read it, so nothing failed; a
+released document had simply gone on describing a column that no longer existed.
+
+**One `_sha256` spelling is kept deliberately.** `hashlib.sha256` in
+`demo_model_metrics` names the algorithm because it *is* the algorithm. The rule
+governs what a stored field is called, not what the function computing it is
+called, and the two comments in `retention` that name `plan_sha256` record a
+versioned wire-format change a `/2` consumer must still be able to tell from a
+`/3` one.
+
+**Reopened for the keys the field survey could not see.** The pass surveyed
+`*_sha256` *field names* and moved twelve. It did not see a bare `"sha256"`
+**key** nested inside an object: `schema/coschema/manifest.json` carries one per
+released file, and every snapshot `manifest.json` carries one per store. Both are
+live, both are the same defect, and the test added in format 11 does not catch
+them because it walks table columns rather than the documents Codess writes.
+
+**Cost, and why it did not travel with format 11.** A store rebuild does not
+produce either file: the released manifest is regenerated by
+`tools/refresh_schema_manifest.py`, and a snapshot manifest is rewritten only
+when its snapshot is republished. So this is a third wire format rather than a
+free rider on the second, and it should batch with whatever next requires a
+manifest regeneration.
+
+**A third instance, in emitted values rather than in names.** `query_api.content_hash`
+returns `"sha256:" + digest`, so every query result carries the algorithm in
+`request_hash`, `result_hash`, and each citation's `content_digest`. Stored
+identities already solved this -- `codess:<kind>:sha256:` became `id1:`, naming
+the derivation scheme -- and this is the same value shape that did not travel
+with it. It is `codess.query-result/1` wire-format, so it costs a result-format
+version bump and invalidates saved results that pin a hash.
+
+**What is already correct, so it is not re-derived.** `sources.source_revision`
+holds `digest-fingerprint:` on every real row -- 0 rows match `sha256:%` across
+the corpus -- and `codess:<kind>:id1:` is the identity prefix. The `sha256:`
+paths in `raw_store` are reached only under raw capture, which no published
+Project currently uses.
+
+**Evidence to close.** No field name, no key, and no emitted value prefix outside
+`hashing` names an algorithm; the test walks the documents Codess writes as well
+as the released schema, using `hashing.ALGORITHM_TOKENS` rather than its own list.
 
 ### W99 -- Two Trees for One Kind of Artifact
 
@@ -5504,6 +5780,123 @@ below that, this baseline cannot distinguish improvements.
 **What this baseline does not cover.** Cross-Project queries over many store
 sets, the publication stage in isolation, and memory under concurrent access.
 Each is a separate workload and none is currently measured.
+
+**Format 12 rebuild, through `codess refresh --force`.** 20 Projects,
+**preflight 195 s + apply 220 s = 415 s**, read from the receipt's per-Project
+`elapsed_seconds` rather than timed externally. A forced refresh decodes
+everything twice by construction -- preflight is a full ingest that must pass for
+every Project before any store is replaced -- so it costs about double a bare
+rebuild and buys the property that a failure leaves the corpus untouched. That
+property paid for itself on the first attempt, which failed all 20 on the
+`--force` omission and replaced nothing.
+
+The worktree Project is not in that cohort and was ingested separately: 7
+Sessions, 44,710 Events, 25.6 s.
+
+**Format 11 rebuild, measured against the row above.** The whole corpus is 21
+Projects, 292,733 Events, **210 s** -- read from the `project.done` and
+`vendor.done` events each ingest already emits, rather than timed externally.
+
+| | Events | Seconds | Per event |
+|---|---|---|---|
+| Largest Project, format 10 baseline | 89,288 | 122.5 | 1,371 us |
+| Largest Project, format 11 rebuild | 88,716 | 74.6 | **841 us** |
+
+**The Event counts moved between the two rebuilds, and the direction is not
+uniform.** Corpus totals went 283,871 to 292,733, +8,862 across 12 Projects --
+ordinary new work recorded between the two runs. One Project went the other way:
+Zero400 lost 2,722 Events, all in Cursor, whose Session count fell 29 to 26.
+
+**Two of the three Sessions were never Sessions, and the vendor did write in
+between -- the check that appeared to rule it out was reading the wrong file.**
+`state.vscdb`'s mtime is 2026-08-19, which looks like a week of quiet. Its
+**`-wal` is 203 MB and was written 2026-08-26 23:35**, between the format-10
+rebuild and the format-11 one. A WAL-mode SQLite store's main file stops being
+touched while the WAL absorbs writes, so a bare mtime on the main file says
+nothing about whether the database changed. `cursor_source` already knows this --
+its change marker is `sqlite-main-wal-inode-size-mtime-ns`, covering both -- so
+the defective check was the manual one, not the code.
+
+**The 3 Sessions are empty composers, and dropping them is correct.** The
+workspace selection returns 29 composers; three of them -- `9d9e7b99`,
+`bbf0d8d7`, `f0f03b97` -- hold `conversation: 0` and
+`fullConversationHeadersOnly: 0`, and none has a single `bubbleId:` row. They are
+windows opened and never used. Cursor agrees: it keeps
+`globalStorage/empty_composer_backup.jsonl`, 140 `composerData` rows it deleted
+*for being empty*, and `bbf0d8d7` -- the one whose live `composerData` is
+absent -- is in it. The format-10 count of 29 was counting three empty shells;
+26 is the right answer.
+
+**The 5,600 Events are the 23:35 write, not a decode difference.** Once the WAL
+is accounted for, an unchanged-source comparison was never available: the source
+changed between the two runs.
+
+**Per-Session counts locate an affected Session, and none is affected here.**
+Every stored Cursor Session for the Project was checked against its live
+`bubbleId:` rows: **0 tombstoned bubbles** across all 26.
+
+The bubble-to-Event relation is exact and is now stated in
+[CursorSchema](CursorSchema.md#bubbles-to-events-counted): 72,083 live bubbles,
+36,733 skipped under two reason codes, 35,350 producing 59,554 Events. Only tool
+bubbles fan out, 1 to 2 as `tool.call` + `tool.result` -- 24,204 of them -- and
+every other kind is 1 to 1. The mean of 1.685 is therefore a function of a
+Session's tool-call share, not a constant, which is why an Event total compared
+against a bubble total says nothing about completeness. The check that does is
+the reason-code reconciliation: 35,350 + 36,733 = 72,083, no remainder.
+
+**What this means for reading Event counts.** Three different causes produce the
+same falling number, and `failed_sources` and `sources_vanished` report 0 for all
+three:
+
+| Cause | What it is | The figure that shows it |
+|---|---|---|
+| Vendor wrote | Cursor changed the store between runs | The source marker, which covers main **and** WAL |
+| Empty composers | Selected, holds no bubble, correctly not stored | Selected count against stored count |
+| Unbound composers | Data present, no header binds it to a workspace | `coverage_report.unbound_composers` |
+
+Only the third is a Codess limitation. Comparing totals without separating them is
+what produced two wrong answers in a row here -- first "the vendor pruned",
+then "the vendor did not prune".
+
+**`composerHeaders` is a migration boundary, not an age window.** The prose above
+and in `cursor_source` said Cursor prunes headers on age. The store does not
+support that: headered composers span 2026-03-26 to 2026-08-17, which is the
+whole retained range rather than a recent window. The published account is that
+the index tracks only chats opened or created since the 3.0 centralisation, so
+the 98 unbound composers are pre-migration rather than expired -- a set that does
+not grow with age and is not recovered by waiting.
+
+**A fourth index exists and adds nothing, checked so it is not rechecked.**
+`ItemTable`'s `composer.composerHeaders` holds 39 entries carrying a
+`workspaceIdentifier`, which reads like the binding the unbound composers lack.
+It is a strict subset of the `composerHeaders` table -- 0 composers appear there
+and not in the table -- so reading it would recover no Session.
+
+**A snapshot was destroyed while this was being worked out.** The format-10
+snapshot held the 3 Sessions and was trimmed by the retention pass during the
+format-12 rebuild, so the 10-to-11 comparison can no longer be made directly. It
+cost nothing -- the bubbles are still in Cursor's store and a selection that
+admits them recovers the Sessions -- but the trim ran while a hazard had been
+asserted about that snapshot and not re-checked.
+
+**Ingest did not get slower; one Project is simply most of the corpus.** At
+comparable Event counts the per-Event cost fell, and the whole rebuild is 210 s
+against a single Project's 122.5 s in the earlier measurement. What reads as
+slowness is distribution: the largest Project is 74.6 s of the 210, and Claude
+decode is 59.4 s of that 74.6 -- the phase is per-source, and a format change
+does not touch it.
+
+The corpus rate is 1,395 Events/s, and no comparable prior figure exists because
+the earlier baseline measured three Projects rather than the corpus. Recorded so
+the next rebuild has one.
+
+**Query, re-measured on the rebuilt store** (88,716 Events, against 0.23 s flat
+in the row above): `sessions` 0.29 s, `events` 0.34 s, `search` 0.41 s,
+`overview` **0.93 s**. The first three are within the "process start and store
+open dominate" reading. `overview` is not, and it is the one figure here worth a
+second look rather than an explanation -- it is a full-store summary over a
+corpus that has grown, so a growth-proportional cost is the expected answer, but
+that is a hypothesis this measurement does not test.
 
 ### Store Fit as Time Series and as Log Records
 

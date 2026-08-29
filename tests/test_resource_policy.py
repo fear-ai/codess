@@ -59,7 +59,7 @@ def test_partial_file_overrides_and_null_disables_one_limit(tmp_path):
     assert policy.origins["transcript_bytes"] == "policy-file"
     assert policy.origins["events_per_source"] == "built-in"
     assert policy.file_path == str(path.resolve())
-    assert policy.file_sha256 == hashlib.sha256(payload).hexdigest()
+    assert policy.file_digest == hashlib.sha256(payload).hexdigest()
 
 
 @pytest.mark.parametrize(

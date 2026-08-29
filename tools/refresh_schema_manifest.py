@@ -57,10 +57,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"missing: {role} -> {entry['path']}", file=sys.stderr)
             return 2
         actual = hash_file(path)
-        if actual != entry.get("sha256"):
+        if actual != entry.get("digest"):
             stale.append(role)
             print(f"{'stale' if args.check else 'updated'}: {role} ({entry['path']})")
-            entry["sha256"] = actual
+            entry["digest"] = actual
 
     if not stale:
         print("manifest is current")

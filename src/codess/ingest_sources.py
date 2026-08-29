@@ -70,6 +70,17 @@ from codess.store import (
 log = logging.getLogger(__name__)
 
 
+RAW_OBJECT_PREFIXES = ("digest:", "sha256:")
+
+
+def _object_hash(object_id: str) -> str | None:
+    """The bare hex of a raw object id, under either recorded prefix."""
+    for prefix in RAW_OBJECT_PREFIXES:
+        if object_id.startswith(prefix):
+            return object_id.removeprefix(prefix)
+    return None
+
+
 def _progress(opts: dict, event: str, **fields: object) -> None:
     callback = opts.get("progress")
     if callback is not None:
@@ -80,7 +91,7 @@ def _raw_record_key(record: dict) -> tuple:
     """Identify one logical raw source/relation independent of its revision."""
     return (
         record.get("record_type"),
-        record.get("source_system_id"),
+        record.get("source_system_key"),
         record.get("source_locator"),
         record.get("parent_source_locator"),
         record.get("relation_kind"),
@@ -116,7 +127,7 @@ def _record_raw(
     profile = SOURCE_PROFILES[source]
     record = dict(record_override) if record_override is not None else recorder.observe(
         path,
-        source_system_id=profile["source_system_id"],
+        source_system_key=profile["source_system_key"],
         storage_format=profile["storage_format"],
         mode=opts.get("raw_mode", "reference"),
         source_locator=source_path,
@@ -126,10 +137,11 @@ def _record_raw(
         opts["raw_records_changed"] = True
     if conn is not None:
         object_id = record.get("object_id")
+        # `digest:` since `codess.raw/2`; `sha256:` is what a `/1` manifest
+        # retained before the algorithm left the value. Either prefix strips to
+        # the same hex, and only the current one is written.
         content_hash = (
-            object_id.removeprefix("sha256:")
-            if isinstance(object_id, str) and object_id.startswith("sha256:")
-            else None
+            _object_hash(object_id) if isinstance(object_id, str) else None
         )
         conn.execute(
             """
@@ -137,14 +149,14 @@ def _record_raw(
             SET availability=?, capture_method=?, consistency=?, content_digest=?
             WHERE id=(
               SELECT id FROM sources
-              WHERE source_system_id=? AND source_path=?
+              WHERE source_system_key=? AND source_path=?
               ORDER BY id DESC LIMIT 1
             )
             """,
             (
                 record["availability"], record["capture_method"],
                 record["consistency"], content_hash,
-                profile["source_system_id"], source_path or str(path),
+                profile["source_system_key"], source_path or str(path),
             ),
         )
 
@@ -239,7 +251,7 @@ def _record_related_raw(
     profile = SOURCE_PROFILES[source]
     record = recorder.observe_related(
         path,
-        source_system_id=profile["source_system_id"],
+        source_system_key=profile["source_system_key"],
         storage_format="text/plain",
         mode=opts.get("raw_mode", "reference"),
         parent_source_locator=parent_source_locator,

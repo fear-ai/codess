@@ -123,7 +123,7 @@ def mapping_diagnostics(
             f"""
             SELECT d.granularity, {severity_projection}, d.reason_code,
                    d.source_field, d.source_value,
-                   d.mapping_rule, d.detail, d.created_at, d.session_id,
+                   d.mapping_rule, d.detail, d.created_when, d.session_id,
                    e.event_id
             FROM mapping_diagnostics d
             LEFT JOIN events e ON e.id = d.event_id
@@ -138,7 +138,7 @@ def mapping_diagnostics(
             item["store_index"] = store_index
             rows.append(item)
     rows.sort(key=lambda row: (
-        row["created_at"], row["project_path"], row["store_index"],
+        row["created_when"], row["project_path"], row["store_index"],
         row["session_id"] or "", row["event_id"] or "",
     ))
     return limited(rows, limit)
@@ -178,7 +178,7 @@ def artifact_evidence(
             f"""
             SELECT a.artifact_kind,
                    COALESCE(a.relative_path, a.uri, a.observed_absolute_path) AS locator,
-                   ea.operation, s.source, e.session_id
+                   ea.operation, s.adapter_key, e.session_id
             FROM artifacts a
             JOIN event_artifacts ea ON ea.artifact_id = a.id
             JOIN events e ON e.id = ea.event_id
@@ -193,7 +193,7 @@ def artifact_evidence(
                 "sources": set(), "operations": set(), "sessions": set(),
                 "evidence": 0, "correlations": set(),
             })
-            item["sources"].add(row["source"])
+            item["sources"].add(row["adapter_key"])
             item["operations"].add(row["operation"])
             item["sessions"].add(row["session_id"])
             item["evidence"] += 1
@@ -367,7 +367,7 @@ def audit_events(
         for row in store["conn"].execute(
             f"""
             SELECT e.session_id, e.event_id, e.event_at, e.subtype,
-                   e.tool_name, e.content_len, e.metadata, s.source
+                   e.tool_name, e.content_len, e.metadata, s.adapter_key
             FROM events e
             JOIN sessions s ON s.id = e.session_id
             WHERE e.subtype IN ({placeholders}) AND {predicate}
@@ -481,7 +481,7 @@ def selected_sessions(
         for row in conn.execute(
             f"""
             SELECT id, {global_projection} {project_projection}
-                   source_system_id, vendor_session_id, source, release,
+                   source_system_key, vendor_session_id, adapter_key, release,
                    started_at, ended_at, project_path, metadata
             FROM sessions s
             WHERE {predicate}
@@ -489,14 +489,14 @@ def selected_sessions(
             params,
         ):
             stable_id = row["session_entity_id"] or session_entity_id(
-                row["source_system_id"], row["vendor_session_id"] or row["id"],
+                row["source_system_key"], row["vendor_session_id"] or row["id"],
             )
             sessions.append({
                 "id": row["id"],
                 "session_entity_id": stable_id,
                 "project_id": row["project_id"] or store.get("project_id"),
                 "query_id": (store_index, row["id"]),
-                "source": row["source"],
+                "adapter_key": row["adapter_key"],
                 "release": row["release"],
                 "started_at": row["started_at"],
                 "ended_at": row["ended_at"],

@@ -136,7 +136,7 @@ def _session_rows(
     return list(conn.execute(
         "SELECT e.session_id, e.sequence_no, e.event_at, e.event_kind, "  # noqa: S608
         "  e.actor_kind, e.content, e.content_len, "
-        "  s.source_system_id, s.surface_kind "
+        "  s.source_system_key, s.surface_kind "
         "FROM events e JOIN sessions s ON s.id = e.session_id "
         f"WHERE {' AND '.join(clause)} "
         "ORDER BY e.session_id, e.sequence_no",
@@ -211,7 +211,7 @@ def extract(
                     exchanges.append(pending)
                 pending = {
                     "project_id": project_id,
-                    "vendor": row["source_system_id"],
+                    "vendor": row["source_system_key"],
                     "surface": row["surface_kind"],
                     "session_id": row["session_id"],
                     "bout": bout,

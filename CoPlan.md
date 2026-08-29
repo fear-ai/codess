@@ -301,7 +301,7 @@ module's own stated purpose:
 Three of the twelve (`project_catalog`, `cli.ingest_cmd`'s
 `_current_snapshot_id`/`_current_snapshot_is_sealed`, and
 `catalog_operations`) read `current.json` and used its `snapshot_id`
-**without verifying `manifest_sha256` at all** -- not a weaker version of
+**without verifying `manifest_digest` at all** -- not a weaker version of
 `snapshot.py`'s check, an absent one. A tampered or stale pointer in any of
 these paths would have been trusted silently.
 
@@ -1254,7 +1254,7 @@ is too late to act on cheaply. The rule is that a released-file check belongs
 before the first write, not during it.#### 8.1.4 Manifest Contents
 
 Every snapshot carries `manifest.json` recording, per store: row counts for all
-20 tables, a SHA-256 over the file, and its byte size. Alongside them:
+20 tables, a `digest` over the file, and its byte size. Alongside them:
 `created_at`, `parent_snapshot_id`, `format_version`, `contract_digest`,
 `decoder_version`, `software_version`, and `sealed`.
 
@@ -2313,12 +2313,16 @@ enforcement attests to nothing -- it is already built, which means W04 now
 qualifies a report rather than gating it. W05 wants real investigations to check
 against, which is the same input Baseline 1's decode validation used.
 
-**The wire-format work regenerated twice.** Time columns, the `contract_digest`
-rename, algorithm names out of stored values, identity derivation, and an
-Event-kind split landed together as CoSchema format 5; nine constant columns, a
-diagnostic-granularity rename, and one shared vendor description landed together
-as format 6 ([CoReview](CoReview.md#coschema-format-6)). Batching is what
-makes that two rebuilds instead of eleven.
+**The wire-format work regenerates in batches, which is what keeps the count
+down.** Time columns, the `contract_digest` rename, algorithm names out of
+stored values, identity derivation, and an Event-kind split landed together as
+CoSchema format 5; nine constant columns, a diagnostic-granularity rename, and
+one shared vendor description landed together as format 6
+([CoReview](CoReview.md#coschema-format-6)); token columns and `duplicate_of` as
+format 10; and the naming resolutions -- `adapter_key`, `source_system_key`, the
+seven `_when` time columns, and twelve `*_digest` fields -- as format 11.
+Batching is what makes those four rebuilds rather than the twenty-odd the
+individual changes would have cost.
 
 #### 12.3.3 Why a Third Baseline Is Not Defined
 

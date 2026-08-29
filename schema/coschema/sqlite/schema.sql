@@ -8,7 +8,7 @@
 -- a stale header here did while the pragma stayed correct.
 
 PRAGMA application_id = 1129268293; -- 0x434F4445, "CODE"
-PRAGMA user_version = 10;
+PRAGMA user_version = 12;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE store_meta (
@@ -35,7 +35,7 @@ CREATE TABLE project_locations (
   path_obsolete INTEGER NOT NULL DEFAULT 0 CHECK (path_obsolete IN (0,1)),
   location_kind TEXT NOT NULL DEFAULT 'directory',
   state TEXT NOT NULL CHECK (state IN ('active','retired','missing','unknown')),
-  observed_at TEXT NOT NULL,
+  observed_when TEXT NOT NULL,
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
   UNIQUE(machine_id, observed_path)
 );
@@ -44,33 +44,33 @@ CREATE TABLE workspace_bindings (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   location_id TEXT REFERENCES project_locations(id) ON DELETE SET NULL,
-  source_system_id TEXT NOT NULL,
+  source_system_key TEXT NOT NULL,
   workspace_id TEXT NOT NULL,
   relation_kind TEXT NOT NULL,
   source_project_path TEXT,
   path_obsolete INTEGER NOT NULL DEFAULT 0 CHECK (path_obsolete IN (0,1)),
   selection_state TEXT NOT NULL,
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
-  UNIQUE(source_system_id, workspace_id, project_id)
+  UNIQUE(source_system_key, workspace_id, project_id)
 );
 
 CREATE TABLE sources (
   id INTEGER PRIMARY KEY,
   source_entity_id TEXT NOT NULL UNIQUE,
-  source_system_id TEXT NOT NULL,
+  source_system_key TEXT NOT NULL,
   source_path TEXT NOT NULL,
   storage_format TEXT NOT NULL,
   source_revision TEXT NOT NULL,
   source_mtime REAL,
   source_size INTEGER CHECK (source_size IS NULL OR source_size >= 0),
-  observed_at TEXT NOT NULL,
+  observed_when TEXT NOT NULL,
   availability TEXT NOT NULL DEFAULT 'reference'
     CHECK (availability IN ('captured','reference','not_retained','unavailable')),
   capture_method TEXT,
   consistency TEXT,
   content_digest TEXT,
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
-  UNIQUE(source_system_id, source_path, source_revision)
+  UNIQUE(source_system_key, source_path, source_revision)
 );
 
 CREATE TABLE model_params (
@@ -98,7 +98,7 @@ CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
   session_entity_id TEXT NOT NULL UNIQUE,
   observation_id TEXT NOT NULL UNIQUE,
-  source_system_id TEXT NOT NULL DEFAULT 'legacy.unknown',
+  source_system_key TEXT NOT NULL DEFAULT 'legacy.unknown',
   vendor_session_id TEXT,
   vendor_name TEXT,
   harness_name TEXT,
@@ -148,7 +148,7 @@ CREATE TABLE sessions (
   started_at REAL,
   ended_at REAL,
   source_mtime REAL,
-  observed_at TEXT,
+  observed_when TEXT,
   time_basis TEXT CHECK (time_basis IN ('event','session','source_mtime','ingested','unknown') OR time_basis IS NULL),
   parent_session_id TEXT,
   session_relation_kind TEXT CHECK (session_relation_kind IN ('subagent','fork','resume','continuation','unknown') OR session_relation_kind IS NULL),
@@ -167,14 +167,20 @@ CREATE TABLE sessions (
   session_model_count INTEGER CHECK (session_model_count IS NULL OR session_model_count >= 0),
   metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
 
+  -- The `SOURCE_PROFILES` key the decoder ran under -- `Claude`, `Codex`,
+  -- `Cursor`. Named `source` through format 10, where it collided with the
+  -- Source entity, with `sources.source_path`, and with the six `source_*`
+  -- columns above that do name Source facts. It is neither: it selects an
+  -- adapter, and every profile constant on this row was read from it.
+  adapter_key TEXT NOT NULL DEFAULT 'Unknown',
+
   -- Read compatibility for the legacy flat query surface. These are
   -- projections, not the functional identity model.
-  source TEXT NOT NULL DEFAULT 'Unknown',
   type TEXT NOT NULL DEFAULT 'Unknown',
   release TEXT,
   project_path TEXT,
 
-  UNIQUE(source_system_id, vendor_session_id)
+  UNIQUE(source_system_key, vendor_session_id)
 );
 
 CREATE TABLE interactions (
@@ -341,8 +347,8 @@ CREATE TABLE processing_runs (
   scope_json TEXT CHECK (scope_json IS NULL OR json_valid(scope_json)),
   actions_json TEXT CHECK (actions_json IS NULL OR json_valid(actions_json)),
   rejection_reason TEXT,
-  started_at TEXT NOT NULL,
-  completed_at TEXT NOT NULL
+  started_when TEXT NOT NULL,
+  completed_when TEXT NOT NULL
 );
 
 CREATE TABLE content_derivations (
@@ -424,7 +430,7 @@ CREATE TABLE mapping_diagnostics (
   source_value TEXT,
   mapping_rule TEXT,
   detail TEXT,
-  created_at TEXT NOT NULL
+  created_when TEXT NOT NULL
 );
 
 CREATE TABLE correlation_assertions (
@@ -437,7 +443,7 @@ CREATE TABLE correlation_assertions (
   method TEXT NOT NULL,
   evidence TEXT CHECK (evidence IS NULL OR json_valid(evidence)),
   confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
-  asserted_at TEXT NOT NULL,
+  asserted_when TEXT NOT NULL,
   reviewer TEXT
 );
 

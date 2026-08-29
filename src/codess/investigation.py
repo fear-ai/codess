@@ -9,7 +9,7 @@ from codess.query_api import RESULT_FORMAT, QueryContractError, content_hash
 from codess.timeval import now_iso
 from codess.wallclock import system_clock
 
-INVESTIGATION_FORMAT = "codess.investigation/1"
+INVESTIGATION_FORMAT = "codess.investigation/2"
 
 
 def build_investigation(
@@ -56,11 +56,11 @@ def build_investigation(
             "session_entity_id": row.get("session_entity_id"),
             "project_id": row.get("project_id"),
             "snapshot_id": row.get("snapshot_id"),
-            "source_system_id": row.get("source_system_id"),
+            "source_system_key": row.get("source_system_key"),
             "source_record_locator": row.get("source_record_locator"),
             "event_kind": row.get("event_kind"),
             "content_digest": content_hash(row.get("content") or ""),
-            "row_sha256": content_hash(row),
+            "row_digest": content_hash(row),
             "content_complete": row.get("content_complete"),
         })
     record = {

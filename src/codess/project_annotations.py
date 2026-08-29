@@ -76,8 +76,8 @@ def _snapshot_facts(snapshot: Path | None) -> dict[str, Any]:
                 facts["events"] += counts.get("events", 0)
                 columns = column_names(conn, "sessions")
                 source_column = (
-                    "source_system_id"
-                    if "source_system_id" in columns else "source"
+                    "source_system_key"
+                    if "source_system_key" in columns else "source"
                 )
                 quoted_source = quote_identifier(source_column)
                 for source, count in conn.execute(

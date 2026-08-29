@@ -139,10 +139,47 @@ def read_manifest(snapshot_dir: Path) -> dict[str, Any]:
     return json.loads(primary.read_text(encoding="utf-8"))
 
 
+def raw_manifest_claim(manifest: dict[str, Any]) -> str | None:
+    """The digest a manifest claims for its raw-manifest file, either spelling.
+
+    `raw_manifest_digest` was `raw_manifest_sha256` through CoSchema format 10.
+    A stored manifest is read while the snapshot holding it is being verified or
+    replaced, so a release that renamed the key must still read what the
+    previous one wrote; only the key moved, and the value is the same digest.
+    """
+    claimed = manifest.get("raw_manifest_digest")
+    if claimed is None:
+        claimed = manifest.get("raw_manifest_sha256")
+    return str(claimed) if claimed is not None else None
+
+
+def store_claim(entry: dict[str, Any]) -> str | None:
+    """The digest a snapshot manifest claims for one store, either spelling.
+
+    `digest` was `sha256` through CoSchema format 11. Same reason as
+    `raw_manifest_claim`: a retained snapshot is verified with the manifest it
+    was written with, and a snapshot is only rewritten when it is republished,
+    so refusing the older key would make every retained snapshot unverifiable.
+    """
+    claimed = entry.get("digest")
+    if claimed is None:
+        claimed = entry.get("sha256")
+    return str(claimed) if claimed is not None else None
+
+
 def current_snapshot(base: Path) -> tuple[Path, dict[str, Any]] | None:
     """Resolve the snapshot base/current.json points to, verifying its
-    manifest_sha256 claim via `read_hash`. Returns (snapshot_dir,
-    pointer_document), or None if no pointer exists yet."""
+    manifest_digest claim via `read_hash`. Returns (snapshot_dir,
+    pointer_document), or None if no pointer exists yet.
+
+    The claim is accepted under either spelling. `manifest_digest` was
+    `manifest_sha256` through CoSchema format 10, and this pointer is the one
+    file a format change cannot regenerate ahead of itself: a rebuild reads the
+    pointer it is about to replace, so refusing the older name would make every
+    published Project unrebuildable by the release that renamed it. The value is
+    identical -- only the key moved -- and the pointer written on the way out
+    carries the current name.
+    """
     pointer = base / CURRENT_POINTER_FILE
     if not pointer.exists():
         return None
@@ -154,7 +191,8 @@ def current_snapshot(base: Path) -> tuple[Path, dict[str, Any]] | None:
         manifest_path = snapshot_path / MANIFEST_FILE
         if not manifest_path.exists():
             raise SnapshotError(f"current snapshot manifest missing at {manifest_path}")
-        read_hash(manifest_path, expected_hash=current["manifest_sha256"])
+        claimed = current.get("manifest_digest") or current["manifest_sha256"]
+        read_hash(manifest_path, expected_hash=claimed)
         return snapshot_path, current
     except SnapshotError:
         raise
@@ -257,7 +295,7 @@ def _software_revision() -> str | None:
             with path.open("rb") as stream:
                 for chunk in iter(lambda stream=stream: stream.read(HASH_CHUNK_BYTES), b""):
                     digest.update(chunk)
-        return revision + "+worktree.sha256:" + digest.hexdigest()
+        return revision + "+worktree.digest:" + digest.hexdigest()
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -401,7 +439,7 @@ def _pointer_document(
         "format_version": manifest["format_version"],
         "decoder_version": manifest["decoder_version"],
         "validator_version": manifest["validator_version"],
-        "manifest_sha256": hash_file(manifest_path),
+        "manifest_digest": hash_file(manifest_path),
     }
 
 
@@ -591,7 +629,7 @@ def create_snapshot(
                 snapshot_created_at=created_at_text,
             )
             stores[source_path.name] = {
-                "sha256": hash_file(target),
+                "digest": hash_file(target),
                 "size": target.stat().st_size,
                 "counts": _logical_counts(target),
             }
@@ -616,7 +654,7 @@ def create_snapshot(
                     except OSError:
                         shutil.copy2(source_object, target_object)
                     try:
-                        verify_hash(target_object, record["stored_sha256"])
+                        verify_hash(target_object, record["stored_digest"])
                     except HashMismatchError as exc:
                         raise SnapshotError(
                             f"sealed raw hash mismatch: {record.get('object_id')}"
@@ -644,7 +682,7 @@ def create_snapshot(
             "project_id": project_id,
             "raw_format": RAW_FORMAT,
             "sealed": seal,
-            "raw_manifest_sha256": hash_file(raw_manifest),
+            "raw_manifest_digest": hash_file(raw_manifest),
             "stores": stores,
         }
         manifest_text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -779,7 +817,7 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
                 row = conn.execute("SELECT id FROM projects LIMIT 1").fetchone()
                 project_id = row[0] if row else None
             stores[path.name] = {
-                "sha256": hash_file(path),
+                "digest": hash_file(path),
                 "size": path.stat().st_size,
                 "counts": _logical_counts(path),
             }
@@ -804,7 +842,7 @@ def rebuild_manifest(snapshot_dir: Path) -> dict[str, Any]:
         "project_id": project_id,
         "raw_format": RAW_FORMAT,
         "sealed": (snapshot_dir / "raw").is_dir(),
-        "raw_manifest_sha256": hash_file(raw_manifest),
+        "raw_manifest_digest": hash_file(raw_manifest),
         "stores": stores,
         "reconstructed": True,
     }
@@ -864,15 +902,24 @@ def snapshot_store_paths_from_base(
                 "stands"
             )
         raw_manifest = snapshot / RAW_MANIFEST_FILE
+        raw_claim = raw_manifest_claim(manifest)
+        if raw_claim is None:
+            raise SnapshotError(
+                f"retained snapshot manifest claims no raw-manifest digest: "
+                f"{snapshot.name}"
+            )
         try:
-            verify_hash(raw_manifest, manifest.get("raw_manifest_sha256"))
+            verify_hash(raw_manifest, raw_claim)
         except HashMismatchError as exc:
             raise SnapshotError("retained snapshot raw manifest hash mismatch") from exc
         paths = []
         for name, entry in manifest["stores"].items():
             path = snapshot / name
+            claimed = store_claim(entry)
+            if claimed is None:
+                raise SnapshotError(f"retained store claims no digest: {name}")
             try:
-                verify_hash(path, entry["sha256"])
+                verify_hash(path, claimed)
             except HashMismatchError as exc:
                 raise SnapshotError(f"retained store hash mismatch: {name}") from exc
             conn = open_readonly(path)

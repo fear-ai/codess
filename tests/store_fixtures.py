@@ -29,8 +29,8 @@ def insert_session(conn, session_id, *, source="Claude", **columns):
         "id": session_id,
         "session_entity_id": f"codess:session:id1:{session_id}",
         "observation_id": f"codess:observation:id1:{session_id}",
-        "source_system_id": VENDOR_SOURCE_SYSTEMS.get(source, "anthropic.claude-code"),
-        "source": source,
+        "source_system_key": VENDOR_SOURCE_SYSTEMS.get(source, "anthropic.claude-code"),
+        "adapter_key": source,
         "type": "Code",
     }
     row.update(columns)

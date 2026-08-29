@@ -1,6 +1,6 @@
 {
   "format_id": "codess.coschema",
-  "format_version": 10,
+  "format_version": 12,
   "application_id": 1129268293,
   "compatibility_policy": {
     "unknown_change": "manual_review",
@@ -30,7 +30,7 @@
       ],
       "sessions": [
         "id",
-        "source",
+        "adapter_key",
         "type",
         "release",
         "project_path"
@@ -117,7 +117,7 @@
           "nullable": false,
           "vocabulary": "location_state"
         },
-        "observed_at": {
+        "observed_when": {
           "type": "rfc3339",
           "nullable": false
         },
@@ -129,7 +129,7 @@
     },
     "workspace_bindings": {
       "identity": [
-        "source_system_id",
+        "source_system_key",
         "workspace_id",
         "project_id"
       ],
@@ -144,7 +144,7 @@
           "nullable": true,
           "target": "project_locations"
         },
-        "source_system_id": {
+        "source_system_key": {
           "type": "text",
           "nullable": false
         },
@@ -176,7 +176,7 @@
     },
     "sources": {
       "identity": [
-        "source_system_id",
+        "source_system_key",
         "source_path",
         "source_revision"
       ],
@@ -185,7 +185,7 @@
           "type": "text",
           "nullable": false
         },
-        "source_system_id": {
+        "source_system_key": {
           "type": "text",
           "nullable": false
         },
@@ -210,7 +210,7 @@
           "nullable": true,
           "minimum": 0
         },
-        "observed_at": {
+        "observed_when": {
           "type": "rfc3339",
           "nullable": false
         },
@@ -239,7 +239,7 @@
     },
     "sessions": {
       "identity": [
-        "source_system_id",
+        "source_system_key",
         "vendor_session_id"
       ],
       "fields": {
@@ -251,7 +251,7 @@
           "type": "text",
           "nullable": false
         },
-        "source_system_id": {
+        "source_system_key": {
           "type": "text",
           "nullable": false
         },
@@ -335,7 +335,7 @@
           "type": "unix_ms",
           "nullable": true
         },
-        "observed_at": {
+        "observed_when": {
           "type": "rfc3339",
           "nullable": true
         },
@@ -794,11 +794,11 @@
           "type": "text",
           "nullable": true
         },
-        "started_at": {
+        "started_when": {
           "type": "rfc3339",
           "nullable": false
         },
-        "completed_at": {
+        "completed_when": {
           "type": "rfc3339",
           "nullable": false
         }
@@ -1108,7 +1108,7 @@
           "type": "text",
           "nullable": true
         },
-        "created_at": {
+        "created_when": {
           "type": "rfc3339",
           "nullable": false
         }
@@ -1153,7 +1153,7 @@
           "minimum": 0,
           "maximum": 1
         },
-        "asserted_at": {
+        "asserted_when": {
           "type": "rfc3339",
           "nullable": false
         },

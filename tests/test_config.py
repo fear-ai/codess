@@ -236,7 +236,7 @@ def test_the_previous_spelling_is_accepted_by_the_raw_store():
 
     store = RawStore(Path(tempfile.mkdtemp()))
     record = store.observe(
-        Path(__file__), source_system_id="x", storage_format="y", mode="none",
+        Path(__file__), source_system_key="x", storage_format="y", mode="none",
     )
     assert record["availability"] == "not_retained"
 
@@ -250,7 +250,7 @@ def test_observe_retains_no_bytes_but_records_the_observation():
 
     store = RawStore(Path(tempfile.mkdtemp()))
     record = store.observe(
-        Path(__file__), source_system_id="x", storage_format="y", mode="observe",
+        Path(__file__), source_system_key="x", storage_format="y", mode="observe",
     )
     assert record["availability"] == "not_retained"
     assert record["source_revision_id"]
@@ -265,7 +265,7 @@ def test_observe_and_reference_differ_only_in_availability():
     from codess.raw_store import RawStore
 
     store = RawStore(Path(tempfile.mkdtemp()))
-    kwargs = {"source_system_id": "x", "storage_format": "y"}
+    kwargs = {"source_system_key": "x", "storage_format": "y"}
     observed = store.observe(Path(__file__), mode="observe", **kwargs)
     referenced = store.observe(Path(__file__), mode="reference", **kwargs)
     differing = {
@@ -311,7 +311,7 @@ def test_an_invalid_raw_mode_is_refused_by_the_raw_store():
     store = RawStore(Path(tempfile.mkdtemp()))
     with pytest.raises(RawCaptureError, match="invalid raw mode"):
         store.observe(
-            Path(__file__), source_system_id="x", storage_format="y", mode="archive",
+            Path(__file__), source_system_key="x", storage_format="y", mode="archive",
         )
 
 
@@ -397,7 +397,7 @@ def test_refresh_keeps_a_snapshot_built_under_the_previous_spelling(tmp_path):
     (base / CURRENT_POINTER_FILE).write_text(
         json.dumps({
             "path": str(snapshot),
-            "manifest_sha256": hash_file(manifest),
+            "manifest_digest": hash_file(manifest),
         }),
         encoding="utf-8",
     )

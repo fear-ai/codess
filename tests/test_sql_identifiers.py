@@ -336,8 +336,8 @@ class TestTheCheckActuallyDetects:
         assert self._undeclared("SELECT s.started_at FROM sessions s") == set()
 
     def test_a_renamed_column_in_an_insert_list_is_caught(self):
-        assert "content_sha256" in self._undeclared(
-            "INSERT INTO sources(source_entity_id, content_sha256) VALUES (?, ?)"
+        assert "content_absent" in self._undeclared(
+            "INSERT INTO sources(source_entity_id, content_absent) VALUES (?, ?)"
         )
 
     def test_a_renamed_column_in_an_update_clause_is_caught(self):
@@ -345,8 +345,8 @@ class TestTheCheckActuallyDetects:
 
         `ingest_sources` held exactly this shape, and no test reached it.
         """
-        assert "content_sha256" in self._undeclared(
-            "UPDATE sources SET availability=?, content_sha256=? WHERE id=?"
+        assert "content_absent" in self._undeclared(
+            "UPDATE sources SET availability=?, content_absent=? WHERE id=?"
         )
 
     def test_a_removed_column_is_caught(self):

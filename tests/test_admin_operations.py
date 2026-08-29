@@ -143,7 +143,7 @@ def _captured_project(tmp_path: Path) -> tuple[Path, Path, str]:
         conn.close()
     raw = RawStore(registry / "raw")
     record = raw.observe(
-        source, source_system_id="openai.codex",
+        source, source_system_key="openai.codex",
         storage_format="codex-jsonl", mode="capture",
     )
     create_snapshot(
@@ -1053,7 +1053,7 @@ def test_a_working_archive_is_named_the_instant_its_manifest_reports(tmp_path):
     source = tmp_path / "session.jsonl"
     source.write_text('{"type":"user"}\n', encoding="utf-8")
     record = raw.observe(
-        source, source_system_id="anthropic.claude-code",
+        source, source_system_key="anthropic.claude-code",
         storage_format="claude-jsonl", mode="capture",
     )
     snapshot = create_snapshot(project, [store], [record], raw_store=raw)

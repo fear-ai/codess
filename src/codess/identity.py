@@ -36,11 +36,11 @@ def _qualified(kind: str, *components: object) -> str:
     return f"codess:{kind}:{IDENTITY_FORMAT_TAG}:{digest}"
 
 
-def session_entity_id(source_system_id: str, vendor_session_id: str) -> str:
+def session_entity_id(source_system_key: str, vendor_session_id: str) -> str:
     """Identify one vendor session independently of a DB or local path."""
-    if not source_system_id or not vendor_session_id:
+    if not source_system_key or not vendor_session_id:
         raise ValueError("session entity identity requires source system and vendor ID")
-    return _qualified("session", source_system_id, vendor_session_id)
+    return _qualified("session", source_system_key, vendor_session_id)
 
 
 def event_entity_id(session_id: str, vendor_event_id: str) -> str:
@@ -68,7 +68,7 @@ def source_key(source_path: str) -> str:
 
 
 def source_revision_entity_id(
-    source_system_id: str, source_path: str, source_revision: str
+    source_system_key: str, source_path: str, source_revision: str
 ) -> str:
     """Identify one immutable state of an upstream Source.
 
@@ -83,10 +83,10 @@ def source_revision_entity_id(
     two distinct Sources can share one; the vendor-assigned name is what
     separates them.
     """
-    if not source_system_id or not source_revision:
+    if not source_system_key or not source_revision:
         raise ValueError("source revision identity requires source system and revision")
     return _qualified(
-        "source-revision", source_system_id, source_key(source_path), source_revision
+        "source-revision", source_system_key, source_key(source_path), source_revision
     )
 
 
@@ -97,7 +97,7 @@ def source_record_entity_id(source_revision_id: str, source_locator: str) -> str
 
 def source_observation_id(
     observed_entity_id: str,
-    source_system_id: str,
+    source_system_key: str,
     source_path: str,
     source_revision: str,
     project_id: str | None = None,
@@ -115,7 +115,7 @@ def source_observation_id(
     identities. The entity they observed is shared; the observation is not.
     """
     return _qualified(
-        "observation", observed_entity_id, source_system_id, source_path,
+        "observation", observed_entity_id, source_system_key, source_path,
         source_revision, project_id or "",
     )
 
@@ -134,10 +134,10 @@ def artifact_uri_id(uri: str) -> str:
 
 
 def workspace_binding_id(
-    project_id: str, source_system_id: str, workspace_id: str
+    project_id: str, source_system_key: str, workspace_id: str
 ) -> str:
     """Identify one workspace binding of a Project."""
-    return _qualified("workspace", project_id, source_system_id, workspace_id)
+    return _qualified("workspace", project_id, source_system_key, workspace_id)
 
 
 def processing_run_id(

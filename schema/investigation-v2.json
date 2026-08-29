@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://codess.local/schema/investigation-v1.json",
+  "$id": "https://codess.local/schema/investigation-v2.json",
   "title": "Codess cited investigation v1",
   "type": "object",
   "required": [
@@ -17,7 +17,7 @@
     "investigation_hash"
   ],
   "properties": {
-    "format": {"const": "codess.investigation/1"},
+    "format": {"const": "codess.investigation/2"},
     "created_at": {"type": "string"},
     "processor_id": {"type": "string", "minLength": 1},
     "summary": {"type": "string", "minLength": 1},
@@ -37,10 +37,10 @@
           "session_entity_id",
           "project_id",
           "snapshot_id",
-          "source_system_id",
+          "source_system_key",
           "source_record_locator",
           "event_kind",
-          "content_sha256",
+          "content_digest",
           "content_complete"
         ],
         "additionalProperties": true

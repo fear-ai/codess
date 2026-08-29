@@ -23,18 +23,19 @@ from codess.resources import storage_usage
 from codess.snapshot import (
     SnapshotError,
     current_snapshot,
+    raw_manifest_claim,
     read_manifest,
     snapshot_generations,
+    store_claim,
     superseded_beyond_depth,
 )
 from codess.wallclock import system_clock
 
-# Version 3 adds `keep_total` and stops spelling the count into `policy`;
-# version 2 renamed `plan_sha256` to `plan_digest`. The format string carries a
-# version precisely so a consumer can tell them apart: a `/2` reader parsing
-# `keep-2-per-project` out of `policy` finds a name with no number in it, and
-# would rather be told the format changed than return nothing. No stored
-# document is rewritten -- each records what happened under its own version.
+# The format string carries a version precisely so a consumer can tell two
+# documents apart: an older reader parsing `keep-2-per-project` out of `policy`
+# finds a name with no number in it, and would rather be told the format changed
+# than return nothing. No stored document is rewritten -- each records what
+# happened under the version it was written with.
 PLAN_FORMAT = "codess.retention-plan/3"
 RECEIPT_FORMAT = "codess.retention-receipt/3"
 
@@ -64,7 +65,7 @@ def _validate_current(
     project_path: Path, raw_root: Path,
 ) -> tuple[Path, set[str], list[dict[str, Any]]]:
     """Validate the current snapshot is safe to keep before planning deletion
-    of everything else. Delegates the pointer-read and manifest_sha256 check
+    of everything else. Delegates the pointer-read and manifest_digest check
     to `snapshot.current_snapshot` -- the same check every other
     current-snapshot consumer relies on -- then applies retention-specific
     checks that function does not perform: the snapshot must be contained
@@ -91,11 +92,11 @@ def _validate_current(
     if manifest.get("snapshot_id") != snapshot_id:
         raise RuntimeError(f"manifest identity mismatch: {snapshot}")
     raw_manifest = snapshot / RAW_MANIFEST_FILE
-    if hash_file(raw_manifest) != manifest.get("raw_manifest_sha256"):
+    if hash_file(raw_manifest) != raw_manifest_claim(manifest):
         raise RuntimeError(f"raw manifest hash mismatch: {snapshot}")
     for name, entry in manifest.get("stores", {}).items():
         store = snapshot / name
-        if not _inside(store, snapshot) or hash_file(store) != entry.get("sha256"):
+        if not _inside(store, snapshot) or hash_file(store) != store_claim(entry):
             raise RuntimeError(f"snapshot store hash mismatch: {store}")
         conn = open_readonly(store)
         try:
@@ -131,7 +132,7 @@ def _large_shared_revisions(
         size = record.get("uncompressed_size")
         relpath = record.get("object_relpath")
         locator = record.get("source_locator")
-        system = record.get("source_system_id")
+        system = record.get("source_system_key")
         if (
             not isinstance(size, int) or size < LARGE_RAW_REVISION_BYTES
             or not all(isinstance(value, str) and value for value in (relpath, locator, system))
@@ -155,7 +156,7 @@ def _large_shared_revisions(
                 "stored_size": record.get("stored_size"),
             })
         conflicts.append({
-            "source_system_id": system,
+            "source_system_key": system,
             "source_locator": locator,
             "revision_count": len(items),
             "stored_bytes": sum(int(item.get("stored_size") or 0) for item in items),
@@ -379,11 +380,9 @@ def build_retention_plan(
         "large_shared_revisions": large_shared_revisions,
         "allow_large_comparison_revisions": allow_large_comparison_revisions,
     }
-    # `plan_digest`, not `plan_sha256`: the algorithm's name lives in
-    # `hashing` alone, and the value is what `codess_canonical_hash`
-    # returns rather than a bare SHA-256 -- it is one today only because
-    # the widths happen to be 256/256, so the name is accurate until
-    # someone changes a width and then silently is not.
+    # The value is whatever `codess_canonical_hash` returns at the declared
+    # widths, so the field names the value rather than the construction; see
+    # `hashing`, which is the only module entitled to name an algorithm.
     plan_digest = codess_canonical_hash(256, 256, identity)
     return {
         "format": PLAN_FORMAT,

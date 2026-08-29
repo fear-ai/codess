@@ -467,7 +467,7 @@ manifests and operator scripts keep working.
 
 Raw objects remain outside Session content and are not an alternate search
 surface. JSONL capture streams input, while Cursor capture uses a consistent
-SQLite backup. Complete SHA-256 identifies retained objects and published
+SQLite backup. A complete digest identifies retained objects and published
 stores. Bounded fingerprints can detect routine change but do not authenticate
 content or replace complete verification.
 

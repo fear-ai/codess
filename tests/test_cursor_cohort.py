@@ -59,7 +59,7 @@ def test_selection_marker_cache_requires_exact_container_and_scope(tmp_path):
     ) is None
 
 
-def test_combined_selection_marker_uses_sha256():
+def test_combined_selection_marker_states_its_derivation():
     marker = combine_selection_markers({
         "/one": {"source_revision": "digest-fingerprint:one"},
         "/two": {"source_revision": "digest-fingerprint:two"},
@@ -85,7 +85,7 @@ def test_cursor_cohort_cache_restores_without_recapturing(tmp_path, monkeypatch)
         raw_store=raw_store,
         cache_path=cache,
         working_path=first_target,
-        source_system_id="cursor.composer",
+        source_system_key="cursor.composer",
         storage_format="cursor-sqlite",
         marker=marker,
         force=False,
@@ -107,7 +107,7 @@ def test_cursor_cohort_cache_restores_without_recapturing(tmp_path, monkeypatch)
         raw_store=raw_store,
         cache_path=cache,
         working_path=second_target,
-        source_system_id="cursor.composer",
+        source_system_key="cursor.composer",
         storage_format="cursor-sqlite",
         marker=marker,
         force=False,
@@ -150,7 +150,7 @@ def test_cursor_cohort_source_change_creates_a_new_cached_revision(tmp_path):
         raw_store=raw_store,
         cache_path=cache,
         working_path=tmp_path / "first.db",
-        source_system_id="cursor.composer",
+        source_system_key="cursor.composer",
         storage_format="cursor-sqlite",
         marker=first_marker,
         force=False,
@@ -165,7 +165,7 @@ def test_cursor_cohort_source_change_creates_a_new_cached_revision(tmp_path):
         raw_store=raw_store,
         cache_path=cache,
         working_path=tmp_path / "second.db",
-        source_system_id="cursor.composer",
+        source_system_key="cursor.composer",
         storage_format="cursor-sqlite",
         marker=second_marker,
         force=False,
@@ -185,7 +185,7 @@ def test_capture_records_stable_when_source_quiescent(tmp_path):
         raw_store=raw_store,
         cache_path=tmp_path / "cache.json",
         working_path=tmp_path / "cap.db",
-        source_system_id="cursor.composer",
+        source_system_key="cursor.composer",
         storage_format="cursor-sqlite",
         marker=marker,
         force=False,
@@ -219,7 +219,7 @@ def test_capture_records_source_advanced_when_revision_moves(tmp_path):
         raw_store=raw_store,
         cache_path=tmp_path / "cache.json",
         working_path=tmp_path / "cap.db",
-        source_system_id="cursor.composer",
+        source_system_key="cursor.composer",
         storage_format="cursor-sqlite",
         marker=stale_marker,
         force=False,

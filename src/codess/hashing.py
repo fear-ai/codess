@@ -46,6 +46,15 @@ GENERATED_BITS = 256
 SUPPORTED_TRUNCATED_BITS = (256, 128, 64)
 """Retained widths. 256 keeps the complete digest; the rest keep leading bits."""
 
+ALGORITHM_TOKENS = ("sha256", "sha1", "sha512", "md5", "blake2")
+"""Spellings that name a digest algorithm rather than the value it produces.
+
+Held here because this module is the only place entitled to name an algorithm:
+a checker that looks for these elsewhere -- in a column, a stored field, or a
+document Codess writes -- needs the list, and keeping its own copy would be a
+second place to update when the algorithm changes.
+"""
+
 
 _SEPARATOR = b"\0"
 

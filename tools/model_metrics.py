@@ -121,7 +121,7 @@ def published_stores(store_root: Path) -> list[tuple[str, Path]]:
 
 def _vendor(conn: sqlite3.Connection) -> str:
     row = conn.execute(
-        "SELECT source_system_id FROM sessions LIMIT 1",
+        "SELECT source_system_key FROM sessions LIMIT 1",
     ).fetchone()
     return str(row[0]) if row and row[0] else "unknown"
 

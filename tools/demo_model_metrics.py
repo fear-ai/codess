@@ -120,7 +120,7 @@ def resolve_store(
         "project_id": current.get("project_id") or project_id,
         "snapshot_id": current.get("snapshot_id"),
         "pointer": str(pointer.resolve()),
-        "manifest_sha256": current.get("manifest_sha256"),
+        "manifest_digest": current.get("manifest_digest"),
         "store": str(resolved),
     }
 
@@ -571,7 +571,7 @@ def main(argv: list[str] | None = None) -> int:
         ],
     }
     canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
-    manifest["specification_sha256"] = hashlib.sha256(
+    manifest["specification_digest"] = hashlib.sha256(
         canonical.encode("utf-8")
     ).hexdigest()
     (out_dir / "manifest.json").write_text(

@@ -35,6 +35,7 @@ from codess.config import (
     SOURCE_LINKS_FILE,
     SOURCE_LINKS_FORMAT,
     STORE_DIR,
+    link_source_system,
 )
 from codess.fileio import open_readonly, quote_identifier
 from codess.hashing import codess_digest
@@ -236,7 +237,7 @@ def get_workspace_ids(
                     if isinstance(identity, dict) else None
                 )
                 if (
-                    link.get("source_system_id") == "cursor.composer"
+                    link_source_system(link) == "cursor.composer"
                     and link.get("selection_state") == "approved"
                     and workspace_id
                 ):
@@ -292,6 +293,75 @@ def subagent_lineage(header_value: object) -> dict[str, Any]:
     return {key: value for key, value in lineage.items() if value is not None}
 
 
+ITEM_HEADER_KEY = "composer.composerHeaders"
+
+
+def _item_table_headers(conn: sqlite3.Connection) -> dict[str, dict]:
+    """Interaction mode and workspace path from Cursor's `ItemTable` index.
+
+    Cursor keeps two composer indexes and they answer different questions. The
+    `composerHeaders` **table** is the selection index: it is the larger of the
+    two, and it is what binds a composer to a workspace. `ItemTable`'s
+    `composer.composerHeaders` is a UI-state document -- draft flags, unread
+    markers, line totals, sidebar state -- carrying a subset of the same
+    composers.
+
+    Measured on a real store: 39 entries against 66 table rows, every one also
+    in the table, and the two agree on the workspace for all 39. So it selects
+    nothing the table does not, and reading it for selection would be wasted
+    work. Two fields on it are not in the table and are worth carrying:
+
+    - `unifiedMode` states whether the composer ran as `agent` or `chat`, which
+      the table records nowhere. Measured 15 agent against 24 chat.
+    - `workspaceIdentifier.uri.fsPath` states the workspace **path**, where the
+      table holds only the storage-directory hash. A hash is regenerated when a
+      workspace is recreated; the path survives it.
+
+    Returns an empty mapping when the key is absent or unreadable: this
+    qualifies Sessions the table already selected, so a failure here narrows
+    what is known rather than dropping a Session.
+    """
+    try:
+        row = conn.execute(
+            "SELECT value FROM ItemTable WHERE key=?", (ITEM_HEADER_KEY,)
+        ).fetchone()
+    except sqlite3.Error as exc:
+        log.warning("Cannot read Cursor %s: %s", ITEM_HEADER_KEY, exc)
+        return {}
+    if row is None or row[0] is None:
+        return {}
+    raw = row[0]
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        log.warning("Cursor %s is not JSON: %s", ITEM_HEADER_KEY, exc)
+        return {}
+    entries = document.get("allComposers") if isinstance(document, dict) else None
+    if not isinstance(entries, list):
+        return {}
+    qualified: dict[str, dict] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        composer_id = entry.get("composerId")
+        if not composer_id:
+            continue
+        identity = entry.get("workspaceIdentifier")
+        uri = identity.get("uri") if isinstance(identity, dict) else None
+        path = uri.get("fsPath") if isinstance(uri, dict) else None
+        mode = entry.get("unifiedMode")
+        fields = {}
+        if isinstance(mode, str) and mode:
+            fields["interaction_mode"] = mode
+        if isinstance(path, str) and path:
+            fields["workspace_path"] = path
+        if fields:
+            qualified[str(composer_id)] = fields
+    return qualified
+
+
 def _composer_headers(
     conn: sqlite3.Connection, workspace_ids: set[str] | None,
 ) -> dict[str, dict]:
@@ -324,6 +394,8 @@ def _composer_headers(
         placeholders = ",".join("?" for _ in ordered)
         sql += f" WHERE {workspace_col} IN ({placeholders})"
         params = ordered
+    # Qualifies what the table selected; it never widens the selection.
+    qualifiers = _item_table_headers(conn)
     return {
         str(composer_id): {
             "workspace_id": workspace_id,
@@ -333,6 +405,7 @@ def _composer_headers(
             "is_subagent": bool(is_subagent),
             "selection_source": "composerHeaders",
             **subagent_lineage(value),
+            **qualifiers.get(str(composer_id), {}),
         }
         for composer_id, workspace_id, created_at, last_updated_at,
             is_archived, is_subagent, value in conn.execute(sql, params)
@@ -522,9 +595,13 @@ def unbound_composer_count(db_path: Path) -> dict[str, int]:
     internally consistent -- so a decoder trusting one reports a smaller corpus
     than exists and cannot tell that it did.
 
-    The split is temporal rather than random: the vendor prunes header rows on
-    age while retaining the data they index, so `composerHeaders` is a retention
-    window rather than an inventory of what exists.
+    The split is a migration boundary rather than an age window. Measured on a
+    real store, headered composers span the whole retained range rather than a
+    recent slice, so nothing is expiring out of the index; the vendor's own
+    account is that the centralised index tracks only chats opened or created
+    since it was introduced. So `composerHeaders` is an inventory of what has
+    been touched recently enough to be migrated, and the remainder does not
+    shrink with age or come back with waiting.
     """
     with closing(connect_readonly(db_path)) as conn:
         headered = set(_composer_headers(conn, None))

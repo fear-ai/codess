@@ -99,11 +99,18 @@ sequence.
 ### Project and Source Selection
 
 A Project is the continuing body of work to which vendor activity is
-attributed. For Git-backed work, one repository is one Project; clones,
-worktrees, editor workspaces, and filesystem locations are bindings or
-observations of it. This distinction permits one Project to retain activity
-from several tools without creating a different identity for every checkout or
-workspace.
+attributed. For Git-backed work, one repository is normally one Project; clones,
+editor workspaces, and filesystem locations are bindings or observations of it.
+This distinction permits one Project to retain activity from several tools
+without creating a different identity for every checkout or workspace.
+
+**A linked git worktree is the exception, and it is a separate Project.** Every
+vendor already treats it as one -- Claude writes a separate slug directory,
+Codex records a distinct `cwd`, Cursor a distinct workspace -- so joining them
+would mean joining Sessions no vendor joined, with `git` deciding what a Session
+belongs to. The relation is recorded rather than implied: `related_project_id`
+names the parent repository's Project and both remain Projects. See
+[CoSchema](CoSchema.md#project) for the reasoning and the measured evidence.
 
 Selection begins with vendor indexes and metadata rather than unrestricted
 filesystem traversal. Claude project bindings, Codex Session metadata, and
@@ -185,8 +192,9 @@ direct work from delegated or subagent-related work and helps a researcher
 choose a relevant Session or period before reading a large body of content.
 
 Because Project identity is separate from directory and workspace identity,
-orientation can also reveal activity recorded by several harnesses, workspaces,
-clones, or worktrees for the same continuing repository.
+orientation can reveal activity recorded by several harnesses, workspaces, or
+clones for one continuing Project. Worktrees are the exception: each is its own
+Project, and `related_project_id` is what connects them.
 
 ### Interaction and Development Reconstruction
 
@@ -356,7 +364,7 @@ Codess uses the following concepts consistently across source systems.
 
 | Term | Meaning |
 |---|---|
-| **Project** | Stable identity for a continuing body of work. For Git-backed work, one repository is one Project; clones, worktrees, directories, and vendor workspaces are locations or bindings. |
+| **Project** | Stable identity for a continuing body of work. For Git-backed work, one repository is normally one Project; clones, directories, and vendor workspaces are locations or bindings. A linked git worktree is its own Project, related to its parent by `related_project_id`, because every vendor records it separately. |
 | **Project location** | An observed checkout, worktree, directory, or historical path associated with a Project. |
 | **workspace** | A source-system or editor scope associated with a Project; it is not a Codess entity or Project identity. |
 | **Source** | Logical upstream evidence container such as a transcript file or database. |

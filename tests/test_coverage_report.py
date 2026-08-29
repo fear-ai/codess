@@ -27,13 +27,13 @@ from codess.coverage_report import (
 from codess.store import connect, init_db
 
 
-def _store_with_rules(tmp_path, source_system_id, rules):
+def _store_with_rules(tmp_path, source_system_key, rules):
     """A store whose Events carry exactly `rules`, for conformance checks."""
     path = get_store_path(tmp_path, "cc")
     init_db(path)
     conn = connect(path)
-    if source_system_id is not None:
-        insert_session(conn, "s1", source_system_id=source_system_id)
+    if source_system_key is not None:
+        insert_session(conn, "s1", source_system_key=source_system_key)
         for index, rule in enumerate(rules):
             insert_event(conn, "s1", str(index), mapping_rule=rule)
     return conn
@@ -141,7 +141,7 @@ class TestLoss:
     def _diagnostic(self, conn, *, level, reason):
         conn.execute(
             "INSERT INTO mapping_diagnostics"
-            "(session_id, event_id, granularity, reason_code, created_at) "
+            "(session_id, event_id, granularity, reason_code, created_when) "
             "VALUES (?, ?, ?, ?, ?)",
             ("s1", None, level, reason, "2026-01-01T00:00:00Z"),
         )

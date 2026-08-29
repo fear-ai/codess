@@ -53,10 +53,10 @@
       "work_item": null
     },
     {
-      "column": "sources.content_sha256",
+      "column": "sources.content_digest",
       "empty_for": "codex",
       "reason": "Sample property, not a decoder gap. The column is written only under raw capture, and non-null counts track captured Sources exactly: Claude 20 of 20 captured, Cursor 2 of 2, Codex 0 of 0. No Codex Source in this sample was captured.",
-      "evidence": "sources.availability='captured' equals sources.content_sha256 IS NOT NULL in every store",
+      "evidence": "sources.availability='captured' equals sources.content_digest IS NOT NULL in every store",
       "work_item": null
     },
     {

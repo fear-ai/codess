@@ -52,9 +52,10 @@ available to qualify results.
 
 ### I Operate or Maintain Codess
 
-Use [First Project](Operations.md#first-project) for ordinary operation and
-[Basic Diagnosis](Operations.md#basic-diagnosis) when results or performance
-are unexpected.
+Use [Keeping a Store Current](#keeping-a-store-current) for the three ordinary
+maintenance operations, [First Project](Operations.md#first-project) for the
+full setup procedure, and [Basic Diagnosis](Operations.md#basic-diagnosis) when
+results or performance are unexpected.
 
 ## Quick Start
 
@@ -78,6 +79,78 @@ Codess reads vendor-owned stores and writes Codess data under the selected
 Project's `.codess/` directory and the central registry, normally `~/.codess/`.
 Review [Data Safety](#data-safety) before capturing raw evidence or exporting
 content.
+
+## Keeping a Store Current
+
+Three operations cover ordinary maintenance. Each is bounded and reports what it
+did; [Operations](Operations.md) has the full procedures and the diagnosis paths.
+
+### One Project
+
+Re-read the vendor Sources for one Project and republish:
+
+```bash
+codess ingest --dir /path/to/project
+```
+
+Ingest decodes only Sources whose selected evidence changed. Add `--force` when
+update evidence is suspect or a contract change requires a full rebuild.
+
+### Every Project
+
+`refresh` is the corpus-wide operation. It resolves the cohort from the catalog,
+**preflights every selected Project before applying any**, and writes a receipt
+recording each stage:
+
+```bash
+python3 tools/project_inventory.py                    # gate; nonzero if Sources vanished
+codess refresh --designator included                  # plan, read-only; review it
+codess refresh --designator included --stage apply    # preflight, then apply
+```
+
+`--designator` names a computed cohort (`included`, `core`, `query_ready`,
+`large`, and others); `--project` and `--project-list` select explicitly. The
+catalog's own exclusions are honoured, so a linked worktree annotated as one is
+not ingested twice through its parent.
+
+Prefer this over a shell loop over Project paths. A loop has no preflight gate,
+no receipt, and no view of catalog state -- and `python` is often a shell alias a
+non-interactive subshell does not inherit, so a loop can fail on every iteration
+while reporting only that each failed.
+
+### After a CoSchema Format Change
+
+A format change is a **rebuild, not a migration**: the store is a projection of
+vendor Sources, so the way to change it is to recompute it. `require_store`
+accepts only the current format, so every published store is refused until
+rebuilt.
+
+```bash
+python3 tools/project_inventory.py                    # run first, and read it
+codess refresh --designator included --stage apply --force
+```
+
+**`--force` is required here and only here.** A routine refresh re-decodes only
+Sources whose evidence changed, so it opens the existing working store -- which a
+format change has just made unreadable, and every Project fails with
+`store CoSchema <n>, supported [<n+1>]`. `--force` rebuilds from the vendor
+Sources instead.
+
+**Read the inventory before rebuilding, not after.** It exits nonzero when a
+Project's vendor Sources are gone, and a store whose Sources no longer exist is
+the only surviving record of those Sessions. See [Data Safety](#data-safety).
+
+**Event counts move between rebuilds, and a fall has two very different
+causes.** A vendor may prune its own store, so a rebuild sees what survives.
+Cursor also prunes its *composer index* while keeping the conversations it
+indexes, and a composer with no index entry states no workspace -- so it drops
+out of a per-Project selection while its content is still there. The second is a
+selection effect and the first is data loss, and `failed_sources` and
+`sources_vanished` report 0 for both.
+
+Read `codess query --coverage`, whose `unbound_composers` states how many
+composers no index entry binds. Comparing totals alone cannot tell the two
+apart.
 
 ## Investigation
 
@@ -167,9 +240,9 @@ sqlite3 'file:/absolute/path/to/sessions_codex.db?mode=ro'
 Examples:
 
 ```sql
-SELECT source_system_id, COUNT(*) AS sessions
+SELECT source_system_key, COUNT(*) AS sessions
 FROM sessions
-GROUP BY source_system_id;
+GROUP BY source_system_key;
 
 SELECT event_kind, actor_kind, COUNT(*) AS events
 FROM events

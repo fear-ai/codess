@@ -103,11 +103,11 @@ def resolve_session_id(
         conn.row_factory = sqlite3.Row
         try:
             for row in conn.execute(
-                "SELECT id, session_entity_id, source_system_id, vendor_session_id "
+                "SELECT id, session_entity_id, source_system_key, vendor_session_id "
                 "FROM sessions"
             ):
                 stable = row["session_entity_id"] or session_entity_id(
-                    row["source_system_id"], row["vendor_session_id"] or row["id"]
+                    row["source_system_key"], row["vendor_session_id"] or row["id"]
                 )
                 candidates = (stable, str(row["id"]), str(row["vendor_session_id"]))
                 if identifier in candidates or any(

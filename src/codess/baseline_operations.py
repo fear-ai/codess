@@ -66,7 +66,7 @@ def archive_stale_working_stores(project: Path) -> Path | None:
     destination = base / WORKING_ARCHIVES_DIR / f"pre-package-{old_label}-{stamp}"
     destination.mkdir(parents=True, exist_ok=False)
     manifest: dict[str, Any] = {
-        "archive_format": "codess.working-archive/1",
+        "archive_format": "codess.working-archive/2",
         "archived_at": archived_at.isoformat(),
         "reason": "released-package-change-requires-source-rebuild",
         "prior_contract_digests": sorted(value or "unknown" for value in contract_digests),
@@ -83,14 +83,14 @@ def archive_stale_working_stores(project: Path) -> Path | None:
         if integrity != "ok":
             raise RuntimeError(f"refusing to archive corrupt working store: {source}")
         manifest["files"][source.name] = {
-            "sha256": hash_file(source), "size": source.stat().st_size,
+            "digest": hash_file(source), "size": source.stat().st_size,
             "integrity_check": integrity,
         }
         shutil.move(str(source), destination / source.name)
     state = base / STATE_FILE
     if state.exists():
         manifest["files"][state.name] = {
-            "sha256": hash_file(state), "size": state.stat().st_size,
+            "digest": hash_file(state), "size": state.stat().st_size,
         }
         shutil.move(str(state), destination / state.name)
     write_json_atomic(destination / "archive.json", manifest)

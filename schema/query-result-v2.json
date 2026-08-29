@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://codess.local/schema/query-result-v1.json",
+  "$id": "https://codess.local/schema/query-result-v2.json",
   "title": "Codess reusable query result v1",
   "type": "object",
   "required": ["format", "processor", "created_at", "data_as_of", "request", "request_hash", "provenance", "bounds", "summary", "rows", "derivations", "limitations", "result_hash"],
   "properties": {
-    "format": {"const": "codess.query-result/1"},
+    "format": {"const": "codess.query-result/2"},
     "processor": {"type": "string"},
     "created_at": {"type": "string"},
     "data_as_of": {"type": "array", "items": {"type": "string"}},

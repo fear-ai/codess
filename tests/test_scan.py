@@ -71,7 +71,7 @@ def test_scan_exact_root_honors_approved_remote_cursor_source_link(tmp_path):
     (sidecar / "source-links.json").write_text(json.dumps({
         "format": "codess.source-links/1",
         "links": [{
-            "source_system_id": "cursor.composer",
+            "source_system_key": "cursor.composer",
             "source_project_path": "vscode-remote://ssh-remote+host/repo",
             "target_project_path": str(project),
             "source_identity": {"workspace_id": workspace_id},

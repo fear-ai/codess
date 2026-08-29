@@ -197,8 +197,9 @@ def now_iso(clock: Callable[[], datetime]) -> str:
         equality, on a stamp      0
 
     `_merged_locations` picks the later of two location observations with `>=`
-    on `(observed_at, ...)` tuples. Everything else orders `_at` columns, which
-    are `REAL` milliseconds and compare as numbers.
+    on `(observed_at, ...)` tuples -- the catalog document's key, which keeps the
+    `_at` spelling because it is not a CoSchema column. Everything else orders
+    `_at` columns, which are `REAL` milliseconds and compare as numbers.
 
     RFC 3339 sorts lexicographically only when every value carries the same
     offset, so converting a non-UTC clock rather than relabelling it is
@@ -210,7 +211,7 @@ def now_iso(clock: Callable[[], datetime]) -> str:
     investigation's hash by *name* so the hash covers content rather than when
     it was recorded.
 
-    **That comparison has no numeric alternative.** `observed_at` is `TEXT` on
+    **That comparison has no numeric alternative.** `observed_when` is `TEXT` on
     `sessions` and `sources` and text in the catalog's location records, with no
     millisecond sibling anywhere -- deliberately, because CoSchema records that a
     stored numeric copy of a `_when` value reintroduces the duplicate-column

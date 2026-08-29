@@ -31,7 +31,7 @@ def test_a_limit_too_small_for_the_derived_tail_is_refused():
     """The bound must leave room for the marker and the whole digest.
 
     The threshold is computed from `_SUFFIX_PREFIX`, so it moved when the
-    marker was renamed from `~sha256:` to `~digest:`. A limit at or
+    marker names the derivation rather than the algorithm. A limit at or
     below the tail length would truncate the digest itself, which is what
     makes two distinct identifiers collide.
     """

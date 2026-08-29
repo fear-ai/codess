@@ -585,7 +585,7 @@ def rewrite_manifest_hash(role: str, path: Path) -> None:
     import hashlib
 
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    manifest["files"][role]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    manifest["files"][role]["digest"] = hashlib.sha256(path.read_bytes()).hexdigest()
     MANIFEST_PATH.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 

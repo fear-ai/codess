@@ -76,6 +76,10 @@ from codess.store import StoreError, connect_readable
 log = logging.getLogger(__name__)
 
 # Standard (built-in) tools for grouping; others are "loaded"
+ROW_FORMAT = "codess.query-row/2"
+"""The JSONL row envelope. Version 2 renamed the session `source` field to
+`adapter_key`, matching the column it is read from."""
+
 STANDARD_TOOLS = frozenset({
     "Bash", "Read", "Edit", "Write", "Grep", "Glob", "TodoWrite",
     "LS", "AskUserQuestion", "Skill", "Agent", "Task",
@@ -131,7 +135,7 @@ class QueryScope:
         if not source_ids:
             return "1", ()
         placeholders = ", ".join("?" for _ in source_ids)
-        return f"{alias}.source_system_id IN ({placeholders})", source_ids
+        return f"{alias}.source_system_key IN ({placeholders})", source_ids
 
     def diagnostics_predicate(self) -> tuple[str, tuple[str, ...]]:
         """The same selection for mapping diagnostics, which join two ways.
@@ -240,9 +244,9 @@ def _open_project_id_query_scope(
                     "snapshot_id": selected_snapshot_id,
                     "snapshot_base": base,
                     "selection_kind": selection.get("selection_kind"),
-                    "selection_sha256": selection.get("selection_sha256"),
-                    "resolved_selection_sha256": selection.get(
-                        "resolved_selection_sha256"
+                    "selection_digest": selection.get("selection_digest"),
+                    "resolved_selection_digest": selection.get(
+                        "resolved_selection_digest"
                     ),
                 })
         return scope, missing
@@ -293,7 +297,7 @@ def _session_recency_sort_key(session: dict) -> tuple:
     return (
         -recency,
         session["query_project"],
-        session["source"],
+        session["adapter_key"],
         session["id"],
     )
 
@@ -690,7 +694,7 @@ def _typed_output(
             {QUERY_SOURCE_FILTERS[token] for token in scope.source_tokens}
             if scope.source_tokens else None
         )
-        if allowed and matches[0]["source"]["source_system_id"] not in allowed:
+        if allowed and matches[0]["source"]["source_system_key"] not in allowed:
             return fail('codess: event is outside the selected vendor scope')
         print(json.dumps(matches[0], indent=2, sort_keys=True))
         return 0 if matches[0]["selected"] else 2
@@ -856,7 +860,7 @@ def _typed_output(
 
 def _emit_jsonl(report: str, data: dict, *, project_path: str | None = None, row_number: int | None = None) -> None:
     envelope = {
-        "schema": "codess.query-row/1",
+        "schema": ROW_FORMAT,
         "report": report,
         "project_path": project_path,
         "row_number": row_number,
@@ -908,7 +912,7 @@ def _jsonl_output(
         for number, row in enumerate(_get_sessions_ordered(scope, limit), 1):
             _emit_jsonl("sessions", {
                 "session_id": row["id"], "session_entity_id": row["session_entity_id"],
-                "source": row["source"], "release": row["release"],
+                "adapter_key": row["adapter_key"], "release": row["release"],
                 "started_at": row["started_at"], "ended_at": row["ended_at"],
                 "source_project_path": row["project_path"],
                 "metadata": _json_metadata(row["metadata"]),
@@ -952,7 +956,7 @@ def _csv_output(
         ])
         for number, row in enumerate(_get_sessions_ordered(scope, limit), 1):
             writer.writerow(protect_csv_row([
-                row["id"], row["session_entity_id"], number, row["source"],
+                row["id"], row["session_entity_id"], number, row["adapter_key"],
                 row["release"], row["started_at"], row["ended_at"],
                 row["project_path"], row["query_project"],
                 json.dumps(_json_metadata(row["metadata"]), sort_keys=True),
@@ -1192,22 +1196,22 @@ def _sessions(scope: QueryScope, with_id: bool, limit: int | None = None) -> int
     if not rows:
         return 0
     if with_id:
-        print("id\tsession_entity_id\tnum\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
+        print("id\tsession_entity_id\tnum\tadapter_key\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for i, row in enumerate(rows, 1):
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
             print(tabular_row(
-                row["id"], row["session_entity_id"], i, row["source"],
+                row["id"], row["session_entity_id"], i, row["adapter_key"],
                 row["name"], row["release"], details, row["started_at"],
                 row["ended_at"], project,
             ))
     else:
-        print("id\tsession_entity_id\tsource\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
+        print("id\tsession_entity_id\tadapter_key\tname\trelease\tdetails\tstarted_at\tended_at\tproject_path")
         for row in rows:
             project = row["project_path"] or row["query_project"]
             details = _session_details(row["metadata"])
             print(tabular_row(
-                row["id"], row["session_entity_id"], row["source"], row["name"],
+                row["id"], row["session_entity_id"], row["adapter_key"], row["name"],
                 row["release"], details, row["started_at"], row["ended_at"],
                 project,
             ))
@@ -1341,7 +1345,7 @@ def _audit(scope: QueryScope, limit: int | None = None) -> int:
     if not rows:
         return 0
     print(
-        "project_path\tsession_id\tsource\ttimestamp\taudit_kind\t"
+        "project_path\tsession_id\tadapter_key\ttimestamp\taudit_kind\t"
         "tool_name\tdetail"
     )
     for row in rows:
@@ -1357,7 +1361,7 @@ def _audit(scope: QueryScope, limit: int | None = None) -> int:
         elif metadata.get("status") is not None:
             detail = f"status={metadata['status']}"
         print(tabular_row(
-            row["project_path"], row["session_id"], row["source"],
+            row["project_path"], row["session_id"], row["adapter_key"],
             row["event_at"], row["subtype"], row["tool_name"], detail,
         ))
     return 0

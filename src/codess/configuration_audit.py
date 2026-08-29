@@ -41,7 +41,7 @@ def audit(
         if source_system_ids:
             values = sorted(source_system_ids)
             session_clauses.append(
-                "s.source_system_id IN (" + ",".join("?" for _ in values) + ")"
+                "s.source_system_key IN (" + ",".join("?" for _ in values) + ")"
             )
             params.extend(values)
         if session_ids:
@@ -133,12 +133,12 @@ def audit(
         example_rows = conn.execute(
             """
             WITH ranked_turns AS (
-              SELECT mt.model_param_id,s.source_system_id,
+              SELECT mt.model_param_id,s.source_system_key,
                      s.session_entity_id AS session_entity_id,
                      mt.id AS model_turn_id,mt.sequence_no,
                      ROW_NUMBER() OVER (
                        PARTITION BY mt.model_param_id
-                       ORDER BY s.source_system_id,s.session_entity_id,
+                       ORDER BY s.source_system_key,s.session_entity_id,
                                 mt.sequence_no,mt.id
                      ) AS occurrence_rank
               FROM model_turns mt
@@ -160,7 +160,7 @@ def audit(
               FROM events e
               WHERE e.model_turn_id IS NOT NULL
             )
-            SELECT rt.model_param_id,rt.source_system_id,
+            SELECT rt.model_param_id,rt.source_system_key,
                    rt.session_entity_id,rt.model_turn_id,
                    e.event_entity_id AS event_entity_id,e.source_record_locator,
                    e.metadata,src.source_entity_id AS source_entity_id,
@@ -190,7 +190,7 @@ def audit(
             examples_by_configuration.setdefault(
                 example["model_param_id"], []
             ).append({
-                "source_system_id": example["source_system_id"],
+                "source_system_key": example["source_system_key"],
                 "session_entity_id": example["session_entity_id"],
                 "model_turn_id": example["model_turn_id"],
                 "event_entity_id": example["event_entity_id"],
@@ -252,10 +252,10 @@ def audit(
                 ),
             })
         coverage_sql = """
-            SELECT s.source_system_id,COUNT(*) AS turns,
+            SELECT s.source_system_key,COUNT(*) AS turns,
                    SUM(mt.model_param_id IS NOT NULL) AS configured
             FROM model_turns mt JOIN sessions s ON s.id=mt.session_id
-        """ + session_filter + " GROUP BY s.source_system_id"
+        """ + session_filter + " GROUP BY s.source_system_key"
         for row in conn.execute(coverage_sql, params):
             entry = vendor_coverage.setdefault(row[0], {"turns": 0, "configured_turns": 0})
             entry["turns"] += row[1]

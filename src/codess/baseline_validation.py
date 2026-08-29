@@ -224,25 +224,25 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM project_locations ORDER BY id
         """,
         "workspace_bindings": """
-            SELECT id, project_id, location_id, source_system_id, workspace_id,
+            SELECT id, project_id, location_id, source_system_key, workspace_id,
                    relation_kind, source_project_path, path_obsolete,
                    selection_state, metadata
             FROM workspace_bindings ORDER BY id
         """,
         "sources": """
-            SELECT source_entity_id, source_system_id, source_path, storage_format, source_revision,
+            SELECT source_entity_id, source_system_key, source_path, storage_format, source_revision,
                    source_mtime, source_size, availability, capture_method,
                    consistency, content_digest, metadata
-            FROM sources ORDER BY source_system_id, source_path, source_revision
+            FROM sources ORDER BY source_system_key, source_path, source_revision
         """,
         "sessions": """
-            SELECT id, session_entity_id, observation_id, source_system_id, vendor_session_id, vendor_name,
+            SELECT id, session_entity_id, observation_id, source_system_key, vendor_session_id, vendor_name,
                    harness_name, storage_format, surface_kind,
                    harness_version, source_cwd,
                    path_obsolete, started_at,
                    ended_at, source_mtime, time_basis, parent_session_id,
                    session_relation_kind, archive_state, archive_source,
-                   metadata, source, type, release, project_path
+                   metadata, adapter_key, type, release, project_path
             FROM sessions ORDER BY id
         """,
         "interactions": """
@@ -564,7 +564,7 @@ def _validate_raw(
             "\0".join(
                 str(record.get(key) or "")
                 for key in (
-                    "source_system_id", "source_locator", "source_revision_id"
+                    "source_system_key", "source_locator", "source_revision_id"
                 )
             )
         )
@@ -589,7 +589,7 @@ def _validate_raw(
                 )
                 _add_check(
                     report, f"{label}.stored_hash",
-                    observed["stored_sha256"] == record.get("stored_sha256"),
+                    observed["stored_digest"] == record.get("stored_digest"),
                     str(object_path),
                 )
                 _add_check(
@@ -711,7 +711,7 @@ def _validate_policy(
                         """
                         SELECT COUNT(*) FROM model_turns mt
                         JOIN sessions s ON s.id=mt.session_id
-                        WHERE s.source='Cursor' AND (
+                        WHERE s.adapter_key='Cursor' AND (
                           mt.boundary_source!='inferred' OR mt.interaction_id IS NULL
                           OR mt.source_turn_id IS NOT NULL)
                         """
@@ -723,7 +723,7 @@ def _validate_policy(
                         SELECT COUNT(*) FROM (
                           SELECT mt.interaction_id, COUNT(*) n
                           FROM model_turns mt JOIN sessions s ON s.id=mt.session_id
-                          WHERE s.source='Cursor'
+                          WHERE s.adapter_key='Cursor'
                           GROUP BY mt.interaction_id HAVING n>1
                         )
                         """
@@ -832,9 +832,9 @@ def validate_project(
         try:
             for source, sessions, events in conn.execute(
                 """
-                SELECT s.source, COUNT(DISTINCT s.id), COUNT(e.id)
+                SELECT s.adapter_key, COUNT(DISTINCT s.id), COUNT(e.id)
                 FROM sessions s LEFT JOIN events e ON e.session_id=s.id
-                GROUP BY s.source
+                GROUP BY s.adapter_key
                 """
             ):
                 entry = counts_by_source.setdefault(source, {"sessions": 0, "events": 0})
@@ -903,7 +903,7 @@ def run_query_smoke(
             write_json_atomic(pointer, {
                 "snapshot_id": snapshot_id,
                 "path": str(snapshot_path),
-                "manifest_sha256": hash_file(snapshot_path / MANIFEST_FILE),
+                "manifest_digest": hash_file(snapshot_path / MANIFEST_FILE),
             })
         env = os.environ.copy()
         env["PYTHONPATH"] = str(repo_root / "src")

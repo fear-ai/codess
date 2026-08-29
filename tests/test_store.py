@@ -120,7 +120,7 @@ class TestShouldIngest:
             state_path, "cursor", source.stat().st_mtime, False, path=source
         )
 
-    def test_large_source_uses_labelled_sampled_sha256(
+    def test_large_source_uses_a_labelled_sampled_digest(
         self, tmp_path, monkeypatch
     ):
         source = tmp_path / "large.jsonl"
@@ -296,7 +296,7 @@ class TestInitDb:
             source="Cursor",
             source_file="/original/Cursor/state.vscdb",
             observation={
-                "source_revision_id": "sha256:captured",
+                "source_revision_id": "digest:captured",
                 "source_mtime_ns": 1_750_000_000_000_000_000,
                 "source_size": 1234,
                 "capture_method": "sqlite-backup",
@@ -311,7 +311,7 @@ class TestInitDb:
         ).fetchone()
         assert tuple(row) == (
             "/original/Cursor/state.vscdb",
-            "sha256:captured",
+            "digest:captured",
             1234,
             "captured",
             "sqlite-backup",
@@ -457,13 +457,13 @@ class TestUpsert:
             )
             conn.commit()
 
-        replace("sha256:first")
-        replace("sha256:second")
+        replace("digest:first")
+        replace("digest:second")
         assert conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM source_records").fetchone()[0] == 1
         assert conn.execute(
             "SELECT source_revision FROM sources"
-        ).fetchone()[0] == "sha256:second"
+        ).fetchone()[0] == "digest:second"
         assert prune_unreferenced_source_revisions(conn) == 0
         conn.close()
 
@@ -944,7 +944,7 @@ class TestWireFormatChanges:
         try:
             assert "event_at" in column_names(conn, "events")
             assert "event_at_basis" in column_names(conn, "events")
-            assert "observed_at" in column_names(conn, "sources")
+            assert "observed_when" in column_names(conn, "sources")
             assert {"started_at", "ended_at"} <= column_names(conn, "sessions")
             assert "source_started_at" in column_names(conn, "tool_invocations")
             assert "started_at" not in column_names(conn, "tool_invocations")
@@ -952,17 +952,71 @@ class TestWireFormatChanges:
             conn.close()
 
     def test_digest_columns_do_not_name_the_algorithm(self, tmp_path):
-        """`hashing` owns the algorithm, so no column may pin it."""
+        """`hashing` owns the algorithm, so no column may pin it.
+
+        Every column of every table, rather than the four the rule was first
+        written against: a name that spells the algorithm is accurate only
+        while the widths stay 256/256, and the next one to be added would not
+        be caught by a check that lists its predecessors.
+        """
+        from codess.hashing import ALGORITHM_TOKENS
+
         db = tmp_path / "digest.db"
         init_db(db)
         conn = connect(db)
         try:
+            named = [
+                f"{table}.{column}"
+                for table in table_names(conn)
+                for column in column_names(conn, table)
+                if any(token in column for token in ALGORITHM_TOKENS)
+            ]
+            assert named == []
             for table in ("sources", "content_objects", "artifacts"):
-                columns = column_names(conn, table)
-                assert "content_digest" in columns
-                assert "content_sha256" not in columns
+                assert "content_digest" in column_names(conn, table)
             assert "policy_digest" in column_names(conn, "processing_runs")
-            assert "policy_sha256" not in column_names(conn, "processing_runs")
+        finally:
+            conn.close()
+
+    def test_a_time_column_suffix_states_its_representation(self, tmp_path):
+        """`_at` is REAL milliseconds; `_when` is RFC 3339 text.
+
+        The defect this closes is one name denoting two representations:
+        `started_at` was REAL in `sessions` and TEXT in `processing_runs`, so
+        code reading both had to know which table it was in.
+        """
+        db = tmp_path / "suffix.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            wrong: list[str] = []
+            for table in table_names(conn):
+                for row in conn.execute(f"PRAGMA table_info({table})"):
+                    name, declared = row["name"], (row["type"] or "").upper()
+                    if name.endswith("_at") and declared != "REAL":
+                        wrong.append(f"{table}.{name} is {declared}, not REAL")
+                    if name.endswith("_when") and declared != "TEXT":
+                        wrong.append(f"{table}.{name} is {declared}, not TEXT")
+            assert wrong == []
+        finally:
+            conn.close()
+
+    def test_a_composed_literal_takes_key_rather_than_id(self, tmp_path):
+        """`_id` names an identifier something assigned.
+
+        `source_system_key` holds `vendor + "." + product`, composed in the
+        mapping profile. Under `_id` a reader could not tell it from
+        `sessions.id`, which is a vendor UUID.
+        """
+        db = tmp_path / "suffix_id.db"
+        init_db(db)
+        conn = connect(db)
+        try:
+            for table in ("sessions", "sources", "workspace_bindings"):
+                columns = column_names(conn, table)
+                assert "source_system_key" in columns
+                assert "source_system_id" not in columns
+            assert "adapter_key" in column_names(conn, "sessions")
         finally:
             conn.close()
 
@@ -1097,7 +1151,7 @@ class TestFormatSixRemovals:
             conn.close()
 
     def test_a_session_does_not_store_what_its_source_system_implies(self, tmp_path):
-        """`product_name` was a pure function of `source_system_id`."""
+        """`product_name` was a pure function of `source_system_key`."""
         db = tmp_path / "sessions.db"
         init_db(db)
         conn = connect(db)
@@ -1105,7 +1159,7 @@ class TestFormatSixRemovals:
             columns = column_names(conn, "sessions")
             assert "product_name" not in columns
             assert "session_purpose" not in columns
-            assert "source_system_id" in columns
+            assert "source_system_key" in columns
         finally:
             conn.close()
 
@@ -1180,7 +1234,7 @@ class TestOneVendorDescription:
         }
         for description in VENDORS.values():
             profile = SOURCE_PROFILES[description["adapter_key"]]
-            assert profile["source_system_id"] == description["source_system_id"]
+            assert profile["source_system_key"] == description["source_system_key"]
             assert profile["storage_format"] == description["storage_format"]
 
     def test_both_key_spellings_resolve_to_one_description(self):

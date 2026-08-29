@@ -45,8 +45,8 @@ def resolve_reviewed_selection(
         raise ValueError(f"catalog has no projects with review decision {decision!r}")
     return {
         "catalog": str(catalog_path.resolve()),
-        "catalog_sha256": codess_bytes_hash(256, 256, catalog_path.read_bytes()),
-        "selection_sha256": codess_canonical_hash(256, 256, projects),
+        "catalog_digest": codess_bytes_hash(256, 256, catalog_path.read_bytes()),
+        "selection_digest": codess_canonical_hash(256, 256, projects),
         "contract_digest": contract_digest(),
         "review_decision": decision,
         "projects": projects,
@@ -114,7 +114,7 @@ def onboard_catalog(
             current = resolve_reviewed_selection(
                 catalog_path, decision=decision, source=source
             )
-            if current["selection_sha256"] != plan["selection_sha256"]:
+            if current["selection_digest"] != plan["selection_digest"]:
                 raise RuntimeError("reviewed selection changed between preflight and apply")
             if current["contract_digest"] != plan["contract_digest"]:
                 raise RuntimeError("CoSchema package changed between preflight and apply")

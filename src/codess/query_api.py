@@ -24,7 +24,7 @@ from codess.units import DAY_MS
 from codess.wallclock import system_clock
 
 REQUEST_FORMAT = "codess.query-request/1"
-RESULT_FORMAT = "codess.query-result/1"
+RESULT_FORMAT = "codess.query-result/2"
 QUERY_PROCESSOR = "codess.query-api/1"
 SUPPORTED_ACTIONS = frozenset({"sessions", "overview", "events", "search"})
 SUPPORTED_FILTERS = frozenset({
@@ -136,7 +136,7 @@ def _canonical_bytes(value: Any) -> bytes:
 
 def content_hash(value: Any) -> str:
     """Return a deterministic content identity (not an authenticity proof)."""
-    return "sha256:" + codess_bytes_hash(256, 256, _canonical_bytes(value))
+    return "digest:" + codess_bytes_hash(256, 256, _canonical_bytes(value))
 
 
 def make_request(
@@ -575,7 +575,7 @@ def _event_predicate(filters: dict[str, Any]) -> tuple[str, list[Any]]:
     _in_clause("e.event_entity_id", filters.get("event_ids") or [], where, params)
     _in_clause("e.interaction_id", filters.get("interaction_ids") or [], where, params)
     _in_clause("e.model_turn_id", filters.get("model_turn_ids") or [], where, params)
-    _in_clause("s.source_system_id", filters.get("source_system_ids") or [], where, params)
+    _in_clause("s.source_system_key", filters.get("source_system_ids") or [], where, params)
     _in_clause("e.event_kind", filters.get("event_kinds") or [], where, params)
     _in_clause("e.tool_name", filters.get("tool_names") or [], where, params)
     _in_clause("e.actor_kind", filters.get("actor_kinds") or [], where, params)
@@ -739,9 +739,9 @@ def _store_provenance(store: dict[str, Any]) -> dict[str, Any]:
         "policy_digest": policies,
         "source_availability": availability,
         "selection_kind": store.get("selection_kind"),
-        "selection_sha256": store.get("selection_sha256"),
-        "resolved_selection_sha256": store.get(
-            "resolved_selection_sha256"
+        "selection_digest": store.get("selection_digest"),
+        "resolved_selection_digest": store.get(
+            "resolved_selection_digest"
         ),
     }
 
@@ -799,7 +799,7 @@ def _observation_id(
         "store": Path(store["path"]).name,
         "entity_kind": entity_kind,
         "entity_id": entity_id,
-    }).removeprefix("sha256:")
+    }).removeprefix("digest:")
     return observation_row_id(digest)
 
 
@@ -839,7 +839,7 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
     limit_sql = " LIMIT ?" if row_limit is not None else ""
     sql_template = """
         SELECT e.event_entity_id,e.event_id,s.session_entity_id AS session_entity_id,e.session_id,
-               s.project_id,s.source_system_id,s.project_path,
+               s.project_id,s.source_system_key,s.project_path,
                e.sequence_no,e.interaction_id,
                e.model_turn_id,e.event_kind,e.actor_kind,e.content_role,e.origin_kind,
                e.event_at AS event_at,e.event_at_basis,
@@ -926,7 +926,7 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
             "snapshot_id": _store_snapshot_id(store),
             "project_path": str(store["project_path"]),
             "source_project_path": record["project_path"],
-            "source_system_id": record["source_system_id"],
+            "source_system_key": record["source_system_key"],
             "sequence_no": record["sequence_no"],
             "interaction_id": record["interaction_id"],
             "model_turn_id": record["model_turn_id"],
@@ -980,7 +980,7 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
     facet_limit = request.get("facet_limit", 50)
     facets: dict[str, list[dict[str, Any]]] = {}
     for field in (
-        "source_system_id", "event_kind", "actor_kind", "content_role",
+        "source_system_key", "event_kind", "actor_kind", "content_role",
         "origin_kind", "tool_name", "status", "model", "model_provider",
         "model_gradation", "model_revision", "reasoning_effort", "speed_tier",
         "service_tier", "model_mode",
@@ -1086,7 +1086,7 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
     where: list[str] = []
     params: list[Any] = []
     _in_clause("s.session_entity_id", filters.get("session_ids") or [], where, params)
-    _in_clause("s.source_system_id", filters.get("source_system_ids") or [], where, params)
+    _in_clause("s.source_system_key", filters.get("source_system_ids") or [], where, params)
     _in_clause(
         "s.parent_session_id",
         filters.get("parent_session_ids") or [],
@@ -1129,7 +1129,7 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
             else "0 AS path_obsolete"
         )
         for row in store["conn"].execute(f"""
-            SELECT s.session_entity_id,s.id,s.source_system_id,s.vendor_session_id,
+            SELECT s.session_entity_id,s.id,s.source_system_key,s.vendor_session_id,
                    s.vendor_name,s.harness_name,s.harness_version,
                    s.started_at,s.ended_at,s.time_basis,s.source_cwd,
                    s.project_id,s.project_path,s.parent_session_id,
@@ -1279,7 +1279,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
         for initiation, count in structure["initiation_kinds"].items():
             initiation_kinds[initiation] = initiation_kinds.get(initiation, 0) + count
         for row in conn.execute(f"""
-            SELECT s.source_system_id,e.event_kind,e.event_at,
+            SELECT s.source_system_key,e.event_kind,e.event_at,
                    LENGTH(COALESCE(e.content,'')),e.tool_name,e.artifact_path,
                    mc.provider,mc.model_gradation,mc.model_name_exact,mc.model_revision,
                    mc.reasoning_effort,mc.speed_tier,mc.service_tier,mc.mode,
@@ -1737,7 +1737,7 @@ def compare_results(prior: dict[str, Any], current: dict[str, Any]) -> dict[str,
 
     issues = []
     if prior.get("format") != RESULT_FORMAT or current.get("format") != RESULT_FORMAT:
-        issues.append("both inputs must be codess.query-result/1")
+        issues.append(f"both inputs must be {RESULT_FORMAT}")
     if content_hash(logical_request(prior)) != content_hash(
         logical_request(current)
     ):

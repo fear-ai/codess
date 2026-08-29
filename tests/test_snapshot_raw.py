@@ -40,7 +40,7 @@ def test_jsonl_capture_is_content_addressed_and_recoverable(tmp_path):
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -51,7 +51,7 @@ def test_jsonl_capture_is_content_addressed_and_recoverable(tmp_path):
     assert zstandard.ZstdDecompressor().decompress(object_path.read_bytes()) == content
     assert raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )["object_id"] == record["object_id"]
@@ -63,7 +63,7 @@ def test_content_addressed_capture_reuses_a_different_valid_zstd_encoding(tmp_pa
     raw = RawStore(tmp_path / "raw")
     first = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -75,15 +75,15 @@ def test_content_addressed_capture_reuses_a_different_valid_zstd_encoding(tmp_pa
 
     second = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
     assert second["object_id"] == first["object_id"]
-    assert second["stored_sha256"] == verify_raw(
+    assert second["stored_digest"] == verify_raw(
         object_path, second
-    )["stored_sha256"]
-    assert second["stored_sha256"] != first["stored_sha256"]
+    )["stored_digest"]
+    assert second["stored_digest"] != first["stored_digest"]
 
 
 def test_raw_capture_streams_without_path_read_bytes(tmp_path, monkeypatch):
@@ -100,7 +100,7 @@ def test_raw_capture_streams_without_path_read_bytes(tmp_path, monkeypatch):
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -124,7 +124,7 @@ def test_raw_capture_failure_never_promotes_partial_object(tmp_path, monkeypatch
     monkeypatch.setattr("codess.raw_store._compress_file", fail_compression)
     with pytest.raises(RawCaptureError, match="injected"):
         raw.observe(
-            source, source_system_id="openai.codex",
+            source, source_system_key="openai.codex",
             storage_format="codex-jsonl", mode="capture",
         )
     assert not list((raw.root / ".staging").glob("*"))
@@ -140,7 +140,7 @@ def test_raw_verification_streams_without_path_read_bytes(tmp_path, monkeypatch)
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -151,7 +151,7 @@ def test_raw_verification_streams_without_path_read_bytes(tmp_path, monkeypatch)
     monkeypatch.setattr(Path, "read_bytes", reject_unbounded_read)
     observed = verify_raw(raw.resolve(record), record)
 
-    assert observed["stored_sha256"] == record["stored_sha256"]
+    assert observed["stored_digest"] == record["stored_digest"]
     assert observed["stored_size"] == record["stored_size"]
     assert observed["object_id"] == record["object_id"]
     assert observed["uncompressed_size"] == record["uncompressed_size"]
@@ -170,7 +170,7 @@ def test_raw_restore_streams_and_verifies_before_promotion(
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
         source,
-        source_system_id="cursor.composer",
+        source_system_key="cursor.composer",
         storage_format="cursor-sqlite",
         mode="capture",
     )
@@ -192,14 +192,14 @@ def test_related_external_content_has_stable_identity_and_parent_link(tmp_path):
     raw = RawStore(tmp_path / "raw")
     record = raw.observe_related(
         sidecar,
-        source_system_id="anthropic.claude-code",
+        source_system_key="anthropic.claude-code",
         storage_format="text/plain",
         mode="capture",
         parent_source_locator="/source/session.jsonl",
         relation_kind="persisted_tool_result",
     )
     assert record["record_type"] == "related_content_revision"
-    assert record["record_id"].startswith("rawrel:sha256:")
+    assert record["record_id"].startswith("rawrel:digest:")
     assert record["parent_source_locator"] == "/source/session.jsonl"
     assert record["relation_kind"] == "persisted_tool_result"
     assert zstandard.ZstdDecompressor().decompress(
@@ -229,7 +229,7 @@ def test_raw_capture_updates_normalized_source_provenance(tmp_path):
         "SELECT availability, capture_method, consistency, content_digest FROM sources"
     ).fetchone()
     assert tuple(row[:3]) == ("captured", "stable-file-read", "stable")
-    assert row[3] == records[0]["object_id"].removeprefix("sha256:")
+    assert row[3] == records[0]["object_id"].removeprefix("digest:")
     conn.close()
 
 
@@ -246,7 +246,7 @@ def test_cursor_capture_uses_consistent_sqlite_backup(tmp_path):
     progress_events = []
     record = raw.observe(
         source,
-        source_system_id="cursor.composer",
+        source_system_key="cursor.composer",
         storage_format="cursor-sqlite",
         mode="capture",
         working_target=working_copy,
@@ -296,7 +296,7 @@ def test_snapshot_is_validated_promoted_and_sealable(tmp_path):
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -327,7 +327,7 @@ def test_snapshot_is_validated_promoted_and_sealable(tmp_path):
 
     pointer = project / ".codess" / "current.json"
     current = json.loads(pointer.read_text(encoding="utf-8"))
-    current["manifest_sha256"] = "0" * 64
+    current["manifest_digest"] = "0" * 64
     pointer.write_text(json.dumps(current), encoding="utf-8")
     with pytest.raises(SnapshotError):
         current_stores(project)
@@ -342,7 +342,7 @@ def test_partial_refresh_carries_current_raw_records(tmp_path):
     source.write_bytes(b"one")
     first = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -365,7 +365,7 @@ def test_current_raw_records_rejects_unparseable_raw_manifest(tmp_path):
     source.write_bytes(b"one")
     first = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -406,7 +406,7 @@ def test_snapshot_rejects_raw_manifest_tamper(tmp_path):
     source.write_text('{"type":"user"}\n', encoding="utf-8")
     record = raw.observe(
         source,
-        source_system_id="claude-code",
+        source_system_key="claude-code",
         storage_format="jsonl",
         mode="capture",
     )
@@ -425,12 +425,61 @@ def _seed_one_snapshot(tmp_path, name="session.jsonl"):
     source.write_bytes(b"one")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
     create_snapshot(project, [store], [record], raw_store=raw)
     return project
+
+
+def test_a_format_10_pointer_still_resolves(tmp_path):
+    """The pointer is the one file a format change cannot regenerate first.
+
+    A rebuild reads the pointer it is about to replace, so a release that
+    renamed `manifest_sha256` to `manifest_digest` has to accept what the
+    previous release wrote -- otherwise every published Project becomes
+    unrebuildable by the very version that renamed the key.
+    """
+    project = _seed_one_snapshot(tmp_path)
+    pointer = project / ".codess" / "current.json"
+    document = json.loads(pointer.read_text(encoding="utf-8"))
+    document["manifest_sha256"] = document.pop("manifest_digest")
+    document["format_version"] = 10
+    pointer.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    resolved = snapshot.current_snapshot(project / ".codess")
+    assert resolved is not None
+    assert len(current_stores(project)) == 1
+
+
+def test_a_format_10_manifest_claim_still_verifies(tmp_path):
+    """The same compatibility, for the digest a stored manifest claims."""
+    project = _seed_one_snapshot(tmp_path)
+    resolved = snapshot.current_snapshot(project / ".codess")
+    assert resolved is not None
+    snapshot_dir, _ = resolved
+    manifest_path = snapshot_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    current = manifest["raw_manifest_digest"]
+
+    assert snapshot.raw_manifest_claim(manifest) == current
+    assert snapshot.raw_manifest_claim(
+        {"raw_manifest_sha256": current}
+    ) == current
+    assert snapshot.raw_manifest_claim({}) is None
+
+
+def test_a_format_11_store_claim_still_verifies():
+    """`digest` since format 12; `sha256` is what format 11 wrote.
+
+    A retained snapshot is verified against the manifest written with it, and a
+    snapshot is rewritten only when republished, so refusing the older key would
+    make every retained snapshot unverifiable by the release that renamed it.
+    """
+    assert snapshot.store_claim({"digest": "abc"}) == "abc"
+    assert snapshot.store_claim({"sha256": "abc"}) == "abc"
+    assert snapshot.store_claim({}) is None
 
 
 def test_recover_current_snapshot_rebuilds_a_deleted_pointer(tmp_path):
@@ -463,7 +512,7 @@ def test_recover_current_snapshot_skips_a_tampered_newest_snapshot(tmp_path):
     source = tmp_path / "second.jsonl"
     source.write_bytes(b"two")
     record = raw.observe(
-        source, source_system_id="openai.codex", storage_format="codex-jsonl",
+        source, source_system_key="openai.codex", storage_format="codex-jsonl",
         mode="capture",
     )
     newest = create_snapshot(project, [store], [record], raw_store=raw)
@@ -510,7 +559,7 @@ def test_rebuild_manifest_reproduces_recoverable_fields(tmp_path):
     assert rebuilt["snapshot_id"] == original["snapshot_id"]
     assert rebuilt["format_version"] == original["format_version"]
     assert rebuilt["contract_digest"] == original["contract_digest"]
-    assert rebuilt["raw_manifest_sha256"] == original["raw_manifest_sha256"]
+    assert rebuilt["raw_manifest_digest"] == original["raw_manifest_digest"]
     assert rebuilt["stores"] == original["stores"]
     assert rebuilt["parent_snapshot_id"] is None
     assert rebuilt["build_policy"] is None
@@ -544,7 +593,7 @@ def test_retained_snapshot_requires_exact_package_unless_explicitly_compatible(
     source.write_text('{"type":"user"}\n', encoding="utf-8")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -645,7 +694,7 @@ def test_a_snapshot_store_does_not_carry_the_snapshot_identity(tmp_path):
     source = tmp_path / "session.jsonl"
     source.write_text('{"type":"user"}\n', encoding="utf-8")
     record = raw.observe(
-        source, source_system_id="anthropic.claude-code",
+        source, source_system_key="anthropic.claude-code",
         storage_format="claude-jsonl", mode="capture",
     )
     snapshot = create_snapshot(project, [store], [record], raw_store=raw)
@@ -675,7 +724,7 @@ def test_membership_is_proven_by_the_manifest_digest(tmp_path):
     source = tmp_path / "session.jsonl"
     source.write_text('{"type":"user"}\n', encoding="utf-8")
     record = raw.observe(
-        source, source_system_id="anthropic.claude-code",
+        source, source_system_key="anthropic.claude-code",
         storage_format="claude-jsonl", mode="capture",
     )
     snapshot = create_snapshot(project, [store], [record], raw_store=raw)
@@ -704,7 +753,7 @@ def test_a_rebuilt_manifest_takes_the_identity_from_the_directory(tmp_path):
     source = tmp_path / "session.jsonl"
     source.write_text('{"type":"user"}\n', encoding="utf-8")
     record = raw.observe(
-        source, source_system_id="anthropic.claude-code",
+        source, source_system_key="anthropic.claude-code",
         storage_format="claude-jsonl", mode="capture",
     )
     snapshot = create_snapshot(project, [store], [record], raw_store=raw)
@@ -835,7 +884,7 @@ class TestContractMismatchIsTyped:
             )
             conn.commit()
             conn.close()
-            manifest["stores"][name]["sha256"] = hash_file(retained)
+            manifest["stores"][name]["digest"] = hash_file(retained)
             manifest["stores"][name]["size"] = retained.stat().st_size
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         paths = snapshot_store_paths(
@@ -904,7 +953,7 @@ def test_a_store_disagreeing_with_its_own_manifest_is_refused(tmp_path):
         )
         conn.commit()
         conn.close()
-        manifest["stores"][name]["sha256"] = hash_file(retained)
+        manifest["stores"][name]["digest"] = hash_file(retained)
         manifest["stores"][name]["size"] = retained.stat().st_size
     assert manifest["contract_digest"] != "0" * 64
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")

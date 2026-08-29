@@ -13,6 +13,167 @@ change, and is minutes of machine time for a corpus of this scale.
 
 ## Unreleased
 
+### CoSchema Format 12
+
+**Every published store must be reingested.** The contract digest changed, so a
+format-11 store is refused. Gate on `python3 tools/project_inventory.py`, then
+`codess refresh --designator included --stage apply --force`; see
+[Keeping a Store Current](README.md#keeping-a-store-current). `--force` is what
+makes a migration different from a routine refresh: without it every Project
+fails on the working store the format change just made unreadable.
+
+- **`product` is removed in favour of `harness_name`.** The mapping contract
+  required a second spelling of one fact: `product` named the program, which
+  `harness_name` already holds. It was the last instance of a defect fixed twice
+  before -- `sessions.product_name` dropped as a pure function of the source
+  system, and `harness_name`'s surface suffix removed. Cursor's value changes
+  with the rename, `cursor-composer` to `cursor`, because `composer` named a
+  surface that `surface_kind` carries in its own column.
+
+  The composition rule it was documented to serve never held: `vendor + "." +
+  product` composes `cursor.cursor-composer` against a stored `cursor.composer`.
+  `source_system_key` is a per-vendor constant that two of three vendors matched
+  by coincidence, and CoNames now says so.
+
+- **The algorithm's name is confined to `hashing`.** Format 11 moved the
+  `*_sha256` field names; this moves the two shapes a field-name survey could not
+  see. A nested `"sha256"` **key** in each `manifest.json` file and store entry
+  is now `digest`. An emitted `sha256:` **value prefix** is now `digest:`, which
+  reaches `request_hash`, `result_hash`, every citation digest, raw object ids,
+  the raw object directory, and the worktree revision suffix.
+
+  Five documents carry a version for it: `codess.query-result/2`,
+  `codess.investigation/2`, `codess.query-row/2`, `codess.raw/2`,
+  `codess.source-verification/2`, and `codess.working-archive/2`.
+
+- **`sessions.source` is `adapter_key` in the query row too.** Format 11 renamed
+  the column and left `codess.query-row/1` emitting it under the old key, so one
+  value had two names one layer apart. `codess.query-row/2` states
+  `adapter_key`, and the printed column headers match.
+
+- **Two backward reads, each with a test per spelling.** A snapshot manifest's
+  store entry and a `codess.raw/1` object id are read under either name, because
+  both are read while the thing holding them is being verified or replaced.
+  `store_claim` and `_object_hash` state this once each rather than at call
+  sites.
+
+- **An operator-written `source-links.json` is read under either key spelling.**
+  `codess.source-links/1` states `source_system_id`, which became
+  `source_system_key` in format 11. Codess never regenerates this file -- an
+  operator writes it -- so the rename could not reach documents on disk, and an
+  approved link silently stopped matching: the Sessions it admits are simply not
+  selected, with no error and no diagnostic. Two real documents on the
+  development machine were affected. `config.link_source_system` reads either
+  name at all three call sites.
+
+  The fixtures for this file were updated with the rename and kept passing, which
+  is why the regression test writes the older key explicitly.
+
+- **Cursor's `ItemTable` composer index is read as a qualifier.** Cursor keeps
+  two composer indexes: the `composerHeaders` table selects, and
+  `ItemTable`'s `composer.composerHeaders` is UI state over a subset of the same
+  composers -- 39 against 66, all also in the table, agreeing on the workspace
+  for every one. It carries two facts the table does not: `unifiedMode` (`agent`
+  or `chat`, split 15/24) and the workspace **path**, where the table holds only
+  a storage hash a workspace recreation would change.
+
+  Both now qualify a selected Session. A composer present only in that document
+  is still not selected -- UI state does not decide Project membership -- and a
+  test asserts it. Neither field reaches a column yet; that is W106.
+
+- **`CODESS_KEEP_SNAPSHOTS` defaults to 3, up from 2.** Two keeps one prior
+  generation, and a format migration consumes it: two consecutive bumps left no
+  retained copy of the pre-migration store, so a decode comparison across the
+  migration could not be made. Three spans one migration.
+
+- **`.python-version` pins the interpreter.** `pyproject.toml` states the
+  supported floor; the new file states what the repository is developed against.
+  Scripts should call `python3` rather than `python`, which is commonly an alias
+  a non-interactive subshell does not inherit.
+
+### CoSchema Format 11
+
+**Every published store must be reingested.** Format 11 renames stored columns,
+so a format-10 store is refused rather than read with the old names. Run
+`python tools/project_inventory.py` first -- it exits nonzero when a Project's
+vendor Sources are gone -- then rebuild the cohort with one command:
+
+```bash
+codess refresh --designator included --stage apply
+```
+
+`codess ingest --dir <project> --force` rebuilds a single Project. Prefer the
+designator for the corpus: it preflights every Project before applying any and
+writes a receipt, and it honours catalog exclusions such as a linked worktree.
+
+**A direct-SQL reader must update three names.** The renames are mechanical and
+the queries in [README](README.md#direct-database-access) show the current
+spelling.
+
+- **`sessions.source` is `sessions.adapter_key`.** The column holds a
+  `SOURCE_PROFILES` key -- `Claude`, `Codex`, `Cursor` -- selecting which adapter
+  decoded the Session. It is not the Source entity, not `sources.source_path`,
+  and not one of the six `source_*` columns beside it that do state Source facts.
+  One word had carried three meanings.
+
+- **`source_system_id` is `source_system_key`,** in all three tables that hold it
+  -- `sessions`, `sources`, `workspace_bindings`. The value is
+  `vendor + "." + product` composed in the mapping profile, so it is a literal
+  rather than an identifier something assigned. `_id` had denoted four
+  incompatible formats: a rowid, a vendor UUID, a Codess derivation, and this.
+
+- **Seven Codess-recorded time columns take `_when`:** `observed_when` on
+  `sources`, `sessions`, and `project_locations`; `started_when` and
+  `completed_when` on `processing_runs`; `created_when` on `mapping_diagnostics`;
+  `asserted_when` on `correlation_assertions`. A suffix now states the
+  representation -- `_at` is `REAL` Unix milliseconds, `_when` is RFC 3339 `TEXT`
+  -- where before `started_at` was `REAL` in `sessions` and `TEXT` in
+  `processing_runs`, so code reading both had to know which table it was in.
+  `sessions.started_at` is unchanged and is why the rule is worth stating.
+
+- **Twelve `*_sha256` fields are `*_digest`,** across snapshot manifests, current
+  pointers, raw-object records, baseline selections, and reviewed catalogs. The
+  algorithm's name lives in `hashing` alone: a value from
+  `codess_canonical_hash(256, 256, …)` *is* a bare SHA-256 at those widths, so
+  the old name read as accurate and would have silently stopped being so when a
+  width changed. `manifest_sha256` appears in every `current.json`, which is why
+  this travelled with a rebuild rather than alone.
+
+  The pass found a name no count could: `schema/field-coverage-baseline.json`
+  still documented `sources.content_sha256`, a column renamed in format 5.
+  Nothing read it, so nothing had failed.
+
+  `hashlib.sha256` keeps its spelling. The rule governs what a stored field is
+  called, not the function that computes it.
+
+- **`current.json` and a stored manifest are read under either spelling.** A
+  rebuild reads the pointer it is about to replace, so a release that renamed
+  `manifest_sha256` cannot also refuse the name the previous release wrote --
+  doing so made all 21 published Projects unrebuildable by the one version that
+  could rebuild them. `raw_manifest_sha256` in a stored manifest is the same
+  case. Both accept either key on read and write only the current one, which is
+  a rule for the files that bootstrap a rebuild and not a general alias.
+
+- **Three tests hold the rules** rather than the instances: no column in any
+  table names a hash algorithm, every `_at` column is `REAL` and every `_when`
+  column is `TEXT`, and no table carries `source_system_id`. A check that lists
+  the columns it knows about does not catch the next one added. The algorithm
+  spellings come from `hashing.ALGORITHM_TOKENS`, so the checker does not keep a
+  second copy of the list this rule exists to centralise.
+
+- **The `sha256` spelling is confined to the hash library and to prose about how
+  a digest is chosen.** Three test names still said `sha256` while asserting
+  `digest-fingerprint` values; documentation in CoSchema, Designs, and
+  CursorSchema named the algorithm where it meant "a complete digest"; and
+  `Operations` and `CoPlan` still named `manifest_sha256`, a key that moved in
+  this release. Text describing `manifest.json` keeps the literal `"sha256"` key,
+  because an operator opening the file sees exactly that.
+
+  Still live and now tracked on W98: a bare `"sha256"` **key** nested in each
+  `manifest.json` file entry and snapshot store entry. A survey of `*_sha256`
+  field names cannot see a key inside an object, which is why the format-11 pass
+  missed it.
+
 ### CoSchema Format 10
 
 **Every published store must be reingested.** `require_store` accepts only the
