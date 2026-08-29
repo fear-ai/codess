@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
+import logging
+import os
+import re
 import sqlite3
+from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from codess.fileio import hash_file
+from codess.config import MAPPING_NAMES
+from codess.fileio import hash_file, quote_identifier
+from codess.hashing import codess_digest
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
-
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "schema" / "coschema"
@@ -22,10 +25,20 @@ DDL_PATH = PACKAGE_ROOT / "sqlite" / "schema.sql"
 MAPPINGS_ROOT = REPO_ROOT / "schema" / "mappings"
 
 FORMAT_ID = "codess.coschema"
-FORMAT_VERSION = 4
+FORMAT_VERSION = 12
 APPLICATION_ID = 0x434F4445
-SUPPORTED_READ_FORMATS = frozenset({2, 3, 4})
-SUPPORTED_WRITE_FORMATS = frozenset({4})
+# Derived from FORMAT_VERSION rather than restated. Codess never migrates a
+# store: a format change is a rebuild from the vendor Sources, because the store
+# is a projection and the way to change a projection is to recompute it. So the
+# only supported format is the current one, for reading as well as writing, and
+# these were a second place to forget when the version moved.
+#
+# Widening the read set is a real decision, not a convenience: it asserts that a
+# store written under the older format still answers queries correctly, which is
+# only true if no column a reader depends on changed meaning. Add the version
+# explicitly here when that has been checked, rather than by default.
+SUPPORTED_READ_FORMATS = frozenset({FORMAT_VERSION})
+SUPPORTED_WRITE_FORMATS = frozenset({FORMAT_VERSION})
 
 
 class SchemaContractError(RuntimeError):
@@ -36,7 +49,31 @@ class UnsupportedStoreError(SchemaContractError):
     """A database is not writable/readable by this software contract."""
 
 
-_sha256 = hash_file
+log = logging.getLogger(__name__)
+
+CONTRACT_OVERRIDE_ENV = "CODESS_NO_CONTRACT_CHECK"
+
+
+def contract_check_disabled() -> bool:
+    """Whether the operator has opted out of contract checking.
+
+    Two situations use this. A test may exercise a store whose recorded
+    contract deliberately disagrees. A recovery may read or extend a store
+    when the released files that produced it are no longer reconstructible --
+    vendor sources deleted, a working tree partly restored -- where refusing
+    the write protects nothing and leaves retained evidence unreachable.
+
+    Read from the environment rather than `config`, for the same reason
+    `fileio._no_hash_active` does: `--no-check` sets the variable after
+    config's module-level constants have resolved, so reading the constant
+    would miss a flag set on the command line.
+
+    The override is not the default and warns. Each bypass logs a warning,
+    and a store written under it records `contract_override` in `store_meta`.
+    """
+    return os.environ.get(CONTRACT_OVERRIDE_ENV, "0").strip().lower() in (
+        "1", "true", "yes",
+    )
 
 
 @lru_cache(maxsize=1)
@@ -58,46 +95,150 @@ def load_manifest() -> dict[str, Any]:
     return manifest
 
 
-@lru_cache(maxsize=1)
-def verify_package() -> str:
-    """Verify every released package file and return a deterministic digest."""
+CONTRACT_ROLES = frozenset({
+    "sqlite_schema",
+    "contract",
+    "mapping_contract",
+    "mapping_claude",
+    "mapping_codex",
+    "mapping_cursor",
+})
+"""The manifest roles that determine what a store *is*.
+
+These six files are loaded by `src/` at runtime: the DDL fixes the physical
+layout, `contract.json` the logical one that `validate_database_contract`
+checks against, and the mapping contract and three profiles the mapping
+evidence attached to decoded records. Nothing outside this set can change the
+layout or the decode of a store, which is the only question the write gate
+asks.
+
+The manifest's remaining entries are validation fixtures. They are verified
+by `verify_package`, which is a release and diagnostic operation, and they
+are deliberately excluded from `contract_digest` -- see 13.4.4.
+"""
+
+
+def _digest_manifest_files(roles: Iterable[str] | None, subject: str) -> str:
+    """Verify the named released files and fold them into one digest.
+
+    `roles` selects a subset of the manifest by role name, or every file when
+    None. Each file is hashed and compared with its recorded value, and the
+    per-file hashes are folded in role order so the result is deterministic
+    and independent of filesystem ordering.
+    """
     manifest = load_manifest()
+    entries = sorted(
+        (role, entry)
+        for role, entry in manifest.get("files", {}).items()
+        if roles is None or role in roles
+    )
     failures: list[str] = []
-    package_hash = hashlib.sha256()
-    for role, entry in sorted(manifest.get("files", {}).items()):
+    combined = codess_digest()
+    for role, entry in entries:
         path = REPO_ROOT / entry["path"]
         if not path.is_file():
             failures.append(f"{role}: missing {entry['path']}")
             continue
-        actual = _sha256(path)
-        if actual != entry.get("sha256"):
+        actual = hash_file(path)
+        if actual != entry.get("digest"):
             failures.append(
-                f"{role}: hash mismatch for {entry['path']} "
-                f"({actual} != {entry.get('sha256')})"
+                f"{role}: digest mismatch for {entry['path']} "
+                f"({actual} != {entry.get('digest')})"
             )
-        package_hash.update(role.encode("utf-8"))
-        package_hash.update(b"\0")
-        package_hash.update(actual.encode("ascii"))
-        package_hash.update(b"\n")
+        combined.update(role.encode("utf-8"))
+        combined.update(b"\0")
+        combined.update(actual.encode("ascii"))
+        combined.update(b"\n")
     if failures:
-        raise SchemaContractError("invalid released CoSchema package: " + "; ".join(failures))
-    return package_hash.hexdigest()
+        if contract_check_disabled():
+            # Report the digest of what is on disk, so a recovery run is
+            # reproducible and the caller sees what it proceeded with.
+            log.warning(
+                "%s: proceeding despite %d failure(s) because %s is set: %s",
+                subject, len(failures), CONTRACT_OVERRIDE_ENV, "; ".join(failures),
+            )
+        else:
+            raise SchemaContractError(f"invalid {subject}: " + "; ".join(failures))
+    return combined.hexdigest()
+
+
+@lru_cache(maxsize=1)
+def contract_digest() -> str:
+    """Verify the executable contract and return its digest.
+
+    This is the value a store records and the write gate compares. It answers
+    one question -- *would extending this store mix records written under
+    different rules?* -- and only the six files in `CONTRACT_ROLES` can change
+    that answer.
+
+    It replaces a digest over the whole manifest, of which ten of sixteen
+    entries were validation fixtures. Editing one made every published store
+    unwritable although its layout, decoder, and data were unchanged, and a
+    fixture edit that had not yet updated the manifest broke the loaders
+    below as well -- so a half-finished edit to a test document disabled the
+    program rather than only the write path (13.4.4).
+    """
+    return _digest_manifest_files(CONTRACT_ROLES, "CoSchema executable contract")
+
+
+@lru_cache(maxsize=1)
+def verify_package() -> str:
+    """Verify every released package file and return a deterministic digest.
+
+    A release and diagnostic operation: it answers "is this working tree the
+    reviewed one", which covers the validation fixtures as well as the
+    contract. Runtime paths use `contract_digest` instead, because a store's
+    compatibility does not depend on test data.
+    """
+    return _digest_manifest_files(None, "released CoSchema package")
 
 
 @lru_cache(maxsize=1)
 def load_contract() -> dict[str, Any]:
-    verify_package()
-    return json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    """The logical contract, checked against the declared format.
+
+    The contract states its own `format_version` for a consumer that never
+    imports Python, and nothing else reads it. That makes a wrong value worse
+    than an absent one: the only reader is the one with no way to check.
+    """
+    contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    stated = contract.get("format_version")
+    if stated != FORMAT_VERSION:
+        raise SchemaContractError(
+            f"contract format_version {stated}, declared CoSchema "
+            f"{FORMAT_VERSION}: update {CONTRACT_PATH.name}"
+        )
+    contract_digest()
+    return contract
 
 
 def load_ddl() -> str:
-    verify_package()
-    return DDL_PATH.read_text(encoding="utf-8")
+    """The released DDL, checked against the declared format.
+
+    `PRAGMA user_version` stamps a newly written store. It stays a literal
+    because the script is executed verbatim and its digest is verified, so it
+    cannot carry a substitution. A bump that misses it writes stores labelled
+    with the previous format that the same code then refuses to read, so the
+    number is checked here rather than left to attention.
+    """
+    ddl = DDL_PATH.read_text(encoding="utf-8")
+    match = re.search(r"PRAGMA\s+user_version\s*=\s*(\d+)", ddl)
+    if match is None:
+        raise SchemaContractError("released DDL declares no user_version")
+    if int(match.group(1)) != FORMAT_VERSION:
+        raise SchemaContractError(
+            f"DDL user_version {match.group(1)}, declared CoSchema "
+            f"{FORMAT_VERSION}: update {DDL_PATH.name}"
+        )
+    # After the version check, so a bump that missed the DDL is reported by
+    # name rather than as a hash mismatch on the same file.
+    contract_digest()
+    return ddl
 
 
 def load_mapping(name: str) -> dict[str, Any]:
-    verify_package()
-    if name not in {"claude", "codex", "cursor"}:
+    contract_digest()
+    if name not in MAPPING_NAMES:
         raise SchemaContractError(f"unknown mapping profile: {name}")
     mapping = json.loads(
         (MAPPINGS_ROOT / f"{name}.json").read_text(encoding="utf-8")
@@ -175,6 +316,46 @@ def database_identity(conn: sqlite3.Connection) -> tuple[int, int]:
     )
 
 
+def table_names(conn: sqlite3.Connection) -> set[str]:
+    """The tables a store actually has.
+
+    Readers that must tolerate an older store ask this rather than catching
+    an error per table, and it is also what keeps `table_counts` from having
+    to carry a hand-maintained list of the schema.
+    """
+    return {
+        str(row[0]) for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+
+
+def column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Which columns one table has.
+
+    Readers project a literal in place of a column an older store predates --
+    `NULL AS entity_id` rather than a failing query -- and each asked SQLite
+    for the column list itself. The identifier is quoted because it cannot be
+    a bound parameter; callers pass a table name from the schema, not input.
+    """
+    return {
+        str(row[1])
+        for row in conn.execute(f"PRAGMA table_info({quote_identifier(table)})")
+    }
+
+
+def store_metadata(conn: sqlite3.Connection) -> dict[str, str]:
+    """Read a store's own metadata as a mapping.
+
+    `store_meta` is a key/value table, so every reader wrote the same
+    `dict(conn.execute(...))` and then picked one key out of it. Naming the
+    read here puts it beside the other store-identity checks and gives the
+    table one place to be queried, which is what a column rename would
+    otherwise have to find at five call sites.
+    """
+    return dict(conn.execute("SELECT key, value FROM store_meta"))
+
+
 def validate_database_contract(conn: sqlite3.Connection) -> list[str]:
     """Return two-way layout/JSON omissions against the logical contract.
 
@@ -191,19 +372,12 @@ def validate_database_contract(conn: sqlite3.Connection) -> list[str]:
         table: set(fields)
         for table, fields in physical.get("excluded_fields", {}).items()
     }
-    tables = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
-    }
+    tables = table_names(conn)
     for entity, definition in entities.items():
         if entity not in tables:
             errors.append(f"missing table {entity}")
             continue
-        columns = {
-            row[1] for row in conn.execute(f'PRAGMA table_info("{entity}")')
-        }
+        columns = column_names(conn, entity)
         expected_fields = set(definition.get("fields", {}))
         expected_fields.update(definition.get("identity", ()))
         expected_fields.update(definition.get("order", ()))
@@ -225,9 +399,7 @@ def validate_database_contract(conn: sqlite3.Connection) -> list[str]:
         if table not in entities:
             errors.append(f"uncontracted table {table}")
             continue
-        columns = {
-            row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')
-        }
+        columns = column_names(conn, table)
         definition = entities[table]
         contracted = set(definition.get("fields", {}))
         contracted.update(definition.get("identity", ()))
@@ -237,44 +409,44 @@ def validate_database_contract(conn: sqlite3.Connection) -> list[str]:
     return errors
 
 
-def has_legacy_schema(conn: sqlite3.Connection) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'"
-    ).fetchone()
-    return row is not None and database_identity(conn) == (0, 0)
+def require_store(conn: sqlite3.Connection, *, write: bool) -> int:
+    """Validate a database before use and return its logical format version.
 
-
-def require_store(
-    conn: sqlite3.Connection,
-    *,
-    write: bool,
-    allow_legacy_read: bool = False,
-) -> int:
-    """Validate a database before use and return its logical format version."""
+    Only the current format is accepted, for reading as well as writing. A
+    store written by an earlier format is not migrated: Codess rebuilds from
+    vendor sources, which remain the authority, so carrying read support for
+    superseded layouts would preserve a path nothing needs.
+    """
     application_id, version = database_identity(conn)
-    if application_id == 0 and version == 0 and has_legacy_schema(conn):
-        if not write and allow_legacy_read:
-            return 1
-        raise UnsupportedStoreError(
-            "legacy unversioned Codess store is read-only; rebuild into CoSchema v4"
-        )
     if application_id != APPLICATION_ID:
         raise UnsupportedStoreError(
             f"not a Codess store: application_id={application_id:#x}"
         )
     supported = SUPPORTED_WRITE_FORMATS if write else SUPPORTED_READ_FORMATS
     if version not in supported:
+        # The remedy is stated because the refusal is expected after an
+        # upgrade rather than exceptional: Codess never migrates a store, so
+        # reingest is the whole procedure and a bare version mismatch does not
+        # say so.
         raise UnsupportedStoreError(
-            f"unsupported CoSchema format {version}; supported={sorted(supported)}"
+            f"store CoSchema {version}, supported {sorted(supported)}: "
+            "rebuild with `codess ingest --dir <project> --force`"
         )
-    meta = dict(conn.execute("SELECT key, value FROM store_meta"))
+    meta = store_metadata(conn)
     if meta.get("format_id") != FORMAT_ID or int(meta.get("format_version", -1)) != version:
         raise UnsupportedStoreError("store_meta disagrees with SQLite format identity")
-    if write and meta.get("package_digest") != verify_package():
-        raise UnsupportedStoreError(
-            "store package differs from the current released package; rebuild "
-            "the derived working store from source"
-        )
+    if write and meta.get("contract_digest") != contract_digest():
+        if contract_check_disabled():
+            log.warning(
+                "writing a store recorded under contract %s with %s in effect; "
+                "records written under different rules may be mixed",
+                meta.get("contract_digest"), CONTRACT_OVERRIDE_ENV,
+            )
+        else:
+            raise UnsupportedStoreError(
+                "store written under a different CoSchema contract: rebuild "
+                f"from source, or set {CONTRACT_OVERRIDE_ENV}=1 to proceed"
+            )
     if write and meta.get("decoder_version") != DECODER_VERSION:
         raise UnsupportedStoreError(
             "store decoder version differs from the current decoder; rebuild"

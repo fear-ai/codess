@@ -12,11 +12,30 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from codess import __version__
+from codess import __version__, reporting
 from codess.config import (
     CC_PROJECTS,
+    RAW_MODE_CHOICES,
+    SOURCE_LINKS_FILE,
+    SOURCE_LINKS_FORMAT,
+    STORE_DIR,
+    VENDOR_KEYS,
     VERBOSE,
+    canonical_raw_mode,
+    link_source_system,
 )
+
+# Re-exported: the Claude slug encoding is `helpers`'. `project` carried a
+# second copy whose `slug_to_path` lacked the filesystem fallback for
+# hyphenated directory names, so the two disagreed on any path containing a
+# hyphen -- a hyphenated directory decoded to a non-existent nested path (3.5.4).
+from codess.helpers import path_to_slug as path_to_slug
+from codess.helpers import slug_to_path as slug_to_path
+from codess.investigation import INVESTIGATION_FORMAT
+from codess.query_api import RESULT_FORMAT
+from codess.reporting.levels import PRIVACY_PROFILES as REPORTING_PRIVACY
+from codess.reporting.levels import PROFILES as REPORTING_PROFILES
+from codess.settings import resolve
 
 log = logging.getLogger(__name__)
 
@@ -26,40 +45,61 @@ CLI_VERSION = __version__
 # --- Git / slug / vendor layout ---
 
 
-def get_project_root(cwd: Path | None = None) -> Path:
-    """Run git rev-parse --show-toplevel; on failure return cwd or Path.cwd()."""
-    cwd = cwd or Path.cwd()
+def _git_output(cwd: Path, *arguments: str) -> str | None:
+    """One `git rev-parse` reading, or None when git cannot answer.
+
+    A missing git, a directory that is not a repository, and a timeout are all
+    "no Git information available" rather than failures: discovery falls back
+    to the path it was given.
+    """
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=5,
+        result = subprocess.run(
+            ["git", "rev-parse", *arguments],
+            cwd=cwd, capture_output=True, text=True, timeout=5,
         )
-        if out.returncode == 0 and out.stdout.strip():
-            return Path(out.stdout.strip())
-    except (subprocess.SubprocessError, FileNotFoundError) as e:
-        log.warning("git rev-parse failed: %s; using cwd", e)
-    return cwd
+    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+        log.warning("git rev-parse %s failed: %s", " ".join(arguments), exc)
+        return None
+    output = result.stdout.strip()
+    return output if result.returncode == 0 and output else None
 
 
-def path_to_slug(path: Path) -> str:
-    """Encode path to CC slug format."""
-    s = path.as_posix()
-    if path.is_absolute():
-        s = s.lstrip("/")
-        return "-" + s.replace("/", "-") if s else ""
-    return s.replace("/", "-")
+def get_project_root(cwd: Path | None = None) -> Path:
+    """The repository a path belongs to, resolving a worktree to its parent.
 
+    Resolved from `--git-common-dir` rather than `--show-toplevel`, because the
+    latter returns the *worktree* root, and a clone reached through a second
+    checkout would otherwise be a second repository with one location each.
 
-def slug_to_path(slug: str) -> Path:
-    """Decode slug to path."""
-    if not slug:
-        return Path(".")
-    if slug.startswith("-"):
-        return Path("/" + slug[1:].replace("-", "/"))
-    return Path(slug.replace("-", "/"))
+    **This is repository identity, not Project identity.** A linked worktree is
+    its own Project -- every vendor records it separately, which
+    [CoSchema](../../CoSchema.md#project) states with the evidence -- and the
+    catalog relates the two with `related_project_id` rather than merging them.
+    What this function answers is which repository a path belongs to, which is
+    what `project_locations` and the worktree relation are derived from.
+
+    `--git-common-dir` names the shared `.git` directory: identical for every
+    worktree of a repository, distinct across repositories. Its parent is the
+    repository root. It is relative to the working directory when the
+    repository is ordinary and absolute from a linked worktree, so it is
+    resolved against `cwd` before the parent is taken.
+
+    A bare repository reports `.` and has no worktree, so it falls back to
+    `--show-toplevel`, which fails there and leaves `cwd` -- the same answer
+    as before for a case that has no checkout to attribute anyway.
+    """
+    cwd = cwd or Path.cwd()
+    common = _git_output(cwd, "--git-common-dir")
+    if common:
+        resolved = Path(common)
+        if not resolved.is_absolute():
+            resolved = cwd / resolved
+        # A bare repository's common dir is the repository itself, so it has
+        # no parent worktree to name; anything else is `<root>/.git`.
+        if resolved.name == ".git":
+            return resolved.parent.resolve()
+    toplevel = _git_output(cwd, "--show-toplevel")
+    return Path(toplevel) if toplevel else cwd
 
 
 def get_cc_projects_dir() -> Path:
@@ -67,24 +107,24 @@ def get_cc_projects_dir() -> Path:
     return CC_PROJECTS
 
 
-def find_slug_for_project(project_root: Path) -> str | None:
+def find_slug_for_project(project_path: Path) -> str | None:
     """Find the current or explicitly linked historical Claude project slug."""
-    slug = path_to_slug(project_root.resolve())
+    slug = path_to_slug(project_path.resolve())
     projects_dir = get_cc_projects_dir()
     if (projects_dir / slug).is_dir():
         return slug
-    link_path = project_root.resolve() / ".codess" / "source-links.json"
+    link_path = project_path.resolve() / STORE_DIR / SOURCE_LINKS_FILE
     if link_path.exists():
         try:
             value = json.loads(link_path.read_text(encoding="utf-8"))
-            if value.get("format") != "codess.source-links/1":
+            if value.get("format") != SOURCE_LINKS_FORMAT:
                 raise ValueError("unsupported source-link format")
             for link in value.get("links") or []:
                 if not isinstance(link, dict):
                     continue
                 source_path = link.get("source_project_path")
                 if (
-                    link.get("source_system_id") == "anthropic.claude-code"
+                    link_source_system(link) == "anthropic.claude-code"
                     and link.get("selection_state") == "approved"
                     and isinstance(source_path, str)
                     and Path(source_path).is_absolute()
@@ -97,9 +137,28 @@ def find_slug_for_project(project_root: Path) -> str | None:
     return None
 
 
-def get_cc_session_dir(project_root: Path) -> Path | None:
+def cc_session_files(cc_dir: Path) -> tuple[list[Path], list[Path]]:
+    """Claude's transcripts under one project slug: main sessions and subagents.
+
+    Two globs that must stay together, asked at three call sites -- `walk_sessions`
+    twice and `ingest_sources` once. Claude writes a Session at the top level and
+    a delegated one under `<session>/subagents/`, so a caller reading only
+    `*.jsonl` silently omits every subagent Session, and one reading `**/*.jsonl`
+    silently conflates the two kinds.
+
+    Returned as a pair rather than a merged list because the distinction is the
+    point: `--subagent` selects whether the second half participates, and a
+    caller that cannot tell them apart cannot honour it.
+    """
+    return (
+        sorted(cc_dir.glob("*.jsonl")),
+        sorted(cc_dir.glob("*/subagents/**/*.jsonl")),
+    )
+
+
+def get_cc_session_dir(project_path: Path) -> Path | None:
     """Return CC session dir for project, or None if not found."""
-    slug = find_slug_for_project(project_root)
+    slug = find_slug_for_project(project_path)
     if slug:
         return get_cc_projects_dir() / slug
     return None
@@ -108,16 +167,11 @@ def get_cc_session_dir(project_root: Path) -> Path | None:
 # --- CLI: bool merge, roots, run options (merged from former cli_options.py) ---
 
 
-def flag_or_env(args: Any, attr: str, env_val: bool) -> bool:
-    """True if CLI ``store_true`` *attr* is set or *env_val* (from ``config``) is true."""
-    return bool(getattr(args, attr, False) or env_val)
-
-
 class RootsWhenEmpty(Enum):
     """Default work root when ``--dirs`` / ``--dir`` yield no paths after merge."""
 
     CWD = "cwd"
-    PROJECT_ROOT = "project_root"
+    PROJECT_ROOT = "project_path"
 
 
 def resolve_cli_roots(
@@ -160,21 +214,53 @@ def resolve_cli_roots(
     return roots, None
 
 
-def resolve_registry_directory(args: Any) -> Path:
-    """Directory for ``ingested_projects.json`` (``CODESS_REGISTRY``, default ``~/.codess``).
+def resolve_store_root(args: Any) -> Path:
+    """Directory for ``projects_state.json`` (``CODESS_STORE_ROOT``, default ``~/.codess``).
 
-    ``--registry PATH`` overrides that default for this invocation (ingest, scan writes,
-    query ``--stats`` updates). Omitted flag → **config** ``REGISTRY``.
+    ``--store PATH`` overrides that default for this invocation (ingest, scan writes,
+    query ``--stats`` updates). Omitted flag -> **config** ``STORE_ROOT``.
+
+    Accepts a ``Path`` or a string because a declaration may supply either, and
+    normalizes both. Every consumer should reach the value through here rather
+    than off ``args``: the flag is declared 22 times, and a direct read is what
+    makes a differing declaration invisible.
     """
-    from codess.config import REGISTRY
+    from codess.config import STORE_ROOT
 
-    raw = getattr(args, "registry", None)
-    if raw is None or not str(raw).strip():
-        return REGISTRY
-    return Path(str(raw).strip()).expanduser()
+    # The precedence is `settings.resolve`'s, stated once there rather than
+    # restated here. What this adds is one narrow rejection and one conversion.
+    raw = resolve(args, "store_root", STORE_ROOT)
+    # `.` and `..` are refused rather than replaced by the default. A relative
+    # location names wherever the command happened to run, so accepting one puts
+    # the durable store somewhere the operator did not choose and a later run
+    # will not find. Substituting the default silently would be worse: the
+    # command would succeed against the wrong store.
+    #
+    # `""` is caught by the same test, because `Path("")` is `Path(".")`. So is
+    # `--store ""`, which argparse converts before the value arrives -- the two
+    # are indistinguishable here, and a caller who wants the working directory
+    # writes `--store "$PWD"`, which is unambiguous.
+    #
+    # `config.validate_config` reports the same condition for the variable, so an
+    # operator sees it before a command runs; this is the guard for the flag and
+    # for a library caller who never passed through validation.
+    if raw is None:
+        return STORE_ROOT
+    # Compared as a `Path`, because `str("")` is `""` while `Path("")` is
+    # `Path(".")` -- the string test alone lets the empty value through.
+    candidate = Path(raw)
+    if str(candidate) in (".", "..") or candidate.name == "..":
+        raise ValueError(
+            f"store root {str(raw)!r} is a relative location; "
+            "give an absolute path, or omit --store for the default"
+        )
+    # `expanduser` and not `strip`: a trailing space is legal in a POSIX path,
+    # so stripping one silently retargets the store to a different directory
+    # than the operator named.
+    return candidate.expanduser()
 
 
-SCAN_SOURCE_TOKENS = frozenset({"cc", "codex", "cursor"})
+SCAN_SOURCE_TOKENS = frozenset(VENDOR_KEYS)
 
 
 def validate_scan_source_for_cli(source: str | None) -> str | None:
@@ -208,17 +294,19 @@ def build_scan_run_options(args: Any) -> dict[str, Any]:
     """Return resolved scan behavior for one CLI invocation.
 
     Keys: stop_on_error, debug, subagent (bool); recent_days (int | None,
-    None when debug bypasses the day filter); vendors (list[str] | None,
-    None meaning all vendors).
-    """
-    from codess.config import CODESS_DAYS, DEBUG, STOP, SUBAGENT
+    None meaning no time window); vendors (list[str] | None, None meaning
+    all vendors).
 
-    stop_on_error = flag_or_env(args, "stop", STOP)
-    debug = flag_or_env(args, "debug", DEBUG)
-    subagent = flag_or_env(args, "subagent", SUBAGENT)
-    recent_days = None if debug else (
-        args.days if getattr(args, "days", None) is not None else CODESS_DAYS
-    )
+    `debug` does not widen the window. Diagnostic output must describe the
+    same selection an ordinary run produces, or a reader cannot reproduce
+    what they were shown; use `--days 0` to select all time.
+    """
+    from codess.config import DAYS, DEBUG, STOP, SUBAGENT
+
+    stop_on_error = resolve(args, "stop_on_error", STOP)
+    debug = resolve(args, "debug", DEBUG)
+    subagent = resolve(args, "subagent", SUBAGENT)
+    recent_days = resolve(args, "days", DAYS)
     source_filter = getattr(args, "source", None)
     if source_filter and source_filter.strip().lower() == "all":
         source_filter = None
@@ -241,25 +329,32 @@ def build_ingest_run_options(args: Any) -> dict[str, Any]:
 
     Keys: stop_on_error, force, debug, redact, strict_mapping, validate_only,
     live_progress, candidate_snapshot (bool); min_size (int); raw_mode (str);
-    content_policy (str | None); resource_policy (dict[str, Any] report);
+    content_policy, resource_policy (Path | str | None -- a `Path` from the
+    flag, a `str` from the environment variable, so a reader normalizes);
     max_source_bytes, max_cursor_container_bytes, max_events_per_source,
     max_events_per_session, max_context_content_chars (int | None).
     """
     from codess.config import (
-        CONTENT_POLICY, DEBUG, FORCE, INGEST_REDACT, MIN_SIZE, RAW_MODE,
-        RESOURCE_POLICY, STOP, STRICT_MAPPING,
+        CONTENT_POLICY,
+        DEBUG,
+        FORCE,
+        MIN_SIZE,
+        RAW_MODE,
+        REDACT,
+        RESOURCE_POLICY,
+        STOP,
+        STRICT_MAPPING,
     )
     from codess.resource_policy import load_resource_policy
 
-    raw_ms = getattr(args, "min_size", None)
-    # Do not use `or MIN_SIZE`: --min-size 0 is valid (falsy int).
-    min_size = int(MIN_SIZE if raw_ms is None else raw_ms)
+    # `resolve` distinguishes absent from zero, which `or MIN_SIZE` cannot:
+    # `--min-size 0` is a valid bound and would be read as unset.
+    min_size = int(resolve(args, "min_size", MIN_SIZE))
 
-    policy_path = getattr(args, "resource_policy", None) or RESOURCE_POLICY
+    policy_path = resolve(args, "resource_policy", RESOURCE_POLICY)
     policy = load_resource_policy(policy_path)
     env_overrides: dict[str, int] = {}
     for env_name, key in (
-        ("CODESS_MAX_SOURCE_BYTES", "transcript_bytes"),
         ("CODESS_MAX_TRANSCRIPT_BYTES", "transcript_bytes"),
         ("CODESS_MAX_CURSOR_CONTAINER_BYTES", "cursor_container_bytes"),
         ("CODESS_MAX_EVENTS_PER_SOURCE", "events_per_source"),
@@ -288,19 +383,23 @@ def build_ingest_run_options(args: Any) -> dict[str, Any]:
             cli_overrides[key] = int(value)
     if cli_overrides:
         policy = policy.with_overrides(cli_overrides, origin="command-line")
-    if getattr(args, "no_resource_limits", False):
-        policy = policy.disabled(origin="--no-resource-limits")
+    if getattr(args, "no_resource", False):
+        policy = policy.disabled(origin="--no-resource")
     maximums = policy.maximums
 
     return {
-        "stop_on_error": flag_or_env(args, "stop", STOP),
-        "force": flag_or_env(args, "force", FORCE),
+        "stop_on_error": resolve(args, "stop_on_error", STOP),
+        "force": resolve(args, "force", FORCE),
         "min_size": min_size,
-        "debug": flag_or_env(args, "debug", DEBUG),
-        "redact": flag_or_env(args, "redact", INGEST_REDACT),
-        "raw_mode": str(getattr(args, "raw_mode", None) or RAW_MODE).lower(),
-        "strict_mapping": flag_or_env(args, "strict_mapping", STRICT_MAPPING),
-        "content_policy": getattr(args, "content_policy", None) or CONTENT_POLICY,
+        "debug": resolve(args, "debug", DEBUG),
+        "redact": resolve(args, "redact", REDACT),
+        # Canonicalized here as well as by the argparse `type`, because settings
+        # resolution is reachable from a library caller that never built a parser.
+        "raw_mode": canonical_raw_mode(
+            str(resolve(args, "raw_mode", RAW_MODE)).lower()
+        ),
+        "strict_mapping": resolve(args, "strict_mapping", STRICT_MAPPING),
+        "content_policy": resolve(args, "content_policy", CONTENT_POLICY),
         "resource_policy": policy.report(),
         "validate_only": bool(getattr(args, "validate", False)),
         "max_source_bytes": maximums["transcript_bytes"],
@@ -309,6 +408,8 @@ def build_ingest_run_options(args: Any) -> dict[str, Any]:
         "max_events_per_session": maximums["events_per_session"],
         "max_context_content_chars": maximums["context_content_chars"],
         "live_progress": not bool(getattr(args, "no_progress", False)),
+        "report_profile": getattr(args, "report_profile", None),
+        "report_privacy": getattr(args, "report_privacy", None),
         "candidate_snapshot": bool(getattr(args, "candidate_snapshot", False)),
     }
 
@@ -353,7 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument(
         "--dirs",
-        type=str,
+        type=Path,
         metavar="PATH",
         help="Plain path list or candidate CSV with directory_path (see README: Selecting Project and vendor scope)",
     )
@@ -384,6 +485,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument(
         "--source",
+        # A comma-separated vendor spec rather than a filesystem path, so `str`
+        # is the subject rather than the absence of a converter.
         type=str,
         default=None,
         metavar="SPEC",
@@ -391,6 +494,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--out",
+        # `str` rather than `Path` because `-` is a sentinel for stdout, not a
+        # filename: converting it would make the sentinel a relative path named
+        # `-` that the writer would then have to detect and undo.
         type=str,
         default="codess_walk.csv",
         help="scan: output CSV path (- for stdout)",
@@ -417,11 +523,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="scan: [CC] include sidechain sessions [CODESS_SUBAGENT]",
     )
     p.add_argument(
-        "--registry",
-        type=str,
+        "--store",
+        dest="store_root",
+        # `Path`, matching the 21 declarations in `admin_cmd`: one flag name
+        # yielding two types is a difference a caller moving between command
+        # families cannot see. `resolve_store_root` normalizes either, so this
+        # changes the declared contract rather than the behaviour.
+        type=Path,
         default=None,
         metavar="PATH",
-        help="Central registry dir for ingested_projects.json (default CODESS_REGISTRY). "
+        help="Central registry dir for projects_state.json (default CODESS_STORE_ROOT). "
         "PATH overrides ~/.codess default. scan: also filters CSV to known paths + reg_* "
         "when set; scan always merges index metrics into registry (default or PATH).",
     )
@@ -430,6 +541,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--redact",
         action="store_true",
         help="ingest: redact secrets (patterns in config) [CODESS_REDACT]",
+    )
+    p.add_argument(
+        "--no-hash",
+        action="store_true",
+        help=(
+            "skip snapshot/manifest hash verification on read; trusts file "
+            "content as-is instead of raising on a mismatch [CODESS_NO_HASH]. "
+            "For recovery/debugging only -- every read this bypasses is "
+            "logged as a warning."
+        ),
+    )
+    p.add_argument(
+        "--no-check",
+        action="store_true",
+        help=(
+            "proceed when the released CoSchema contract does not verify or "
+            "does not match the one a store was written under "
+            "[CODESS_NO_CONTRACT_CHECK]. Intended for tests and recovery; "
+            "each bypass logs a warning, and a store created under it records "
+            "`contract_override` in its metadata."
+        ),
     )
     p.add_argument(
         "--force",
@@ -447,7 +579,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--raw-mode",
-        choices=("none", "reference", "capture", "seal"),
+        type=canonical_raw_mode,
+        choices=RAW_MODE_CHOICES,
         default=None,
         help="ingest: raw evidence mode [CODESS_RAW_MODE] (default reference)",
     )
@@ -466,15 +599,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--content-policy",
-        type=str,
-        metavar="JSON",
+        # A path to a JSON file, not JSON text: `ingest_cmd` reads it with
+        # `Path(...).expanduser()`, so the metavar named the file's content.
+        type=Path,
+        metavar="PATH",
         default=None,
         help="ingest: scoped content pre/post-processing policy [CODESS_CONTENT_POLICY]",
     )
     p.add_argument(
         "--resource-policy",
-        type=str,
-        metavar="JSON",
+        type=Path,
+        metavar="PATH",
         default=None,
         help=(
             "ingest: versioned resource-limit policy "
@@ -506,7 +641,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--no-resource-limits",
+        "--no-resource",
         action="store_true",
         help=(
             "ingest: explicitly disable transcript, Cursor-container, event, "
@@ -516,6 +651,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--no-progress", action="store_true",
         help="ingest: suppress live progress on stderr; retain structured trace",
+    )
+    p.add_argument(
+        "--report-profile", choices=tuple(sorted(REPORTING_PROFILES)),
+        default=None,
+        help="operational reporting volume and destination [CODESS_REPORT_PROFILE]",
+    )
+    p.add_argument(
+        "--report-privacy", choices=REPORTING_PRIVACY,
+        default=None,
+        help="how much a reported field reveals: local verbatim, shared "
+             "root-relative, strict root token only [CODESS_REPORT_PRIVACY]",
     )
 
     p.add_argument(
@@ -606,14 +752,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="query: correlate artifact evidence across sessions and vendors",
     )
     p.add_argument(
+        "--coverage",
+        action="store_true",
+        help="query: report what was mapped, what was not, and which record "
+             "shapes were seen, per store",
+    )
+    p.add_argument(
         "--snapshot-id",
         help="query: select one retained snapshot (requires exactly one project)",
     )
     p.add_argument(
-        "--snapshot-package-policy",
+        "--snapshot-policy",
+        dest="snapshot_policy",
         choices=("exact", "read-compatible"),
         default="exact",
-        help="query: require matching package, or explicitly allow same-format historical reads",
+        help="query: require the store's recorded contract to match, or explicitly "
+             "allow same-format historical reads",
     )
     p.add_argument(
         "--output-format", choices=("table", "jsonl", "csv"), default="table",
@@ -626,11 +780,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--status", action="append", dest="query_statuses", help="query: normalized/source status (repeatable)")
     p.add_argument("--model", action="append", dest="query_models", help="query: exact model name (repeatable)")
     p.add_argument("--model-provider", action="append", dest="query_model_providers", help="query: exact model provider (repeatable)")
-    p.add_argument("--model-family", action="append", dest="query_model_families", help="query: normalized model family (repeatable)")
+    p.add_argument("--model-line", action="append", dest="query_model_lines", help="query: model line, e.g. claude or gpt (repeatable)")
+    p.add_argument("--model-generation", action="append", dest="query_model_generations", help="query: model generation, e.g. 5 (repeatable)")
+    p.add_argument("--model-version", action="append", dest="query_model_versions", help="query: model version within a generation, e.g. 5.6 (repeatable)")
+    p.add_argument("--model-gradation", action="append", dest="query_model_gradations", help="query: capability level, e.g. opus or sol (repeatable)")
+    p.add_argument("--model-variant", action="append", dest="query_model_variants", help="query: superseded designator, e.g. codex (repeatable)")
     p.add_argument("--model-revision", action="append", dest="query_model_revisions", help="query: exact model revision (repeatable)")
     p.add_argument("--reasoning-effort", action="append", dest="query_reasoning_efforts", help="query: exact observed reasoning effort (repeatable)")
     p.add_argument("--speed-tier", action="append", dest="query_speed_tiers", help="query: exact observed speed tier (repeatable)")
     p.add_argument("--service-tier", action="append", dest="query_service_tiers", help="query: exact observed service tier (repeatable)")
+    p.add_argument("--request-tier", action="append", dest="query_request_tiers", help="query: tier the client requested (repeatable)")
     p.add_argument("--model-mode", action="append", dest="query_model_modes", help="query: exact observed model/collaboration mode (repeatable)")
     p.add_argument("--tool-name", action="append", dest="query_tool_names", help="query: exact tool name (repeatable)")
     p.add_argument("--actor-kind", action="append", dest="query_actor_kinds", help="query: normalized actor kind (repeatable)")
@@ -652,7 +811,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--facet-limit", type=int, default=50, help="typed events/search: maximum values per facet and repetition groups")
     p.add_argument("--request", dest="query_request", help="typed query: load codess.query-request/1 JSON")
     p.add_argument("--save-request", help="typed query: atomically save canonical request JSON")
-    p.add_argument("--save-result", help="typed query: atomically save codess.query-result/1 JSON")
+    p.add_argument(
+        "--save-result",
+        help=f"typed query: atomically save {RESULT_FORMAT} JSON",
+    )
     p.add_argument("--result-input", help="typed query: restrict by stable IDs from a prior result")
     p.add_argument("--compare-result", help="typed query: compare stable row identities with a prior result; exit 3 when changed")
     p.add_argument(
@@ -667,7 +829,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--save-investigation",
         type=Path,
-        help="query cite: atomically save codess.investigation/1",
+        help=f"query cite: atomically save {INVESTIGATION_FORMAT}",
     )
     return p
 
@@ -679,8 +841,8 @@ def parse_and_run(argv: list[str] | None = None) -> int:
     """
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     if raw_argv and raw_argv[0] in {
-        "refresh", "catalog", "baseline", "evidence", "schema", "session",
-        "storage",
+        "refresh", "catalog", "baseline", "config", "evidence", "package",
+        "schema", "session", "storage",
     }:
         from cli.admin_cmd import run as run_admin
         return run_admin(raw_argv)
@@ -697,15 +859,43 @@ def parse_and_run(argv: list[str] | None = None) -> int:
     if args.verbose or VERBOSE:
         logging.basicConfig(level=logging.DEBUG)
 
+    # `fileio` and `schema_contract` read their variables directly, because a
+    # leaf module cannot import `config` without a cycle -- so a flag reaches
+    # them by writing the variable. `settings.LEAF_VISIBLE` declares which
+    # settings that applies to, and `apply_leaf_visible` performs the write once
+    # instead of the two hand-written assignments this replaced.
+    from codess.config import NO_HASH
+    from codess.settings import apply_leaf_visible
+
+    if resolve(args, "no_hash", NO_HASH):
+        args.no_hash = True
+    for variable in apply_leaf_visible(args):
+        log.debug("verification bypassed by request: %s", variable)
+
     from cli.ingest_cmd import run as run_ingest
     from cli.query_cmd import run as run_query
     from cli.scan_cmd import run as run_scan
 
-    if args.command == "scan":
-        return run_scan(args)
-    if args.command == "ingest":
-        return run_ingest(args)
-    return run_query(args)
+    handlers = {"scan": run_scan, "ingest": run_ingest}
+    handler = handlers.get(args.command, run_query)
+
+    # One command boundary for every family, rather than a flush before each of
+    # the query command's 105 return points. `query` is configured here too:
+    # scan and ingest configure their own profiles because they register vendor
+    # roots for path redaction, and a second `configure` would discard those.
+    if args.command not in handlers:
+        reporting.configure(
+            getattr(args, "report_profile", None),
+            privacy=getattr(args, "report_privacy", None),
+            redaction_roots={"home": Path.home()},
+        )
+    try:
+        return handler(args)
+    finally:
+        # A batch below the flush threshold must still reach the sink before
+        # the process ends. In `finally` so an error path reports what it had
+        # recorded rather than losing it with the exception.
+        reporting.flush()
 
 
 def main() -> int:

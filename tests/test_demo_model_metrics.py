@@ -7,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "demo_model_metrics.py"
 
@@ -21,8 +20,8 @@ def _store(path: Path) -> None:
           event_at REAL, content_len INTEGER, event_kind TEXT,
           model_turn_id TEXT
         );
-        CREATE TABLE model_turns (id TEXT PRIMARY KEY, model_config_id INTEGER);
-        CREATE TABLE model_configurations (
+        CREATE TABLE model_turns (id TEXT PRIMARY KEY, model_param_id INTEGER);
+        CREATE TABLE model_params (
           id INTEGER PRIMARY KEY, model_name_exact TEXT
         );
         """
@@ -32,9 +31,9 @@ def _store(path: Path) -> None:
         (2, "claude-opus-4-8"),
         (3, "claude-sonnet-5"),
     )
-    conn.executemany("INSERT INTO model_configurations VALUES (?, ?)", models)
+    conn.executemany("INSERT INTO model_params VALUES (?, ?)", models)
     base = 1_783_234_800_000
-    for index, (config_id, model) in enumerate(models, 1):
+    for index, (config_id, _model) in enumerate(models, 1):
         turn = f"turn-{index}"
         interaction = f"interaction-{index}"
         prompt = base + index * 10_000
@@ -62,7 +61,7 @@ def test_demo_model_metrics_generates_table_data_charts_and_manifest(tmp_path):
     _store(store)
     result = subprocess.run(
         [
-            sys.executable, str(TOOL), "--store", str(store),
+            sys.executable, str(TOOL), "--store-file", str(store),
             "--start", "2026-07-05", "--end", "2026-08-02",
             "--out-dir", str(output),
         ],

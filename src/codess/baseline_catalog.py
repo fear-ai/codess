@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from codess.baseline_validation import load_policy, validate_project
 from codess.fileio import read_json, write_json_atomic
 from codess.project_catalog import durable_project_root
-from codess.schema_contract import FORMAT_VERSION, verify_package
-
+from codess.schema_contract import FORMAT_VERSION, contract_digest
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 SELECTION_FORMAT = "codess.baseline-selection/1"
 APPROVED_FORMAT = "codess.approved-baselines/1"
@@ -76,7 +77,7 @@ def update_approved_catalog(
     old.update(entry)
     entries[entry["path"]] = old
     data["projects"] = sorted(entries.values(), key=lambda item: item["path"])
-    data["package_digest"] = verify_package()
+    data["contract_digest"] = contract_digest()
     write_json_atomic(path, data)
 
 
@@ -94,9 +95,18 @@ def load_baseline_selection(path: Path) -> dict[str, Any]:
 
 
 def _accepted_from_reports(
-    projects: Iterable[dict[str, Any]], *, repo_root: Path,
+    projects: Iterable[dict[str, Any]], *, catalog_base: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
-    package_digest = verify_package()
+    """Accept the reported Projects, resolving each one's policy path.
+
+    `catalog_base` is the directory a relative `policy` field resolves
+    against, and is the *selection document's own directory* rather than a
+    global root. That is what makes a selection portable: a policy named
+    `policies/x.json` beside its selection resolves wherever the pair is
+    placed, so moving the catalog out of the checkout does not rewrite
+    every stored path. An absolute path is used as given, unchanged.
+    """
+    current_digest = contract_digest()
     approved: list[dict[str, Any]] = []
     reviewed: list[dict[str, Any]] = []
     registries: set[str] = set()
@@ -104,7 +114,7 @@ def _accepted_from_reports(
         project = Path(specification["path"]).expanduser().resolve()
         policy = Path(specification["policy"])
         if not policy.is_absolute():
-            policy = repo_root / policy
+            policy = catalog_base / policy
         report = read_json(project / ".codess/validation-report.json")
         final = report.get("final_validation") or {}
         if (
@@ -112,8 +122,8 @@ def _accepted_from_reports(
             or final.get("status") not in ACCEPTED_STATES
         ):
             raise RuntimeError(f"project is not fully accepted: {project}")
-        if final.get("package_digest") != package_digest:
-            raise RuntimeError(f"project package differs from current package: {project}")
+        if final.get("contract_digest") != current_digest:
+            raise RuntimeError(f"project contract differs from the current one: {project}")
         if not (report.get("fixed_point") or {}).get("passed"):
             raise RuntimeError(f"project lacks a fixed point: {project}")
         pointer = read_json(project / ".codess/current.json")
@@ -127,7 +137,7 @@ def _accepted_from_reports(
         )
         if current.get("status") not in ACCEPTED_STATES:
             raise RuntimeError(f"current baseline validation rejected: {project}")
-        for field in ("snapshot_id", "semantic_digest", "package_digest"):
+        for field in ("snapshot_id", "semantic_digest", "contract_digest"):
             if current.get(field) != final.get(field):
                 raise RuntimeError(f"accepted report {field} is stale: {project}")
         final = {**current, "query_smoke": final.get("query_smoke", {})}
@@ -143,18 +153,21 @@ def _accepted_from_reports(
             "snapshot_id": final["snapshot_id"],
             "semantic_digest": final["semantic_digest"],
             "validation_state": final["status"],
-            "policy": str(policy.relative_to(repo_root)) if policy.is_relative_to(repo_root) else str(policy),
+            "policy": (
+                str(policy.relative_to(catalog_base))
+                if policy.is_relative_to(catalog_base) else str(policy)
+            ),
         })
     if len(registries) != 1:
         raise RuntimeError(f"reviewed projects use different registries: {registries}")
     return approved, reviewed, registries.pop()
 
 
-def verify_reviewed_catalog(path: Path, *, repo_root: Path) -> dict[str, Any]:
+def verify_reviewed_catalog(path: Path, *, catalog_base: Path | None = None) -> dict[str, Any]:
     catalog = read_json(path)
     if catalog.get("catalog_format") != REVIEWED_FORMAT:
         raise ValueError("unsupported reviewed-baseline catalog format")
-    if catalog.get("package_digest") != verify_package():
+    if catalog.get("contract_digest") != contract_digest():
         raise ValueError("reviewed package digest differs from the current package")
     registry = Path(catalog["registry"]).expanduser().resolve()
     results = []
@@ -172,7 +185,7 @@ def verify_reviewed_catalog(path: Path, *, repo_root: Path) -> dict[str, Any]:
         )
         policy_path = Path(item["policy"])
         if not policy_path.is_absolute():
-            policy_path = repo_root / policy_path
+            policy_path = (catalog_base or path.parent) / policy_path
         report = validate_project(
             project,
             policy=load_policy(policy_path),
@@ -197,24 +210,31 @@ def freeze_reviewed_catalogs(
     *,
     approved_path: Path,
     reviewed_path: Path,
-    repo_root: Path,
+    catalog_base: Path,
 ) -> dict[str, Any]:
+    """Freeze the accepted Projects into the approved and reviewed catalogs.
+
+    `catalog_base` anchors relative policy paths, and is normally the
+    directory holding the selection document. Passing it explicitly rather
+    than deriving it keeps the caller in control of where a portable
+    selection is rooted.
+    """
     approved_projects, reviewed_projects, registry = _accepted_from_reports(
-        selection["projects"], repo_root=repo_root
+        selection["projects"], catalog_base=catalog_base
     )
-    package_digest = verify_package()
+    current_digest = contract_digest()
     approved = {
         "catalog_format": APPROVED_FORMAT,
         "coschema_format": FORMAT_VERSION,
-        "package_digest": package_digest,
+        "contract_digest": current_digest,
         "registry": registry,
         "projects": approved_projects,
     }
     reviewed = {
         "catalog_format": REVIEWED_FORMAT,
-        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "reviewed_at": now_iso(system_clock),
         "review_state": "accepted_with_known_gaps",
-        "package_digest": package_digest,
+        "contract_digest": current_digest,
         "registry": registry,
         "projects": reviewed_projects,
         "known_gaps": selection.get("known_gaps", []),
@@ -226,7 +246,9 @@ def freeze_reviewed_catalogs(
     try:
         write_json_atomic(approved_path, approved)
         write_json_atomic(reviewed_path, reviewed)
-        verification = verify_reviewed_catalog(reviewed_path, repo_root=repo_root)
+        verification = verify_reviewed_catalog(
+            reviewed_path, catalog_base=catalog_base
+        )
     except Exception:
         for path, content in previous.items():
             if content is None:
@@ -238,7 +260,7 @@ def freeze_reviewed_catalogs(
         raise
     return {
         "status": "frozen",
-        "package_digest": package_digest,
+        "contract_digest": current_digest,
         "projects": len(reviewed_projects),
         "registry": registry,
         "verification": verification,

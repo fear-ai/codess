@@ -12,9 +12,9 @@ from codess.baseline_validation import (
     semantic_digest,
     validate_project,
 )
-from codess.fileio import source_fingerprint
+from codess.fileio import read_source_revision
 from codess.raw_store import RawStore
-from codess.snapshot import create_snapshot, current_store_paths
+from codess.snapshot import create_snapshot, current_stores
 from codess.store import connect, init_db, replace_session_events
 
 
@@ -78,7 +78,7 @@ def _snapshot(tmp_path: Path, *, orphan_tool_result: bool = False) -> tuple[Path
     raw_store = RawStore(raw_root)
     raw_record = raw_store.observe(
         source,
-        source_system_id="claude-code",
+        source_system_key="claude-code",
         storage_format="claude-jsonl",
         mode="capture",
     )
@@ -110,18 +110,18 @@ def test_validate_snapshot_and_semantic_fixed_point(tmp_path):
     assert not first["limitations"]
     assert len(first["semantic_digest"]) == 64
 
-    before = semantic_digest(current_store_paths(project))
+    before = semantic_digest(current_stores(project))
     pointer = json.loads((project / ".codess/current.json").read_text())
     snapshot = project / ".codess" / pointer["path"]
     raw_record = json.loads((snapshot / "raw-manifest.jsonl").read_text().splitlines()[1])
     create_snapshot(
         project,
-        current_store_paths(project),
+        current_stores(project),
         [raw_record],
         raw_store=RawStore(raw_root),
         build_policy={"raw_mode": "capture"},
     )
-    assert semantic_digest(current_store_paths(project)) == before
+    assert semantic_digest(current_stores(project)) == before
 
 
 def test_policy_rejects_unapproved_mapping_diagnostic(tmp_path):
@@ -172,15 +172,24 @@ def test_load_policy_rejects_unknown_fields(tmp_path):
 
 
 def test_repository_acceptance_policies_are_valid():
+    """Every acceptance policy present parses and requires a fixed point.
+
+    The set is not enumerated. It was, naming one machine's Projects, which
+    tied the suite to that machine and disclosed it -- and asserted the wrong
+    thing besides: what matters is that each policy is loadable and demands a
+    fixed point, not which Projects an operator happens to have accepted.
+    `ci-fixture.json` is the one policy the repository ships, because it
+    validates a fixture the repository contains and is therefore true on
+    every machine.
+    """
     root = Path(__file__).resolve().parents[1]
     policies = sorted((root / "catalog/policies").glob("*.json"))
-    assert {path.name for path in policies} == {
-        "ci-fixture.json", "proj-n.json", "insight.json", "misses.json", "proj-m.json", "proj-h.json",
-            "proj-f.json", "proj-g.json", "proj-k.json", "wp.json",
-            "proj-p.json", "proj-l.json", "proj-a.json", "proj-b.json",
-            "proj-e.json",
-        }
-    assert all(load_policy(path)["require_fixed_point"] for path in policies)
+    names = {path.name for path in policies}
+    assert "ci-fixture.json" in names, "the shipped template policy is missing"
+    assert policies, "no acceptance policies found"
+    for path in policies:
+        policy = load_policy(path)
+        assert policy["require_fixed_point"], f"{path.name} does not require a fixed point"
 
 
 def test_ci_fixture_policy_covers_three_vendors_without_home_data(tmp_path):
@@ -221,7 +230,7 @@ def test_ci_fixture_policy_covers_three_vendors_without_home_data(tmp_path):
         raw_records.append(
             raw_store.observe(
                 raw_source,
-                source_system_id=source_system,
+                source_system_key=source_system,
                 storage_format=f"fixture-{suffix}",
                 mode="capture",
             )
@@ -235,7 +244,7 @@ def test_ci_fixture_policy_covers_three_vendors_without_home_data(tmp_path):
     first = validate_project(project, policy=policy, raw_store_root=raw_root)
     assert first["status"] == "accepted", first["errors"]
     create_snapshot(
-        project, current_store_paths(project), raw_records, raw_store=raw_store,
+        project, current_stores(project), raw_records, raw_store=raw_store,
         build_policy={"raw_mode": "capture"},
     )
     second = validate_project(project, policy=policy, raw_store_root=raw_root)
@@ -266,7 +275,7 @@ def test_query_smoke_targets_unpublished_candidate_snapshot(tmp_path):
     )
     candidate = create_snapshot(
         project,
-        current_store_paths(project),
+        current_stores(project),
         [raw_record],
         raw_store=RawStore(raw_root),
         build_policy={"raw_mode": "capture"},
@@ -297,21 +306,21 @@ def test_frozen_reference_validation_does_not_require_live_locator(tmp_path):
         }
     )
     for key in (
-        "object_id", "stored_sha256", "compression", "uncompressed_size",
+        "object_id", "stored_digest", "compression", "uncompressed_size",
         "stored_size", "object_relpath",
     ):
         record.pop(key, None)
     manifest_path.write_text(lines[0] + "\n" + json.dumps(record) + "\n")
     manifest = json.loads((snapshot / "manifest.json").read_text())
     import hashlib
-    manifest["raw_manifest_sha256"] = hashlib.sha256(
+    manifest["raw_manifest_digest"] = hashlib.sha256(
         manifest_path.read_bytes()
     ).hexdigest()
     snapshot_manifest = snapshot / "manifest.json"
     snapshot_manifest.write_text(json.dumps(manifest))
     current_path = project / ".codess/current.json"
     current = json.loads(current_path.read_text())
-    current["manifest_sha256"] = hashlib.sha256(
+    current["manifest_digest"] = hashlib.sha256(
         snapshot_manifest.read_bytes()
     ).hexdigest()
     current_path.write_text(json.dumps(current))
@@ -323,17 +332,17 @@ def test_frozen_reference_validation_does_not_require_live_locator(tmp_path):
     assert not frozen["errors"]
 
 
-def test_reference_validation_rejects_legacy_md5_revision(tmp_path):
+def test_reference_validation_rejects_an_unsupported_revision(tmp_path):
     source = tmp_path / "legacy.jsonl"
     source.write_text('{"legacy":true}\n', encoding="utf-8")
     legacy_revision = "unsupported-fingerprint:" + ("0" * 32)
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     (snapshot / "raw-manifest.jsonl").write_text(
-        json.dumps({"raw_format": "codess.raw/1"}) + "\n"
+        json.dumps({"raw_format": "codess.raw/2"}) + "\n"
         + json.dumps({
             "availability": "reference",
-            "source_system_id": "openai.codex",
+            "source_system_key": "openai.codex",
             "source_locator": str(source),
             "source_revision_id": legacy_revision,
         }) + "\n",
@@ -352,21 +361,21 @@ def test_reference_validation_rejects_legacy_md5_revision(tmp_path):
     )
     assert not check["passed"]
     assert check["detail"]["expected"] == legacy_revision
-    assert check["detail"]["observed"].startswith("sha256-fingerprint:")
+    assert check["detail"]["observed"].startswith("digest-fingerprint:")
     assert any("current_reference" in error for error in report["errors"])
 
 
-def test_reference_validation_keeps_sha256_mismatch_fatal(tmp_path):
+def test_reference_validation_keeps_a_digest_mismatch_fatal(tmp_path):
     source = tmp_path / "current.jsonl"
     source.write_text('{"current":true}\n', encoding="utf-8")
-    current_revision = source_fingerprint(source)[0]
+    current_revision = read_source_revision(source)[0]
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     (snapshot / "raw-manifest.jsonl").write_text(
-        json.dumps({"raw_format": "codess.raw/1"}) + "\n"
+        json.dumps({"raw_format": "codess.raw/2"}) + "\n"
         + json.dumps({
             "availability": "reference",
-            "source_system_id": "openai.codex",
+            "source_system_key": "openai.codex",
             "source_locator": str(source),
             "source_revision_id": current_revision,
         }) + "\n",
@@ -379,3 +388,112 @@ def test_reference_validation_keeps_sha256_mismatch_fatal(tmp_path):
     )
 
     assert any("current_reference" in error for error in report["errors"])
+
+
+class TestDigestCoversTheSchema:
+    """Every released table is in the semantic digest, or excluded with a reason.
+
+    The digest silently ignores whatever `canonical_rows` does not list, so an
+    omission is invisible: `model_params` was missing, and model evidence could
+    differ between two stores while a fixed-point check called them identical
+   . A hand-written table list has nothing to be checked against,
+    which is the same failure 3.5.4 found in the table-to-count map.
+    """
+
+    def _listed(self):
+        import re
+
+        source = Path(__file__).resolve().parents[1] / "src/codess/baseline_validation.py"
+        text = source.read_text(encoding="utf-8")
+        body = text[text.index("def canonical_rows"):text.index("def semantic_digest")]
+        return set(re.findall(r'^\s{8}"(\w+)":', body, re.MULTILINE))
+
+    def _declared(self):
+        import re
+
+        from codess.schema_contract import load_ddl
+
+        return set(re.findall(r"CREATE TABLE (\w+)", load_ddl()))
+
+    def test_every_released_table_is_covered_or_excluded(self):
+        from codess.baseline_validation import DIGEST_EXCLUDED_TABLES
+
+        missing = self._declared() - self._listed() - set(DIGEST_EXCLUDED_TABLES)
+        assert not missing, (
+            f"tables neither in the digest nor excluded with a reason: {sorted(missing)}"
+        )
+
+    def test_each_exclusion_states_why(self):
+        from codess.baseline_validation import DIGEST_EXCLUDED_TABLES
+
+        assert DIGEST_EXCLUDED_TABLES, "an empty exclusion set hides the decision"
+        for table, reason in DIGEST_EXCLUDED_TABLES.items():
+            assert len(reason) > 40, f"{table}'s exclusion needs a stated reason"
+
+    def test_an_exclusion_names_a_real_table(self):
+        from codess.baseline_validation import DIGEST_EXCLUDED_TABLES
+
+        unknown = set(DIGEST_EXCLUDED_TABLES) - self._declared()
+        assert not unknown, f"excluded tables absent from the DDL: {sorted(unknown)}"
+
+    def test_model_evidence_changes_the_digest(self, tmp_path):
+        """The defect, pinned: a differing model row must not compare equal."""
+        from codess.baseline_validation import semantic_digest
+        from codess.store import connect, init_db
+
+        store = tmp_path / "sessions_cc.db"
+        init_db(store)
+        before = semantic_digest([store])
+        conn = connect(store)
+        conn.execute(
+            "INSERT INTO model_params(provider, model_name_exact) VALUES (?, ?)",
+            ("openai", "gpt-test"),
+        )
+        conn.commit()
+        conn.close()
+        assert semantic_digest([store]) != before, (
+            "model evidence must be visible to a fixed-point comparison"
+        )
+
+
+class TestTableListsFollowTheSchema:
+    """Every hardcoded table list is checked against the released DDL.
+
+    A list of table names written in code drifts silently: the snapshot
+    manifest counted twenty of twenty-four tables, so a manifest described a
+    snapshot as complete while saying nothing about four of them -- and a
+    reader comparing two manifests could not see one of those tables gain or
+    lose rows. `store.table_counts` had already been written to remove this
+    exact drift from two other modules, at eleven and twenty-two names.
+
+    The rule these assert is not "every list holds every table". A selecting
+    list is legitimate -- a storage report names the entities an operator reads
+    about. The rule is that a list is either derived from the store, or names
+    only tables that exist, so a rename fails here rather than silently
+    dropping a table from a report.
+    """
+
+    def _declared(self):
+        import re
+
+        from codess.schema_contract import load_ddl
+
+        return set(re.findall(r"CREATE TABLE (\w+)", load_ddl()))
+
+    def test_the_snapshot_manifest_counts_every_table(self, tmp_path):
+        """The manifest is derived from the store, not from a list."""
+        from codess.snapshot import _logical_counts
+        from codess.store import init_db
+
+        store = tmp_path / "sessions_cc.db"
+        init_db(store)
+        assert set(_logical_counts(store)) == self._declared()
+
+    def test_the_storage_report_names_only_real_tables(self):
+        """A selecting list may be a subset and may not name a table that is gone."""
+        from codess.storage_report import REPORTED_TABLES
+
+        unknown = set(REPORTED_TABLES) - self._declared()
+        assert not unknown, (
+            f"storage report names tables the schema does not declare: {sorted(unknown)}"
+        )

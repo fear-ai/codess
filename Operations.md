@@ -4,19 +4,80 @@ This guide gets Codess installed, connected to local Claude Code, Codex, and
 Cursor stores, and running against Projects. It covers the normal operating
 path and basic diagnosis. Exact command options remain in `codess --help`.
 
-## 1. Requirements
+## Requirements
 
 Codess requires:
 
-- Python 3.10 or newer;
+- Python 3.11 or newer;
 - local read access to the vendor stores being examined;
 - write access to the selected Project's `.codess/` directory; and
-- write access to the central Codess registry, normally `~/.codess/`.
+- write access to the machine store, normally `~/.codess/` (see
+  [Two `.codess` Directories](#two-codess-directories)).
+
+`pyproject.toml` states the supported floor (`>=3.11`) and `.python-version`
+states the interpreter this repository is developed and tested against. With
+pyenv installed the second is what `python` resolves to inside the tree; without
+it the file is inert and the floor still applies.
+
+**Use the interpreter, not a shell alias, in any script.** `python` is commonly
+an alias or a pyenv shim that a non-interactive subshell does not inherit, so a
+loop calling `python` can fail with `command not found` on every iteration while
+reporting only that each iteration failed. `python3` resolves through the shim
+and is the spelling to use.
 
 SQLite support is supplied by Python. The `zstandard` package is installed as a
 runtime dependency for bounded raw-object capture.
 
-## 2. Installation
+### Two `.codess` Directories
+
+Codess writes to two directories that share a name and hold different things.
+Both appear in every operation below, so it is worth separating them once.
+
+| | Project depo `<project>/.codess` | Machine store `~/.codess` |
+|---|---|---|
+| Holds | The Project's working stores, its current pointer, ingest state, and the last report | Published store sets, one per Project, plus receipts, reports, retention records, raw capture, and the machine id |
+| Scope | One Project | One machine |
+| Selected by | `--dir` | `--store` (`--registry` is the older spelling and still works) |
+| Removable | Yes -- deleting it costs a re-ingest | Yes, but it holds the only copy of every published store |
+
+A Project's `current.json` **points into the machine store**: the working store
+sits beside the checkout, and the published store the pointer selects is
+central. They are not copies of each other.
+
+**Why the machine store grows, and what bounds it.** Each publication writes a
+complete new store set rather than a delta, so a Project ingested repeatedly
+accumulates one full copy per run.
+
+`CODESS_KEEP_SNAPSHOTS` bounds that: it counts snapshots kept, current
+included, and defaults to **2** -- the snapshot just published and one rollback
+target. **1 keeps only the current** and **0 keeps every snapshot**, which is
+what an operator auditing a sequence of rebuilds needs. Trimming runs
+after the new snapshot is published, so an interruption leaves more snapshots
+than asked for rather than none -- the failure that matters is a Project with no
+readable store, and this ordering cannot produce it. The oldest are removed
+first, and a directory that will not delete is reported rather than raised.
+
+Set 0 when auditing a sequence of rebuilds, where every intermediate store is
+evidence. Raise it where a rollback further back than one publication is worth
+the disk.
+
+This bounds accumulation from here on; it does not reclaim what a machine has
+already retained. Run `codess storage report` for the split between current and
+superseded, and `codess storage prune` to apply a retention plan to the rest.
+
+**Two files hold the Project lists, and they answer different questions.**
+
+| File | Answers |
+|---|---|
+| `projects.json` | Which Projects exist, their identity, locations, and workspace bindings |
+| `ingested_projects.json` | What has been scanned, ingested, or queried for each path, and when |
+
+The first is keyed by Project identity and is the registry proper; the second is
+keyed by path and records activity. A path can appear in the second without
+being in the first, which is how a directory holding Sessions shows up before it
+is onboarded as a Project.
+
+## Installation
 
 Choose the intended Python environment, then install from the repository root:
 
@@ -34,7 +95,7 @@ pytest -q
 The installed `codess` command is the normal interface. Running source files
 directly is reserved for development and diagnosis.
 
-## 3. Source Locations
+## Source Locations
 
 Codess uses the ordinary vendor locations by default:
 
@@ -52,19 +113,219 @@ export CODESS_CC_PROJECTS=/absolute/path/to/claude/projects
 export CODESS_CODEX_SESSIONS=/absolute/path/to/codex/sessions
 export CODESS_CODEX_ARCHIVED_SESSIONS=/absolute/path/to/codex/archived_sessions
 export CODESS_CURSOR_DATA=/absolute/path/to/Cursor/User
-export CODESS_REGISTRY=/absolute/path/to/codess-registry
+export CODESS_STORE_ROOT=/absolute/path/to/machine-store
 ```
 
 Every configured Source root must be absolute. Pointing Codess at copied test
 data is a useful way to diagnose source interpretation without touching live
 application state.
 
-## 4. First Project
+### Scan Scoping
+
+**The three settings below are what a running Codess reads.**
+`CODESS_AGGREGATORS` and `CODESS_EXCLUDE_REVIEW_DIRS` are retired: both took
+work-root-relative segments and both asked the same question -- is this a tree
+kept for reference rather than developed in -- so `exclude_paths` is now both.
+The structural restriction went with them: an aggregator had to be a direct
+child of the work root, so a reference tree one level deeper could not be named
+at all, and an absolute path carries no such limit.
+
+Scan decides which directories are candidate Projects. Three settings bound
+that, and they answer different questions:
+
+| Setting | Answers | Form | Ships |
+|---|---|---|---|
+| `CODESS_EXCLUDE_DIRS` | Which directory *names* are never traversed anywhere | Names | Non-empty sample |
+| `CODESS_EXCLUDE_PATHS` | Which specific trees on *this machine* are not the operator's work | Absolute paths | Empty |
+| `CODESS_INCLUDE_PATHS` | Which trees to admit despite a rule that would skip them | Absolute paths | Empty |
+
+**A name is portable and a path is not**, which is what decides who supplies
+each. `tmp`, `var`, `node_modules`, and `windows` mean the same thing on every
+machine, so they ship as a sample. A reference tree's location is one machine's
+layout, so it ships empty and the operator supplies it.
+
+```bash
+# Trees kept for reference rather than developed in.
+export CODESS_EXCLUDE_PATHS='/opt/vendor-src,/home/user/reference'
+
+# Admitted despite an exclusion, typically outside the home tree.
+export CODESS_INCLUDE_PATHS='/srv/projects/active'
+```
+
+**Syntax.** Lists are **comma-separated**, not colon-separated: a colon is
+excluded from the value character set precisely so a comma is unambiguous, and
+PATH notation would wrongly suggest precedence by position. Leading and trailing
+whitespace is stripped, from a file and from the command line alike. A directory
+name is alphanumeric with `-`, `_`, and `.` permitted, no `/`, at most 255
+characters. A path starts with `/`, may end with one, and is at most 1023
+characters. `..` is rejected in either: a traversal segment would let an entry
+escape the scope it appears to name.
+
+**Precedence is by specificity, stated once because the ordering bug is the
+predictable failure:**
+
+```text
+include_paths > exclude_paths > exclude_dirs > hidden names > default traversal
+```
+
+An `include_paths` entry is honoured even when a parent is excluded and even
+when a segment matches an excluded name -- that is the whole reason it exists.
+Name-based exclusion over-reaches by design: a real `bin/` of checked-in scripts
+is skipped by the `bin` rule, and `include_paths` is the recourse that does not
+require weakening the rule for every tree.
+
+**Hidden names are skipped without being listed.** Any directory whose name
+begins with `.` is not traversed, so the list does not enumerate `.git`,
+`.venv`, `.mypy_cache`, and the rest -- an enumeration of a rule is permanently
+incomplete, since every new tool adds a name. `.codess` and `.claude` are read
+by explicit path rather than by traversal, so the rule does not reach them.
+
+**Symbolic links are not followed.** Following them breaks the precedence rule
+above: a link inside an excluded tree pointing into an included one re-admits
+excluded content by a path that never matches `exclude_paths`, so an exclusion
+the operator wrote is silently void. Links also admit cycles and report one
+Project twice under two paths. A tree that genuinely lives behind a link is
+admitted by naming its real location in `include_paths`, which is explicit and
+auditable.
+
+**A vendored clone is indistinguishable from a Project by inspection.** Both are
+directories with a `.git` and a remote; nothing on disk says which the operator
+develops. `CODESS_EXCLUDE_PATHS` is where that judgment lives, and leaving it
+empty does not mean "no exclusions apply" -- it means the judgment has not been
+recorded. Measured consequence on an unconfigured machine: a directory of
+third-party clones read for reference was ranked as a candidate Project for
+Sessions belonging to a repository beside it.
+
+**A skipped check is not a passing check.** With the path settings unset, the
+layout checks in `registry_check` do not run, and the command reports zero
+findings -- which reads as clean. It states which checks were skipped and the
+variable that enables them, so the two are distinguishable. Run
+`tools/setup_discovery.py --propose` to see what the running process resolved
+and to get candidates from the operator's own tree.
+
+**A vendored clone is indistinguishable from a Project by inspection.** Both are
+directories with a `.git` and a remote; nothing on disk says which one the
+operator develops. So the exclusion list is where that judgment lives, and
+leaving it empty does not mean "no exclusions apply" -- it means the judgment
+has not been recorded. Measured consequence on an unconfigured machine: a
+directory of third-party clones read for reference was ranked as a candidate
+Project for Sessions belonging to a repository beside it.
+
+**A linked git worktree is a related Project, not a separate one.** Where a
+repository has worktrees, each has its own directory and its own `.git` *file*
+pointing at the shared repository. Discovery treats each as a boundary, which
+is correct for locating Sessions; relating them is a catalog operation --
+`state: worktree` with `--related-project-id` naming the parent.
+
+## Regenerating After a Schema or Package Change
+
+Read this first if `ingest` reports:
+
+```text
+UnsupportedStoreError: store package differs from the current released
+package; rebuild the derived working store from source
+```
+
+Codess does not migrate stores. Vendor sources remain the authority, so a
+store written under a different released package is rebuilt rather than
+converted. The procedure preserves the old data instead of deleting it, so a
+comparison remains possible if a rebuild produces something unexpected.
+
+**Check Source coverage before rebuilding.** "Vendor sources remain the
+authority" holds only where those Sources still exist. A rebuild reads the
+Sources, so a store whose Sources the vendor has pruned yields less than it
+held -- and the old store moved aside is then the only record of the
+difference.
+
+```bash
+python tools/project_inventory.py   # nonzero exit if any Project lost Sources
+```
+
+Archive any Project it names before proceeding; the procedure is under
+[Project Inventory](#project-inventory). This is a real condition rather than a
+precaution: Claude Code prunes on a 30-day default, and a known defect bypasses
+the setting on update.
+
+Move existing stores aside, keeping them:
+
+```bash
+# One Project.
+mv /path/to/project/.codess /path/to/project/.codess.old
+
+# Every Project the machine store has recorded.
+python - <<'PY'
+import json, shutil
+from pathlib import Path
+registry = Path.home() / ".codess" / "ingested_projects.json"
+for entry in json.loads(registry.read_text())["projects"]:
+    store = Path(entry["path"]) / ".codess"
+    if store.is_dir():
+        shutil.move(str(store), str(store) + ".old")
+PY
+```
+
+The Project state file accumulates an entry per Project ever scanned,
+including temporary directories from test runs, and has no retention policy.
+Move it aside as well so the rebuilt list reflects what currently exists:
+
+```bash
+mv ~/.codess/ingested_projects.json ~/.codess/ingested_projects.old.json
+```
+
+Rediscover and rebuild. Use `--days 0` for the first scan so Projects older
+than the default window are not silently omitted:
+
+```bash
+codess scan --dir ~/Work --days 0 --out -
+codess ingest --dir /path/to/project
+codess query overview --dir /path/to/project
+```
+
+Read the warnings rather than only the exit status. Both commands report on
+stderr while results go to stdout, so they are easy to miss when redirecting:
+
+| Message | Meaning |
+|---|---|
+| `N project(s) have coding work older than the ... window` | Projects exist but were not listed; widen with `--days 0` |
+| `scan diagnostics: stale_index_entries=N` | A vendor index references Sessions whose files are gone |
+| `ingest diagnostics: malformed=N unsupported=N` | Records that could not be decoded; investigate before trusting counts |
+| `skipping incomplete final record` | A Session was being written during the read; re-ingest later to pick it up |
+| `cursor.workspace.skip ... reason=no-bubble-rows` | A Cursor workspace exists with no retained conversation |
+
+`.codess.old` is a working archive, not a retained artifact. Keep it only
+while confirming the rebuild: `codess query overview` against the new store
+should report Session and Event counts consistent with the
+`last-ingest-report.json` inside the archived directory. Delete
+`.codess.old` once that comparison holds -- it is a copy of derived data
+that vendor sources can reproduce, so keeping it past validation costs disk
+for no evidence.
+
+No vendor format currently requires skipping, and Codess keeps no
+supported-version list. Sessions written by many harness releases decode
+through the same path, because the vendors' record envelopes have been
+stable across the range retained locally. A record shape the decoder does
+not recognize is counted as `unsupported` rather than dropped, so a format
+change appears as a rising diagnostic on one source system instead of as
+missing data.
+
+The harness version is recorded per Session, so the range actually present
+is a query rather than an assumption:
+
+```bash
+sqlite3 -readonly path/to/.codess/sessions_cc.db \
+  "SELECT harness_version, COUNT(*) FROM sessions GROUP BY 1 ORDER BY 2 DESC"
+```
+
+To rehearse the decode without writing anything, add `--validate`: ingest
+stages into a temporary directory, reports the same diagnostics, and leaves
+the Project, registry, and raw store untouched.
+
+## First Project
 
 Use one real repository or Project directory whose Sessions are expected to be
 small and easy to recognize.
 
-### 4.1 Discover
+### Discover
 
 ```bash
 PROJECT=/absolute/path/to/project
@@ -75,7 +336,7 @@ Scan consults vendor indexes and bounded metadata. It does not normalize
 Session content. Confirm that the row names the intended Project and
 source systems before ingesting.
 
-### 4.2 Validate
+### Validate
 
 Run a non-publishing parse and validation when testing a new Source shape or
 configuration:
@@ -87,7 +348,7 @@ codess ingest --dir "$PROJECT" --source all --validate
 Validation uses temporary stores and reports malformed, ignored, empty, and
 failed Sources without changing the Project's selected Project store set.
 
-### 4.3 Ingest
+### Ingest
 
 ```bash
 codess ingest --dir "$PROJECT" --source all
@@ -98,7 +359,7 @@ the common records, writes per-source-system SQLite stores, and publishes the
 completed Project store set. Progress is emitted on standard error without
 printing Session content.
 
-### 4.4 Orient
+### Orient
 
 ```bash
 codess query overview --dir "$PROJECT"
@@ -116,7 +377,7 @@ If results do not resemble the expected Project work, stop and investigate
 Project attribution, Source selection, and vendor mapping before ingesting more
 Projects.
 
-## 5. Routine Updates
+## Routine Updates
 
 Repeating ingest performs an assessed update. Unchanged selected evidence is
 skipped; changed Sources are decoded and replace their prior normalized
@@ -151,6 +412,29 @@ Use repeated `--project` or a maintained Project list for a bounded batch.
 Failures remain Project-specific unless fail-fast behavior is explicitly
 selected.
 
+**A whole-corpus rebuild is a designator, not a loop.** After a CoSchema format
+change every published store must be rebuilt, and `--designator` selects the
+cohort from the catalog rather than from a list assembled by hand:
+
+```bash
+python3 tools/project_inventory.py           # gate: exits nonzero on vanished Sources
+codess refresh --designator included         # plan; review the selection
+codess refresh --designator included --stage apply --force
+```
+
+**After a format change, `--force` is required.** A routine refresh decodes only
+Sources whose selected evidence changed, which means opening the existing working
+store; a format change has just made that store unreadable, so every Project
+fails with `store CoSchema <n>, supported [<n+1>]: rebuild with ... --force`.
+The message names the remedy, and the failure is reported per Project in the
+receipt rather than aborting the run.
+
+This preflights every selected Project before applying any, and writes a
+`codess.refresh-receipt/1` recording each stage. A hand-written loop over
+Project paths has neither, and it also loses the catalog's own exclusions: a
+linked worktree annotated `worktree_of` is omitted from `included`, so a loop
+that reads `projects.json` directly ingests one repository twice.
+
 Inspect the known Project inventory and its computed annotations with:
 
 ```bash
@@ -158,7 +442,7 @@ codess catalog status
 codess catalog annotations
 ```
 
-## 6. Selecting Several Projects
+## Selecting Several Projects
 
 `--dir` may be repeated. `--dirs` accepts a plain path list or a CSV containing
 `directory_path`.
@@ -175,7 +459,7 @@ Inspect the resolved Project scope before drawing cross-Project conclusions.
 The stores preserve Project and source-system identity even when results are
 merged for display.
 
-## 7. Content and Resource Controls
+## Content and Resource Controls
 
 Built-in bounds protect against accidental binary ingestion, extremely large
 transcripts, oversized context bodies, and excessive Event counts. They are
@@ -197,11 +481,16 @@ record before raising it. Oversize or non-text input can indicate incorrect
 Project selection, a vendor format change, or a record that should remain
 external rather than searchable content.
 
-## 8. Raw Evidence
+## Raw Evidence
 
 The ordinary `reference` mode records the Source locator and bounded update
-evidence without retaining another complete copy. `capture` and `seal` are for
+evidence without retaining another complete copy. `observe` retains even less,
+recording the fingerprint and update evidence with no reference, which states
+that Codess read the Source and kept nothing. `capture` and `seal` are for
 investigations requiring exact retained Source bytes.
+
+`--raw-mode none` was the previous spelling of `observe` and still parses, so
+existing operator scripts do not need editing.
 
 ```bash
 codess ingest --dir "$PROJECT" --raw-mode reference
@@ -211,11 +500,11 @@ Raw capture can contain private code, prompts, tool data, and credentials. Use
 it only with an explicit retention purpose and adequate local storage. Raw
 objects support provenance and recovery; they are not inserted wholesale into
 the searchable database. The functional tradeoffs and mode boundaries are
-defined in [Raw Evidence and Integrity](Designs.md#48-raw-evidence-and-integrity).
+defined in [Raw Evidence and Integrity](Designs.md#raw-evidence-and-integrity).
 
-## 9. Basic Diagnosis
+## Basic Diagnosis
 
-### 9.1 No Project Appears in Scan
+### No Project Appears in Scan
 
 Check:
 
@@ -228,14 +517,32 @@ Check:
 Use `--debug` for bounded source-selection diagnostics. It must not be treated
 as a routine content dump.
 
-### 9.2 Ingest Reports Malformed or Unsupported Records
+### Ingest Reports Malformed or Unsupported Records
 
-Identify the source system, Source locator, record locator, exact type, and
-diagnostic reason. Compare the representative record with the vendor schema and
-adapter fixture. A malformed optional field should not remove an otherwise
-usable Event; a core identity or ordering failure should remain explicit.
+Start with the coverage report, which states what was mapped and what was
+not for each store in a Project:
 
-### 9.3 Search Returns Unexpected Counts
+```bash
+codess query --dir "$PROJECT" --coverage
+```
+
+It reports admitted Events against classified Events, the record shapes seen
+and their counts, and diagnostic reasons split by level. The split matters
+when reading it: a **source** or **record** reason means something did not
+become an Event, while a **field** reason means an Event exists with a value
+missing. A Project can show thousands of field diagnostics and lose nothing.
+
+A record shape appearing there that no mapping profile names is an unknown
+shape -- usually a vendor format change rather than a decoder fault. A shape
+that has stopped appearing is the same evidence from the other direction.
+
+Then identify the source system, Source locator, record locator, exact type,
+and diagnostic reason for a representative record, and compare it with the
+vendor schema and adapter fixture. A malformed optional field should not
+remove an otherwise usable Event; a core identity or ordering failure should
+remain explicit.
+
+### Search Returns Unexpected Counts
 
 Verify:
 
@@ -248,14 +555,272 @@ Verify:
 
 Use direct read-only SQLite queries to reconcile a focused result.
 
-### 9.4 Cursor Is Slow or Busy
+### Cursor Is Slow or Busy
 
 Codess queries selected Cursor headers and composer key ranges through read-only
 SQLite connections. Confirm that the selected workspace mapping is narrow and
 that the live database is not continuously changing. Do not copy, vacuum,
 rewrite, or fully decode the Cursor database merely to diagnose one Project.
 
-## 10. Schema Maintenance
+### First Discovery on a New Machine
+
+Codess ships with empty grouping and exclusion lists, so a fresh install
+classifies nothing by name. Discovery is a three-step process rather than a
+configuration exercise: scan broadly, review what was found, then narrow.
+
+```text
+  1. scan            ~/Work or ~, all-time window, empty lists
+        │
+        ▼
+  2. review          which rows are Projects, which are containers,
+        │            which are review or vendored trees
+        ▼
+  3. configure       CODESS_EXCLUDE_PATHS -- trees you keep but do not develop
+        │            CODESS_INCLUDE_PATHS -- one to admit despite a rule
+        ▼
+  4. rescan          confirm the same Projects, minus the excluded trees
+```
+
+```bash
+# 1. Discover with nothing configured.
+codess scan --dir ~/Work --days 0 --out -
+
+# 3. Narrow, using absolute paths from your own tree. Comma-separated, not
+#    colon: a colon is excluded from the value set so a comma is unambiguous.
+export CODESS_EXCLUDE_PATHS='/home/user/work/reference,/home/user/work/vendor'
+
+# A tree inside an excluded one that you *do* develop in. This outranks every
+# other rule, which is why it exists: name-based exclusion over-reaches.
+export CODESS_INCLUDE_PATHS='/home/user/work/reference/mine'
+
+# 4. Confirm the narrowing removed only what you intended.
+codess scan --dir ~/Work --days 0 --out -
+```
+
+**What discovery does without configuration**, verified on a tree of 21
+Projects across three vendors:
+
+| Property | Behavior |
+|---|---|
+| Coverage | Scanning `~` and `~/Work` find the same Projects; `~` additionally finds tool working directories outside the work root |
+| System locations | Never reported. `/`, `/var`, and similar roots are refused: *broad system traversal root is not allowed* |
+| Depth | A container holding 68 nested repositories reports as **one** row, not 68. Scan is index-led and does not walk into candidates |
+| Backup trees | `OLD` and `Save` segments are excluded without configuration, being conventions rather than one tree's names |
+| Matching | On path segments, so `OSS` excludes `group/OSS/proj` and not `OSSproject/x`, and a directory is excluded by where it sits rather than by where the scan started |
+
+**Why the lists ship empty.** A default derived from one machine's tree
+misclassifies directories on every other machine, and the operator cannot see
+why: a Project silently absent from a scan looks like a discovery failure. An
+empty value is also a statement -- *this tree has no grouping directories* --
+which a frozen default could not make.
+
+`~/Work` remains the default work root when no `--dir` is given, since it is
+home-relative and costs nothing when absent.
+
+#### What Is Excluded Without Configuration
+
+Two exclusion mechanisms exist, and they differ in what they name:
+
+| | Discovery policy | `CODESS_EXCLUDE_PATHS` |
+|---|---|---|
+| Where | `schema/discovery-policy.json`, replaced by `CODESS_DISCOVERY_POLICY` | Environment variable |
+| Names | Directory **names**, matched case-folded on any segment | **Paths** relative to the work root |
+| Ships | Populated | Empty |
+| Portable | Yes -- `obj` is build output everywhere | No -- names one machine's layout |
+| Examples | `build`, `dist`, `obj`, `bin`, `x64`, `.vs`, `packages`, `node_modules`, `vendor`, `tmp`, `temp`, `.git`, `__pycache__`, `.venv` | whatever the operator configures |
+
+The policy file also records **names that look skippable and are deliberately
+traversed**, each with its reason -- `lib`, `etc`, `conf`, `data`, `web`,
+`windows`, `private`, `secrets`, and others. They are data rather than a
+comment so `tools/setup_discovery.py` can report them to an operator deciding
+what to exclude for their own tree. Each is a source directory in a common
+layout, so pruning it by name would hide the Project rather than the noise.
+
+**`secrets` and `credentials` are traversed deliberately.** Pruning stops
+traversal, which changes what is discovered rather than what is protected: a
+Session that already read a credential file records it whether or not Codess
+later walks that directory. Content exclusion is the content policy's
+subject, and a name-based skip that looked like protection would be worse
+than none.
+
+A malformed or unreadable policy warns and falls back to the released set: a
+scan that will not start because a policy has a trailing comma is a worse
+failure than one that uses the shipped names.
+
+The built-in set covers four kinds: version-control and editor state, caches,
+build output on POSIX **and Windows** conventions, and scratch directories.
+Matching is case-folded, so `TMP`, `Tmp`, and `tmp` are one entry. Ordinary
+source directories -- `src`, `lib`, `docs`, `tests` -- are never pruned.
+
+`OLD` and `Save` segments are additionally excluded as backup conventions.
+
+**Links, mounts, and other filesystems.** Every path is resolved before it is
+compared to a root, so a symbolic link pointing outside the work root is
+detected as outside it and not followed -- otherwise a link would attribute
+another tree's Sessions to this one. A link to its own parent resolves rather
+than recursing. Codess does not stop at a filesystem boundary: a network
+mount or external volume inside the work root is scanned like any other
+directory, which is usually wanted and is slow when the mount is remote. Use
+an explicit `--dir` or an exclusion entry if a mounted tree should be skipped.
+
+#### Recommended Setup Sequence
+
+A first scan over an unfamiliar tree can be long. This order informs the
+operator before committing to it:
+
+```text
+  1. show defaults      what is pruned, what is empty, where the work root is
+        │
+  2. quick probe        ~ with a short recency window -- seconds, not minutes
+        │               "here is what a full scan would look at"
+        ▼
+  3. choose roots       inclusion: which trees to scan at all
+        │               exclusion: which to skip within them
+        ▼
+  4. full scan          the long pass, over a scope the operator chose
+        │
+  5. review and ingest  sort the discovered Projects, ingest the wanted ones
+```
+
+```bash
+# 1. What will happen, before anything is read: resolved roots, which lists
+#    are empty, what is pruned, and what is deliberately traversed.
+codess config discovery --no-propose
+
+# 1b. The same, plus candidate containers read from your own tree.
+codess config discovery
+
+# 2. A quick probe: recent work only, so it finishes in seconds.
+codess scan --dir ~ --days 30 --out -
+
+# 3. Configure from what the probe showed.
+export CODESS_EXCLUDE_PATHS='<absolute paths to trees you keep, not develop>'
+
+# 4. The long pass, now bounded.
+codess scan --dir ~/work --days 0 --out -
+
+# 5. Ingest what review selected.
+codess ingest --dir <project>
+```
+
+**Why a probe before a full scan.** A recency-windowed scan reads the same
+vendor indexes as a full one but stops at the cutoff, so it costs a fraction
+of the time and answers the question that decides the configuration: which
+containers hold work, and which trees are someone else's code. Configuring
+first and scanning once is faster than scanning, discovering the tree is
+wrong, and scanning again.
+
+**Exclusions matter less than they appear, because discovery is index-led.**
+Measured against a tree holding five vendored directories with 145 nested
+third-party repositories between them: only **one** appeared in a scan with
+no exclusions configured, and it appeared because coding work had actually
+happened there. The other four have no vendor sessions, so an index-led scan
+never reaches them however many repositories they contain.
+
+Configure exclusions for trees where you *have* worked and do not want
+reported -- a reference checkout you opened an assistant in, an archive you
+edited. A directory full of code nobody has run an assistant against needs no
+exclusion, and adding one is a rule that silently stops matching when the
+directory is renamed.
+
+**Findings outside the work root are expected.** Scanning `~` rather than a
+work root additionally reports tool working directories such as `~/.codex`,
+where work happened while the current directory was one of them. These are
+correctly discovered: a Project boundary tested only against clean
+repositories is not being tested. Cursor's shared store appears as
+`(global)`, which is an observation rather than a Project and is never
+written to the registry.
+
+### Current Snapshot Manifest Hash Mismatch
+
+`scan`, `ingest`, and `query` verify the current snapshot's `manifest.json`
+against the hash recorded in its `current.json` pointer before trusting it.
+A mismatch produces an explicit error naming the affected Project and
+snapshot rather than silently accepting stale or tampered content; see
+[Publication and Integrity](CoPlan.md#84-publication-and-integrity) for what
+the check does and does not protect against.
+
+Investigate before bypassing: compare `current.json`'s recorded
+`manifest_digest` against a fresh digest of the retained `manifest.json`, and
+confirm whether the snapshot directory was touched outside normal Codess
+operation (an interrupted publish, manual editing, or a restored backup are
+the ordinary causes).
+
+Two recovery commands rebuild what was lost, and which to use depends on
+which file is damaged:
+
+```bash
+# current.json lost or corrupt: republish the newest snapshot that validates.
+codess baseline recover-pointer --directory /path/to/project
+
+# manifest.json corrupt: reconstruct it from the surviving stores.
+codess baseline recover-manifest --snapshot /path/to/project/.codess/snapshots/<id>
+codess baseline recover-manifest --snapshot <...> --apply
+```
+
+`recover-pointer` republishes an existing snapshot and creates nothing, so it
+needs no confirmation. `recover-manifest` reports by default and writes only
+under `--apply`, because `parent_snapshot_id`, `build_policy`, and
+`build_policy_digest` are recorded nowhere else and come back null: review
+what is recoverable before overwriting what is there. The reconstructed
+document carries `"reconstructed": true`.
+
+`--no-hash` skips this verification; see
+[Integrity Check Overrides](#integrity-check-overrides) for its behavior
+and the conditions under which it is appropriate.
+
+### Integrity Check Overrides
+
+Two checks guard reads and writes, and each has one escape. Both are recovery
+and test options rather than routine flags. Each accepts a command-line flag
+or an environment variable, and the environment variable is what the checking
+code reads: a flag is parsed after configuration constants resolve, so the
+flag's effect is to set the variable.
+
+The two answer different questions and are not interchangeable.
+
+| Override | Environment | Question the check answers | What it covers |
+|---|---|---|---|
+| `--no-hash` | `CODESS_NO_HASH=1` | Is this file the bytes we recorded? | Content verification of an individual retained file against a hash stored beside it: snapshot manifests, pointer documents, and raw-capture objects. |
+| `--no-check` | `CODESS_NO_CONTRACT_CHECK=1` | Were these records written under the rules in force now? | Verification of the released CoSchema package -- DDL, contract, mapping profiles -- and comparison of a store's recorded `contract_digest` against the current one before a write. |
+
+The distinction that matters operationally: `--no-hash` concerns **one file's
+integrity**, and a mismatch means the file changed since it was recorded.
+`--no-check` concerns **agreement between a store and the schema package**,
+and a mismatch means the rules changed since the store was written. A store
+can pass every hash check and still fail the contract check, which is the
+ordinary case after a schema change; the reverse means a file was altered.
+
+Their scope differs accordingly. `--no-hash` affects reads throughout, since
+hashes are verified wherever a recorded file is loaded. `--no-check` gates
+store creation and writes; reads of an already-written store are not blocked
+by a contract mismatch.
+
+Neither override is the default, and both warn. Every bypassed hash check
+logs the path. Every bypassed contract check logs the store and each failure
+it passed over, and a store created under `--no-check` records
+`contract_override` in its `store_meta`, so a later reader observes the
+override directly rather than inferring it from a failing check. `--no-check`
+does not weaken the identity checks around it: a store whose SQLite
+`application_id`, format version, decoder version, or validator version
+disagrees is still refused.
+
+Neither override repairs the underlying inconsistency. Two situations justify
+one:
+
+- **Recovery.** A store whose recorded contract disagrees with the installed
+  one, whose vendor Sources are gone, and whose released files cannot be
+  reconstructed is unreadable under a mandatory gate. The check would then
+  withhold retained evidence rather than protect anything.
+- **Tests.** Exercising a deliberately mismatched store, or a deliberately
+  corrupted manifest, without regenerating the released set.
+
+Outside those, identify and fix the cause. For a contract mismatch, [Schema
+Maintenance](#schema-maintenance) covers comparing the two contracts; for a
+hash mismatch, the investigation steps are in
+[10.6](#current-snapshot-manifest-hash-mismatch).
+
+## Schema Maintenance
 
 Normal ingest verifies the installed schema package before it writes a store.
 When changing CoSchema, a mapping profile, or SQLite DDL, run the focused
@@ -272,7 +837,531 @@ Choose `same`, `compatible`, `breaking`, or `manual` only after reviewing the
 reported contract changes. Then run the full test suite and the smallest real
 source-system example that exercises the changed translation.
 
-## 11. Maintenance Boundaries
+## Comparative Measures
+
+`tools/model_metrics.py` reports what the published stores show about tools,
+vendors, and models; `--html` renders it as one self-contained page. Both read
+the current pointer per Project, so a superseded snapshot is never counted.
+
+```bash
+python tools/model_metrics.py                     # every measure, as JSON
+python tools/model_metrics.py --measure tools     # one measure
+python tools/model_metrics.py --html report.html  # the visual report
+```
+
+**Comparability is stated per measure rather than assumed**, because three
+findings make the obvious comparisons wrong:
+
+| Measure | Compare across vendors? |
+|---|---|
+| Human prompts | **Yes.** Actor classification is what CoSchema normalizes for all three |
+| Tool calls | No. A call is harness-mediated: Cursor records one where Claude does the same work another way |
+| Events, events per Session | No. 45-78% of a store is tool traffic, so the count measures how much a harness writes down |
+| Tool durations | Only where `resolution` is `measured`. Cursor stamps a call and its result identically, so most of its pairs state ordering rather than elapsed time |
+
+**A duration measure states whether it measured anything.** `resolution` is
+`measured`, `same_timestamp`, or `none`, and the report omits the second rather
+than publishing a p50 of zero as though a tool returned instantly.
+
+## Analysis and Visualization
+
+Four tools read published stores and write self-contained HTML -- no network, no
+build step, no external asset -- so a report is readable from an archive.
+
+```bash
+python tools/model_metrics.py --html metrics.html      # tools, vendors, models
+python tools/dialog_extract.py --out dialog.jsonl      # step 1: flat dataset
+python tools/dialog_report.py dialog.jsonl --html d.html  # step 2: analysis
+python tools/timeline_report.py --project X --repo ~/X --html t.html
+python tools/friction_signals.py --examples            # preliminary miss signals
+```
+
+**Extraction and analysis are separate steps on purpose.** `dialog_extract`
+writes JSONL, CSV, or a labelled transcript; `dialog_report` reads that file and
+never opens a store. A figure can then be recomputed from a file a reader
+already has, and either half can be replaced without the other.
+
+**What each is for, and what it may not be used for:**
+
+| Tool | Answers | Does not |
+|---|---|---|
+| `model_metrics` | Tool volume, failure rate, duration, vendor recording shape | Compare tool counts across vendors -- a call is harness-mediated |
+| `dialog_extract` / `dialog_report` | Exchange shape: bouts, prompt and reply size, reply fan-out | Claim causality; the pairing is derived from Session sequence |
+| `timeline_report` | Which vendor worked on which day, against commits | Read a gap as a decline; an empty cell is absence |
+| `friction_signals` | Interrupts, denials, failures, corrective openings | Rate the work, or compare rates between Projects |
+
+**`friction_signals` reports candidates, not findings.** A tool failure is often
+the work -- a failing test being driven -- and a corrective rate depends on how
+an operator writes. What travels is a Project's change over time.
+
+## Repository Tools
+
+The `codess` command is the supported interface. The scripts under `tools/`
+are development and diagnosis aids that are not installed as commands and are
+run with the repository's Python. They are grouped here by what they answer.
+
+### Before Rebuilding or Deleting a Store
+
+`tools/project_inventory.py` reports, per published Project, whether its
+recorded vendor Sources still exist, and exits nonzero if any do not. It is the
+gate on the three operations that can destroy an unreproducible store: a format
+rebuild, a retention prune, and a superseded-store cleanup. See
+[Project Inventory](#project-inventory) for the coverage values and the archive
+procedure.
+
+### When the Schema Manifest Needs Refreshing
+
+`schema/coschema/manifest.json` records a `digest` per released schema file, and
+`tools/refresh_schema_manifest.py` recomputes them. It is separate from a
+snapshot's `manifest.json`, which describes one store set -- the names collide
+and the roles do not.
+
+**Observed cases, from this repository's own history:**
+
+| Circumstance | What happens without a refresh | Observed |
+|---|---|---|
+| A CoSchema format bump | Every store read fails with `format_version mismatch`, including stores just written | Yes -- format 6 to 7. The DDL, the contract, the constant, *and* the manifest each needed updating, and missing the manifest failed 289 tests |
+| A contract file edited without a format change | The write gate warns that the recorded `contract_digest` differs | Yes -- adding a vocabulary |
+| A fixture or policy file edited | The released-package check reports a digest mismatch | Yes -- adding `backup_conventions` to the discovery policy |
+| A comment-only edit to a schema file | Same as above: the digest covers bytes, not meaning | Yes -- rewriting the `schema.sql` header comment. Caught before collection, in under a second, naming the file and `tools/refresh_schema_manifest.py` |
+
+**The workflow that avoids the trap:** edit the schema file, run
+`tools/refresh_schema_manifest.py`, then run the suite. Refreshing *after* the
+suite means reading a failure whose cause is the manifest rather than the
+change, which is how a five-minute edit becomes an hour.
+
+`PRAGMA user_version` in the DDL is a fourth place the format number appears
+and is the one most easily missed: it is what stamps a newly written store, so
+a format bump that misses it writes stores labelled with the old number while
+the code refuses them.
+
+**Resilience implication.** The digests are what let a store state which
+contract produced it, so a store written under an edited-but-unrefreshed
+contract is *detectable* rather than silently divergent. The cost is that the
+manifest is a second thing to keep current, and nothing but the test suite
+enforces it. A pre-commit check that fails when a `schema/` file is newer than
+the manifest would close that, and does not exist.
+
+### Assessing Snapshots for Deletion
+
+**Two tools, and why both exist.** `codess storage report` answers *how much*;
+`tools/snapshot_inventory.py` answers *which, and is it safe*. They are not
+duplicates and neither subsumes the other:
+
+| | `storage report` | `snapshot_inventory.py` |
+|---|---|---|
+| Scope | Whole registry, plus raw store and vendor stores | Per snapshot |
+| Reports | Allocated and logical bytes, file counts, page utilization, current vs superseded totals, deltas against the previous observation | Snapshot identity, per-store Session and Event counts, format, lineage, Session date range, and a deletion recommendation |
+| Records an observation | Yes, dated, for trend comparison | No, it is read-only reporting |
+| Answers "reclaim 5,146,054,656 bytes" | Yes | No |
+| Answers "which of these eight may I delete" | No | Yes |
+
+The command reports `superseded: {allocated_bytes: 5146054656, files: 295}` and
+names no snapshot. That aggregate is the right answer to a capacity question
+and cannot answer a deletion question, because deleting requires knowing what
+each individual generation holds.
+
+**Why the assessment is a `tools/` script rather than a command.** Three
+reasons, in the order they matter:
+
+1. **It reads snapshots the installed contract refuses.** `require_store`
+   accepts only the current format for reading as well as writing, so a
+   command built on the store layer cannot open a superseded snapshot at all.
+   The inventory reads `manifest.json` instead, which is plain JSON and
+   format-independent -- that is precisely what makes a superseded generation
+   describable by software that cannot read it.
+2. **Its output is a prompt for judgment, not a result.** `SUBSET` is a
+   recommendation; equal counts are strong evidence and not proof of equal
+   content. The supported command surface returns results a program can act
+   on, and a recommendation is not one.
+3. **Deletion is deliberately not automated here.** `storage prune` exists and
+   is the reviewed operation. Splitting assessment from action means a wrong
+   assessment costs a re-read rather than data.
+
+**Workflow.** Assess, read, then act:
+
+```bash
+python tools/snapshot_inventory.py --ranges     # what is there, what is safe
+codess storage report                           # what it costs, recorded dated
+codess storage prune                            # the plan, reported not applied
+codess storage prune --apply                    # the reviewed removal
+```
+
+**`storage prune` without `--apply` deletes nothing.** It emits a
+`codess.retention-plan/3` document naming every path it would remove, and
+`--apply` emits a `codess.retention-receipt/3` naming every path it did. The two
+are separate commands so a plan can be read before it is acted on, and the
+receipt carries the plan's `plan_digest` so the applied plan is provably the
+reviewed one.
+
+**Read `safe_to_apply` and the pointer check before applying.** The plan reports
+`safe_to_apply`, `errors`, and `references.blocking`; the last names anything
+still pointing at a snapshot due for deletion. A plan that is not safe states
+why rather than refusing silently.
+
+**Where the receipt lands.** `~/.codess/receipts/retention/<applied_at>.json`
+by default, named for the instant its own `applied_at` records -- the file name
+and the contents are two renderings of one moment, which is the correlation a
+receipt exists to support. `--receipt PATH` overrides it, and a path outside that
+tree is not read back by anything: `refresh_receipts` scans
+`~/.codess/reports/refresh-*.json` and nothing scans elsewhere, so an overridden
+receipt is a copy for a person rather than a record the system consults.
+
+**The eight flags, and why each is a flag rather than a setting or a default.**
+A retention run is deliberate and infrequent, so its options belong on the
+command where an operator states them per run -- not in the environment, where a
+value set once silently governs a later deletion:
+
+| Flag | Decides | Why it is exposed here |
+|---|---|---|
+| `--apply` | Whether anything is deleted | The one irreversible act in the command; separating plan from apply is what lets a plan be read before it is trusted |
+| `--keep N` | How many snapshots survive per Project, current included: 1 the current alone, 3 the current and two past, 0 every one | Defaults to `CODESS_KEEP_SNAPSHOTS`, so a prune retains what publication retains. Per run because a deliberate reclaim may want to keep less than routine trimming |
+| `--reference-catalog PATH` | Which catalogs' references block a deletion | A catalog outside the store cannot be discovered, so it is named. Repeatable because a machine may hold several |
+| `--working-archives` | Whether working archives are candidates | Off by default: they are a working area rather than published evidence, and including them by default would delete on a run an operator asked to be conservative |
+| `--keep-comparison-revisions` | Whether several >=1 GiB revisions of one logical source survive | The default keeps one. A comparison between two large revisions is a deliberate, temporary state, so retaining both is asked for rather than assumed |
+| `--receipt PATH` | Where the receipt is written | Overrides the default location; see below |
+| `--output PATH` | Where the document goes instead of stdout | The result channel, so a plan can be saved and diffed against the receipt |
+| `--store PATH` | Which durable store | One machine may hold more than one |
+
+**Why the depth is a flag *and* a variable.** Publication trims after every
+ingest and a prune runs when an operator decides to reclaim; both are retention,
+so both read `CODESS_KEEP_SNAPSHOTS` and a prune that ignored it would replace a
+policy rather than apply one. `--keep` overrides it for one run, and the plan's
+`policy` field records which depth was applied -- `current-plus-2-per-project`
+rather than a constant, so a receipt read later states the rule it followed.
+
+**Why the receipt is a separate document and not the plan.** They answer
+different questions, and the receipt records six things a plan cannot: when it
+was applied, what was *actually* removed rather than proposed, what was
+reclaimed, the postcondition, the selection flags in force, and the digest of the
+plan it came from. It also carries `kept` and `verified` -- what survived, and
+the reference checks that made the deletion safe -- so a reader holding only the
+receipt can tell a snapshot that was deleted from one that was never there, and
+can audit the claim that nothing still pointed at what went.
+
+**What the result keys are**, because a caller parsing them should not guess:
+
+| Key | Plan | Receipt | Holds |
+|---|---|---|---|
+| `format` | yes | yes | `codess.retention-plan/3` or `codess.retention-receipt/3` |
+| `safe_to_apply`, `errors` | yes | -- | Whether the plan may be applied, and why not |
+| `delete`, `keep` | yes | -- | Counts, byte usage, and the paths or ids on each side |
+| `deleted` | -- | yes | `snapshot_paths`, `raw_object_paths`, `working_archive_paths` -- **lists of paths, not counts** |
+| `reclaimed` | -- | yes | `snapshot_allocated_bytes` and its raw and working-archive counterparts |
+| `kept` | -- | yes | `snapshot_ids` and counts of what survived -- the question asked when a store is found to be missing something |
+| `verified` | -- | yes | The `references`, `errors`, and pre-apply `safe_to_apply` that justified the deletion |
+| `postcondition` | -- | yes | `remaining_candidates` and `safe_to_apply` after the fact |
+| `plan_digest` | yes | yes | Identifies the plan; equal values mean the applied plan is the reviewed one |
+| `policy` | yes | yes | The rule applied, named: `keep-newest` |
+| `keep_total` | yes | yes | How many snapshots the rule retained per Project, current included |
+| `receipt_path` | -- | yes, on stdout | Where the receipt was written |
+
+A count comes from `len(deleted["snapshot_paths"])`; there is no `snapshots`
+key on a receipt, and no `applied` key at all.
+
+**Resilience implications.** Reading the manifest rather than the store is what
+keeps the registry legible after a format change: a machine that upgrades
+mid-project can still enumerate, size, and date every generation it holds
+without downgrading anything. The cost is that the manifest and the store can
+in principle disagree -- the manifest carries a `digest` per store precisely so
+that disagreement is detectable, and a manifest that does not match its store
+is a finding rather than a rounding error.
+
+The failure mode this leaves open: a snapshot whose `manifest.json` is missing
+or unreadable is invisible to the inventory, and would be reported only by the
+byte-level `storage report`. Running both is what closes it, which is the
+reason the workflow above lists them in that order rather than choosing one.
+
+
+
+Publication writes a new snapshot and repoints `current.json`, so superseded
+generations accumulate. `tools/snapshot_inventory.py` reports what each holds
+and which are safe to remove.
+
+```bash
+python tools/snapshot_inventory.py                 # counts and recommendation
+python tools/snapshot_inventory.py --ranges        # add Session date ranges
+python tools/snapshot_inventory.py --csv out.csv   # machine-readable
+```
+
+**Most of the assessment costs no database open.** The snapshot manifest
+already records per-store row counts, a `digest` per store, byte size,
+`created_at`, and `parent_snapshot_id` -- so volume, lineage, and identity are
+read from JSON. Only the Session date range opens a store, which is why
+`--ranges` is opt-in.
+
+**The recommendation, and what it is not.** A superseded snapshot is reported
+`SUBSET` when the current snapshot holds at least as many Sessions and Events
+**in every store**. Compared per store rather than in total, because a total
+hides the case where one store lost rows while another gained more -- which is
+exactly where deleting would lose evidence. Equal counts are strong evidence
+and not proof of equal content, so the tool recommends and the operator
+deletes.
+
+**Read the date range before deleting anything that is not a plain subset.**
+Counts alone can mislead: two stores for one Project were found holding 154
+Sessions/29,161 Events and 343 Sessions/7,653 Events, which reads as the second
+superseding the first. Their ranges are 2026-05-28 to 07-30 and 2026-07-29 to
+08-02 -- **four days of overlap and two months held only by the older store**,
+because the vendor had pruned its own transcripts in between. The range is what
+made that visible.
+
+**What the tool does not decide.** Whether the vendor Sources still exist is a
+Project-level question answered by `sources_vanished` in the Project inventory
+below. A snapshot whose Sources are intact can be rebuilt; one whose Sources
+have been pruned cannot, whatever its counts say.
+
+### Adjusting a Project's State
+
+Two mechanisms, and the distinction is who decides. **Commands** record an
+operator's judgment in the registry. **Files** carry evidence a Project's own
+directory holds. Nothing infers a state from a path.
+
+#### Commands
+
+| Command | Records |
+|---|---|
+| `codess catalog state --project-id <id> --state <s> [--related-project-id <id>] [--note ...]` | A disposition: `priority`, `candidate`, `deferred`, `excluded`, `needs_review`, `worktree`. `worktree` requires the related Project |
+| `codess catalog location retire --project-id <id> --directory <p>` | One location is no longer live; the Project's other locations stand |
+| `codess catalog location add --project-id <id> --directory <p>` | A second location for one Project |
+| `codess catalog relocate --project-id <id> --from <p> --to <q>` | A move, in one step. **Run it before the move where you can.** Afterwards is strictly harder: Claude's storage slug encodes the absolute path, so a move already made leaves the Project's history split across two slug directories with nothing joining them, and the repair is a `path_aliases` entry rather than a rename |
+| `codess catalog lifecycle [--state <s>]` | Reports the derived state per Project; exits nonzero on `scanned` |
+
+**A disposition records what it left.** Setting a state stores
+`previous_state` when it differs from the current one, so "excluded on
+2026-08-20, previously candidate" is distinguishable from "excluded, always
+was". An initial setting has no `previous_state`, and that absence is the
+answer rather than missing data.
+
+#### File-Based Directives
+
+| File | Holds | Written by |
+|---|---|---|
+| `<project>/.codess/project.json` | The Project's identity binding | Ingest, on first observation |
+| `<project>/.codess/source-links.json` | Approved links to vendor Sources whose path or identity does not match -- a renamed workspace, a remote one | The operator |
+| `~/.codess/projects.json` | The catalog: identities, locations, aliases, dispositions | Ingest and the catalog commands |
+| `schema/discovery-policy.json` | Directory names never traversed, and backup conventions | Released; replaceable via `CODESS_DISCOVERY_POLICY` |
+
+**The source-link file is the up-front directive.** It states, before ingest
+runs, that a vendor Source belongs to this Project despite naming another path
+-- which is how a renamed or remote workspace is bound by review rather than by
+inference.
+
+#### What Has No Command Yet
+
+A **purged** Project -- one whose vendor Sources are gone while the Project
+itself is live -- is measurable and unreported, and its store must not be
+deleted without approval. A **copy** is derived and nothing consults it at
+ingest, so a duplicated directory is still ingested twice. Both are tracked as
+open work.
+
+### When a Project Directory Moves
+
+Moving a Project preserves its identity **if the directory moves whole**: the
+binding at `<project>/.codess/project.json` travels with it, and the next
+ingest recognises the Project rather than minting a second one. Observed on a
+real move -- no minting warning, and the catalog recorded both paths as
+locations of one Project.
+
+**What the move does not do is retire the old path.** The catalog keeps it as
+an `active` location, so every check that reads locations keeps reporting a
+directory that is gone. Retire it explicitly:
+
+```bash
+codess catalog location retire --project-id <id> --directory <old-path>
+```
+
+After that the location carries `state: retired` and `path_obsolete: true`, and
+both `codess catalog lifecycle` and `tools/registry_check.py` treat it as
+answered: the Project reports `moved` rather than `removed`, and the stale
+path stops appearing as nested, excluded, or absent.
+
+**Why the retirement is manual.** Nothing marks a location obsolete when its
+directory disappears, and nothing should guess: a path absent today is a
+Project that moved, a volume that is unmounted, or a directory deleted on
+purpose, and those have different answers. The tools report the condition; the
+operator states which it was.
+
+**If the directory is copied rather than moved**, both copies carry the same
+binding and both claim one identity. That is the case the guard in
+`_resolve_project_id` reports -- a binding naming an identity the catalog
+records at another path -- and it is why the binding is a cache rather than the
+authority.
+
+### Project Inventory
+
+`catalog/inventory/project-inventory.csv` is a per-Project reference row,
+generated rather than maintained. It answers the questions that decide whether
+a store is still needed:
+
+| Column | Answers |
+|---|---|
+| `path`, `dir_exists` | Does the Project directory still exist on this machine |
+| `is_git_repo`, `worktree` | Is it a repository, and is it a linked worktree of another |
+| `coschema_format` | Is the store readable by the installed contract |
+| `sessions`, `events`, `store_bytes` | What it holds and what it costs |
+| `sources_total`, `sources_on_disk`, `sources_vanished` | **Whether the vendor Sources still exist** |
+| `disposition`, `commentary` | The catalog state, and why the row matters |
+
+**`sources_vanished` is the column that decides retention.** A store whose
+Sources are all present duplicates evidence the current Sources still produce;
+a store with vanished Sources is the last remaining record of them. That
+distinction is a query rather than a judgement, which is what makes it
+re-checkable after the person who made the call has forgotten it.
+
+**`tools/project_inventory.py` computes it.** Run it before any rebuild,
+retention prune, or superseded-store cleanup -- those are the three operations
+that can destroy a store whose Sources are gone.
+
+```bash
+python tools/project_inventory.py                    # every published Project
+python tools/project_inventory.py --csv out.csv      # the reference row
+```
+
+It opens every store read-only and writes nothing. It **exits nonzero when any
+Project holds vanished Sources**, so it can gate a rebuild rather than merely
+report before one.
+
+**Coverage has three values, and the middle one is why.** A vendor prune
+removes transcripts individually, so a Project commonly loses part of its
+Sources rather than all of them:
+
+| Value | Means | Consequence |
+|---|---|---|
+| `complete` | Every recorded Source resolves | The store can be rebuilt from its Sources |
+| `partial` | Some resolve, some do not | The store is the only record of the part that is gone |
+| `purged` | None resolves | The store is the only record of all of it |
+
+Reading coverage as two values reports a partly purged store as `complete` and
+removes the protection it most needs, which is the unrecoverable case rather
+than an edge of it.
+
+**An archived store is protected by permission, not by convention.** A store
+retained because its Sources are gone belongs outside the active registry --
+`require_store` refuses its format, so it answers no query, and leaving it in
+place invites the same question at every format change. Copy it under
+`~/.codess/archive/<name>/`, write a note beside it stating what it holds and
+why it cannot be regenerated, and remove write permission:
+
+```bash
+chmod -R a-w ~/.codess/archive/<name>
+```
+
+Restoring write permission is then the deliberate act that must precede any
+change to it.
+
+The reference row carries absolute paths from one machine, so it is generated
+locally and excluded from version control by the `*.csv` rule.
+
+### Where a Measurement Is Read From
+
+A figure that describes the current state is read from a producer, not from a
+document: prose goes stale silently while a producer is re-run. This is the
+quick reference for which producer answers what, and which of them fails a
+build rather than merely reporting.
+
+| Producer | Location | Holds | Gated |
+|---|---|---|---|
+| `tools/quality_report.py` | `schema/quality-baseline.json` | Lint and type counts per rule and category, against recorded ceilings | **Yes** -- exits nonzero when a count rises |
+| `pytest` | -- | Pass and fail counts | **Yes** -- via the same report |
+| Refresh receipts | Registry, per Project | Ingest rate, Event counts, per-stage seconds | No |
+| `~/.codess/projects/*/current.json` | Registry | Published Project count, snapshot sizes and identity | No |
+| `tools/deep_audit.py` | Run output | Design-tier findings: `PLR`, `TRY`, `C901`, duplicate clusters | No |
+| `tools/field_coverage.py` | Run output | Which columns are empty, and for which vendors | Optional -- `--fail-on-gap` |
+| `tools/decode_audit.py` | Run output | Classification and relation consistency | **Yes** -- exits nonzero on any inconsistency |
+| `tools/value_survey.py` | Run output | Columns carrying no information, in six classes | No |
+
+**The gated ones are the durable record.** A count written into a document is
+strictly weaker than a baseline file, because the file fails the build when it
+drifts and the prose does not. Accept a new ceiling deliberately:
+
+```bash
+python tools/quality_report.py            # report and compare
+python tools/quality_report.py --accept   # record a new ceiling, and say why
+```
+
+**What a document should carry instead.** A count belongs in a work item only
+where it bounds the work -- which fields a mapping must decide, how many call
+sites a rule must reach -- because that is what tells a finished item from an
+unfinished one. A count that reports a moment belongs to a producer above, and
+the document names the producer.
+
+### Decode and Evidence Audits
+
+These read ingested stores or vendor Sources and report structure, counts, and
+classifications. They report record shapes and never message, prompt,
+argument, or result content, so a finding names a source record type or field
+and can be acted on without reproducing what a Session said.
+
+| Tool | Answers |
+|---|---|
+| `decode_audit.py` | Do classification, relation, and decode coverage hold across ingested stores? Reports Actor, role, origin, and Event-kind distributions, tool and model linkage, Session relations, context Events, and nine pairings that should not co-occur. Exits nonzero when any inconsistency is found. |
+| `audit_claude_features.py` | Which Claude Code record features appear in local Sources? |
+| `audit_codex_parentage.py` | What parent-Session evidence do Codex rollouts carry? |
+| `audit_cursor_features.py` | Which Cursor tool and model structures appear in the selected workspaces? |
+| `value_survey.py` | Which columns carry no information -- never written, or written with the same value every time? Six classes, because what a value is constant *across* changes what it means: absent everywhere, absent for all but one vendor, absent for exactly one, one value across all vendors, one value differing per vendor, constant for some. Values are printed only with `--values`, and are classifications rather than content. |
+| `field_coverage.py` | Which CoSchema columns hold no data, and for which vendors? Classifies every column as empty for one vendor, populated for only one, or empty for all -- three different findings. `--fail-on-gap` exits nonzero on the first class, where a column is demonstrably decodable and one adapter does not fill it. |
+| `gather_evidence.py` | What compatibility evidence is currently available across all three vendors and the registry? |
+| `demo_model_metrics.py` | What model latency and prompt/response measures does one store hold over a bounded period? |
+
+```bash
+python tools/decode_audit.py --dir "$PROJECT" --out audit.json
+```
+
+`--dir` is repeatable, so several Projects can be audited as one report.
+
+### Contract and Quality Checks
+
+| Tool | Answers |
+|---|---|
+| `quality_report.py` | What are the current lint, type, and test counts? Reports all three so a change is compared against the state before it. Only the test suite gates the exit status; lint and type counts have a nonzero baseline being reduced against named work items. |
+| `coschema_gate.py` | Is a CoSchema contract change compatible with its declared rank? Fail-closed; this is what `codess schema compare` wraps. |
+| `report_sql_suppressions.py` | Which files currently hold a Ruff `S608` exemption, and does the exemption list still match the code? |
+
+| `deep_audit.py` | What does the whole tool set see, beyond the rules the gate selects? Runs twenty Ruff families one at a time, plus Pylint duplicate detection, Radon complexity, and Vulture, grades each finding, and writes a timestamped log. |
+
+```bash
+python tools/quality_report.py
+python tools/quality_report.py --skip-tests
+```
+
+**The two are not interchangeable.** `quality_report.py` is the gate: fast,
+run before a change lands, and it fails when a recorded count rises.
+`deep_audit.py` is a periodic audit: slower, reports findings nobody will act on
+today, and depends on tools that may be absent -- so it says which ones did not
+run, because a missing tool reporting nothing looks exactly like a clean result.
+
+```bash
+python tools/deep_audit.py                          # report and log
+python tools/deep_audit.py --no-log                 # report only
+python tools/deep_audit.py --compare output/audits/deep-audit-<stamp>.json
+```
+
+Findings are graded and each line names the tool that produced it:
+
+| Tier | Meaning |
+|---|---|
+| `DEFECT` | A selected rule reported something; the gate expects zero, so read every one |
+| `DESIGN` | Not wrong today, but the shape that produced past defects here |
+| `GAP` | A tool did not run, so it reported nothing rather than found nothing |
+
+Pylint, Radon, and Vulture are development-only and not runtime dependencies;
+install them when running the audit.
+
+### Snapshot and Catalog Maintenance
+
+These operate on published state. Review their reports before applying a
+change, and see [Maintenance Boundaries](#maintenance-boundaries).
+
+| Tool | Answers |
+|---|---|
+| `validate_snapshot.py` | Does one Project's current snapshot verify, and does a smoke query succeed against it? |
+| `build_review_catalog.py` | What reviewable catalog seed does a scan candidate CSV produce? |
+| `prune_project_catalog.py` | Which catalog Projects no longer exist on disk? Reports by default; quarantines only with `--apply`. |
+| `project_status.sh` | What state is a Project in before any large vendor extraction? Content-free orientation over the Project directory and the registry. |
+| `retire_project.py`, `apply_and_verify.py`, `freeze_reviewed_baselines.py`, `verify_reviewed_baselines.py` | Validated Project relocation, and reviewed-baseline apply, freeze, and verification. Each is a compatibility wrapper over the corresponding `codess baseline` or `codess catalog` operation; prefer the command. |
+
+## Maintenance Boundaries
 
 Snapshots, raw objects, catalogs, and receipts support repeatable operation but
 are not the primary product surface. Before deleting any of them:

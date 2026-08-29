@@ -7,18 +7,19 @@ comparison outcome and criticality partition.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable, Iterator
 from contextlib import ExitStack
 from itertools import zip_longest
 from pathlib import Path
-from typing import Iterable, Iterator
 
 from codess import field_state
 from codess.baseline_validation import canonical_rows
+from codess.fileio import open_readonly
 from codess.schema_contract import require_store
 
 # Fields whose per-row divergence blocks promotion (identity / ordering / lineage).
 CRITICAL_FIELDS = frozenset({
-    "global_id", "observation_id", "event_id", "session_id",
+    "entity_id", "observation_id", "event_id", "session_id",
     "sequence_no", "interaction_id", "model_turn_id",
     "parent_event_id", "caused_by_event_id", "source_call_id",
     "row_identity",
@@ -100,7 +101,7 @@ _NORMALIZED_SESSION_FIELDS = frozenset({"observation_id", "ended_at"})
 
 
 def _open_tables(path: Path, stack: ExitStack) -> dict[str, Iterable[sqlite3.Row]]:
-    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    conn = open_readonly(path)
     stack.callback(conn.close)
     conn.row_factory = sqlite3.Row
     require_store(conn, write=False)
@@ -140,16 +141,16 @@ def compare_snapshot_rows(
                 for index, pair in enumerate(
                     zip_longest(old_rows, new_rows, fillvalue=None), 1
                 ):
-                    old, new = pair
-                    old = {} if old is None else dict(old)
-                    new = {} if new is None else dict(new)
+                    old_row, new_row = pair
+                    old = {} if old_row is None else dict(old_row)
+                    new = {} if new_row is None else dict(new_row)
                     context = {
                         "store": store_name,
                         "table": table,
                         "row": index,
                     }
                     # Missing rows are an identity vacancy even in tables
-                    # without a column literally named global_id.
+                    # without a column literally named entity_id.
                     old_identity = (
                         f"{store_name}:{table}:{index}" if old else None
                     )

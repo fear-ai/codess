@@ -10,10 +10,13 @@ from pathlib import Path
 
 import pytest
 
+from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
 from codess.schema_contract import (
     APPLICATION_ID,
     FORMAT_ID,
     FORMAT_VERSION,
+    MANIFEST_PATH,
+    SchemaContractError,
     UnsupportedStoreError,
     load_contract,
     load_mapping,
@@ -24,13 +27,11 @@ from codess.schema_contract import (
     verify_package,
 )
 from codess.store import connect, init_db, replace_session_events
-from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
-
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "schema" / "coschema" / "fixtures"
 sys.path.insert(0, str(ROOT / "tools"))
-from coschema_gate import compare, required  # noqa: E402
+from coschema_gate import compare, required
 
 
 def load_fixture(kind: str, name: str) -> dict:
@@ -105,7 +106,7 @@ def test_event_field_diagnostics_materialize_scope_and_severity(tmp_path):
             "session_id": "s1", "event_id": "e1",
             "event_type": "user_message", "role": "user",
             "field_diagnostics": [{
-                "diagnostic_level": "field", "level": "info",
+                "granularity": "field", "severity": "info",
                 "reason_code": "field_absent",
                 "source_field": "modelInfo",
             }],
@@ -113,7 +114,7 @@ def test_event_field_diagnostics_materialize_scope_and_severity(tmp_path):
         session_id="s1",
     )
     row = conn.execute(
-        "SELECT level,severity,reason_code,source_field "
+        "SELECT granularity,severity,reason_code,source_field "
         "FROM mapping_diagnostics"
     ).fetchone()
     assert tuple(row) == ("field", "info", "field_absent", "modelInfo")
@@ -137,17 +138,28 @@ def test_mapping_event_verifier_checks_rules_provenance_and_json():
     ]
 
 
-def test_writer_refuses_legacy_store_but_reader_can_identify_it(tmp_path):
-    path = tmp_path / "legacy.db"
+def test_store_from_a_superseded_format_is_refused_for_read_and_write(tmp_path):
+    """Only the current format is accepted; older stores are rebuilt, not read."""
+    path = tmp_path / "superseded.db"
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE sessions(id TEXT PRIMARY KEY)")
     conn.commit()
-    assert require_store(conn, write=False, allow_legacy_read=True) == 1
-    with pytest.raises(UnsupportedStoreError):
-        require_store(conn, write=True)
+    for write in (False, True):
+        with pytest.raises(UnsupportedStoreError):
+            require_store(conn, write=write)
     conn.close()
     with pytest.raises(UnsupportedStoreError):
         init_db(path)
+
+
+def test_only_the_current_format_is_readable():
+    from codess.schema_contract import (
+        FORMAT_VERSION,
+        SUPPORTED_READ_FORMATS,
+        SUPPORTED_WRITE_FORMATS,
+    )
+
+    assert SUPPORTED_READ_FORMATS == SUPPORTED_WRITE_FORMATS == {FORMAT_VERSION}
 
 
 def test_writer_refuses_store_from_another_released_package(tmp_path):
@@ -155,7 +167,7 @@ def test_writer_refuses_store_from_another_released_package(tmp_path):
     init_db(path)
     conn = sqlite3.connect(path)
     conn.execute(
-        "UPDATE store_meta SET value=? WHERE key='package_digest'", ("0" * 64,)
+        "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("0" * 64,)
     )
     conn.commit()
     assert require_store(conn, write=False) == FORMAT_VERSION
@@ -195,7 +207,7 @@ def test_cursor_prompt_model_selection_configures_following_model_turn(tmp_path)
             "session_id": "cursor-1", "event_id": "prompt",
             "event_type": "user_message", "subtype": "prompt", "role": "user",
             "content": "hello",
-            "metadata": json.dumps({"model_selection": "composer-2.5", "model": "composer-2.5"}),
+            "metadata": json.dumps({"model_set": "composer-2.5", "model": "composer-2.5"}),
         },
         {
             "session_id": "cursor-1", "event_id": "response",
@@ -206,7 +218,7 @@ def test_cursor_prompt_model_selection_configures_following_model_turn(tmp_path)
     row = conn.execute(
         """
         SELECT c.model_name_exact
-        FROM model_turns t JOIN model_configurations c ON c.id=t.model_config_id
+        FROM model_turns t JOIN model_params c ON c.id=t.model_param_id
         """
     ).fetchone()
     assert row[0] == "composer-2.5"
@@ -222,7 +234,7 @@ def test_cursor_prompt_model_selection_configures_following_model_turn(tmp_path)
             "role": "assistant", "content": "hi",
         },
     ], session_id="cursor-1")
-    assert conn.execute("SELECT COUNT(*) FROM model_configurations").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM model_params").fetchone()[0] == 1
     conn.close()
 
 
@@ -252,14 +264,14 @@ def test_model_event_settings_override_session_or_prompt_defaults(tmp_path):
     row = conn.execute(
         """
         SELECT c.model_name_exact,c.provider,c.reasoning_effort,
-               c.service_tier,c.mode,c.source_config
-        FROM model_turns t JOIN model_configurations c ON c.id=t.model_config_id
+               c.service_tier,c.mode,c.source_params
+        FROM model_turns t JOIN model_params c ON c.id=t.model_param_id
         """
     ).fetchone()
     assert tuple(row[:5]) == (
         "gpt-test", "openai", "high", "priority", "default"
     )
-    assert json.loads(row["source_config"])["configuration_provenance"]
+    assert json.loads(row["source_params"])["configuration_provenance"]
     conn.close()
 
 
@@ -268,11 +280,11 @@ def test_model_configuration_null_safe_identity_is_enforced(tmp_path):
     init_db(path)
     conn = connect(path)
     conn.execute(
-        "INSERT INTO model_configurations(model_name_exact) VALUES ('model-x')"
+        "INSERT INTO model_params(model_name_exact) VALUES ('model-x')"
     )
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO model_configurations(model_name_exact) VALUES ('model-x')"
+            "INSERT INTO model_params(model_name_exact) VALUES ('model-x')"
         )
     conn.close()
 
@@ -309,10 +321,10 @@ def test_event_graph_tools_and_artifacts_are_materialized(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM tool_result_content").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM artifact_content").fetchone()[0] == 1
     assert conn.execute(
-        "SELECT COUNT(*) FROM sessions WHERE global_id LIKE 'codess:session:sha256:%'"
+        "SELECT COUNT(*) FROM sessions WHERE session_entity_id LIKE 'codess:session:id1:%'"
     ).fetchone()[0] == 1
     assert conn.execute(
-        "SELECT COUNT(*) FROM events WHERE global_id LIKE 'codess:event:sha256:%'"
+        "SELECT COUNT(*) FROM events WHERE event_entity_id LIKE 'codess:event:id1:%'"
     ).fetchone()[0] == 3
     call = conn.execute("SELECT source_status, normalized_status FROM tool_invocations").fetchone()
     assert tuple(call) == ("completed", "succeeded")
@@ -382,7 +394,7 @@ def test_unlinked_tool_result_is_preserved_with_diagnostic(tmp_path):
     ).fetchone()
     assert tuple(result) == (None, "orphan")
     diagnostic = conn.execute(
-        "SELECT level, reason_code FROM mapping_diagnostics"
+        "SELECT granularity, reason_code FROM mapping_diagnostics"
     ).fetchone()
     assert tuple(diagnostic) == ("field", "missing_tool_call_id")
     conn.close()
@@ -559,3 +571,308 @@ def test_evolution_gate_classifies_and_fails_closed():
     unknown = copy.deepcopy(old)
     unknown["future_rule"] = True
     assert required(list(compare(old, unknown))) == "manual"
+
+
+# --- contract digest versus package digest -----------------------------------
+#
+# The write gate compares the executable contract, not the whole released set.
+# Ten of the manifest's sixteen entries are validation fixtures, and editing
+# one used to make every published store unwritable although its layout,
+# decoder, and data were unchanged (13.4.4).
+
+def rewrite_manifest_hash(role: str, path: Path) -> None:
+    """Point the manifest at a file's current bytes, as a release would."""
+    import hashlib
+
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest["files"][role]["digest"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def clear_package_caches() -> None:
+    import codess.schema_contract as module
+
+    module.load_manifest.cache_clear()
+    module.load_contract.cache_clear()
+    module.contract_digest.cache_clear()
+    module.verify_package.cache_clear()
+
+
+@pytest.fixture
+def restore_package():
+    """Restore every released file this test may edit, whatever happens."""
+    import codess.schema_contract as module
+
+    originals = {
+        path: path.read_text(encoding="utf-8")
+        for path in (
+            MANIFEST_PATH,
+            module.PACKAGE_ROOT / "fixtures" / "minimal" / "session.json",
+            module.DDL_PATH,
+        )
+    }
+    clear_package_caches()
+    try:
+        yield originals
+    finally:
+        for path, text in originals.items():
+            path.write_text(text, encoding="utf-8")
+        clear_package_caches()
+
+
+def test_the_contract_digest_covers_only_the_runtime_files():
+    """Six files determine what a store is; nothing else can change that."""
+    from codess.schema_contract import CONTRACT_ROLES, load_manifest
+
+    assert {
+        "sqlite_schema", "contract", "mapping_contract",
+        "mapping_claude", "mapping_codex", "mapping_cursor",
+    } == CONTRACT_ROLES
+    assert set(load_manifest()["files"]) >= CONTRACT_ROLES
+
+
+def test_the_two_digests_are_distinct():
+    """They answer different questions, so they must not be interchangeable."""
+    from codess.schema_contract import contract_digest, verify_package
+
+    assert contract_digest() != verify_package()
+    assert len(contract_digest()) == 64
+
+
+def test_a_new_store_records_the_contract_digest(tmp_path):
+    from codess.schema_contract import contract_digest, store_metadata
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    try:
+        assert store_metadata(conn)["contract_digest"] == contract_digest()
+    finally:
+        conn.close()
+
+
+def test_editing_a_fixture_does_not_make_a_store_unwritable(
+    tmp_path, restore_package,
+):
+    """A test document must not gate a store write."""
+    import codess.schema_contract as module
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    fixture = module.PACKAGE_ROOT / "fixtures" / "minimal" / "session.json"
+    fixture.write_text(
+        restore_package[fixture].rstrip("\n") + "\n\n", encoding="utf-8",
+    )
+    rewrite_manifest_hash("fixture_minimal_session", fixture)
+    clear_package_caches()
+
+    connect(path).close()
+
+
+def test_a_fixture_edit_with_a_stale_manifest_does_not_break_the_loaders(
+    tmp_path, restore_package,
+):
+    """The sharper failure: a half-finished edit disabled the program.
+
+    `load_ddl` and `load_contract` verified the whole manifest, so a fixture
+    whose recorded hash had not yet been updated broke every path that reads
+    the DDL -- including creating a store, which has nothing to do with it.
+    """
+    import codess.schema_contract as module
+
+    fixture = module.PACKAGE_ROOT / "fixtures" / "minimal" / "session.json"
+    fixture.write_text(
+        restore_package[fixture].rstrip("\n") + "\n\n", encoding="utf-8",
+    )
+    clear_package_caches()
+
+    assert module.load_ddl()
+    init_db(tmp_path / "store.db")
+
+
+def test_a_fixture_edit_is_still_reported_by_package_verification(
+    restore_package,
+):
+    """Nothing is weakened: the fixtures are still verified, elsewhere."""
+    import codess.schema_contract as module
+
+    fixture = module.PACKAGE_ROOT / "fixtures" / "minimal" / "session.json"
+    fixture.write_text(
+        restore_package[fixture].rstrip("\n") + "\n\n", encoding="utf-8",
+    )
+    clear_package_caches()
+
+    with pytest.raises(SchemaContractError, match="released CoSchema package"):
+        module.verify_package()
+
+
+def test_changing_the_ddl_still_refuses_the_write(tmp_path, restore_package):
+    """The control: a real contract change must still stop a store write."""
+    import codess.schema_contract as module
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    module.DDL_PATH.write_text(
+        restore_package[module.DDL_PATH] + "\n-- semantic change\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_hash("sqlite_schema", module.DDL_PATH)
+    clear_package_caches()
+
+    with pytest.raises(UnsupportedStoreError, match="rebuild"):
+        connect(path)
+
+
+def test_changing_a_mapping_profile_still_refuses_the_write(
+    tmp_path, restore_package,
+):
+    """Mapping profiles are runtime files, so they gate writes as the DDL does."""
+    import codess.schema_contract as module
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    profile = module.MAPPINGS_ROOT / "claude.json"
+    original = profile.read_text(encoding="utf-8")
+    try:
+        profile.write_text(original.rstrip("\n") + "\n\n", encoding="utf-8")
+        rewrite_manifest_hash("mapping_claude", profile)
+        clear_package_caches()
+        with pytest.raises(UnsupportedStoreError, match="rebuild"):
+            connect(path)
+    finally:
+        profile.write_text(original, encoding="utf-8")
+        clear_package_caches()
+
+
+# --- explicit override -------------------------------------------------------
+#
+# Contract checking runs by default and is skippable by explicit request. Two
+# situations use the skip: a test exercising a deliberately mismatched store,
+# and a recovery where the released files that produced a store are no longer
+# reconstructible, so refusing the write protects nothing and leaves retained
+# evidence unreachable.
+
+@pytest.fixture
+def contract_override(monkeypatch):
+    """Enable the override for one test, clearing the digest caches around it."""
+    from codess.schema_contract import CONTRACT_OVERRIDE_ENV
+
+    clear_package_caches()
+    monkeypatch.setenv(CONTRACT_OVERRIDE_ENV, "1")
+    yield
+    monkeypatch.delenv(CONTRACT_OVERRIDE_ENV, raising=False)
+    clear_package_caches()
+
+
+def test_the_override_is_off_unless_asked_for(monkeypatch):
+    from codess.schema_contract import CONTRACT_OVERRIDE_ENV, contract_check_disabled
+
+    monkeypatch.delenv(CONTRACT_OVERRIDE_ENV, raising=False)
+    assert contract_check_disabled() is False
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("1", True), ("true", True), ("YES", True), (" 1 ", True),
+    ("0", False), ("false", False), ("", False), ("maybe", False),
+])
+def test_the_override_reads_the_usual_truthy_spellings(
+    monkeypatch, value, expected,
+):
+    from codess.schema_contract import CONTRACT_OVERRIDE_ENV, contract_check_disabled
+
+    monkeypatch.setenv(CONTRACT_OVERRIDE_ENV, value)
+    assert contract_check_disabled() is expected
+
+
+def test_a_refused_write_names_the_override(tmp_path):
+    """The refusal names the flag, so the escape is discoverable."""
+    from codess.schema_contract import CONTRACT_OVERRIDE_ENV
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("0" * 64,)
+    )
+    conn.commit()
+    with pytest.raises(UnsupportedStoreError, match=CONTRACT_OVERRIDE_ENV):
+        require_store(conn, write=True)
+    conn.close()
+
+
+def test_the_override_allows_writing_a_mismatched_store(
+    tmp_path, contract_override,
+):
+    """Recovery: the contract that produced this store is gone."""
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("0" * 64,)
+    )
+    conn.commit()
+    try:
+        assert require_store(conn, write=True) == FORMAT_VERSION
+    finally:
+        conn.close()
+
+
+def test_the_override_allows_an_unverifiable_contract(
+    restore_package, contract_override,
+):
+    """A partly restored working tree still permits work."""
+    import codess.schema_contract as module
+
+    module.DDL_PATH.write_text(
+        restore_package[module.DDL_PATH] + "\n-- unrecorded\n", encoding="utf-8",
+    )
+    clear_package_caches()
+    assert len(module.contract_digest()) == 64
+
+
+def test_the_override_is_reported_when_it_is_used(
+    tmp_path, contract_override, caplog,
+):
+    """Each bypass logs a warning."""
+    import logging
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("0" * 64,)
+    )
+    conn.commit()
+    try:
+        with caplog.at_level(logging.WARNING, logger="codess.schema_contract"):
+            require_store(conn, write=True)
+    finally:
+        conn.close()
+    assert any("CODESS_NO_CONTRACT_CHECK" in record.message for record in caplog.records)
+
+
+def test_a_store_created_under_the_override_records_that(
+    tmp_path, contract_override,
+):
+    """The store records that its digest was not verified."""
+    from codess.schema_contract import store_metadata
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    try:
+        assert store_metadata(conn).get("contract_override") == "1"
+    finally:
+        conn.close()
+
+
+def test_an_ordinary_store_records_no_override(tmp_path):
+    from codess.schema_contract import store_metadata
+
+    path = tmp_path / "store.db"
+    init_db(path)
+    conn = sqlite3.connect(path)
+    try:
+        assert "contract_override" not in store_metadata(conn)
+    finally:
+        conn.close()

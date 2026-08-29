@@ -14,13 +14,13 @@ import hashlib
 import json
 import math
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime
 from html import escape
 from pathlib import Path
 from statistics import median
-from typing import Any, Iterable
+from typing import Any
 from zoneinfo import ZoneInfo
-
 
 FORMAT = "codess.demo-model-metrics/1"
 DEFAULT_TABLE_MODELS = (
@@ -51,7 +51,7 @@ VENDOR_STORES = {
 
 def _parse_boundary(value: str, timezone_name: str) -> float:
     """Return an inclusive/exclusive boundary as Unix milliseconds."""
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
     return parsed.timestamp() * 1000
@@ -120,7 +120,7 @@ def resolve_store(
         "project_id": current.get("project_id") or project_id,
         "snapshot_id": current.get("snapshot_id"),
         "pointer": str(pointer.resolve()),
-        "manifest_sha256": current.get("manifest_sha256"),
+        "manifest_digest": current.get("manifest_digest"),
         "store": str(resolved),
     }
 
@@ -165,7 +165,7 @@ WITH interaction_observations AS (
          ) AS preference
     FROM events e
     JOIN model_turns mt ON mt.id = e.model_turn_id
-    JOIN model_configurations mc ON mc.id = mt.model_config_id
+    JOIN model_params mc ON mc.id = mt.model_param_id
    WHERE e.actor_kind = 'model'
      AND e.content_role = 'response'
      AND e.event_at >= ?
@@ -495,10 +495,20 @@ def write_latency_svg(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     selection = parser.add_mutually_exclusive_group(required=True)
-    selection.add_argument("--project", type=Path)
-    selection.add_argument("--store", type=Path)
+    selection.add_argument(
+        "--directory", type=Path,
+        help="the Project directory to read",
+    )
+    selection.add_argument(
+        "--store-file", dest="store", type=Path,
+        help="one source-system store to read instead of a Project directory",
+    )
     parser.add_argument("--vendor", choices=sorted(VENDOR_STORES), default="cc")
-    parser.add_argument("--registry", type=Path, default=Path.home() / ".codess")
+    parser.add_argument(
+        "--store", dest="store_root", type=Path,
+        default=Path.home() / ".codess",
+        help="the machine's durable store (default: ~/.codess)",
+    )
     parser.add_argument("--start", required=True, help="inclusive ISO date/time")
     parser.add_argument("--end", required=True, help="exclusive ISO date/time")
     parser.add_argument("--timezone", default="America/Los_Angeles")
@@ -517,9 +527,9 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("--start must precede --end")
         store, selection_info = resolve_store(
             store=args.store,
-            project=args.project,
+            project=args.directory,
             vendor=args.vendor,
-            registry=args.registry.expanduser().resolve(),
+            registry=args.store_root.expanduser().resolve(),
         )
         interactions = read_interactions(
             store,
@@ -561,7 +571,7 @@ def main(argv: list[str] | None = None) -> int:
         ],
     }
     canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
-    manifest["specification_sha256"] = hashlib.sha256(
+    manifest["specification_digest"] = hashlib.sha256(
         canonical.encode("utf-8")
     ).hexdigest()
     (out_dir / "manifest.json").write_text(

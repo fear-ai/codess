@@ -1,6 +1,9 @@
 """Field-state classification and two-value comparison for adapters.
 
-Design, requirements, and rationale: CoPlan D17/D18.
+A decoder that reports only "missing" loses the distinction between a field
+the source omitted, one it sent empty, and one it sent unreadably. Those want
+different dispositions, so the state is named and carried rather than
+collapsed at the point of discovery.
 
 Public API:
 - Field states: ``PRESENT``, ``ABSENT``, ``EMPTY``, ``NULL``, ``SENTINEL``,
@@ -8,8 +11,7 @@ Public API:
 - Comparison outcomes: ``MATCH``, ``MISMATCH``, ``VACANT``.
 - Criticality: ``FATAL``, ``ADVISORY``.
 - ``classify(value)`` -> state; ``get_state(record, key)`` -> ``(value, state)``.
-- ``coarse(state)`` -> ``present``/``vacant`` (``malformed`` stays itself).
-- ``is_vacant(state)``, ``diagnostic_level(state)`` -> ``info``/``warn``/None.
+- ``severity(state)`` -> ``info``/``warn``/None.
 - ``criticality(state, is_critical_field)`` -> ``fatal``/``advisory``/None.
 - ``compare(prior, rebuilt)`` -> comparison outcome.
 - ``diagnose(opts, ...)`` records a field diagnostic; never raises.
@@ -34,15 +36,6 @@ VACANT = "vacant"
 VACANT_STATES = frozenset({ABSENT, EMPTY, NULL, SENTINEL})
 
 
-def coarse(state: str) -> str:
-    """Map a field state to ``present``/``vacant``; ``malformed`` maps to itself."""
-    if state == PRESENT:
-        return PRESENT
-    if state in VACANT_STATES:
-        return VACANT
-    return state
-
-
 # Comparison outcomes.
 MATCH = "match"
 MISMATCH = "mismatch"
@@ -65,8 +58,22 @@ _MISSING = object()
 
 
 def classify(value: Any) -> str:
-    """Classify a value into a field state. Pass ``_MISSING`` for a missing key
-    to get ``absent``. Never raises; ``malformed`` is set by parsing callers."""
+    """Report which state a field value is in, separating four falsy cases.
+
+    ``if not value`` is true for an omitted key, ``None``, ``""``, and a
+    sentinel such as ``"unknown"``, so a decoder using it stores one state for
+    four different source conditions and its diagnostics cannot distinguish
+    them afterwards. This returns ``absent``, ``null``, ``empty``, and
+    ``sentinel`` respectively.
+
+    Pass ``_MISSING`` for a key that was not present at all; every other
+    argument is the value as read.
+
+    ``malformed`` is not returned here. It depends on the type a caller
+    expected, which this function is not given: the same string can be a valid
+    name and an invalid timestamp. A caller that parses classifies first and
+    replaces ``present`` with ``malformed`` when its parse fails.
+    """
     if value is _MISSING:
         return ABSENT
     if value is None:
@@ -83,20 +90,31 @@ def classify(value: Any) -> str:
     return PRESENT
 
 
-def get_state(record: dict, key: str) -> tuple[Any, str]:
-    """Return ``(value, state)`` for ``record[key]``, distinguishing absent."""
+def get_state(record: object, key: str) -> tuple[Any, str]:
+    """Return ``(value, state)`` for ``record[key]``, distinguishing absent.
+
+    A non-mapping record reads as ABSENT rather than raising. This is the
+    narrowest point every vendor field passes through, so guarding the type
+    here covers the whole decode: a vendor writing a string where an object
+    belongs is a field observation, and an `AttributeError` raised from inside
+    a decode discards the Session that record sits in.
+    """
+    if not isinstance(record, dict):
+        return None, ABSENT
     value = record.get(key, _MISSING)
     state = classify(value)
     return (None if value is _MISSING else value), state
 
 
-def is_vacant(state: str) -> bool:
-    """True for any absent-family state (absent/empty/null/sentinel)."""
-    return state in VACANT_STATES
+def severity(state: str) -> str | None:
+    """Return ``"info"``, ``"warn"``, or ``None`` (present) for a state.
 
-
-def diagnostic_level(state: str) -> str | None:
-    """Return ``"info"``, ``"warn"``, or ``None`` (present) for a state."""
+    Named for what it returns. It was `diagnostic_level`, which read as the
+    granularity column beside it in `mapping_diagnostics` and produced exactly
+    that confusion: the emitted dict carried `level` meaning severity and
+    `diagnostic_level` meaning granularity, and the store read the second into
+    the column named after the first.
+    """
     if state in _WARN_STATES:
         return "warn"
     if state in _INFO_STATES:
@@ -105,17 +123,22 @@ def diagnostic_level(state: str) -> str | None:
 
 
 def criticality(state: str, *, is_critical_field: bool) -> str | None:
-    """Return ``fatal``/``advisory``/None for a state on a (critical?) field.
-    ``present`` -> None; non-present -> ``fatal`` if critical else ``advisory``."""
+    """Return ``fatal``/``advisory``/None for a state on one field.
+
+    ``present`` yields None; a non-present state is ``fatal`` when the field is
+    critical and ``advisory`` when it is not.
+    """
     if state == PRESENT:
         return None
     return FATAL if is_critical_field else ADVISORY
 
 
 def compare(prior: Any, rebuilt: Any) -> str:
-    """Return ``match``/``mismatch``/``vacant`` for two values. ``vacant`` if
-    either side is non-present; else ``match`` if equal, ``mismatch`` if not.
-    Never raises."""
+    """Return ``match``/``mismatch``/``vacant`` for two values.
+
+    ``vacant`` if either side is non-present; else ``match`` if equal,
+    ``mismatch`` if not.
+    """
     prior_present = classify(prior) == PRESENT
     rebuilt_present = classify(rebuilt) == PRESENT
     if not (prior_present and rebuilt_present):
@@ -125,10 +148,12 @@ def compare(prior: Any, rebuilt: Any) -> str:
 
 def diagnose(opts: dict, *, field: str, state: str, source_field: str,
              value: Any = None, mapping_rule: str | None = None) -> None:
-    """Record a field diagnostic into ``opts['diagnostics']`` (name->count) and
-    ``opts['field_diagnostics']`` (rows); no-op for ``present``. Never raises."""
-    level = diagnostic_level(state)
-    if level is None:
+    """Record a field diagnostic, as a count and as a row.
+
+    Writes ``opts['diagnostics']`` (name to count) and
+    ``opts['field_diagnostics']`` (rows); a ``present`` state is a no-op.
+    """
+    if severity(state) is None:
         return
     diagnostics = opts.get("diagnostics")
     if diagnostics is None:
@@ -151,13 +176,17 @@ def diagnostic(
     value: Any = None,
     mapping_rule: str | None = None,
 ) -> dict | None:
-    """Build one bounded field diagnostic suitable for an Event attachment."""
-    level = diagnostic_level(state)
-    if level is None:
+    """Build one bounded field diagnostic suitable for an Event attachment.
+
+    `severity` is how much it matters; `granularity` is which part of the input
+    it is about. Both keys name their own column in `mapping_diagnostics`.
+    """
+    field_severity = severity(state)
+    if field_severity is None:
         return None
     return {
-        "level": level,
-        "diagnostic_level": "field",
+        "severity": field_severity,
+        "granularity": "field",
         "reason_code": f"field_{state}",
         "field": field,
         "source_field": source_field,

@@ -9,17 +9,25 @@ from pathlib import Path
 import pytest
 import zstandard
 
-from cli.ingest_cmd import _record_raw
+from codess import snapshot
+from codess.fileio import hash_file
+from codess.ingest_sources import _record_raw
 from codess.raw_store import (
-    RawCaptureError, RawStore,
-    materialize_captured_object,
-    verify_captured_object,
+    RawCaptureError,
+    RawStore,
+    restore_raw,
+    verify_raw,
 )
+from codess.schema_contract import FORMAT_VERSION
 from codess.snapshot import (
+    SnapshotContractMismatchError,
     SnapshotError,
     create_snapshot,
     current_raw_records,
-    current_store_paths,
+    current_stores,
+    read_manifest,
+    rebuild_manifest,
+    recover_current_snapshot,
     snapshot_store_paths,
 )
 from codess.store import connect, ensure_source, init_db, replace_session_events
@@ -32,7 +40,7 @@ def test_jsonl_capture_is_content_addressed_and_recoverable(tmp_path):
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -43,7 +51,7 @@ def test_jsonl_capture_is_content_addressed_and_recoverable(tmp_path):
     assert zstandard.ZstdDecompressor().decompress(object_path.read_bytes()) == content
     assert raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )["object_id"] == record["object_id"]
@@ -55,7 +63,7 @@ def test_content_addressed_capture_reuses_a_different_valid_zstd_encoding(tmp_pa
     raw = RawStore(tmp_path / "raw")
     first = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -67,15 +75,15 @@ def test_content_addressed_capture_reuses_a_different_valid_zstd_encoding(tmp_pa
 
     second = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
     assert second["object_id"] == first["object_id"]
-    assert second["stored_sha256"] == verify_captured_object(
+    assert second["stored_digest"] == verify_raw(
         object_path, second
-    )["stored_sha256"]
-    assert second["stored_sha256"] != first["stored_sha256"]
+    )["stored_digest"]
+    assert second["stored_digest"] != first["stored_digest"]
 
 
 def test_raw_capture_streams_without_path_read_bytes(tmp_path, monkeypatch):
@@ -92,7 +100,7 @@ def test_raw_capture_streams_without_path_read_bytes(tmp_path, monkeypatch):
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -116,7 +124,7 @@ def test_raw_capture_failure_never_promotes_partial_object(tmp_path, monkeypatch
     monkeypatch.setattr("codess.raw_store._compress_file", fail_compression)
     with pytest.raises(RawCaptureError, match="injected"):
         raw.observe(
-            source, source_system_id="openai.codex",
+            source, source_system_key="openai.codex",
             storage_format="codex-jsonl", mode="capture",
         )
     assert not list((raw.root / ".staging").glob("*"))
@@ -132,7 +140,7 @@ def test_raw_verification_streams_without_path_read_bytes(tmp_path, monkeypatch)
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -141,15 +149,15 @@ def test_raw_verification_streams_without_path_read_bytes(tmp_path, monkeypatch)
         raise AssertionError("raw verification must not call Path.read_bytes")
 
     monkeypatch.setattr(Path, "read_bytes", reject_unbounded_read)
-    observed = verify_captured_object(raw.resolve(record), record)
+    observed = verify_raw(raw.resolve(record), record)
 
-    assert observed["stored_sha256"] == record["stored_sha256"]
+    assert observed["stored_digest"] == record["stored_digest"]
     assert observed["stored_size"] == record["stored_size"]
     assert observed["object_id"] == record["object_id"]
     assert observed["uncompressed_size"] == record["uncompressed_size"]
 
 
-def test_raw_materialization_streams_and_verifies_before_promotion(
+def test_raw_restore_streams_and_verifies_before_promotion(
     tmp_path, monkeypatch
 ):
     source = tmp_path / "source.db"
@@ -162,17 +170,17 @@ def test_raw_materialization_streams_and_verifies_before_promotion(
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
         source,
-        source_system_id="cursor.composer",
+        source_system_key="cursor.composer",
         storage_format="cursor-sqlite",
         mode="capture",
     )
 
     def reject_unbounded_read(_path):
-        raise AssertionError("raw materialization must not call Path.read_bytes")
+        raise AssertionError("raw restore must not call Path.read_bytes")
 
     monkeypatch.setattr(Path, "read_bytes", reject_unbounded_read)
     target = tmp_path / "restored.db"
-    observed = materialize_captured_object(raw.resolve(record), target, record)
+    observed = restore_raw(raw.resolve(record), target, record)
     assert observed["object_id"] == record["object_id"]
     assert target.stat().st_size == source.stat().st_size
 
@@ -184,14 +192,14 @@ def test_related_external_content_has_stable_identity_and_parent_link(tmp_path):
     raw = RawStore(tmp_path / "raw")
     record = raw.observe_related(
         sidecar,
-        source_system_id="anthropic.claude-code",
+        source_system_key="anthropic.claude-code",
         storage_format="text/plain",
         mode="capture",
         parent_source_locator="/source/session.jsonl",
         relation_kind="persisted_tool_result",
     )
     assert record["record_type"] == "related_content_revision"
-    assert record["record_id"].startswith("rawrel:sha256:")
+    assert record["record_id"].startswith("rawrel:digest:")
     assert record["parent_source_locator"] == "/source/session.jsonl"
     assert record["relation_kind"] == "persisted_tool_result"
     assert zstandard.ZstdDecompressor().decompress(
@@ -218,10 +226,10 @@ def test_raw_capture_updates_normalized_source_provenance(tmp_path):
         conn,
     )
     row = conn.execute(
-        "SELECT availability, capture_method, consistency, content_sha256 FROM sources"
+        "SELECT availability, capture_method, consistency, content_digest FROM sources"
     ).fetchone()
-    assert tuple(row[:3]) == ("captured", "stable-file-read", "stable-stat")
-    assert row[3] == records[0]["object_id"].removeprefix("sha256:")
+    assert tuple(row[:3]) == ("captured", "stable-file-read", "stable")
+    assert row[3] == records[0]["object_id"].removeprefix("digest:")
     conn.close()
 
 
@@ -234,14 +242,14 @@ def test_cursor_capture_uses_consistent_sqlite_backup(tmp_path):
     writer.commit()
     observed_source_stat = source.stat()
     raw = RawStore(tmp_path / "raw")
-    materialized = tmp_path / "cohort.db"
+    working_copy = tmp_path / "cohort.db"
     progress_events = []
     record = raw.observe(
         source,
-        source_system_id="cursor.composer",
+        source_system_key="cursor.composer",
         storage_format="cursor-sqlite",
         mode="capture",
-        materialized_target=materialized,
+        working_target=working_copy,
         progress=lambda event, **fields: progress_events.append((event, fields)),
     )
     writer.close()
@@ -254,10 +262,10 @@ def test_cursor_capture_uses_consistent_sqlite_backup(tmp_path):
         "raw.compress.start",
         "raw.compress.done",
         "raw.object_promoted",
-        "raw.materialized.done",
+        "raw.working_file.written",
     ]
     with sqlite3.connect(
-        materialized.resolve().as_uri() + "?mode=ro", uri=True
+        working_copy.resolve().as_uri() + "?mode=ro", uri=True
     ) as conn:
         assert conn.execute("SELECT value FROM items").fetchone()[0] == "captured"
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -288,7 +296,7 @@ def test_snapshot_is_validated_promoted_and_sealable(tmp_path):
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -296,15 +304,20 @@ def test_snapshot_is_validated_promoted_and_sealable(tmp_path):
     manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["software_version"]
     assert manifest["runtime"]["sqlite"]
-    assert len(manifest["build_policy_sha256"]) == 64
+    assert len(manifest["build_policy_digest"]) == 64
     assert (snapshot / "raw" / record["object_relpath"]).exists()
-    resolved = current_store_paths(project)
+    resolved = current_stores(project)
     assert len(resolved) == 1
     check = sqlite3.connect(resolved[0])
     assert check.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
     meta = dict(check.execute("SELECT key, value FROM store_meta"))
     check.close()
-    assert meta["snapshot_id"] == manifest["snapshot_id"]
+    # The snapshot identity lives in the manifest, not in the stores it
+    # names: it is derived before the copy and the manifest records that
+    # copy's digest, so a copy carrying the identity would sit inside the
+    # structure whose digest depends on it.
+    assert "snapshot_id" not in meta
+    assert meta["snapshot_created_at"] == manifest["created_at"]
 
     successor = create_snapshot(project, [store], [record], raw_store=raw)
     successor_manifest = json.loads(
@@ -314,13 +327,13 @@ def test_snapshot_is_validated_promoted_and_sealable(tmp_path):
 
     pointer = project / ".codess" / "current.json"
     current = json.loads(pointer.read_text(encoding="utf-8"))
-    current["manifest_sha256"] = "0" * 64
+    current["manifest_digest"] = "0" * 64
     pointer.write_text(json.dumps(current), encoding="utf-8")
     with pytest.raises(SnapshotError):
-        current_store_paths(project)
+        current_stores(project)
 
 
-def test_partial_refresh_can_carry_verified_current_raw_records(tmp_path):
+def test_partial_refresh_carries_current_raw_records(tmp_path):
     project = tmp_path / "project"
     store = project / ".codess" / "sessions_cursor.db"
     init_db(store)
@@ -329,45 +342,39 @@ def test_partial_refresh_can_carry_verified_current_raw_records(tmp_path):
     source.write_bytes(b"one")
     first = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
     create_snapshot(project, [store], [first], raw_store=raw)
     assert current_raw_records(project) == [first]
 
-    raw_manifest = next((project / ".codess" / "snapshots").glob("*/raw-manifest.jsonl"))
-    raw_manifest.write_text("tampered\n", encoding="utf-8")
-    with pytest.raises(SnapshotError, match="raw manifest hash mismatch"):
-        current_raw_records(project)
 
-
-def test_snapshot_preserves_older_store_format_identity(tmp_path):
+def test_current_raw_records_rejects_unparseable_raw_manifest(tmp_path):
+    """Malformed content in an existing snapshot still errors, without a
+    per-read hash re-check: manifest.json and raw-manifest.jsonl are
+    write-once (see snapshot.py::read_manifest), so nothing in this module
+    re-verifies their content against a recorded hash on every read anymore
+    -- corruption is caught only if it also happens to make the content
+    unparseable, not detected as a distinct "tampered" condition."""
     project = tmp_path / "project"
     store = project / ".codess" / "sessions_cursor.db"
     init_db(store)
-    with sqlite3.connect(store) as conn:
-        conn.execute("PRAGMA user_version = 3")
-        conn.execute(
-            "UPDATE store_meta SET value='3' WHERE key='format_version'"
-        )
-        conn.execute(
-            "UPDATE store_meta SET value='legacy-package' WHERE key='package_digest'"
-        )
     raw = RawStore(tmp_path / "raw")
     source = tmp_path / "session.jsonl"
-    source.write_bytes(b"legacy")
-    record = raw.observe(
+    source.write_bytes(b"one")
+    first = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
-    snapshot = create_snapshot(project, [store], [record], raw_store=raw)
-    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
-    assert "coschema3" in snapshot.name
-    assert manifest["format_version"] == 3
-    assert manifest["package_digest"] == "legacy-package"
+    create_snapshot(project, [store], [first], raw_store=raw)
+
+    raw_manifest = next((project / ".codess" / "snapshots").glob("*/raw-manifest.jsonl"))
+    raw_manifest.write_text("not valid json\n", encoding="utf-8")
+    with pytest.raises(SnapshotError, match="cannot read current raw records"):
+        current_raw_records(project)
 
 
 def test_snapshot_build_failure_does_not_replace_current_pointer(tmp_path, monkeypatch):
@@ -399,14 +406,180 @@ def test_snapshot_rejects_raw_manifest_tamper(tmp_path):
     source.write_text('{"type":"user"}\n', encoding="utf-8")
     record = raw.observe(
         source,
-        source_system_id="claude-code",
+        source_system_key="claude-code",
         storage_format="jsonl",
         mode="capture",
     )
     snapshot = create_snapshot(project, [store], [record], raw_store=raw)
     (snapshot / "raw-manifest.jsonl").write_text("tamper\n", encoding="utf-8")
     with pytest.raises(SnapshotError, match="raw manifest hash mismatch"):
-        current_store_paths(project)
+        current_stores(project)
+
+
+def _seed_one_snapshot(tmp_path, name="session.jsonl"):
+    project = tmp_path / "project"
+    store = project / ".codess" / "sessions_cursor.db"
+    init_db(store)
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / name
+    source.write_bytes(b"one")
+    record = raw.observe(
+        source,
+        source_system_key="openai.codex",
+        storage_format="codex-jsonl",
+        mode="capture",
+    )
+    create_snapshot(project, [store], [record], raw_store=raw)
+    return project
+
+
+def test_a_format_10_pointer_still_resolves(tmp_path):
+    """The pointer is the one file a format change cannot regenerate first.
+
+    A rebuild reads the pointer it is about to replace, so a release that
+    renamed `manifest_sha256` to `manifest_digest` has to accept what the
+    previous release wrote -- otherwise every published Project becomes
+    unrebuildable by the very version that renamed the key.
+    """
+    project = _seed_one_snapshot(tmp_path)
+    pointer = project / ".codess" / "current.json"
+    document = json.loads(pointer.read_text(encoding="utf-8"))
+    document["manifest_sha256"] = document.pop("manifest_digest")
+    document["format_version"] = 10
+    pointer.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    resolved = snapshot.current_snapshot(project / ".codess")
+    assert resolved is not None
+    assert len(current_stores(project)) == 1
+
+
+def test_a_format_10_manifest_claim_still_verifies(tmp_path):
+    """The same compatibility, for the digest a stored manifest claims."""
+    project = _seed_one_snapshot(tmp_path)
+    resolved = snapshot.current_snapshot(project / ".codess")
+    assert resolved is not None
+    snapshot_dir, _ = resolved
+    manifest_path = snapshot_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    current = manifest["raw_manifest_digest"]
+
+    assert snapshot.raw_manifest_claim(manifest) == current
+    assert snapshot.raw_manifest_claim(
+        {"raw_manifest_sha256": current}
+    ) == current
+    assert snapshot.raw_manifest_claim({}) is None
+
+
+def test_a_format_11_store_claim_still_verifies():
+    """`digest` since format 12; `sha256` is what format 11 wrote.
+
+    A retained snapshot is verified against the manifest written with it, and a
+    snapshot is rewritten only when republished, so refusing the older key would
+    make every retained snapshot unverifiable by the release that renamed it.
+    """
+    assert snapshot.store_claim({"digest": "abc"}) == "abc"
+    assert snapshot.store_claim({"sha256": "abc"}) == "abc"
+    assert snapshot.store_claim({}) is None
+
+
+def test_recover_current_snapshot_rebuilds_a_deleted_pointer(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    (project / ".codess" / "current.json").unlink()
+    assert current_stores(project) == []
+
+    result = recover_current_snapshot(project)
+    assert result["snapshot_id"]
+    assert len(current_stores(project)) == 1
+
+
+def test_recover_current_snapshot_rebuilds_a_corrupted_pointer(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    (project / ".codess" / "current.json").write_text("not json{{{", encoding="utf-8")
+    with pytest.raises(SnapshotError):
+        current_stores(project)
+
+    result = recover_current_snapshot(project)
+    assert result["snapshot_id"]
+    assert len(current_stores(project)) == 1
+
+
+def test_recover_current_snapshot_skips_a_tampered_newest_snapshot(tmp_path):
+    project = _seed_one_snapshot(tmp_path, name="first.jsonl")
+    assert len(current_stores(project)) == 1  # sanity: resolves before tamper
+
+    store = project / ".codess" / "sessions_cursor.db"
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "second.jsonl"
+    source.write_bytes(b"two")
+    record = raw.observe(
+        source, source_system_key="openai.codex", storage_format="codex-jsonl",
+        mode="capture",
+    )
+    newest = create_snapshot(project, [store], [record], raw_store=raw)
+    (newest / "raw-manifest.jsonl").write_text("tamper\n", encoding="utf-8")
+
+    result = recover_current_snapshot(project)
+    assert result["snapshot_id"] != newest.name
+    assert len(current_stores(project)) == 1
+
+
+def test_recover_current_snapshot_raises_when_nothing_is_retained(tmp_path):
+    project = tmp_path / "project"
+    (project / ".codess").mkdir(parents=True)
+    with pytest.raises(SnapshotError, match="no retained snapshots"):
+        recover_current_snapshot(project)
+
+
+def test_read_manifest_falls_back_to_backup_copy(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    snapshot_dir = next((project / ".codess" / "snapshots").iterdir())
+    original = read_manifest(snapshot_dir)
+    (snapshot_dir / "manifest.json").unlink()
+    assert read_manifest(snapshot_dir) == original
+
+
+def test_read_manifest_raises_when_both_copies_are_missing(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    snapshot_dir = next((project / ".codess" / "snapshots").iterdir())
+    (snapshot_dir / "manifest.json").unlink()
+    (snapshot_dir / "manifest.json.bak").unlink()
+    with pytest.raises(SnapshotError, match="manifest.json missing"):
+        read_manifest(snapshot_dir)
+
+
+def test_rebuild_manifest_reproduces_recoverable_fields(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    snapshot_dir = next((project / ".codess" / "snapshots").iterdir())
+    original = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    (snapshot_dir / "manifest.json").unlink()
+    (snapshot_dir / "manifest.json.bak").unlink()
+
+    rebuilt = rebuild_manifest(snapshot_dir)
+    assert rebuilt["reconstructed"] is True
+    assert rebuilt["snapshot_id"] == original["snapshot_id"]
+    assert rebuilt["format_version"] == original["format_version"]
+    assert rebuilt["contract_digest"] == original["contract_digest"]
+    assert rebuilt["raw_manifest_digest"] == original["raw_manifest_digest"]
+    assert rebuilt["stores"] == original["stores"]
+    assert rebuilt["parent_snapshot_id"] is None
+    assert rebuilt["build_policy"] is None
+
+
+def test_rebuild_manifest_requires_a_surviving_store_database(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    snapshot_dir = next((project / ".codess" / "snapshots").iterdir())
+    for db in snapshot_dir.glob("*.db"):
+        db.unlink()
+    with pytest.raises(SnapshotError, match="store database"):
+        rebuild_manifest(snapshot_dir)
+
+
+def test_rebuild_manifest_requires_raw_manifest_jsonl(tmp_path):
+    project = _seed_one_snapshot(tmp_path)
+    snapshot_dir = next((project / ".codess" / "snapshots").iterdir())
+    (snapshot_dir / "raw-manifest.jsonl").unlink()
+    with pytest.raises(SnapshotError, match="raw-manifest.jsonl"):
+        rebuild_manifest(snapshot_dir)
 
 
 def test_retained_snapshot_requires_exact_package_unless_explicitly_compatible(
@@ -420,7 +593,7 @@ def test_retained_snapshot_requires_exact_package_unless_explicitly_compatible(
     source.write_text('{"type":"user"}\n', encoding="utf-8")
     record = raw.observe(
         source,
-        source_system_id="openai.codex",
+        source_system_key="openai.codex",
         storage_format="codex-jsonl",
         mode="capture",
     )
@@ -428,9 +601,482 @@ def test_retained_snapshot_requires_exact_package_unless_explicitly_compatible(
     snapshot_id = snapshot.name
     assert snapshot_store_paths(project, snapshot_id)
 
-    monkeypatch.setattr("codess.snapshot.verify_package", lambda: "f" * 64)
-    with pytest.raises(SnapshotError, match="package digest mismatch"):
+    monkeypatch.setattr("codess.snapshot.contract_digest", lambda: "f" * 64)
+    with pytest.raises(SnapshotError, match="different CoSchema contract"):
         snapshot_store_paths(project, snapshot_id)
     assert snapshot_store_paths(
-        project, snapshot_id, allow_package_mismatch=True
+        project, snapshot_id, allow_contract_mismatch=True
     )
+
+
+# --- stat consistency at the capture site -----------------------------------
+#
+# Capture and fingerprinting share one guard (`fileio.stat_consistency`) and
+# differ only in disposition. These cover capture's: any change is a rejection,
+# because a raw object claims to be the exact bytes of one source state.
+
+def _append_after_read(source: Path, monkeypatch, extra: bytes = b"b" * 4096):
+    """Grow the source between the read and the closing stat.
+
+    Capture compares a stat taken before the read with one taken after it, so
+    the change has to land in that window; growing the file earlier would fail
+    the compressor's declared size instead of the guard under test.
+    """
+    real_stat = Path.stat
+    state = {"reads": 0}
+
+    def stat_then_grow(self, *args, **kwargs):
+        if self == source:
+            state["reads"] += 1
+            if state["reads"] == 2:
+                with open(source, "ab") as appending:
+                    appending.write(extra)
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_then_grow)
+
+
+def test_capture_source_changed(tmp_path, monkeypatch):
+    """A source that moved mid-capture cannot be stored as exact bytes."""
+    from codess.raw_store import _compress_file
+
+    source = tmp_path / "session.jsonl"
+    source.write_bytes(b"a" * 4096)
+    _append_after_read(source, monkeypatch)
+    with pytest.raises(RawCaptureError, match="changed during capture"):
+        _compress_file(source, tmp_path / "staged.zst", require_stable_stat=True)
+
+
+def test_capture_accepts_a_stable_source(tmp_path):
+    from codess.raw_store import _compress_file
+
+    source = tmp_path / "session.jsonl"
+    source.write_bytes(b"a" * 4096)
+    content_hash, _stored, uncompressed, _size, _stat = _compress_file(
+        source, tmp_path / "staged.zst", require_stable_stat=True,
+    )
+    assert uncompressed == 4096
+    assert content_hash
+
+
+def test_a_transactional_backup_is_exempt_from_the_stat_guard(tmp_path, monkeypatch):
+    """An SQLite backup is its own consistent copy, so its stat may move.
+
+    The size check still applies: it compares the bytes actually read against
+    the size promised, which the stat guard cannot do.
+    """
+    from codess.raw_store import _compress_file
+
+    source = tmp_path / "state.vscdb"
+    source.write_bytes(b"a" * 4096)
+    _append_after_read(source, monkeypatch)
+    content_hash, _stored, uncompressed, _size, _stat = _compress_file(
+        source, tmp_path / "staged.zst", require_stable_stat=False,
+    )
+    assert uncompressed == 4096
+    assert content_hash
+
+
+# --- snapshot identity lives above the stores --------------------------------
+#
+# Written into each copied store's `store_meta`, `snapshot_id` would sit inside the
+# structure whose digest the manifest records. The identity stays a creation identity,
+# held in the manifest and the directory name.
+
+def test_a_snapshot_store_does_not_carry_the_snapshot_identity(tmp_path):
+    from codess.schema_contract import store_metadata
+    from codess.store import connect
+
+    project = tmp_path / "project"
+    store = project / ".codess" / "sessions_cc.db"
+    init_db(store)
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"type":"user"}\n', encoding="utf-8")
+    record = raw.observe(
+        source, source_system_key="anthropic.claude-code",
+        storage_format="claude-jsonl", mode="capture",
+    )
+    snapshot = create_snapshot(project, [store], [record], raw_store=raw)
+    manifest = read_manifest(snapshot)
+
+    conn = connect(next(snapshot.glob("*.db")), read_only=True)
+    try:
+        meta = store_metadata(conn)
+    finally:
+        conn.close()
+    assert "snapshot_id" not in meta
+    assert meta["snapshot_created_at"] == manifest["created_at"]
+    assert manifest["snapshot_id"] == snapshot.name
+
+
+def test_membership_is_proven_by_the_manifest_digest(tmp_path):
+    """Removing the identity string does not weaken verification.
+
+    The manifest records each store's digest, which names that exact file --
+    a strictly stronger claim than a copied identity string, since it also
+    detects any modification.
+    """
+    project = tmp_path / "project"
+    store = project / ".codess" / "sessions_cc.db"
+    init_db(store)
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"type":"user"}\n', encoding="utf-8")
+    record = raw.observe(
+        source, source_system_key="anthropic.claude-code",
+        storage_format="claude-jsonl", mode="capture",
+    )
+    snapshot = create_snapshot(project, [store], [record], raw_store=raw)
+    snapshot_id = snapshot.name
+    assert snapshot_store_paths(project, snapshot_id)
+
+    retained = next(snapshot.glob("*.db"))
+    original = retained.read_bytes()
+    conn = sqlite3.connect(retained)
+    conn.execute("INSERT INTO store_meta VALUES ('tampered','1')")
+    conn.commit()
+    conn.close()
+    with pytest.raises(SnapshotError, match="hash mismatch"):
+        snapshot_store_paths(project, snapshot_id)
+
+    retained.write_bytes(original)
+    assert snapshot_store_paths(project, snapshot_id)
+
+
+def test_a_rebuilt_manifest_takes_the_identity_from_the_directory(tmp_path):
+    """The directory name is the identity now that the stores omit it."""
+    project = tmp_path / "project"
+    store = project / ".codess" / "sessions_cc.db"
+    init_db(store)
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"type":"user"}\n', encoding="utf-8")
+    record = raw.observe(
+        source, source_system_key="anthropic.claude-code",
+        storage_format="claude-jsonl", mode="capture",
+    )
+    snapshot = create_snapshot(project, [store], [record], raw_store=raw)
+
+    rebuilt = rebuild_manifest(snapshot)
+    assert rebuilt["snapshot_id"] == snapshot.name
+
+
+def test_copy_gated_before_stamp(tmp_path, monkeypatch):
+    """The copy is gated as a write before `store_meta` is stamped into it.
+
+    `_backup_store` verified the target only after writing to it, so a copy
+    whose recorded contract disagreed was modified first and rejected second.
+    The gate now runs between `backup` and the stamp, which is where the
+    target first becomes a store this process writes.
+    """
+    from codess import snapshot as snapshot_module
+    from codess.schema_contract import UnsupportedStoreError
+
+    backup_store = snapshot_module._backup_store
+
+    source = tmp_path / "sessions_cc.db"
+    init_db(source)
+
+    gated: list[bool] = []
+    original = snapshot_module.require_store
+
+    def record(conn, *, write):
+        gated.append(write)
+        if write:
+            raise UnsupportedStoreError("contract mismatch")
+        return original(conn, write=write)
+
+    monkeypatch.setattr(snapshot_module, "require_store", record)
+    with pytest.raises(UnsupportedStoreError):
+        backup_store(
+            source, tmp_path / "copy.db", snapshot_created_at="2026-01-01T00:00:00Z",
+        )
+
+    assert gated == [False, True]  # source read-gated, then target write-gated
+    stamped = sqlite3.connect(tmp_path / "copy.db")
+    try:
+        keys = {
+            row[0] for row in stamped.execute("SELECT key FROM store_meta")
+        }
+    finally:
+        stamped.close()
+    assert "snapshot_created_at" not in keys
+
+
+def _snapshot_project(tmp_path):
+    """One project with a store and a published snapshot."""
+    project = tmp_path / "project"
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"message":"x"}\n', encoding="utf-8")
+    store = project / ".codess" / "sessions_codex.db"
+    init_db(store)
+    conn = connect(store)
+    replace_session_events(
+        conn,
+        {"id": "s1", "source": "Codex", "type": "Code", "project_path": str(project)},
+        [{"session_id": "s1", "event_id": "1", "event_type": "user_message",
+          "subtype": "prompt", "role": "user", "content": "hello",
+          "source_file": str(source)}],
+        session_id="s1",
+    )
+    conn.commit()
+    conn.close()
+    raw = RawStore(tmp_path / "raw")
+    snapshot = create_snapshot(project, [store], [], raw_store=raw)
+    return project, store, snapshot
+
+
+class TestContractMismatchIsTyped:
+    """A contract mismatch is distinguishable without reading the message.
+
+    `project_catalog` classified this by matching message text, so rewording
+    the operator-facing string silently reclassified the Project's status.
+    The type carries the distinction now, and these tests fix that.
+    """
+
+    def test_mismatch_is_a_snapshot_error(self):
+        """Existing handlers catching SnapshotError still catch it."""
+        assert issubclass(SnapshotContractMismatchError, SnapshotError)
+
+    def test_a_differing_contract_raises_the_typed_error(self, tmp_path):
+        project, _store, snapshot = _snapshot_project(tmp_path)
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["contract_digest"] = "0" * 64
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(SnapshotContractMismatchError):
+            snapshot_store_paths(project, snapshot.name)
+
+    def test_the_message_names_the_rebuild_command(self, tmp_path):
+        """The remedy is in the message because nothing else states it.
+
+        Codess rebuilds rather than migrates, so a reader told only that the
+        contract differs has no way to learn what resolves it.
+        """
+        project, _store, snapshot = _snapshot_project(tmp_path)
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["contract_digest"] = "0" * 64
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(SnapshotContractMismatchError, match="ingest --force"):
+            snapshot_store_paths(project, snapshot.name)
+
+    def test_an_explicit_reader_may_still_open_it(self, tmp_path):
+        """`--snapshot-policy read-compatible` is the opt-in.
+
+        The manifest and the store it names are tampered together, because
+        they are checked against each other independently of whether they
+        match the running software -- that internal agreement is what proves
+        the snapshot was not partly rewritten, and the opt-in does not waive
+        it.
+        """
+        project, _store, snapshot = _snapshot_project(tmp_path)
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["contract_digest"] = "0" * 64
+        for name in manifest["stores"]:
+            retained = snapshot / name
+            conn = sqlite3.connect(retained)
+            conn.execute(
+                "UPDATE store_meta SET value=? WHERE key='contract_digest'",
+                ("0" * 64,),
+            )
+            conn.commit()
+            conn.close()
+            manifest["stores"][name]["digest"] = hash_file(retained)
+            manifest["stores"][name]["size"] = retained.stat().st_size
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        paths = snapshot_store_paths(
+            project, snapshot.name, allow_contract_mismatch=True
+        )
+        assert [path.name for path in paths] == list(manifest["stores"])
+
+
+class TestUnsupportedFormatNamesTheRemedy:
+    """A store from an older format states what resolves it.
+
+    The bare "unsupported CoSchema format" left an operator with no next
+    step, which matters more than usual here because a single-vendor
+    `--force` cannot fix it -- a store set publishes whole.
+    """
+
+    def test_an_older_snapshot_format_names_the_rebuild(self, tmp_path):
+        project, _store, snapshot = _snapshot_project(tmp_path)
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["format_version"] = 4
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(SnapshotError, match="ingest --force") as caught:
+            snapshot_store_paths(project, snapshot.name)
+        assert "format 4" in str(caught.value)
+
+    def test_a_store_on_an_older_format_names_the_whole_project(self, tmp_path):
+        """The single-vendor `--force` that cannot work is called out.
+
+        Reproduces the real failure: one vendor rebuilt to the new format
+        while the others sit at the old one, so publication refuses.
+        """
+        from codess.snapshot import _store_package_identity
+
+        _project, store, _snapshot = _snapshot_project(tmp_path)
+        conn = sqlite3.connect(store)
+        conn.execute("PRAGMA user_version=4")
+        conn.commit()
+        conn.close()
+        with pytest.raises(SnapshotContractMismatchError) as caught:
+            _store_package_identity([store])
+        message = str(caught.value)
+        assert store.name in message
+        assert "without `--source`" in message
+
+
+def test_a_store_disagreeing_with_its_own_manifest_is_refused(tmp_path):
+    """Internal agreement is checked even when a mismatch is opted into.
+
+    `allow_contract_mismatch` waives "does this snapshot match the running
+    software", not "do the manifest and the store it names agree". The second
+    is what proves a snapshot was not partly rewritten, so a store whose
+    recorded contract differs from its own manifest is refused regardless.
+    """
+    project, _store, snapshot = _snapshot_project(tmp_path)
+    manifest_path = snapshot / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # The store alone is rewritten; the manifest keeps its original digest, so
+    # the two disagree. This is what separates this case from the opt-in one
+    # above, where both are moved together and agreement therefore holds.
+    for name in manifest["stores"]:
+        retained = snapshot / name
+        conn = sqlite3.connect(retained)
+        conn.execute(
+            "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("0" * 64,)
+        )
+        conn.commit()
+        conn.close()
+        manifest["stores"][name]["digest"] = hash_file(retained)
+        manifest["stores"][name]["size"] = retained.stat().st_size
+    assert manifest["contract_digest"] != "0" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(SnapshotContractMismatchError, match="different CoSchema"):
+        snapshot_store_paths(project, snapshot.name, allow_contract_mismatch=True)
+
+
+class TestRecoveryIsReachable:
+    """Both recovery operations have a command route.
+
+    `recover_current_snapshot` and `rebuild_manifest` existed and no command
+    reached either, so an operator with a hash mismatch was directed to
+    `codess baseline`, which could not do the job. Dead-code
+    detection reported both; the defect was the missing route.
+    """
+
+    def test_a_lost_pointer_is_rebuilt_from_a_retained_snapshot(self, tmp_path):
+        project, _store, snapshot = _snapshot_project(tmp_path)
+        pointer = project / ".codess" / "current.json"
+        assert pointer.exists()
+        pointer.unlink()
+
+        recovered = recover_current_snapshot(project)
+
+        assert pointer.exists()
+        assert recovered["snapshot_id"] == snapshot.name
+
+    def test_recovery_reports_when_nothing_can_be_recovered(self, tmp_path):
+        """An empty Project fails with the reason, not a traceback."""
+        project = tmp_path / "bare"
+        (project / ".codess").mkdir(parents=True)
+        with pytest.raises(SnapshotError, match="no retained snapshots"):
+            recover_current_snapshot(project)
+
+    def test_a_corrupt_manifest_is_reconstructed_from_the_stores(self, tmp_path):
+        _project, _store, snapshot = _snapshot_project(tmp_path)
+        (snapshot / "manifest.json").write_text("not json", encoding="utf-8")
+
+        rebuilt = rebuild_manifest(snapshot)
+
+        assert rebuilt["reconstructed"] is True
+        assert rebuilt["format_version"] == FORMAT_VERSION
+        assert rebuilt["snapshot_id"] == snapshot.name
+
+    def test_the_unrecoverable_fields_come_back_null(self, tmp_path):
+        """Stated rather than silently defaulted.
+
+        These three are recorded nowhere but the manifest itself, so a
+        reconstruction cannot restore them and must not invent them.
+        """
+        _project, _store, snapshot = _snapshot_project(tmp_path)
+        rebuilt = rebuild_manifest(snapshot)
+        for field_name in (
+            "parent_snapshot_id", "build_policy", "build_policy_digest",
+        ):
+            assert rebuilt[field_name] is None
+
+
+class TestPriorSnapshotsAreTrimmed:
+    """Publication keeps a bounded number of superseded snapshots.
+
+    Each publication writes a complete store set rather than a delta, so a
+    Project ingested repeatedly accumulates one full copy per run. On the
+    development machine that reached 48 snapshots of one Project, 47 of them
+    superseded, before any bound existed.
+    """
+
+    @staticmethod
+    def _snapshots(root, count):
+        for index in range(count):
+            (root / f"2026081{index}T000000.000000Z-coschema6-{index:016x}").mkdir()
+        return sorted(entry.name for entry in root.iterdir())
+
+    def test_oldest_beyond_the_limit(self, tmp_path, monkeypatch):
+        """The current snapshot survives whatever the limit is.
+
+        The limit counts snapshots kept, current included, so 3 leaves the
+        current one and two past.
+        """
+        monkeypatch.setattr(snapshot, "KEEP_SNAPSHOTS", 3)
+        names = self._snapshots(tmp_path, 6)
+        current = names[-1]
+
+        removed = snapshot._trim_prior_snapshots(tmp_path, keep_current=current)
+
+        remaining = sorted(entry.name for entry in tmp_path.iterdir())
+        assert len(removed) == 3
+        assert removed == names[:3], "the oldest are the ones removed"
+        assert current in remaining
+        assert len(remaining) == 3, "the current snapshot and two past"
+
+    def test_one_keeps_only_the_current(self, tmp_path, monkeypatch):
+        """1 keeps the current snapshot alone, and is distinct from 0.
+
+        Counting the total is what separates them: a count of prior generations
+        has no spare value for "keep everything".
+        """
+        monkeypatch.setattr(snapshot, "KEEP_SNAPSHOTS", 1)
+        names = self._snapshots(tmp_path, 4)
+        current = names[-1]
+
+        removed = snapshot._trim_prior_snapshots(tmp_path, keep_current=current)
+
+        assert removed == names[:3]
+        assert [entry.name for entry in tmp_path.iterdir()] == [current]
+
+    def test_zero_keeps_every_snapshot(self, tmp_path, monkeypatch):
+        """0 is unlimited, for an operator auditing a sequence of rebuilds."""
+        monkeypatch.setattr(snapshot, "KEEP_SNAPSHOTS", 0)
+        names = self._snapshots(tmp_path, 5)
+
+        removed = snapshot._trim_prior_snapshots(tmp_path, keep_current=names[-1])
+
+        assert removed == []
+        assert len(list(tmp_path.iterdir())) == 5
+
+    def test_fewer_than_the_limit(self, tmp_path, monkeypatch):
+        """Nothing is removed when the limit is not reached."""
+        monkeypatch.setattr(snapshot, "KEEP_SNAPSHOTS", 5)
+        names = self._snapshots(tmp_path, 3)
+
+        removed = snapshot._trim_prior_snapshots(tmp_path, keep_current=names[-1])
+
+        assert removed == []
+        assert len(list(tmp_path.iterdir())) == 3

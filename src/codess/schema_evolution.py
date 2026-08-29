@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterator
-
+from collections.abc import Iterator
+from typing import Any
 
 RANK = {"same": 0, "compatible": 1, "breaking": 2, "manual": 3}
 
@@ -81,4 +81,15 @@ def compare(old: dict[str, Any], new: dict[str, Any]) -> Iterator[tuple[str, str
 
 
 def required(findings: list[tuple[str, str, str]]) -> str:
-    return max((item[0] for item in findings), key=RANK.get, default="same")
+    """The most severe disposition among the findings, or `same` for none.
+
+    Ranked by an explicit lookup rather than `RANK.get`: the bound method is
+    overloaded, so its one-argument form returns `int | None` and a `None` would
+    order unpredictably against an `int`. An unranked disposition is a
+    programming error here, and ranking it lowest would hide it.
+    """
+    return max(
+        (item[0] for item in findings),
+        key=lambda disposition: RANK[disposition],
+        default="same",
+    )

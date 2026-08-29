@@ -9,7 +9,7 @@ shared components rather than implementing independent database readers.
 Cursor's SQLite format is private and can change without notice. Use read-only
 access and tolerate missing tables, null values, and new fields.
 
-## 1. Source Scope and Locations
+## Source Scope and Locations
 
 `CODESS_CURSOR_DATA` overrides the platform default Cursor `User` directory.
 
@@ -30,12 +30,128 @@ Relevant paths under that base:
 `workspace.json` commonly stores `folder` as a `file://` string. Codess also
 accepts an object whose `folder.path` contains the path.
 
-The separate `~/.cursor/projects/<project-slug>/agent-transcripts/` tree is not
-part of the SQLite pipeline and is not currently ingested.
+### Terminal-Agent Storage
 
-## 2. Storage Layout
+Cursor records agent Sessions driven from a terminal (`cursor-agent`, also
+reachable as `cursor agent`) **outside** the SQLite pipeline this document
+otherwise describes. Two locations are observed, and only the second is
+current:
 
-### 2.1 `cursorDiskKV`
+| Path | State |
+|---|---|
+| `~/.cursor/projects/<project-slug>/` | **Current.** Holds `agent-transcripts/`, `agent-tools/`, `terminals/`, `canvases/`, and `mcps/` |
+| `~/.cursor/chats/<workspace-hash>/<agent-uuid>/store.db` | **Historical.** One SQLite database per Session; no longer written |
+
+Neither is ingested. Characterising the current tree is tracked as an open work
+item.
+
+**The historical store is set aside, not decoded.** `chats/` held one SQLite
+database per Session -- a `meta` row of hex-encoded JSON carrying `agentId`,
+`name`, `mode`, `lastUsedModel`, and an epoch-millisecond `createdAt`, plus a
+content-addressed `blobs` table of protobuf messages yielding `role`, typed
+`content[]` parts, and tool calls. Every instance observed was written between
+9 and 12 August 2025 against one model, and nothing under `chats/` has been
+written since while sibling directories have. The decision is to leave it
+undecoded: adapter work would be spent on Sessions no current release produces.
+
+What it establishes is worth keeping. Its designators shared almost nothing
+with `state.vscdb` -- a Session was `agentId` rather than `composerId`, a tool
+carried a `toolName` string rather than a `toolFormerData.tool` numeric enum, a
+message carried `role` plus typed `content[]` parts rather than an integer
+`type`, and no `serverBubbleId` existed, so the duplication described under
+Repetition and Deduplication did not arise. Only `createdAt` in epoch
+milliseconds agreed with this document's vocabulary.
+
+The rule that follows: **a Cursor storage location is read on its own terms.**
+Carrying a field name across from the GUI store is unsafe even within one
+vendor.
+
+**This storage is expired by the vendor.** `~/.cursor/projects/` carries
+zero-byte `.agent-data-cleanup-<YYYY-MM-DD>` sentinels, one per run, whose name
+is their entire content and whose mtime falls the day before the date they
+carry -- so they record that a sweep ran, not what it removed. Eight cover
+recent consecutive days.
+
+The window is not short. Measured across 609 files in 53 project directories:
+196 are under a week old, 185 one to four weeks, 112 one to three months, and
+116 older than three months, with the oldest at roughly six months. So the
+sweep is periodic rather than aggressive, and terminal-agent evidence is not
+about to vanish -- but it is deleted on a schedule Codess does not control,
+which the GUI store's retention does not do.
+
+### Remote Workspace Handling
+
+Cursor records a workspace opened over SSH as a URI rather than a path, and
+Codess **refuses it as a Project location**. The refusal is implemented in
+`local_path_from_uri`: a URI with any scheme other than `file`, or a `file`
+URI with a non-empty authority other than `localhost`, returns no path, so the
+workspace never matches a Project directory.
+
+**The shape, decoded.** One authority appears on the development machine:
+
+```
+vscode-remote://ssh-remote%2B7b22686f73744e616d65223a22686f7374227d/home/user/work/project
+                ^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                scheme     percent-encoded hex of {"hostName":"host"}  path on that host
+```
+
+The authority is `ssh-remote` plus a `+` (as `%2B`) and a hex-encoded JSON
+object naming the host. So the host **is** stated and recoverable; what is
+absent is any evidence that the remote path corresponds to a local Project.
+
+**Two shapes appear, and the second is the hazard.**
+
+| Shape | Count | Meaning |
+|---|---|---|
+| `…/home/ubuntu/...` | 7 | A tree that exists only on the remote host |
+| `…/home/user/...` | 2 | A path that **also exists locally**, under the same ssh authority |
+
+The second is why a path alone cannot decide. The same absolute string denotes
+a local directory and a remote one; only the authority separates them, and a
+rule that strips the scheme before comparing would bind remote Sessions to a
+local Project silently. That is the specific error the current refusal
+prevents.
+
+**What is lost, measured.** Nine remote workspaces hold **8 composers and
+17,994 bubbles**. They are decoded like any other composer -- nothing about
+being remote affects bubble decode -- but they reach no Project through
+workspace matching, so they are ingested only if an operator approves a source
+link.
+
+**The supported route is an approved source link**, not a relaxed rule.
+`get_workspace_ids` reads `.codess/source-links.json` and admits a workspace id
+whose link is `approved`, which is how a renamed or remote identity is bound by
+review rather than by inference. A remote workspace therefore has a path into a
+Project; it requires a person to state which Project.
+
+**Claude and Codex do not present this.** Every Claude Session on the
+development machine records a local `cwd`; no record carries a `/home/...`
+path. Remote handling is a Cursor concern because Cursor is the only vendor
+here that stores a workspace URI.
+
+### Opening a Cursor Store Read-Only
+
+Codess opens vendor databases read-only and does not modify them. Two access
+particulars are established:
+
+- **The GUI stores accept the read-only URI.** `sqlite3.connect("file:<path>?mode=ro",
+  uri=True)` is the form `cursor_source` uses against `state.vscdb`, and the
+  form `README` documents for direct inspection.
+- **The chat stores did not.** Every read-only URI open against
+  `~/.cursor/chats/*/*/store.db` failed with `unable to open database file` --
+  at the vendor path, at a copy outside the repository, and at a copy inside
+  it -- while a plain path open succeeded immediately on all three. The same
+  URI form works against Codess's own stores, so the form alone does not
+  explain it and the trigger is not yet identified.
+
+The consequence for discovery is what makes this worth recording: a store that
+cannot be opened is indistinguishable from a Source that is not present, so an
+open failure must be reported as an unreadable Source rather than counted as
+an absence.
+
+## Storage Layout
+
+### `cursorDiskKV`
 
 Key/value table with unique text keys and text, blob, or null values.
 
@@ -50,7 +166,7 @@ Key/value table with unique text keys and text, blob, or null values.
 JSON values are usually UTF-8 JSON text. Codess also attempts base64-wrapped
 JSON for bubble and composer data. Null or undecodable values are skipped.
 
-### 2.2 `composerHeaders`
+### `composerHeaders`
 
 Session-level index:
 
@@ -58,7 +174,7 @@ Session-level index:
 |---|---|
 | `composerId` | Session identifier and primary key |
 | `workspaceId` | Workspace-storage directory id when known; used to scope global ingest |
-| `createdAt`, `lastUpdatedAt` | Epoch-millisecond header timestamps |
+| `createdAt`, `lastUpdatedAt` | Epoch-millisecond header timestamps. Present on all 66 headers measured. **Read by scan for its time-range row and by `cursor_source`, and not carried into a Session**: `sessions.started_at` and `ended_at` are null on Cursor stores, so a Cursor Project can hold Events with no time at any level |
 | `isArchived`, `isSubagent` | Session classification flags |
 | `recency`, `checkpointAt`, `value` | Cursor state not currently used by Codess |
 
@@ -67,7 +183,7 @@ Codess uses this as the primary global-session index. Composers whose
 classification columns default to null/false; additional columns are ignored.
 Session metadata records `selection_source=composerHeaders`; the selected
 evidence fingerprint includes that designation and uses
-`cursor-workspace-header-source-key-length-edge-sha256-fingerprint-v2`.
+`cursor-workspace-header-source-key-length-edge-digest-fingerprint-v2`.
 The table is not a complete Session catalog: Cursor can retain full
 `composerData:*` and `bubbleId:*` rows after removing a composer header.
 
@@ -80,7 +196,212 @@ parent composer/session is not consistently available, so
 `parent_session_id` remains NULL instead of being inferred from time, content,
 or workspace proximity.
 
-### 2.3 `ItemTable`
+### Header Coverage and What Cursor Removes
+
+**Cursor does not prune conversations on age; it prunes the index and it
+deletes empties.** Three distinct behaviours produce a smaller Session count,
+and they need separating because only one is a Codess limitation.
+
+**Why the index and not the data?** The obvious reading -- that dropping entries
+reclaims space -- is contradicted by the sizes: the index is ~36 KiB against
+~4.2 GiB of conversation across 420,000 rows, a ratio near 119,000 to 1.
+Discarding the index saves nothing. The behaviour is consistent with a migration
+that had to populate a new central index and only had the information to do so
+for composers it saw opened: the index is the *new* structure and the data is
+what predates it, so the data was never a candidate for removal.
+
+The published account adds that a conversation reopened after the migration
+gains its header. **Not verified here** -- `composerHeaders.createdAt` records
+when the conversation was created, not when its index entry was written, so this
+store cannot distinguish a composer indexed at migration from one indexed on a
+later reopen. Recorded as the vendor's account rather than a measured property;
+verifying it needs a before-and-after observation of one composer.
+
+**Nothing is lost; 36% of the corpus is unattributable.** The distinction
+matters because the two have different remedies and only one is urgent. Measured
+on one store:
+
+| | Composers | Bubbles |
+|---|---|---|
+| Headered, bindable to a Project | 66 | 134,654 |
+| Unbound -- data intact, no workspace | 98 | 75,257 |
+| Unbound **and** empty | 0 | -- |
+
+Every one of the 98 holds real conversation. No bubble is missing, no
+`composerData:` row is absent for them, and a query over the whole store reads
+them. What is absent is the workspace binding, so Codess cannot say which
+Project they belong to and does not guess. The remedy is an operator statement,
+not a recovery: the evidence is on disk now and will be on disk later.
+
+**1. The index is a migration boundary.** `composerHeaders` was centralised into
+the global store and tracks only composers opened or created since. Measured on
+one store: 66 headered against 164 total, and the headered set spans
+2026-03-26 to 2026-08-17 -- the whole retained range, not a recent slice. So the
+98 unbound composers are pre-migration, not expired: the set does not grow with
+age, does not shrink by waiting, and shrinks only when a composer is reopened.
+Their `composerData:` rows and every bubble are intact.
+
+**`ItemTable`'s `composer.composerHeaders` is a second index, and it is UI state
+rather than a selection index.** Measured: 39 entries against 66 table rows,
+every one also in the table, and the two agree on the workspace for all 39. So
+it selects nothing the table does not -- an earlier reading of it as the missing
+binding was wrong.
+
+Why the vendor keeps both is legible from the fields. The table holds what
+persists about a conversation -- identity, workspace, times, archived, subagent.
+The `ItemTable` document holds what the sidebar draws: `hasUnreadMessages`,
+`isDraft`, `hasBeenInSidebar`, `hasPendingPlan`, `totalLinesAdded`,
+`numSubComposers`, 19 fields in all. It is written whole on UI state changes,
+which is why it lags -- and why it is a subset rather than a superset.
+
+Two of those fields are evidence Codess had no other source for, so they are
+read as **qualifiers** on a Session the table already selected:
+
+| Field | What it states | Measured |
+|---|---|---|
+| `unifiedMode` | Whether the composer ran as `agent` or `chat` | 15 agent, 24 chat -- recorded nowhere in the table |
+| `workspaceIdentifier.uri.fsPath` | The workspace **path** | 26 of 39. The table holds only the storage hash, which a workspace recreation changes; the path survives it |
+
+The qualifier must never widen a selection: a composer present only in the
+`ItemTable` document stays out, because a UI-state document does not decide
+Project membership. A test asserts that directly.
+
+**2. Empty composers are deleted, and backed up first.**
+`globalStorage/empty_composer_backup.jsonl` holds `composerData` rows Cursor
+removed for holding no conversation -- 140 on one machine. A composer can
+therefore appear in the header index, be selected for a Project, and hold zero
+bubbles; three did on one Project. Storing them would report Sessions that never
+had content.
+
+**3. Tombstones exist: a key with a NULL value.** Measured: 7 `composerData:`
+and 41 `bubbleId:` rows whose key remains and whose payload is gone. This is
+distinct from a missing key, and a reader treating NULL as an empty record would
+manufacture a contentless Session rather than reporting a removed one.
+
+**Reading a falling Event count.** The main file is misleading on its own: in
+WAL mode `state.vscdb` stops being written while `-wal` absorbs changes, so its
+mtime can be a week stale while the database changed minutes ago. One measured
+instance: main at 2026-08-19, a 203 MB WAL at 2026-08-26. Codess's own change
+marker covers both (`sqlite-main-wal-inode-size-mtime-ns`); a hand check that
+looks only at the main file will conclude the source is unchanged when it is not.
+
+**How this differs from Claude Code**, which matters because the mitigations are
+opposite:
+
+| | Claude Code | Cursor |
+|---|---|---|
+| What is removed | The transcript itself | The index entry, and empty composers |
+| Trigger | Age, 30-day default (`cleanupPeriodDays`) | A one-time index migration; emptiness |
+| Recoverable from the vendor | No | Yes -- the data is retained and readable |
+| Grows over time | Yes, continuously | No, fixed at the migration |
+| Mitigation | **Ingest more often than the vendor prunes** | **Read the unbound set**; cadence does not help |
+
+Claude's is data loss a Codess store can outlive, so cadence is the whole
+defence. Cursor's is an attribution gap where the evidence is still present, so
+the defence is reading it and stating that it is unattributed -- ingesting more
+often would not recover a single Session.
+
+### The Conversation Index
+
+`globalStorage/conversation-search.db` is a second SQLite store holding what
+the interface displays about a conversation, none of which appears on a bubble:
+
+| Column | Holds |
+|---|---|
+| `id` | The composer id, joining to `bubbleId:<id>:*` |
+| `title` | The conversation's name as shown |
+| `branches` | The vendor's own grouping value |
+| `is_archived` | Whether the conversation was archived |
+| `updated_at`, `root_fingerprint`, `source`, `scope` | Freshness, content identity, and whether the row is local or a cloud cache |
+
+Measured on one machine: 127 conversations, 110 carrying a title and 8 flagged
+archived. A store built from bubbles alone cannot report the name the operator
+sees, which is why `sessions.session_label` reads from here.
+
+An `fts5` virtual table (`conversation_fts`) indexes title, body, and branches
+for the interface's own search. Codess does not read it -- the body is content
+the resource policy governs, and the searchable copy is a second one.
+
+### Other `~/.cursor` Structures
+
+Recorded because a coverage claim that counts only the composer store
+understates what the vendor retains. None is decoded.
+
+| Path | Holds |
+|---|---|
+| `~/.cursor/worktrees/` | Worktree working areas the harness manages, one observed |
+| `~/.cursor/prompt_history.json` | Prompts typed, as a flat JSON array |
+| `~/.cursor/projects/<slug>/` | Per-project agent state: transcripts, tool output, terminals, canvases, MCP records |
+| `~/.cursor/chats/<hash>/<uuid>/store.db` | The superseded terminal-agent store |
+| `~/.cursor/ai-tracking/ai-code-tracking.db` | Authorship tracking for generated code |
+| `globalStorage/empty_composer_backup.jsonl` | Composer state written aside |
+
+### Adjacent Key Spaces
+
+`cursorDiskKV` holds far more than the key spaces Codess decodes by default.
+Recorded because a reader estimating coverage from the bubble tables alone will
+overstate it: of 444,476 rows, `bubbleId:` and `composerData:` are decoded
+always and `agentKv:` on request.
+
+| Key space | Rows | Holds |
+|---|---|---|
+| `bubbleId:` | 210,152 | Conversation bubbles -- decoded |
+| `agentKv:` | 209,951 | A second message corpus: JSON conversation messages, protobuf, and file bodies under one key space -- **decoded on request** ([Reasoning Fidelity](#reasoning-fidelity)) |
+| `composer:` | 11,616 | Composer state -- not decoded |
+| `checkpointId:` | 7,718 | `files`, `activeInlineDiffs`, `newlyCreatedFolders`, `nonExistentFiles` per checkpoint |
+| `codeBlockDiff:` | 1,417 | `newModelDiffWrtV0` and `originalModelDiffWrtV0` per code block |
+| `ofsContent:` | 789 | File content keyed by composer and `file://` URI; 586 distinct URIs |
+| `messageRequestContext:` | 678 | Harness context assembled per message request |
+| `inlineDiff:` | 545 | Inline diff state |
+| `patch-graph:` | 354 | `fileUri`, `patches`, `provenance`, `version`; 162 distinct file URIs |
+| `composerData:` | 166 | Session settings -- partly decoded |
+
+**`patch-graph` records per-span authorship.** Its `provenance.spans` entries
+take the form `{"start": 1, "end": 19, "owner": "<uuid>"}`, so the vendor
+states which turn owns which line range of a file. CoSchema carries no
+equivalent today.
+
+**Cursor keeps three indexes of the same composers, and they disagree.**
+`composerHeaders` is the smallest at 66 rows; global `composerData:` holds 166;
+and each workspace database keeps its own `composer.composerData` list.
+Measured on one machine, **107 composers hold bubbles that `composerHeaders`
+does not list**, carrying 75,473 bubbles between them.
+
+| Index | Rows | States a workspace | Read by Codess |
+|---|---|---|---|
+| `composerHeaders` | 66 | Yes | Yes, authoritative |
+| Workspace `composer.composerData` | 94 composers | Implicitly, by which database holds it | Yes, as a fallback |
+| Global `composerData:` | 166 | **No** | Yes, for settings and as a last-resort recovery |
+
+Reading all three raises composer coverage from 66 to 164, of which 134 state
+an exact model name in `modelConfig.modelName`.
+
+**A globally-recovered composer cannot be attributed to a Project.** Its
+`composerData:` row states no `workspaceId`, and no folder, cwd, or root-path
+field appears on any of the 98 checked. Codess therefore admits these only when
+a caller asks for every composer, and never under a workspace selection: a
+Session bound to a Project on no evidence would be an inference, not a decode.
+`selection_source` records which index each composer came from.
+
+**`modelConfig.selectedModels` carries parameters the model name need not
+state.** An entry takes the form
+`{"modelId": "composer-2.5", "parameters": [{"id": "fast", "value": "true"}]}`.
+Measured over 37 composers, each holding exactly one entry, two parameter ids
+appear:
+
+| Parameter | Composers | Observed values | Mapped to |
+|---|---|---|---|
+| `fast` | 34 | `"true"` 31, `"false"` 3 | `speed_tier`, only on `"true"` |
+| `effort` | 19 | `"high"` 19 | `reasoning_effort` |
+
+Values are strings, so `"false"` is a stated value rather than an assertion and
+does not set a tier. Neither parameter is reliably encoded in the model name:
+`composer-2` and `composer-2-fast` are distinct names, but a composer may set
+`fast` on a model whose name says nothing, and **no Cursor model name encodes
+effort at all**. Whether other parameter ids or other `effort` values exist is
+not established from one machine.
+
+### `ItemTable`
 
 Most rows are editor/workbench state and are ignored. One workspace-local row,
 `composer.composerData`, is a secondary session index. Its `allComposers`
@@ -93,7 +414,7 @@ fallback-selected Session records
 `selection_source=workspace.composerData`; current global headers override an
 overlapping fallback.
 
-## 3. Selective Access
+## Selective Access
 
 Use SQLite read-only mode:
 
@@ -123,7 +444,7 @@ decoding unrelated bubbles in the global database. Workspace selection and SQL
 live in `codess.cursor_source`; the adapter only decodes selected values and
 normalizes events.
 
-## 4. Bubble Records
+## Bubble Records
 
 Fields relevant to normalization:
 
@@ -133,8 +454,8 @@ Fields relevant to normalization:
 | `text` | Message body | Sanitized and truncated |
 | `createdAt` | ISO-8601 event timestamp | Primary normalized timestamp and sort key |
 | `timingInfo.clientStartTime` | Relative client timing, or an epoch value in alternate shapes | Used only when it plausibly represents Unix seconds or milliseconds |
-| `toolFormerData` | One tool name/call id/model-call id, arguments, result, status, and optional `userDecision` | Emitted as a linked invocation and, for final states or a result body, a result/failure event; exact accepted/rejected permission evidence is retained |
-| `toolResults` | Alternate tool-result array | Nonempty arrays are mapped when present; selected stores commonly contain empty arrays |
+| `toolFormerData` | One tool name/call id/model-call id, arguments, result, status, and optional `userDecision`. **"Former" does not mean superseded**: this is the only populated tool shape, and its `tool` field is a numeric enum paired with `name` (`5` beside `read_file`, `15` beside `run_terminal_cmd`), so the name reads as a UI component rather than a point in time. What it denotes in Cursor's own vocabulary is not established | Emitted as a linked invocation and, for final states or a result body, a result/failure event; exact accepted/rejected permission evidence is retained |
+| `toolResults` | Alternate tool-result array | **Present on every bubble and empty on every one measured**: 6,000 bubbles sampled from the live global store, `toolResults` populated on none. `toolFormerData` was populated on 5,078 of the same sample and produced 60,875 tool results across the current-format Codess stores, against zero from this key. `cursor.tool-result-legacy` is therefore declared and unused; it is retained because a store written when the shape carried data still needs it |
 | `modelInfo.modelName` | Model selection attached to a user request | Non-`default` values configure the following inferred model turn with exact source-field provenance; `default` remains source metadata |
 | `conversationSummary` | JSON string with summary body and truncation boundary IDs | Bounded `context.compact` event |
 | `contextWindowStatusAtCreation` | Context usage observation (`tokensUsed`, `tokenLimit`, percentages) | Preserved as source metadata on the bubble's emitted events |
@@ -215,7 +536,51 @@ explicitly supported context subset is `conversationSummary`,
 `contextWindowStatusAtCreation`, and top-level `messageRequestContext`; other
 large attachment/context-selection envelopes remain in captured raw evidence.
 
-### 4.1 Repetition and Deduplication
+### Bubbles to Events, Counted
+
+A bubble is a stored record; an Event is one normalized observation. The
+relation is not one-to-one in either direction, and both departures are
+measured rather than asserted. From one Project's store -- 26 Sessions, 72,083
+live bubbles, 59,554 Events:
+
+**Fan-out: only tool bubbles produce two Events, and every other kind produces
+one.** Grouping Events by the bubble they came from gives exactly two shapes:
+
+| Bubble produces | Event kinds | Bubbles |
+|---|---|---|
+| 2 Events | `tool.call` + `tool.result` | 24,204 |
+| 1 Event | `message.reasoning_summary` | 6,374 |
+| 1 Event | `message.response` | 3,576 |
+| 1 Event | `message.prompt` | 1,174 |
+| 1 Event | `message.context` | 22 |
+
+35,350 bubbles yield 59,554 Events, a mean of 1.685. A tool bubble carries the
+invocation and its result in one record; Codess separates them because a call
+without a result and a call with a failed result are different facts, and a
+single Event could state neither.
+
+**Fan-in: half the bubbles produce no Event, and each is counted.** 36,733 of
+the 72,083 emit nothing, which reconciles exactly against the ingest
+diagnostics:
+
+| Reason code | Bubbles |
+|---|---|
+| `duplicate_records` | 32,730 |
+| `record_empty_assistant_envelope` | 4,003 |
+| **Total** | **36,733** |
+
+35,350 + 36,733 = 72,083. Nothing is dropped without a reason code, so the two
+figures reconcile without a remainder -- which is the property that makes a
+falling Event count diagnosable rather than merely alarming.
+
+**The consequence for reading counts.** Comparing an Event total against a
+bubble total is not a validity check: the ratio moves with the tool-call share
+of a Session, so a Session that ran many tools has more Events than bubbles and
+one that ran none has fewer. To detect *removal*, compare a Session's bubbles
+against the same Session's bubbles at an earlier observation, or read the
+reason-code totals, which state where the difference went.
+
+### Repetition and Deduplication
 
 Cursor evidence has three distinct repetition cases:
 
@@ -253,7 +618,44 @@ must be versioned and confidence-bearing, cite its constituent events, and
 produce a derived grouping or assertion only; it can never authorize source or
 Event removal.
 
-## 5. Composer Records
+## Capability Vocabulary
+
+Cursor declares a lifecycle vocabulary on the bubble and records no instances of
+it. Both halves are worth keeping: the names state which phases the harness
+knows about, and the emptiness states that this store is not where they land.
+
+`capabilityStatuses` maps a phase name to a list, present on 8,457 bubbles in
+the measured corpus with **every list empty on every one**:
+
+| Phase | Bubbles carrying the key |
+|---|---|
+| `mutate-request` | 8,457 |
+| `start-submit-chat` | 8,457 |
+| `before-submit-chat` | 8,457 |
+| `process-stream` | 8,457 |
+| `chat-stream-finished` | 8,457 |
+| `before-apply` | 8,457 |
+| `after-apply` | 8,457 |
+| `accept-all-edits` | 8,457 |
+| `composer-done` | 8,457 |
+| `add-pending-action` | 137 |
+
+The order above is a plausible execution order rather than the key order, which
+is not stable across bubbles. Nine phases appear together and
+`add-pending-action` only sometimes, so it is conditional on the turn rather
+than part of the fixed set.
+
+`capabilityType` is a separate numeric enum on 11,454 bubbles with three
+observed values: `15` (122,661 occurrences), `30` (44,922), `22` (289). What
+each denotes is not established, and it is not the phase set above -- the value
+counts match no phase distribution.
+
+**Neither is decoded today.** These names are the closest thing Cursor offers to
+the task lifecycle Codex records directly, so if a later release begins
+populating the lists, this vocabulary is what a mapping would be built against.
+Recording it now is what lets a future comparison show the change.
+
+## Composer Records
 
 `composerData:<composerId>` may include identity, title, model/mode, context,
 conversation-header, file-state, and opaque conversation-state fields. It can
@@ -281,7 +683,7 @@ workspace metadata come first from `composerHeaders`; workspace
 `composer.composerData` supplies a provenance-labeled fallback when the primary
 header is absent. A current header wins when both exist.
 
-## 6. Mapping Boundaries
+## Mapping Boundaries
 
 | Codess concept | Workspace DB | Global DB |
 |---|---|---|
@@ -331,9 +733,9 @@ SQLite read transactions and calculates a
 non-authenticating change marker from exact header fields, every key and value
 length, and the first/last 512 bytes of each value. A changed selected marker
 triggers one exact transactional backup for the cohort; unrelated table changes
-do not. Selected-row and combined-cohort markers use SHA-256; the bounded edge
+do not. Selected-row and combined-cohort markers use a complete digest; the bounded edge
 method remains a change detector rather than complete content
-identity. Exact captured evidence remains fully SHA-256 addressed and verified.
+identity. Exact captured evidence remains fully digest-addressed and verified.
 
 An immediate repeat may reuse those selected markers only when a metadata-only
 cache matches the exact Project-to-workspace selection and two observations of
@@ -349,7 +751,106 @@ only with `immutable=1` after confirming that neither `-wal` nor `-shm` exists.
 An indexed prefix existence probe then advances ingest state without parsing or
 retaining workspace databases that contain no `bubbleId:*` records.
 
-## 7. Limitations
+## Harness System Prompts
+
+`agentKv` holds the harness system prompt, which no other Cursor structure
+records. 23 were observed and **every one is textually unique**, so a store
+that retained each body would hold 23 near-duplicates. They group into families
+by the model they address: two prompts of the same family measured 97.6%
+similar and differed in one line, while different families differ in length by
+a factor of ten -- 1,877 characters for a Grok variant against 25,152 for a
+Fable 5 one.
+
+Codess therefore decodes the structure beside the body:
+
+| Field | Holds |
+|---|---|
+| `harness_prompt_model` | The model the prompt's first line names |
+| `harness_prompt_sections` | The ordered `<section>` tags, which are the prompt's own structure |
+| `harness_prompt_digest` | The exact text's identity, so two Sessions can be compared without either body being read |
+| `harness_prompt_chars` | Length, which separates families at a glance |
+
+**The named model is what the harness told the model it was**, not necessarily
+the model that served the turn: Cursor's router says `You are Auto` while a
+model name appears on the bubble. The two are separate observations and are
+stored separately.
+
+Observed models, by the prompt's own statement: `Composer`, `Auto`, `Cursor`,
+`Cursor Grok 4.5`, `Cursor Grok 4.6`, `gpt-5.3-codex`, `Opus 4.6`, `Fable 5`,
+`claude-4.6-opus-high-thinking`, and `claude-4.6-sonnet-medium-thinking`.
+Section vocabularies differ per family: the Composer family uses
+`communication`, `tool_calling`, `maximize_parallel_tool_calls`; the Claude
+family uses `tone_and_style`, `linter_errors`, `inline_line_numbers`.
+
+**A system prompt states no join key and is therefore unattributed.** It
+carries neither `requestId` nor a `toolCallId`, and no bubble references it, so
+nothing in the store binds one to a Session. They are counted under
+`record_agent_kv_unattributed` rather than dropped, so the corpus is countable;
+attributing one by key order would be adjacency inference on a content hash.
+
+## Reasoning Fidelity
+
+Cursor records model reasoning in two shapes, and which one appears is a
+property of the model rather than of the Session or the operator. Both reach
+CoSchema as `message.reasoning_summary` with `reasoning_fidelity` stating
+which, so a cross-vendor query can compare them without conflating them.
+
+| Shape | Where | Carries |
+|---|---|---|
+| `thinking.text` on a bubble | `bubbleId:` | The reasoning itself, with `redactedThinking` marking a withheld chunk |
+| `reasoning` part | `agentKv:` message | The reasoning itself |
+| `redacted-reasoning` part | `agentKv:` message | **Nothing.** The part's presence is the whole evidence: the vendor states reasoning existed and withheld it |
+
+**A redacted part is retained with empty content and `reasoning_redacted`
+set.** An absent field would say something different -- that no reasoning was
+produced -- and only the first can be revisited when a release changes.
+
+### Measured Distribution
+
+Joined through `toolCallId` from `agentKv` messages to the bubbles that state
+the same identity, so each reasoning message inherits its composer's date and
+model. Both dimensions separate cleanly, which is why both are recorded.
+
+By month of the bubble that carries the tool call:
+
+| Month | Redacted | Exposed |
+|---|---|---|
+| 2026-02 | 0 | 212 |
+| 2026-03 | 0 | 351 |
+| 2026-04 | 468 | 63 |
+| 2026-05 | 233 | 0 |
+| 2026-06 | 36,069 | 88 |
+| 2026-07 | 1,964 | 6,146 |
+| 2026-08 | 862 | 26,965 |
+
+By the composer's stated model, which is the sharper signal:
+
+| Model | Redacted | Exposed | Composers |
+|---|---|---|---|
+| `grok-4.5` | 35,810 | 10,735 | 7 |
+| `grok-4.6` | 12 | 22,073 | 1 |
+| `composer-2.5` | 2,469 | 127 | 8 |
+| `composer-2-fast` | 281 | 0 | 12 |
+| `composer-2.5-fast` | 228 | 0 | 5 |
+| `cursor-grok-4.5-high-fast` | 0 | 391 | 6 |
+| `composer-1.5` | 0 | 306 | 3 |
+| `composer-2` | 6 | 177 | 2 |
+| `claude-4.6-sonnet-medium-thinking` | 0 | 16 | 3 |
+
+**The month pattern is the model pattern seen through time.** June is
+overwhelmingly redacted and August overwhelmingly exposed, and the models in
+use differ across that boundary: `grok-4.5` redacts most of its reasoning while
+`grok-4.6` exposes nearly all of it. Reading the months alone would suggest a
+vendor policy that changed; the per-model split shows a model property that the
+operator's model choice moved through.
+
+**What this does not establish.** One machine, and the model column is a
+composer-level default rather than a per-turn statement -- a composer that
+switched models mid-Session attributes all of its reasoning to one name. The
+distribution is evidence about these composers, not a claim about how any model
+behaves generally.
+
+## Limitations
 
 - Global composers without a usable current-header or workspace-fallback
   mapping are excluded from Project ingest.

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from codess.query_api import RESULT_FORMAT, QueryContractError, content_hash
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
-
-INVESTIGATION_FORMAT = "codess.investigation/1"
+INVESTIGATION_FORMAT = "codess.investigation/2"
 
 
 def build_investigation(
@@ -28,11 +29,11 @@ def build_investigation(
     if not isinstance(processor_id, str) or not processor_id.strip():
         raise QueryContractError("investigation processor_id must be non-empty")
     by_event = {
-        str(row["global_event_id"]): row
+        str(row["event_entity_id"]): row
         for row in result.get("rows") or []
-        if row.get("global_event_id")
+        if row.get("event_entity_id")
     }
-    requested = sorted(set(str(value) for value in event_ids if value))
+    requested = sorted({str(value) for value in event_ids if value})
     if requested:
         missing = sorted(set(requested) - set(by_event))
         if missing:
@@ -50,21 +51,21 @@ def build_investigation(
     citations = []
     for row in selected:
         citations.append({
-            "global_event_id": row["global_event_id"],
+            "event_entity_id": row["event_entity_id"],
             "observation_id": row.get("observation_id"),
-            "global_session_id": row.get("global_session_id"),
+            "session_entity_id": row.get("session_entity_id"),
             "project_id": row.get("project_id"),
             "snapshot_id": row.get("snapshot_id"),
-            "source_system_id": row.get("source_system_id"),
+            "source_system_key": row.get("source_system_key"),
             "source_record_locator": row.get("source_record_locator"),
             "event_kind": row.get("event_kind"),
-            "content_sha256": content_hash(row.get("content") or ""),
-            "row_sha256": content_hash(row),
+            "content_digest": content_hash(row.get("content") or ""),
+            "row_digest": content_hash(row),
             "content_complete": row.get("content_complete"),
         })
     record = {
         "format": INVESTIGATION_FORMAT,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now_iso(system_clock),
         "processor_id": processor_id.strip(),
         "summary": summary,
         "input_result_hash": result.get("result_hash"),

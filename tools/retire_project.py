@@ -11,23 +11,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codess.catalog_operations import relocate_project  # noqa: E402
-from codess.fileio import write_json_atomic  # noqa: E402
-from codess.project_catalog import ensure_project_binding  # noqa: E402
+from codess.catalog_operations import relocate_project
+from codess.fileio import write_json_atomic
+from codess.project_catalog import ensure_project_binding
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project", type=Path, required=True)
-    parser.add_argument("--registry", type=Path, required=True)
+    parser.add_argument(
+        "--directory", type=Path, required=True,
+        help="the Project directory to operate on",
+    )
+    parser.add_argument("--store", dest="store_root", type=Path, required=True)
     parser.add_argument("--new-location", type=Path, required=True)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args(argv)
     try:
-        project = args.project.expanduser().resolve()
-        binding = ensure_project_binding(args.registry, project)
+        project = args.directory.expanduser().resolve()
+        binding = ensure_project_binding(args.store_root, project)
         receipt = relocate_project(
-            args.registry, binding["project_id"], project, args.new_location
+            args.store_root, binding["project_id"], project, args.new_location
         )
         receipt["receipt_format"] = "codess.project-retirement/1"
         if args.report:

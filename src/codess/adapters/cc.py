@@ -1,25 +1,31 @@
 """CC JSONL parser and normalizer."""
 
 import json
-import hashlib
 import logging
-from datetime import datetime, timezone
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
+from typing import Any
 
 from codess import field_state
-
+from codess.bounded_jsonl import iter_bounded_jsonl
 from codess.config import (
+    MAX_EXTERNAL_CONTENT_BYTES,
     TRUNCATE_DIALOG,
     TRUNCATE_GREP_PATTERN,
     TRUNCATE_PROMPT,
     TRUNCATE_RESPONSE,
     TRUNCATE_TOOL_RESULT,
 )
+from codess.context_content import bound_context_content, truncate_content
+from codess.hashing import codess_bytes_hash
+from codess.mapping import (
+    RecordContext,
+    annotate_mapping,
+    as_mapping,
+    is_decodable_record,
+)
 from codess.sanitize import apply_sanitization, sanitize_value
-from codess.bounded_jsonl import iter_bounded_jsonl
-from codess.context_content import bound_context_content
-from codess.mapping import annotate_mapping
+from codess.timeval import epoch_ms
 from codess.tool_result_status import application_failure_evidence
 
 log = logging.getLogger(__name__)
@@ -29,7 +35,8 @@ class SourceCompatibilityError(ValueError):
     """A source record cannot be mapped without silently losing meaning."""
 
 SKIP_TYPES = frozenset({
-    "progress", "file-history-snapshot", "queue-operation", "last-prompt", "system",
+    "progress", "file-history-snapshot", "file-history-delta", "queue-operation",
+    "last-prompt", "system",
 })
 
 PERMISSION_DENIAL_MARKERS = (
@@ -167,6 +174,22 @@ def iter_cc_records(
                 continue
             try:
                 record = json.loads(line)
+                # A JSONL line is guaranteed to be valid JSON and not to be an
+                # *object*: a vendor writing a bare list or string produces a
+                # record every consumer would call `.get` on. Counted as
+                # malformed here rather than raising from inside whichever
+                # decode function reached it first.
+                if not is_decodable_record(record):
+                    if diagnostics is not None:
+                        diagnostics["malformed_records"] = (
+                            diagnostics.get("malformed_records", 0) + 1
+                        )
+                    if warn:
+                        log.warning(
+                            "non-object record at %s:%d: %s",
+                            path, line_num, type(record).__name__,
+                        )
+                    continue
                 yield line_num, record, raw
             except json.JSONDecodeError as e:
                 if diagnostics is not None:
@@ -178,18 +201,68 @@ def iter_cc_records(
                 continue
 
 
+# Claude's `entrypoint` mapped onto CoSchema's `surface_kind` vocabulary. An unlisted
+# value is left unmapped, since a wrong surface is worse than an absent one. `sdk-cli`
+# is `api` rather than `cli`: those records carry `promptSource: sdk`, so the Session was
+# driven programmatically rather than typed at a terminal.
+_CC_SURFACE = {
+    "cli": "cli",
+    "claude-desktop": "desktop",
+    "sdk-cli": "api",
+}
+
+# Resource bound on an otherwise unbounded file, not a claim the facts appear within it:
+# one stated later is simply not found. Over 370 real Sessions the latest first statement
+# of any fact sought here was line 7.
+MAX_FACT_RECORDS = 256
+
+
 def get_session_metadata(path: Path) -> dict:
-    """Return bounded session facts observed directly in Claude records."""
-    facts = {}
+    """Return bounded session facts observed directly in Claude records.
+
+    `entrypoint` is a per-record field but a Session-level fact -- across 370 real
+    Sessions none mixed two values -- so the first observed value describes the Session.
+    Only observed values are returned, so `store` falls back to the vendor profile where
+    a record states none.
+    """
+    facts: dict[str, str] = {}
+    # Distinct working directories seen while reading the bounded prefix. A
+    # Session is usually one directory and is not guaranteed to be: measured
+    # over 376 real transcripts, four record more than one and one records 21,
+    # all subdirectories of the same Project. The count is over the records
+    # actually read, so it is a floor rather than a total -- which is the
+    # honest value here, since this function reads `MAX_FACT_RECORDS` and not
+    # the file.
+    observed_cwds: set[str] = set()
     for line_num, record, _raw in iter_cc_records(path, warn=False):
         version = record.get("version") or record.get("claudeCodeVersion")
         if version is not None and "harness_version" not in facts:
             facts["harness_version"] = str(version)
         cwd = record.get("cwd")
-        if isinstance(cwd, str) and cwd and "source_cwd" not in facts:
-            facts["source_cwd"] = cwd
-        if len(facts) == 2 or line_num >= 256:
+        if isinstance(cwd, str) and cwd:
+            observed_cwds.add(cwd)
+            if "source_cwd" not in facts:
+                facts["source_cwd"] = cwd
+        # Claude writes a generated title on records rather than in a side
+        # index. Generated rather than operator-set, which the basis records:
+        # a reader must not take it for a name the operator chose.
+        title = record.get("aiTitle")
+        if isinstance(title, str) and title.strip() and "session_label" not in facts:
+            facts["session_label"] = title.strip()
+            facts["session_label_basis"] = "vendor_generated"
+        entrypoint = record.get("entrypoint")
+        if (
+            isinstance(entrypoint, str) and entrypoint.strip()
+            and "entrypoint" not in facts
+        ):
+            facts["entrypoint"] = entrypoint.strip()
+            mapped = _CC_SURFACE.get(entrypoint.strip().lower())
+            if mapped:
+                facts["surface_kind"] = mapped
+        if line_num >= MAX_FACT_RECORDS:
             break
+    if observed_cwds:
+        facts["source_cwd_count"] = str(len(observed_cwds))
     return facts
 
 
@@ -218,13 +291,11 @@ def should_skip(record: dict) -> bool:
     """Return True for progress, file-history-snapshot, queue-operation, last-prompt, system (empty)."""
     rtype = record.get("type")
     if rtype == "system":
-        content = record.get("message", {}).get("content")
+        content = as_mapping(record.get("message")).get("content")
         if content and (not isinstance(content, list) or content):
             return False  # Include system with content
         return True
-    if rtype in SKIP_TYPES:
-        return True
-    return False
+    return rtype in SKIP_TYPES
 
 
 def _is_permission_denial(text: str) -> bool:
@@ -233,14 +304,12 @@ def _is_permission_denial(text: str) -> bool:
     return any(marker in lowered for marker in PERMISSION_DENIAL_MARKERS)
 
 
-def _normalize_compaction(
-    record: dict,
-    line_num: int,
-    session_id: str,
-    source_file: str,
-) -> dict:
+def _normalize_compaction(record: dict, context: RecordContext) -> dict:
     """Retain an explicit compact boundary and its observed accounting."""
-    compact = record.get("compactMetadata") or {}
+    session_id, source_file, line_num = (
+        context.session_id, context.source_file, context.line_num,
+    )
+    compact = as_mapping(record.get("compactMetadata"))
     metadata = {"audit_kind": "context_compaction"}
     field_names = {
         "trigger": "trigger",
@@ -255,24 +324,16 @@ def _normalize_compaction(
     for source_name, common_name in field_names.items():
         if compact.get(source_name) is not None:
             metadata[common_name] = compact[source_name]
-    return {
-        "session_id": session_id,
-        "event_id": str(line_num),
-        "event_type": "system_event",
-        "subtype": "context_compaction",
-        "role": "system",
-        "content": None,
-        "content_len": None,
-        "content_ref": None,
-        "tool_name": None,
-        "tool_input": None,
-        "tool_output": None,
-        "timestamp": _get_timestamp(record),
-        "file_path": None,
-        "source_file": source_file,
-        "metadata": json.dumps(metadata, separators=(",", ":")),
-        "source_raw": None,
-    }
+    return _base_event(
+        session_id=session_id,
+        event_id=str(line_num),
+        event_type="system_event",
+        subtype="context_compaction",
+        role="system",
+        timestamp=_get_timestamp(record),
+        source_file=source_file,
+        metadata=json.dumps(metadata, separators=(",", ":")),
+    )
 
 
 def _mapping_rule(event: dict) -> str:
@@ -290,7 +351,7 @@ def _mapping_rule(event: dict) -> str:
     if subtype in {"tool_result", "tool_failure", "permission_denied"}:
         return "claude.tool-result"
     if event_type == "product_state":
-        return "claude.product-state"
+        return _PRODUCT_STATE_RULES.get(subtype or "", "claude.product-state")
     if subtype == "fork_context_reference":
         return "claude.fork-context"
     if event_type == "lifecycle_event":
@@ -390,17 +451,7 @@ def extract_tool_input(tool_name: str, input_obj: dict) -> dict:
     return out
 
 
-def truncate_content(text: str, limit: int) -> tuple[str, int]:
-    """Return (truncated, full_len). If over limit, append …."""
-    if text is None:
-        return "", 0
-    s = str(text)
-    n = len(s)
-    if limit <= 0:
-        return "…" if n else "", n
-    if n <= limit:
-        return s, n
-    return s[: limit - 1] + "…", n
+
 
 
 def _build_tool_map(path: Path) -> dict[str, str]:
@@ -409,7 +460,7 @@ def _build_tool_map(path: Path) -> dict[str, str]:
     for _line_num, record, _ in iter_cc_records(path, warn=False):
         if record.get("type") != "assistant":
             continue
-        content = record.get("message", {}).get("content") or []
+        content = as_mapping(record.get("message")).get("content") or []
         for block in content:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 tid = block.get("id")
@@ -419,38 +470,44 @@ def _build_tool_map(path: Path) -> dict[str, str]:
     return tool_map
 
 
-def _parse_timestamp(ts) -> float | None:
-    """Convert timestamp to Unix ms. Handles float or ISO 8601 string."""
-    if ts is None:
-        return None
-    if isinstance(ts, (int, float)):
-        return float(ts)
-    if isinstance(ts, str):
-        try:
-            s = ts.replace("Z", "+00:00")
-            dt = datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.timestamp() * 1000
-        except (ValueError, TypeError):
-            pass
-    return None
+def _parse_timestamp(ts: Any) -> float | None:
+    """Convert a Claude timestamp to Unix milliseconds.
+
+    Claude writes ISO-8601 strings today; the numeric paths the normalizer
+    handles are a guard against a format change rather than a shape real data
+    reaches.
+    """
+    return epoch_ms(ts)
 
 
 def _get_timestamp(record: dict, opts: dict | None = None) -> float | None:
-    """Extract timestamp from record or message. Returns Unix ms.
+    """Return the record's timestamp in Unix milliseconds, or None.
 
-    A present-but-unparseable timestamp is reported as ``malformed`` (warn) when
-    ``opts`` is given; absent/empty values stay silent. Never raises.
+    CCSchema records the stamp as ``timestamp`` on the record or nested in
+    ``message``, so both positions are read, top level first.
+
+    **Selects on field state rather than truthiness.** ``_parse_timestamp``
+    accepts ``0`` and returns ``0.0``, so an ``or`` chain would skip that value
+    and read the nested position instead. A vacant state -- absent, null, or
+    empty -- moves to the next position; any other state stops the search, so
+    an unparseable value is diagnosed here rather than masked by the nested
+    stamp.
+
+    With ``opts``, a stamp that stops the search but does not parse is reported
+    as ``malformed``; a vacant one is reported as its own state.
     """
-    ts = record.get("timestamp") or record.get("message", {}).get("timestamp")
-    parsed = _parse_timestamp(ts)
+    for source in (record, record.get("message") or {}):
+        raw, state = field_state.get_state(source, "timestamp")
+        if state not in field_state.VACANT_STATES:
+            break
+    parsed = _parse_timestamp(raw)
     if opts is not None and parsed is None:
-        state = field_state.classify(ts if ts is not None else field_state._MISSING)
         if state == field_state.PRESENT:
-            state = field_state.MALFORMED  # present but did not parse
+            # `classify` sees a non-empty value; that it had to be a timestamp
+            # is known here, so the narrower state is set here.
+            state = field_state.MALFORMED
         field_state.diagnose(
-            opts, field="event_at", state=state, source_field="timestamp", value=ts
+            opts, field="event_at", state=state, source_field="timestamp", value=raw
         )
     return parsed
 
@@ -460,7 +517,10 @@ def _block_event_id(line_num: int, emitted_index: int) -> str:
     return str(line_num) if emitted_index == 0 else f"{line_num}:{emitted_index}"
 
 
-def _event_metadata(record: dict, tool_use_id=None, extra: dict | None = None) -> str | None:
+def _event_metadata(
+    record: dict, tool_use_id: str | None = None,
+    extra: dict | None = None,
+) -> str | None:
     """Retain stable Claude lineage identifiers without copying the envelope."""
     metadata = {}
     if record.get("uuid") is not None:
@@ -475,14 +535,18 @@ def _event_metadata(record: dict, tool_use_id=None, extra: dict | None = None) -
 
 
 def _assistant_configuration(record: dict) -> dict:
-    """Retain verified Claude model settings with their exact source fields."""
-    message = record.get("message") or {}
-    if not isinstance(message, dict):
-        return {}
-    values = {}
-    provenance = {}
+    """Retain verified Claude model settings with their exact source fields.
 
-    def keep(common: str, source_field: str, value) -> None:
+    `effort` is read from the record's top level, which is where Claude states it, rather
+    than from `message` alongside the model.
+    """
+    message = record.get("message")
+    if not isinstance(message, dict):
+        message = {}
+    values: dict[str, Any] = {}
+    provenance: dict[str, Any] = {}
+
+    def keep(common: str, source_field: str, value: Any) -> None:
         if value is None or isinstance(value, (dict, list)):
             return
         text = str(value).strip()
@@ -495,6 +559,7 @@ def _assistant_configuration(record: dict) -> dict:
             }
 
     keep("model", "message.model", message.get("model"))
+    keep("reasoning_effort", "effort", record.get("effort"))
     usage = message.get("usage")
     if isinstance(usage, dict):
         keep(
@@ -512,6 +577,42 @@ def _diagnostic(opts: dict, name: str, count: int = 1) -> None:
         diagnostics[name] = diagnostics.get(name, 0) + count
 
 
+def _record_refused(
+    context: RecordContext,
+    reason_code: str,
+    *,
+    record_type: str | None = None,
+    detail: str | None = None,
+) -> None:
+    """Record that one source record was read and not admitted.
+
+    The counter alone said *how many* records an adapter refused; this says
+    *which*, with the locator the call site already holds. Without it the
+    coverage report's record-level loss is structurally zero and that zero is
+    unfalsifiable rather than measured -- a reader cannot distinguish "no
+    record was refused" from "refusals are not recorded".
+
+    Collected rather than written here: an adapter must not write SQL (3.3),
+    so these accumulate on `opts` and `store` persists them against the Source
+    once it is known.
+    """
+    opts, source_file, line_num = (
+        context.opts, context.source_file, context.line_num,
+    )
+    _diagnostic(opts, reason_code)
+    pending = opts.get("record_diagnostics")
+    if pending is None:
+        return
+    pending.append({
+        "granularity": "record",
+        "reason_code": reason_code,
+        "source_locator": f"line:{line_num}" if line_num is not None else None,
+        "source_file": source_file,
+        "source_record_type": record_type,
+        "detail": detail,
+    })
+
+
 def _process_text(text: str, opts: dict, *, phase: str, record_type: str) -> str | None:
     from codess.content_processing import apply_processing
     return apply_processing(
@@ -520,20 +621,31 @@ def _process_text(text: str, opts: dict, *, phase: str, record_type: str) -> str
 
 
 def _base_event(
-    *, session_id: str, event_id: str, event_type: str, subtype: str,
+    *, session_id: str, event_id: str, event_type: str, subtype: str | None,
     role: str, timestamp: float | None, source_file: str,
+    content: str | None = None, content_len: int | None = None,
+    metadata: str | None = None, **extra: Any,
 ) -> dict:
-    return {
+    """One Claude Event envelope, holding the fields every record shares.
+
+    `content` and `metadata` default to None so a caller emitting a bare
+    lifecycle record passes neither; a caller with text passes both rather than
+    building the sixteen keys again. `extra` carries what only some records
+    have, so a caller without them spells out no `None` per key.
+    """
+    event = {
         "session_id": session_id, "event_id": event_id,
         "event_type": event_type, "subtype": subtype, "role": role,
-        "content": None, "content_len": None, "content_ref": None,
+        "content": content, "content_len": content_len, "content_ref": None,
         "tool_name": None, "tool_input": None, "tool_output": None,
         "timestamp": timestamp, "file_path": None,
-        "source_file": source_file, "metadata": None, "source_raw": None,
+        "source_file": source_file, "metadata": metadata, "source_raw": None,
     }
+    event.update(extra)
+    return event
 
 
-def _attach_timestamp_state(event: dict, record: dict, timestamp) -> None:
+def _attach_timestamp_state(event: dict, record: dict, timestamp: Any) -> None:
     if timestamp is not None:
         return
     value, state = field_state.get_state(record, "timestamp")
@@ -602,10 +714,69 @@ def _attach_prompt_origin_state(event: dict, record: dict) -> None:
         )
 
 
-def normalize_product_state(
-    record: dict, line_num: int, session_id: str, source_file: str, opts: dict,
-) -> dict | None:
+PRODUCT_LABEL_LIMIT = 512
+"""Bound for a Session label -- a title or agent name, never a message."""
+
+NAMED_LABEL_RECORDS = {
+    # record type -> (Event subtype, the field holding the label)
+    "ai-title": ("ai_title", "aiTitle"),
+    "custom-title": ("custom_title", "customTitle"),
+    "agent-name": ("agent_name", "agentName"),
+}
+"""Records that carry one short label and differ only in where it lives."""
+
+
+_PRODUCT_STATE_KINDS = {
+    "ai_title": "session.label",
+    "custom_title": "session.label",
+    "agent_name": "session.label",
+    "mode": "harness.setting",
+    "permission_mode": "harness.setting",
+    "context_attachment": "content.attachment",
+    "file_history_snapshot": "content.attachment",
+    "file_history_delta": "content.attachment",
+    "last_prompt_marker": "session.marker",
+}
+"""Which Event kind each Claude product-state record belongs to.
+
+One kind spanning all nine subtypes made a query for Session titles return
+permission settings and file diffs as well -- it was Claude's largest kind,
+with more Events than `tool.call`. The four kinds separate what a reader
+actually selects on: what the Session is called, how the harness was
+configured, what material was attached, and where a position was marked.
+`last_prompt_marker` is its own kind rather than attached material because it
+points at a position rather than carrying content.
+"""
+
+
+_PRODUCT_STATE_RULES = {
+    subtype: f"claude.{kind.replace('.', '-')}"
+    for subtype, kind in _PRODUCT_STATE_KINDS.items()
+}
+"""The released rule id for each subtype, derived from the kind it maps to.
+
+Kept in step with `_PRODUCT_STATE_KINDS` by construction: a rule and the kind
+it produces are the same decision, and deriving one from the other is what
+stops the profile and the decoder disagreeing.
+"""
+
+
+def _product_state_kind(subtype: str | None) -> str:
+    """The Event kind for one product-state subtype.
+
+    An unrecognized subtype keeps the general kind rather than being forced
+    into one of the four: `event_kind` is a declared open vocabulary, and a
+    newly observed Claude record is evidence to classify deliberately, not to
+    guess at from the nearest existing name.
+    """
+    return _PRODUCT_STATE_KINDS.get(subtype or "", "state.product")
+
+
+def normalize_product_state(record: dict, context: RecordContext) -> dict | None:
     """Map bounded Claude product/lifecycle state without copying envelopes."""
+    session_id, source_file, line_num, opts = (
+        context.session_id, context.source_file, context.line_num, context.opts,
+    )
     rtype = record.get("type")
     subtype = record.get("subtype")
     event = None
@@ -616,21 +787,18 @@ def normalize_product_state(
     elif rtype == "permission-mode":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="permission_mode", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
         metadata["permission_mode"] = record.get("permissionMode")
-    elif rtype == "ai-title":
-        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="ai_title", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
-        title = _process_text(record.get("aiTitle") or "", opts, phase="pre", record_type="ai-title")
-        if title is not None:
-            event["content"], event["content_len"] = truncate_content(title, 512)
-    elif rtype == "custom-title":
-        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="custom_title", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
-        title = _process_text(record.get("customTitle") or "", opts, phase="pre", record_type="custom-title")
-        if title is not None:
-            event["content"], event["content_len"] = truncate_content(title, 512)
-    elif rtype == "agent-name":
-        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="agent_name", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
-        name = _process_text(record.get("agentName") or "", opts, phase="pre", record_type="agent-name")
-        if name is not None:
-            event["content"], event["content_len"] = truncate_content(name, 512)
+    elif rtype in NAMED_LABEL_RECORDS:
+        # Three records that differ only in which field holds the label and
+        # what the resulting Event is called. Written out separately they
+        # were three copies of one construction, which is what made a
+        # fourteen-branch dispatch look longer than its decisions (3.5.4).
+        subtype, field = NAMED_LABEL_RECORDS[rtype]
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype=subtype, role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        label = _process_text(record.get(field) or "", opts, phase="pre", record_type=rtype)
+        if label is not None:
+            event["content"], event["content_len"] = truncate_content(
+                label, PRODUCT_LABEL_LIMIT
+            )
     elif rtype == "fork-context-ref":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="fork_context_reference", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
         metadata = {
@@ -654,6 +822,27 @@ def normalize_product_state(
     elif rtype == "file-history-snapshot":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="file_history_snapshot", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
         metadata["snapshot_field_count"] = len(record)
+    elif rtype == "file-history-delta":
+        # Records that one tracked file was backed up, and which snapshot the
+        # backup derives from. Harness product state like its snapshot
+        # sibling, not a message: the file content is not in the record, only
+        # the fact that a backup exists and where the harness tracked it.
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="product_state", subtype="file_history_delta", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        backup = record.get("backup")
+        backup = backup if isinstance(backup, dict) else {}
+        metadata.update({
+            # The message this delta belongs to, and the snapshot it extends.
+            # Both are vendor identifiers retained as recorded.
+            "message_id": record.get("messageId"),
+            "snapshot_message_id": record.get("snapshotMessageId"),
+            "backup_version": backup.get("version"),
+            "backup_time": backup.get("backupTime"),
+            # The tracked path is retained as an Artifact locator elsewhere;
+            # here only its presence is recorded, so this Event stays a
+            # structural observation rather than a second copy of the path.
+            "has_tracking_path": bool(record.get("trackingPath")),
+            "has_backup": bool(backup),
+        })
     elif rtype == "queue-operation":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="queue_operation", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
         metadata["operation"] = record.get("operation")
@@ -666,6 +855,17 @@ def normalize_product_state(
         metadata = {"duration_ms": record.get("durationMs"), "message_count": record.get("messageCount")}
     elif rtype == "system" and subtype == "scheduled_task_fire":
         event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="scheduled_task_fire", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+    elif rtype == "system" and subtype == "model_consent_fallback":
+        # One model was asked for and another answered. Both names are stated, so the
+        # fallback is recorded as one fact rather than as two unrelated models: without
+        # it the Session shows only the model that ran, and the request is lost.
+        event = _base_event(session_id=session_id, event_id=str(line_num), event_type="lifecycle_event", subtype="model_fallback", role="harness", timestamp=_get_timestamp(record), source_file=source_file)
+        metadata = {
+            "requested_model": record.get("originalModel"),
+            "fallback_model": record.get("fallbackModel"),
+            "fallback_choice": record.get("choice"),
+            "persisted_as_default": record.get("persistedAsDefault"),
+        }
     elif rtype == "system" and subtype == "local_command":
         text = str(record.get("content") or "")
         text = _process_text(
@@ -711,7 +911,7 @@ def normalize_product_state(
     if not event.get("event_kind"):
         event.update({
             "event_kind": (
-                "state.product"
+                _product_state_kind(event.get("subtype"))
                 if event["event_type"] == "product_state"
                 else "lifecycle.vendor"
             ),
@@ -724,13 +924,12 @@ def normalize_product_state(
 
 
 def normalize_assistant(
-    record: dict,
-    line_num: int,
-    session_id: str,
-    source_file: str,
-    opts: dict,
+    record: dict, context: RecordContext,
 ) -> tuple[list[dict], dict[str, str]]:
     """Extract assistant events; return (events, tool_map)."""
+    session_id, source_file, line_num, opts = (
+        context.session_id, context.source_file, context.line_num, context.opts,
+    )
     events = []
     tool_map = {}
     message = record.get("message")
@@ -779,24 +978,14 @@ def normalize_assistant(
             if processed is None:
                 continue
             truncated = processed
-            events.append({
-                "session_id": session_id,
-                "event_id": _block_event_id(line_num, emitted_index),
-                "event_type": "assistant_message",
-                "subtype": subtype,
-                "role": role,
-                "content": truncated,
-                "content_len": content_len,
-                "content_ref": None,
-                "tool_name": None,
-                "tool_input": None,
-                "tool_output": None,
-                "timestamp": ts,
-                "file_path": None,
-                "source_file": source_file,
-                "metadata": _event_metadata(record, extra=model_configuration),
-                "source_raw": None,
-            })
+            events.append(_base_event(
+                session_id=session_id,
+                event_id=_block_event_id(line_num, emitted_index),
+                event_type="assistant_message", subtype=subtype, role=role,
+                timestamp=ts, source_file=source_file,
+                content=truncated, content_len=content_len,
+                metadata=_event_metadata(record, extra=model_configuration),
+            ))
             _attach_timestamp_state(events[-1], record, ts)
             _attach_configuration_state(events[-1], record)
             emitted_index += 1
@@ -814,29 +1003,24 @@ def normalize_assistant(
             tool_input = extract_tool_input(tname or "", tinput)
             tool_input = sanitize_value(tool_input, redact_enabled)
             tool_use_id = block.get("id")
-            events.append({
-                "session_id": session_id,
-                "event_id": _block_event_id(line_num, emitted_index),
-                "event_type": "tool_call",
-                "subtype": None,
-                "role": role,
-                "content": None,
-                "content_len": None,
-                "content_ref": None,
-                "tool_name": tname,
-                "tool_input": json.dumps(tool_input) if tool_input else None,
-                "tool_output": None,
-                "timestamp": ts,
-                "file_path": (
+            events.append(_base_event(
+                session_id=session_id,
+                event_id=_block_event_id(line_num, emitted_index),
+                event_type="tool_call",
+                subtype=None,
+                role=role,
+                timestamp=ts,
+                source_file=source_file,
+                tool_name=tname,
+                tool_input=json.dumps(tool_input) if tool_input else None,
+                file_path=(
                     tool_input.get("path") or tool_input.get("file_path")
                     if isinstance(tool_input, dict) else None
                 ),
-                "source_file": source_file,
-                "metadata": _event_metadata(
+                metadata=_event_metadata(
                     record, tool_use_id, extra=model_configuration
                 ),
-                "source_raw": None,
-            })
+            ))
             _attach_timestamp_state(events[-1], record, ts)
             _attach_configuration_state(events[-1], record)
             field_state.attach(
@@ -849,14 +1033,12 @@ def normalize_assistant(
 
 
 def normalize_user(
-    record: dict,
-    line_num: int,
-    session_id: str,
-    source_file: str,
-    tool_map: dict[str, str],
-    opts: dict,
+    record: dict, context: RecordContext, tool_map: dict[str, str],
 ) -> list[dict]:
     """Extract user events."""
+    session_id, source_file, line_num, opts = (
+        context.session_id, context.source_file, context.line_num, context.opts,
+    )
     events = []
     message = record.get("message")
     message = message if isinstance(message, dict) else {}
@@ -870,7 +1052,11 @@ def normalize_user(
     # preceding compact boundary through parentUuid.
     if record.get("isCompactSummary"):
         if not isinstance(content, str):
-            _diagnostic(opts, "unsupported_records")
+            _record_refused(
+                context, "unsupported_records",
+                record_type="compact_summary",
+                detail="compact summary content is not text",
+            )
             if opts.get("strict_mapping"):
                 raise SourceCompatibilityError(
                     "Claude compact summary content is not text"
@@ -881,14 +1067,14 @@ def normalize_user(
         )
         if text is None:
             return []
-        text, content_len, truncated = bound_context_content(text, opts)
+        text, content_len, was_truncated = bound_context_content(text, opts)
         text = _process_text(
             text, opts, phase="post", record_type="context.compact.summary"
         )
         if text is None:
             return []
         text, _post_length, post_truncated = bound_context_content(text, opts)
-        truncated = truncated or post_truncated
+        was_truncated = was_truncated or post_truncated
         event = _base_event(
             session_id=session_id,
             event_id=str(line_num),
@@ -908,7 +1094,7 @@ def normalize_user(
             "metadata": _event_metadata(record, extra={
                 "context_kind": "compaction_summary",
                 "compaction_boundary_uuid": record.get("parentUuid"),
-                "content_truncated": truncated,
+                "content_truncated": was_truncated,
             }),
         })
         _attach_timestamp_state(event, record, ts)
@@ -988,7 +1174,11 @@ def normalize_user(
     if content is None:
         content = []
     elif not isinstance(content, list):
-        _diagnostic(opts, "unsupported_records")
+        _record_refused(
+            context, "unsupported_records",
+            record_type=record.get("type"),
+            detail=f"user content is {type(content).__name__}, not a list",
+        )
         if opts.get("strict_mapping"):
             raise SourceCompatibilityError(
                 f"unsupported Claude user content type: {type(content).__name__}"
@@ -1025,42 +1215,28 @@ def normalize_user(
                 and semantics["actor_kind"] == "harness"
             ):
                 subtype = semantics["subtype"]
-            events.append({
-                "session_id": session_id,
-                "event_id": _block_event_id(line_num, emitted_index),
-                "event_type": (
-                    local_command["event_type"]
-                    if (
-                        local_command is not None
-                        and not (
-                            local_command["actor_kind"] == "human"
-                            and semantics["actor_kind"] == "harness"
-                        )
-                    )
-                    else semantics["event_type"]
-                ),
-                "subtype": subtype,
-                "role": (
-                    local_command["role"]
-                    if (
-                        local_command is not None
-                        and not (
-                            local_command["actor_kind"] == "human"
-                            and semantics["actor_kind"] == "harness"
-                        )
-                    )
-                    else semantics["role"]
-                ),
-                "content": text,
-                "content_len": len(text),
-                "content_ref": None,
-                "tool_name": None,
-                "tool_input": None,
-                "tool_output": None,
-                "timestamp": ts,
-                "file_path": None,
-                "source_file": source_file,
-                "metadata": _event_metadata(record, extra={
+            # A local command names the Event unless the harness produced it on
+            # a human's behalf: there the command is what was typed and the
+            # harness is what acted, so the semantics win. One predicate,
+            # because `event_type` and `role` must not disagree about which
+            # source they came from.
+            named_by = semantics
+            if local_command is not None and not (
+                local_command["actor_kind"] == "human"
+                and semantics["actor_kind"] == "harness"
+            ):
+                named_by = local_command
+            events.append(_base_event(
+                session_id=session_id,
+                event_id=_block_event_id(line_num, emitted_index),
+                event_type=named_by["event_type"],
+                subtype=subtype,
+                role=named_by["role"],
+                content=text,
+                content_len=len(text),
+                timestamp=ts,
+                source_file=source_file,
+                metadata=_event_metadata(record, extra={
                     "prompt_source": semantics["prompt_source"],
                     "origin_kind": semantics["source_origin_kind"],
                     "user_type": record.get("userType"),
@@ -1071,8 +1247,7 @@ def normalize_user(
                         local_command["command_name"] if local_command else None
                     ),
                 }),
-                "source_raw": None,
-            })
+            ))
             if (
                 local_command is not None
                 and not (
@@ -1098,6 +1273,47 @@ def normalize_user(
                 _attach_prompt_origin_state(events[-1], record)
             emitted_index += 1
 
+        elif btype == "image":
+            # A human pasting a screenshot with no accompanying text. Without this the
+            # prompt exists in the Session and not in the store -- 48 of them in one
+            # observed Project, counted only as a diagnostic.
+            #
+            # The payload is deliberately not retained. These are base64
+            # images averaging ~185 KB, and the `attachment` record's
+            # treatment is the established pattern in this adapter: record
+            # that content was present, its type and size, never the bytes.
+            source = block.get("source")
+            source = source if isinstance(source, dict) else {}
+            data = source.get("data") or ""
+            semantics = _user_origin_semantics(record, source_file)
+            events.append({
+                "session_id": session_id,
+                "event_id": _block_event_id(line_num, emitted_index),
+                "event_type": semantics["event_type"],
+                "subtype": "attachment",
+                "role": semantics["role"],
+                "content": None,
+                "content_len": 0,
+                "timestamp": ts,
+                "source_file": source_file,
+                "actor_kind": semantics["actor_kind"],
+                "content_role": semantics["content_role"],
+                # The normalized origin, as the text branch stores; the raw
+                # vendor string travels in metadata rather than the column.
+                "origin_kind": semantics["origin_kind"],
+                "metadata": _event_metadata(record, extra={
+                    "attachment_type": btype,
+                    "origin_kind": semantics["source_origin_kind"],
+                    "media_type": source.get("media_type"),
+                    "attachment_source": source.get("type"),
+                    "encoded_length": len(data) if data else 0,
+                    "prompt_source": semantics["prompt_source"],
+                    "user_type": record.get("userType"),
+                    "is_sidechain": record.get("isSidechain"),
+                    "actor_evidence": semantics["actor_evidence"],
+                }),
+            })
+            emitted_index += 1
         elif btype == "tool_result":
             tool_use_id = block.get("tool_use_id")
             tool_name = tool_map.get(tool_use_id) if tool_use_id else None
@@ -1138,30 +1354,44 @@ def normalize_user(
                 )
             else:
                 subtype = "tool_result"
-            events.append({
-                "session_id": session_id,
-                "event_id": _block_event_id(line_num, emitted_index),
-                "event_type": "user_message",
-                "subtype": subtype,
-                "role": role,
-                "content": truncated,
-                "content_len": content_len,
-                "content_ref": None,
-                "tool_name": tool_name,
-                "tool_input": None,
-                "tool_output": truncated,
-                "source_status": (
-                    "application_error" if result_failure else None
+            events.append(_base_event(
+                session_id=session_id,
+                event_id=_block_event_id(line_num, emitted_index),
+                event_type="user_message",
+                subtype=subtype,
+                role=role,
+                content=truncated,
+                content_len=content_len,
+                timestamp=ts,
+                source_file=source_file,
+                tool_name=tool_name,
+                tool_output=truncated,
+                # Claude states the result as a structured object on 12,863 real
+                # records -- `stdout` and `stderr` separately, `structuredPatch`,
+                # `interrupted` -- which the text projection flattens into one blob.
+                # The structure is carried so a reader can select on stderr or find
+                # an interrupted result without re-parsing the text.
+                tool_output_structured=(
+                    record.get("toolUseResult")
+                    if isinstance(record.get("toolUseResult"), (dict, list))
+                    else None
                 ),
-                "normalized_status": (
+                # What the source said, not what was inferred from it.
+                # `result_failure` is a text-pattern inference used only for MCP
+                # results; `is_error` is Claude's own flag on the result block. Reading
+                # only the inference leaves `source_status` null on the 470 failure and
+                # denial Events whose outcome the vendor states directly.
+                source_status=(
+                    "application_error" if result_failure
+                    else "is_error" if is_error
+                    else None
+                ),
+                normalized_status=(
                     "succeeded" if subtype == "tool_result"
                     else "failed" if subtype == "tool_failure"
                     else None
                 ),
-                "timestamp": ts,
-                "file_path": None,
-                "source_file": source_file,
-                "metadata": _event_metadata(
+                metadata=_event_metadata(
                     record,
                     tool_use_id,
                     extra=({
@@ -1170,8 +1400,7 @@ def normalize_user(
                         "result_status_evidence": result_failure,
                     } if result_failure else None),
                 ),
-                "source_raw": None,
-            })
+            ))
             _attach_timestamp_state(events[-1], record, ts)
             emitted_index += 1
 
@@ -1191,6 +1420,27 @@ def normalize_user(
                     f"persisted tool output outside session tree: {path}"
                 )
             before = path.stat()
+            # The size is checked before the read, not after: reading first and
+            # then rejecting would already have materialized the body this bound
+            # exists to keep out of memory. Nothing in the vendor contract bounds
+            # this file -- it is written by whatever tool produced the output, so
+            # its size is a property of that tool rather than of a Session.
+            limit = int(
+                opts.get("max_external_content_bytes")
+                or MAX_EXTERNAL_CONTENT_BYTES
+            )
+            if before.st_size > limit:
+                _record_refused(
+                    context, "external_content_oversize",
+                    record_type="external.tool_result",
+                    detail=(
+                        f"persisted tool output is {before.st_size} bytes, "
+                        f"above the {limit}-byte bound: {path.name}"
+                    ),
+                )
+                raise SourceCompatibilityError(
+                    f"persisted tool output exceeds {limit} bytes: {path}"
+                )
             raw = path.read_bytes()
             after = path.stat()
             if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
@@ -1236,7 +1486,7 @@ def normalize_user(
                 "content_role": "tool_result_detail", "origin_kind": "tool_generated",
                 "metadata": _event_metadata(record, extra={
                     "source_locator": str(path),
-                    "content_sha256": hashlib.sha256(raw).hexdigest(),
+                    "content_digest": codess_bytes_hash(256, 256, raw),
                     "byte_size": len(raw), "character_length": full_len,
                     "extraction": "complete" if len(extracted) == full_len else "bounded",
                     "media_type": "text/plain",
@@ -1279,25 +1529,42 @@ def process_file(
     diagnostics = opts.get("diagnostics")
 
     for line_num, record, raw_line in iter_cc_records(path, diagnostics):
+        # Built once per record and passed whole: the four values identify the
+        # record under decode and none of them varies within it.
+        context = RecordContext(
+            session_id=session_id, source_file=source_file,
+            line_num=line_num, opts=opts,
+        )
         if record.get("type") == "system" and record.get("subtype") == "compact_boundary":
             yield _annotate_source(
-                _normalize_compaction(record, line_num, session_id, source_file),
+                _normalize_compaction(record, context),
                 record,
                 line_num,
             )
             continue
-        product_state = normalize_product_state(
-            record, line_num, session_id, source_file, opts
-        )
+        product_state = normalize_product_state(record, context)
         if product_state is not None:
             if opts.get("include_product_state", True):
                 yield _annotate_source(product_state, record, line_num)
                 _diagnostic(opts, "product_state_records")
             else:
-                _diagnostic(opts, "known_ignored_records")
+                # Refused by configuration rather than by kind, so the reason
+                # names the setting: a reader asking why these are absent needs
+                # to know the answer is a flag, not a decode gap.
+                _record_refused(
+                    context, "record_product_state_excluded",
+                    record_type=str(record.get("type") or ""),
+                )
             continue
         if should_skip(record):
-            _diagnostic(opts, "known_ignored_records")
+            # Named per record type rather than summed. `known_ignored` folded
+            # six types into one total, so a vendor that started writing meaning
+            # into `progress` would move the number with nothing saying which
+            # type moved.
+            _record_refused(
+                context, "record_kind_not_mapped",
+                record_type=str(record.get("type") or ""),
+            )
             continue
         rtype = record.get("type")
         debug = opts.get("debug", False)
@@ -1308,9 +1575,9 @@ def process_file(
         )
 
         if rtype == "assistant":
-            evs, _ = normalize_assistant(record, line_num, session_id, source_file, opts)
+            evs, _ = normalize_assistant(record, context)
             if not evs and diagnostics is not None:
-                blocks = (record.get("message") or {}).get("content") or []
+                blocks = as_mapping(record.get("message")).get("content") or []
                 block_types = {
                     block.get("type") for block in blocks
                     if isinstance(block, dict)
@@ -1320,42 +1587,32 @@ def process_file(
                     for block in blocks if isinstance(block, dict)
                 )
                 if empty_thinking or block_types == {"fallback"}:
-                    diagnostics["known_ignored_records"] = (
-                        diagnostics.get("known_ignored_records", 0) + 1
-                    )
                     reason = (
-                        "empty_reasoning_state_records"
-                        if empty_thinking else "fallback_state_records"
+                        "record_empty_reasoning_state"
+                        if empty_thinking else "record_fallback_state"
                     )
-                    diagnostics[reason] = diagnostics.get(reason, 0) + 1
+                    _record_refused(
+                        context, reason,
+                        record_type=str(record.get("type") or ""),
+                    )
                 else:
-                    diagnostics["ignored_records"] = (
-                        diagnostics.get("ignored_records", 0) + 1
+                    _record_refused(
+                        context, "record_unclassified",
+                        record_type=str(record.get("type") or ""),
                     )
             for ev in evs:
                 if source_raw is not None:
                     ev["source_raw"] = source_raw
                 yield _annotate_source(ev, record, line_num)
         elif rtype == "user":
-            evs = normalize_user(
-                record, line_num, session_id, source_file, tool_map, opts
-            )
+            evs = normalize_user(record, context, tool_map)
             if not evs and diagnostics is not None:
-                blocks = (record.get("message") or {}).get("content") or []
-                if blocks and all(
-                    isinstance(block, dict) and block.get("type") == "image"
-                    for block in blocks
-                ):
-                    diagnostics["unsupported_records"] = (
-                        diagnostics.get("unsupported_records", 0) + 1
-                    )
-                    diagnostics["attachment_only_records"] = (
-                        diagnostics.get("attachment_only_records", 0) + 1
-                    )
-                else:
-                    diagnostics["ignored_records"] = (
-                        diagnostics.get("ignored_records", 0) + 1
-                    )
+                # Image-only records used to land here and be counted
+                # unsupported; they now decode as bounded attachment prompts,
+                # so anything still producing no Event is an ordinary ignore.
+                diagnostics["ignored_records"] = (
+                    diagnostics.get("ignored_records", 0) + 1
+                )
             for ev in evs:
                 if source_raw is not None:
                     ev["source_raw"] = source_raw

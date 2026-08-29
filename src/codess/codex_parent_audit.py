@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 PARENT_KEY = re.compile(
     r"(^|[._])(parent|parent_session|parent_thread|ancestor|forked_from|"

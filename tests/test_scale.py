@@ -4,11 +4,16 @@ import json
 import sqlite3
 import time
 
+from cursor_fixtures import create_bubble_table, create_header_table
+
 from codess.adapters.cursor import _iter_bubbles
-from codess.cursor_source import get_db_metrics
 from codess.codex_source import get_session_files as get_codex_session_files
+from codess.cursor_source import get_db_metrics
 from codess.query_api import (
-    execute, make_request, selected_project_ids, selected_project_snapshots,
+    execute,
+    make_request,
+    selected_project_ids,
+    selected_project_snapshots,
 )
 from codess.store import connect, init_db, replace_session_events
 
@@ -16,12 +21,8 @@ from codess.store import connect, init_db, replace_session_events
 def test_cursor_large_header_metrics_and_selected_read(tmp_path):
     db = tmp_path / "state.vscdb"
     conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
-    conn.execute(
-        "CREATE TABLE composerHeaders ("
-        "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-        "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-    )
+    create_bubble_table(conn)
+    create_header_table(conn)
     count = 1_200
     conn.executemany(
         "INSERT INTO cursorDiskKV VALUES (?, ?)",
@@ -132,7 +133,7 @@ def test_typed_query_streams_and_orders_beyond_sqlite_attach_limit(tmp_path):
         stores.append({
             "conn": connect(store, read_only=True),
             "path": store,
-            "project_root": project,
+            "project_path": project,
             "snapshot_id": f"snapshot-{index:03d}",
         })
     try:

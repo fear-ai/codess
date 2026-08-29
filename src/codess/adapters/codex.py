@@ -2,17 +2,24 @@
 
 import json
 import logging
+import re
 from collections import Counter
-from datetime import datetime, timezone
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
+from typing import Any
 
 from codess import field_state
 from codess.config import TRUNCATE_PROMPT, TRUNCATE_RESPONSE, TRUNCATE_TOOL_RESULT
-from codess.context_content import bound_context_content
-from codess.sanitize import sanitize_value
 from codess.content_processing import apply_processing
-from codess.mapping import annotate_mapping
+from codess.context_content import bound_context_content, truncate_content
+from codess.mapping import (
+    RecordContext,
+    annotate_mapping,
+    as_mapping,
+    is_decodable_record,
+)
+from codess.sanitize import sanitize_value
+from codess.timeval import epoch_ms
 from codess.tool_result_status import application_failure_evidence
 
 log = logging.getLogger(__name__)
@@ -33,6 +40,17 @@ def iter_codex_records(
                 continue
             try:
                 record = json.loads(line)
+                if not is_decodable_record(record):
+                    if diagnostics is not None:
+                        diagnostics["malformed_records"] = (
+                            diagnostics.get("malformed_records", 0) + 1
+                        )
+                    if warn:
+                        log.warning(
+                            "non-object record at %s:%d: %s",
+                            path, line_num, type(record).__name__,
+                        )
+                    continue
                 yield line_num, record, raw
             except json.JSONDecodeError as e:
                 if diagnostics is not None:
@@ -48,7 +66,7 @@ def get_session_meta(path: Path) -> tuple[str, str]:
     """Return (session_id, project_path) from first session_meta. Fallback to filename stem and '.'."""
     for _line_num, record, _ in iter_codex_records(path, warn=False):
         if record.get("type") == "session_meta":
-            payload = record.get("payload") or {}
+            payload = as_mapping(record.get("payload"))
             sid = payload.get("id")
             cwd = payload.get("cwd")
             return (
@@ -58,12 +76,52 @@ def get_session_meta(path: Path) -> tuple[str, str]:
     return path.stem, "."
 
 
+# `source` names where the Session ran. Codex reports the interface directly,
+# so this maps its values onto CoSchema's `surface_kind` vocabulary rather
+# than inferring one. An unlisted value is left unmapped: the profile default
+# is a guess, and a wrong surface is worse than an absent one.
+_CODEX_SURFACE = {
+    "cli": "cli",
+    "vscode": "ide",
+    "exec": "cli",
+}
+
+
+def _observed_harness(payload: dict) -> dict:
+    """Harness and surface the Session actually reports, where it reports them.
+
+    Codex is the only one of the three vendors that names both: `originator`
+    distinguishes `codex_cli_rs`, `Codex Desktop`, `codex-tui`, and `codex_exec`,
+    and `source` distinguishes `cli`, `vscode`, and `exec`. Claude states a surface
+    only (`entrypoint`) and Cursor neither, so both fall back to the profile.
+
+    `originator` is stored verbatim even though its values conflate the program with
+    the surface -- `codex_cli_rs` and `Codex Desktop` are one program under two
+    surfaces. It is the exact vendor string, which the schema retains rather than
+    normalizes; the surface is recorded separately from `source`, so a reader who
+    wants the program alone reads `surface_kind` beside it.
+
+    Only observed values are returned, so `store` falls back to the profile where a
+    vendor supplies nothing.
+    """
+    observed: dict[str, str] = {}
+    originator = payload.get("originator")
+    if isinstance(originator, str) and originator.strip():
+        observed["harness_name"] = originator.strip()
+    surface = payload.get("source")
+    if isinstance(surface, str):
+        mapped = _CODEX_SURFACE.get(surface.strip().lower())
+        if mapped:
+            observed["surface_kind"] = mapped
+    return observed
+
+
 def get_session_metadata(path: Path) -> dict:
     """Return useful, bounded session-level metadata from session_meta."""
     for _line_num, record, _ in iter_codex_records(path, warn=False):
         if record.get("type") != "session_meta":
             continue
-        payload = record.get("payload") or {}
+        payload = as_mapping(record.get("payload"))
         values = {
             key: payload[key]
             for key in (
@@ -73,6 +131,7 @@ def get_session_metadata(path: Path) -> dict:
             )
             if payload.get(key) is not None
         }
+        values.update(_observed_harness(payload))
         parent = payload.get("parent_thread_id")
         forked = payload.get("forked_from_id")
         thread_source = str(payload.get("thread_source") or "").lower()
@@ -109,22 +168,9 @@ def get_session_metadata(path: Path) -> dict:
     return {}
 
 
-def _parse_timestamp(value) -> float | None:
-    """Normalize Unix seconds/ms or ISO-8601 to Unix milliseconds."""
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        number = float(value)
-        return number * 1000 if number < 1e12 else number
-    if isinstance(value, str):
-        try:
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except (TypeError, ValueError):
-            return None
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp() * 1000
-    return None
+def _parse_timestamp(value: Any) -> float | None:
+    """Normalize a Codex time to Unix milliseconds."""
+    return epoch_ms(value)
 
 
 def _extract_text_from_content(content: list) -> str:
@@ -135,14 +181,12 @@ def _extract_text_from_content(content: list) -> str:
     for block in content:
         if not isinstance(block, dict):
             continue
-        if block.get("type") == "input_text":
-            parts.append(block.get("text", ""))
-        elif "text" in block:
+        if block.get("type") == "input_text" or "text" in block:
             parts.append(block.get("text", ""))
     return "\n".join(parts)
 
 
-def _extract_reasoning_summary(summary) -> str:
+def _extract_reasoning_summary(summary: Any) -> str:
     """Extract vendor-exposed summary text, never encrypted reasoning state."""
     if not isinstance(summary, list):
         return ""
@@ -182,8 +226,8 @@ def _build_record_maps(
     mcp_call_ids: set[str] = set()
     output_by_call: dict[str, object] = {}
     for _line_num, record, _raw in iter_codex_records(path, warn=False):
-        payload = record.get("payload") or {}
-        if not isinstance(payload, dict):
+        payload = as_mapping(record.get("payload"))
+        if not payload:
             continue
         if (
             record.get("type") == "event_msg"
@@ -244,6 +288,39 @@ def _tool_input(payload: dict, redact_enabled: bool) -> str | None:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
+_PATCH_FILE_HEADER = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
+
+
+def _patched_file(payload: dict) -> str | None:
+    """The file an `apply_patch` call operates on, or None.
+
+    Codex names no path in a tool argument -- `exec_command` carries a shell
+    string and `apply_patch` an envelope -- so the Artifact a Codex Session
+    touched was not recoverable from any field. It is recoverable from the
+    patch envelope, whose `*** Add|Update|Delete File:` headers name each
+    path, and every one of the 4,639 `apply_patch` calls observed carries at
+    least one.
+
+    Only the first path is returned, because `events.file_path` holds one
+    value; a patch touching several files records the first and keeps the
+    rest in `tool_input`, which is retained whole. Naming one file is
+    evidence; inventing a join across several would not be.
+    """
+    if payload.get("name") != "apply_patch":
+        return None
+    raw = payload.get("arguments") or payload.get("input")
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = raw
+        raw = parsed.get("input") if isinstance(parsed, dict) else parsed
+    if not isinstance(raw, str):
+        return None
+    match = _PATCH_FILE_HEADER.search(raw)
+    return match.group(1).strip() if match else None
+
+
 def _metadata(payload: dict) -> str | None:
     values = {
         key: payload[key]
@@ -266,10 +343,10 @@ def _configuration_values(
         prefix = "payload.thread_settings"
     if not isinstance(source, dict):
         return {}
-    values = {}
-    provenance = {}
+    values: dict[str, Any] = {}
+    provenance: dict[str, Any] = {}
 
-    def keep(common: str, source_field: str, value) -> None:
+    def keep(common: str, source_field: str, value: Any) -> None:
         if value is None or isinstance(value, (dict, list)):
             return
         text = str(value).strip()
@@ -292,7 +369,10 @@ def _configuration_values(
         "reasoning_effort" if "reasoning_effort" in source else "effort",
         source.get("reasoning_effort") or source.get("effort"),
     )
-    keep("service_tier", "service_tier", source.get("service_tier"))
+    # Codex states the tier the client *requested*, in `thread_settings` beside
+    # `model_provider`. Claude states the tier the API *served*, in `message.usage`
+    # beside the token counts. Different facts, so different columns.
+    keep("request_tier", "service_tier", source.get("service_tier"))
     collaboration = source.get("collaboration_mode")
     if isinstance(collaboration, dict):
         keep("mode", "collaboration_mode.mode", collaboration.get("mode"))
@@ -329,6 +409,76 @@ def _mapping_rule(event: dict) -> str:
     if event.get("subtype") == "turn_aborted":
         return "codex.abort"
     return "codex.message"
+
+
+def _base_event(
+    *, session_id: str, line_num: int, event_type: str, subtype: str | None,
+    role: str, timestamp: float | None, source_file: str,
+    event_kind: str | None = None, actor_kind: str | None = None,
+    content_role: str | None = None, origin_kind: str | None = None,
+    content: str | None = None, content_len: int | None = None,
+    tool_name: str | None = None, tool_input: str | None = None,
+    tool_output: str | None = None, metadata: str | None = None,
+    file_path: str | None = None, source_raw: object = None,
+    event_id: str | None = None,
+    **extra: object,
+) -> dict:
+    """One Codex Event envelope, holding the fields every record shares.
+
+    Fifteen call sites each wrote the same twenty keys inline -- 405 lines in
+    which sixteen keys were identical everywhere and only the classification
+    and content varied, so finding what a record type does differently meant
+    diffing two blocks. This mirrors `adapters/cc._base_event`, with one
+    difference: Codex usually classifies where it builds, so the four
+    classification fields are arguments here. Three record types -- tool
+    search, function and custom tool calls -- omit them, and an omitted field
+    is left out of the dict rather than set to `None`, because the two are
+    not the same to `store._event_classification`: it fills only absent
+    dimensions, so a `None` would be an explicit classification of nothing.
+
+    That omission is deliberate and correct. `_inferred_classification` derives the
+    four values from `event_type` and `role`, which for a tool call is
+    unambiguous, and it produces `tool.call`/`model`/`tool_request`/
+    `model_generated` for all 18,709 such Events in the real stores --
+    identical to what the sites that state them inline produce. Repeating
+    them here would add fifteen lines that could disagree with the resolver
+    and be believed over it.
+
+    `extra` carries fields only some records have -- `source_status` and
+    `normalized_status` on tool results -- so the callers that have none do
+    not each spell out a `None`.
+    """
+    classification = {
+        key: value
+        for key, value in (
+            ("event_kind", event_kind), ("actor_kind", actor_kind),
+            ("content_role", content_role), ("origin_kind", origin_kind),
+        )
+        if value is not None
+    }
+    return {
+        "session_id": session_id,
+        # One record can yield several Events -- a compaction with several
+        # summaries -- and each needs its own identity within the line. A
+        # caller with one Event lets the line number stand for it.
+        "event_id": str(line_num) if event_id is None else event_id,
+        "event_type": event_type,
+        "subtype": subtype,
+        "role": role,
+        **classification,
+        "content": content,
+        "content_len": content_len,
+        "content_ref": None,
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "tool_output": tool_output,
+        "timestamp": timestamp,
+        "file_path": file_path,
+        "source_file": source_file,
+        "metadata": metadata,
+        "source_raw": source_raw,
+        **extra,
+    }
 
 
 def _annotate_source(
@@ -390,9 +540,19 @@ def _update_configuration(current: dict, observed: dict) -> None:
         current["configuration_provenance"] = provenance
 
 
-def _merge_metadata(payload: dict, configuration: dict) -> str | None:
+def _merge_metadata(
+    payload: dict, configuration: dict, extra: dict | None = None,
+) -> str | None:
+    """Merge a record's metadata with the run's configuration and any extras.
+
+    `extra` is for a fact the adapter establishes rather than reads -- the
+    reasoning fidelity, which is known from *which field was parsed* and appears
+    nowhere in the payload.
+    """
     values = json.loads(_metadata(payload) or "{}")
     values.update(configuration)
+    if extra:
+        values.update(extra)
     return json.dumps(values, separators=(",", ":")) if values else None
 
 
@@ -402,15 +562,128 @@ def _failed_status(payload: dict) -> bool:
     }
 
 
+_EXIT_CODE = re.compile(r'\\?"exit_code\\?":\s*(-?\d+)')
+
+
+# Codex prefixes most tool output with a fixed header -- `Exit code`, `Wall time`,
+# `Total output lines` -- then `Output:` and the body. 18,543 of 19,576 real results
+# carry it. The fields are stated, not inferred, so they are decoded rather than left
+# inside the text; the body stays a string because that is what it is.
+# Codex prefixes tool output with a header of stated facts, then `Output:` and the
+# body. 18,543 of 19,576 real results carry one. The fields are matched per line rather
+# than as one expression, because the set and order vary by tool and the spellings do
+# too: the exit code appears as `Process exited with code N` on 14,934 results and
+# `Exit code: N` on 1,319, and the wall time with and without a colon.
+_HEADER_FIELDS = (
+    (re.compile(r"\AExit code: (-?\d+)\Z"), "exit_code", int),
+    (re.compile(r"\AProcess exited with code (-?\d+)\Z"), "exit_code", int),
+    (re.compile(r"\AWall time:? ([\d.]+) seconds?\Z"), "wall_seconds", float),
+    (re.compile(r"\ATotal output lines: (\d+)\Z"), "output_lines", int),
+    (re.compile(r"\AOriginal token count: (\d+)\Z"), "output_tokens", int),
+    (re.compile(r"\AChunk ID: (\S+)\Z"), "chunk_id", str),
+    (re.compile(r"\AProcess running with session ID (\S+)\Z"), "process_session_id", str),
+    (re.compile(r"\A(Script completed)\Z"), "script_completed", bool),
+)
+_OUTPUT_MARKER = "Output:"
+
+
+def _output_text(output: object) -> str | None:
+    """The text Codex wrapped, from whichever wrapper it used.
+
+    Three transports carry the same payload: a bare string, a `{"output": ...}`
+    envelope, and a list of `{type, text}` content blocks. The wrapper is retained
+    verbatim in `output_json`; this returns only the text so one header decode serves
+    all three.
+    """
+    if isinstance(output, str):
+        stripped = output.strip()
+        if stripped[:1] == "{":
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                return output
+            if isinstance(parsed, dict) and isinstance(parsed.get("output"), str):
+                return parsed["output"]
+            return output
+        return output
+    if isinstance(output, list):
+        parts = [
+            block["text"] for block in output
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        ]
+        return "\n".join(parts) if parts else None
+    return None
+
+
+def _decoded_output(output: object) -> dict | None:
+    """Header fields plus body, where Codex states a header.
+
+    Returns None when no `Output:` marker is present, or when the lines before it
+    state nothing recognized: a result Codex did not annotate has no fields, and an
+    envelope holding only the body would claim structure that is not there.
+    """
+    text = _output_text(output)
+    if not isinstance(text, str):
+        return None
+    marker = text.find(_OUTPUT_MARKER)
+    if marker < 0:
+        return None
+    decoded: dict = {}
+    for line in text[:marker].split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        for pattern, name, cast in _HEADER_FIELDS:
+            match = pattern.match(line)
+            if match is None:
+                continue
+            decoded[name] = True if cast is bool else cast(match.group(1))
+            break
+        else:
+            # An unrecognized header line means the marker was body text rather than
+            # a header, so nothing is claimed for this result.
+            return None
+    if not decoded:
+        return None
+    body = text[marker + len(_OUTPUT_MARKER):]
+    decoded["output"] = body[1:] if body[:1] in ("\n", " ") else body
+    return decoded
+
+
+def _exit_code_status(payload: dict) -> str | None:
+    """The shell exit code Codex reports inside its output text, or None.
+
+    Codex states no `status` field on most tool outputs, so 26,917 of 30,415
+    real results carried neither a source nor a normalized outcome. It does
+    report `exit_code` -- but inside the output body, as JSON embedded in
+    text, which is why no field read reached it. About 11% of sampled
+    outputs carry one.
+
+    Returned as the exact source spelling (`exit_code:0`) so
+    `store._normalized_status` maps it and the raw value is retained. Where
+    no code is present the result stays unknown, which is the honest answer:
+    Codex did not say.
+    """
+    raw = payload.get("output")
+    if not isinstance(raw, str):
+        raw = json.dumps(raw) if raw is not None else ""
+    match = _EXIT_CODE.search(raw)
+    if match:
+        return f"exit_code:{match.group(1)}"
+    # The header states the same fact in words on far more results -- 14,795 against
+    # 79 -- and the two forms never co-occur, so the header is the larger source.
+    decoded = _decoded_output(payload.get("output"))
+    if decoded and "exit_code" in decoded:
+        return f"exit_code:{decoded['exit_code']}"
+    return None
+
+
 def _compaction_events(
     payload: dict,
+    context: RecordContext,
     *,
-    session_id: str,
-    source_file: str,
-    line_num: int,
     timestamp: float | None,
     source_raw: bytes | None,
-    opts: dict,
 ) -> Iterator[dict]:
     """Map each explicit encrypted Codex compaction summary once.
 
@@ -418,6 +691,9 @@ def _compaction_events(
     transcript messages.  Only its dedicated ``type=compaction`` item is new
     compaction communication; copying the rest would multiply large messages.
     """
+    session_id, source_file, line_num, opts = (
+        context.session_id, context.source_file, context.line_num, context.opts,
+    )
     history = payload.get("replacement_history")
     if not isinstance(history, list):
         history = []
@@ -474,37 +750,69 @@ def _compaction_events(
                 metadata[key] = payload[key]
         if item.get("id") is not None:
             metadata["compaction_item_id"] = item["id"]
-        yield {
-            "session_id": session_id,
-            "event_id": (
+        yield _base_event(
+            session_id=session_id,
+            line_num=line_num,
+            event_id=(
                 str(line_num)
                 if len(summaries) == 1
                 else f"{line_num}:{emitted_index}"
             ),
-            "event_type": "system_event",
-            "subtype": "context_compaction",
-            "role": "harness",
-            "content": text or None,
-            "content_len": content_len if encrypted is not None else None,
-            "content_ref": None,
-            "tool_name": None,
-            "tool_input": None,
-            "tool_output": None,
-            "timestamp": timestamp,
-            "file_path": None,
-            "source_file": source_file,
-            "metadata": json.dumps(metadata, separators=(",", ":")),
-            "source_raw": source_raw,
-            "event_kind": "context.compact",
-            "actor_kind": "harness",
-            "content_role": "context",
-            "origin_kind": "harness_injected",
-            "_source_path": (
+            event_type="system_event",
+            subtype="context_compaction",
+            role="harness",
+            timestamp=timestamp,
+            source_file=source_file,
+            content=text or None,
+            content_len=content_len if encrypted is not None else None,
+            metadata=json.dumps(metadata, separators=(",", ":")),
+            source_raw=source_raw,
+            event_kind="context.compact",
+            actor_kind="harness",
+            content_role="context",
+            origin_kind="harness_injected",
+            _source_path=(
                 "$.payload.replacement_history"
                 if history_index < 0
                 else f"$.payload.replacement_history[{history_index}]"
             ),
-        }
+        )
+
+
+def _record_refused(
+    context: RecordContext,
+    reason_code: str,
+    *,
+    record_type: str | None = None,
+) -> None:
+    """Record that one source record was read and not admitted.
+
+    Mirrors the Claude adapter's recorder for the same reason: a counter says
+    *how many* an adapter refused and a persisted row says *which*, so a
+    coverage report can state record-level loss rather than reporting a
+    structural zero. `store` aggregates these by reason and record type before
+    writing, which is what makes the high-volume kinds affordable.
+
+    Collected rather than written here, because an adapter must not write SQL:
+    these accumulate on `opts` and `store` persists them once the Source row
+    exists.
+    """
+    opts, source_file, line_num = (
+        context.opts, context.source_file, context.line_num,
+    )
+    diagnostics = opts.get("diagnostics")
+    if diagnostics is not None:
+        diagnostics[reason_code] = diagnostics.get(reason_code, 0) + 1
+    pending = opts.get("record_diagnostics")
+    if pending is None:
+        return
+    pending.append({
+        "granularity": "record",
+        "reason_code": reason_code,
+        "source_locator": f"line:{line_num}" if line_num is not None else None,
+        "source_file": source_file,
+        "source_record_type": record_type,
+    })
 
 
 def process_file(
@@ -521,21 +829,32 @@ def process_file(
     (
         call_map,
         direct_user_messages,
-        mcp_call_ids,
+        _mcp_call_ids,
         mcp_failures,
     ) = _build_record_maps(path)
     has_direct_user_notifications = bool(direct_user_messages)
     current_configuration: dict = {}
 
     for line_num, record, raw_line in iter_codex_records(path, diagnostics):
+        # Built once per record and passed whole: the four values identify the
+        # record under decode and none of them varies within it.
+        context = RecordContext(
+            session_id=session_id, source_file=source_file,
+            line_num=line_num, opts=opts,
+        )
         rtype = record.get("type")
-        payload = record.get("payload") or {}
-        if not isinstance(payload, dict):
+        raw_payload = record.get("payload")
+        # Counted rather than coerced: a payload stated as a list is a vendor
+        # observation, and `as_mapping` used here would make the diagnostic
+        # unreachable. Coercion is right where a *field* may be malformed and
+        # the record is still worth decoding; a whole payload is not.
+        if not isinstance(raw_payload, dict):
             if diagnostics is not None:
                 diagnostics["malformed_records"] = (
                     diagnostics.get("malformed_records", 0) + 1
                 )
             continue
+        payload = raw_payload
         timestamp = _parse_timestamp(record.get("timestamp"))
 
         source_raw = (
@@ -545,6 +864,13 @@ def process_file(
         )
 
         if rtype == "session_meta":
+            # Codex states provider and model on different records: `session_meta` carries
+            # `model_provider` and no model, `turn_context` the reverse. The provider is a
+            # Session-level fact, so it seeds the configuration every later turn extends.
+            _update_configuration(
+                current_configuration,
+                _configuration_values("session_meta", payload, line_num),
+            )
             if diagnostics is not None:
                 diagnostics["session_metadata_records"] = (
                     diagnostics.get("session_metadata_records", 0) + 1
@@ -554,12 +880,12 @@ def process_file(
         if rtype == "compacted":
             for event in _compaction_events(
                 payload,
-                session_id=session_id,
-                source_file=source_file,
-                line_num=line_num,
+                RecordContext(
+                    session_id=session_id, source_file=source_file,
+                    line_num=line_num, opts=opts,
+                ),
                 timestamp=timestamp,
                 source_raw=source_raw,
-                opts=opts,
             ):
                 yield _annotate_source(event, rtype, payload, line_num)
             continue
@@ -596,59 +922,95 @@ def process_file(
             if item_type == "reasoning":
                 text = _extract_reasoning_summary(payload.get("summary"))
                 if not text:
+                    # An item carrying encrypted state and no exposed summary
+                    # is *withheld* reasoning, not absent reasoning: the vendor
+                    # states that reasoning happened and does not show it.
+                    # Recorded with empty content and `reasoning_redacted`, the
+                    # same representation Cursor's `redacted-reasoning` part
+                    # gets, so one query compares the two vendors. Dropping it
+                    # said the model produced no reasoning, which is a
+                    # different claim and a false one -- measured, 17,460 of
+                    # 24,793 Codex reasoning items are this shape.
+                    if not payload.get("encrypted_content"):
+                        if diagnostics is not None:
+                            _record_refused(
+                                context, "record_reasoning_without_summary",
+                                record_type=str(item_type or ""),
+                            )
+                            diagnostics["reasoning_without_summary_records"] = (
+                                diagnostics.get(
+                                    "reasoning_without_summary_records", 0
+                                ) + 1
+                            )
+                        continue
                     if diagnostics is not None:
-                        diagnostics["known_ignored_records"] = (
-                            diagnostics.get("known_ignored_records", 0) + 1
+                        diagnostics["reasoning_redacted_records"] = (
+                            diagnostics.get("reasoning_redacted_records", 0) + 1
                         )
-                        diagnostics["reasoning_without_summary_records"] = (
-                            diagnostics.get(
-                                "reasoning_without_summary_records", 0
-                            ) + 1
-                        )
+                    yield _annotate_source(_base_event(
+                        line_num=line_num,
+                        session_id=session_id,
+                        event_type="assistant_message",
+                        subtype="reasoning_summary",
+                        role="assistant",
+                        event_kind="message.reasoning_summary",
+                        actor_kind="model",
+                        content_role="reasoning_summary",
+                        origin_kind="model_generated",
+                        timestamp=timestamp,
+                        source_file=source_file,
+                        content="",
+                        content_len=0,
+                        metadata=_merge_metadata(
+                            payload, current_configuration,
+                            # Never the encrypted state itself, which stays
+                            # opaque: the flag is the whole evidence.
+                            {
+                                "reasoning_fidelity": "redacted",
+                                "reasoning_redacted": True,
+                            },
+                        ),
+                        source_raw=source_raw,
+                    ), rtype, payload, line_num)
                     continue
-                text = apply_processing(
-                    text, opts, vendor="Codex",
-                    record_type="reasoning_summary",
-                    event_kind="message.reasoning_summary", phase="pre",
+                bounded = _bounded_content(
+                    text, opts, record_type="reasoning_summary",
+                    event_kind="message.reasoning_summary",
+                    limit=TRUNCATE_RESPONSE,
                 )
-                if text is None:
+                if bounded is None:
                     continue
-                truncated, content_len = _truncate(text, TRUNCATE_RESPONSE)
-                truncated = apply_processing(
-                    truncated, opts, vendor="Codex",
-                    record_type="reasoning_summary",
-                    event_kind="message.reasoning_summary", phase="post",
-                )
-                if truncated is None:
-                    continue
+                truncated, content_len = bounded
                 if diagnostics is not None:
                     diagnostics["reasoning_summary_records"] = (
                         diagnostics.get("reasoning_summary_records", 0) + 1
                     )
-                yield _annotate_source({
-                    "session_id": session_id,
-                    "event_id": str(line_num),
-                    "event_type": "assistant_message",
-                    "subtype": "reasoning_summary",
-                    "role": "assistant",
-                    "event_kind": "message.reasoning_summary",
-                    "actor_kind": "model",
-                    "content_role": "reasoning_summary",
-                    "origin_kind": "model_generated",
-                    "content": truncated,
-                    "content_len": content_len,
-                    "content_ref": None,
-                    "tool_name": None,
-                    "tool_input": None,
-                    "tool_output": None,
-                    "timestamp": timestamp,
-                    "file_path": None,
-                    "source_file": source_file,
-                    "metadata": _merge_metadata(
-                        payload, current_configuration
+                yield _annotate_source(_base_event(
+                    line_num=line_num,
+                    session_id=session_id,
+                    event_type="assistant_message",
+                    subtype="reasoning_summary",
+                    role="assistant",
+                    event_kind="message.reasoning_summary",
+                    actor_kind="model",
+                    content_role="reasoning_summary",
+                    origin_kind="model_generated",
+                    timestamp=timestamp,
+                    source_file=source_file,
+                    content=truncated,
+                    content_len=content_len,
+                    metadata=_merge_metadata(
+                        payload, current_configuration,
+                        # `summary`, not `full`: `_extract_reasoning_summary`
+                        # reads `payload.summary`, which the vendor exposes in
+                        # place of the reasoning state it withholds. Cursor
+                        # stores the reasoning itself under the same Event kind,
+                        # so the field is what lets one query select both
+                        # without treating a precis as the thing it summarizes.
+                        {"reasoning_fidelity": "summary"},
                     ),
-                    "source_raw": source_raw,
-                }, rtype, payload, line_num)
+                    source_raw=source_raw,
+                ), rtype, payload, line_num)
                 continue
 
             if item_type == "message":
@@ -684,180 +1046,111 @@ def process_file(
 
                 if role == "user" and direct_user:
                     subtype = "slash_command" if text.strip().startswith("/") else "prompt"
-                    truncated, content_len = _truncate(text, TRUNCATE_PROMPT)
+                    truncated, content_len = truncate_content(text, TRUNCATE_PROMPT)
                     truncated = apply_processing(
                         truncated, opts, vendor="Codex", record_type="message",
                         event_kind="message.prompt", phase="post",
                     )
                     if truncated is None:
                         continue
-                    yield _annotate_source({
-                        "session_id": session_id,
-                        "event_id": str(line_num),
-                        "event_type": "user_message",
-                        "subtype": subtype,
-                        "role": "user",
-                        "event_kind": "message.prompt",
-                        "actor_kind": "human",
-                        "content_role": "prompt",
-                        "origin_kind": "direct_user_input",
-                        "content": truncated,
-                        "content_len": content_len,
-                        "content_ref": None,
-                        "tool_name": None,
-                        "tool_input": None,
-                        "tool_output": None,
-                        "timestamp": timestamp,
-                        "file_path": None,
-                        "source_file": source_file,
-                        "metadata": _merge_metadata(payload, {
-                            **current_configuration,
-                            "source_role": "user",
-                            "actor_evidence": (
-                                "event_msg.user_message"
-                                if has_direct_user_notifications
-                                else "legacy_user_role_fallback"
-                            ),
-                            "content_truncated": (
-                                content_len > TRUNCATE_PROMPT
-                            ),
-                        }),
-                        "source_raw": source_raw,
-                    }, rtype, payload, line_num)
+                    yield _annotate_source(_base_event(
+                        line_num=line_num,
+                        session_id=session_id,
+                        event_type="user_message",
+                        subtype=subtype,
+                        role="user",
+                        event_kind="message.prompt",
+                        actor_kind="human",
+                        content_role="prompt",
+                        origin_kind="direct_user_input",
+                        timestamp=timestamp,
+                        source_file=source_file,
+                        content=truncated,
+                        content_len=content_len,
+                        metadata=_merge_metadata(payload, { **current_configuration, "source_role": "user", "actor_evidence": ( "event_msg.user_message" if has_direct_user_notifications else "legacy_user_role_fallback" ), "content_truncated": ( content_len > TRUNCATE_PROMPT ) }),
+                        source_raw=source_raw,
+                    ), rtype, payload, line_num)
                     if diagnostics is not None:
                         diagnostics["direct_user_message_records"] = (
                             diagnostics.get("direct_user_message_records", 0)
                             + 1
                         )
-                elif role == "user":
-                    bounded, content_len, truncated = bound_context_content(
+                elif role in {"user", "developer", "system"}:
+                    # One branch for three roles. Codex injects harness
+                    # context under any of them and the handling was
+                    # identical, differing only in the role recorded and in
+                    # whether the unpaired-user diagnostic applies -- so the
+                    # two copies could drift on the bounding or processing
+                    # they share, which is the part that matters.
+                    context_text, content_len, was_truncated = bound_context_content(
                         text, opts
                     )
-                    bounded = apply_processing(
-                        bounded, opts, vendor="Codex",
-                        record_type="message",
+                    context_text = apply_processing(
+                        context_text, opts, vendor="Codex", record_type="message",
                         event_kind="message.context", phase="post",
                     )
-                    if bounded is None:
+                    if context_text is None:
                         continue
-                    bounded, _post_len, post_truncated = bound_context_content(
-                        bounded, opts
+                    context_text, _post_len, post_truncated = bound_context_content(
+                        context_text, opts
                     )
-                    yield _annotate_source({
-                        "session_id": session_id,
-                        "event_id": str(line_num),
-                        "event_type": "system_event",
-                        "subtype": "context_injection",
-                        "role": "user",
-                        "event_kind": "message.context",
-                        "actor_kind": "harness",
-                        "content_role": "context",
-                        "origin_kind": "harness_injected",
-                        "content": bounded,
-                        "content_len": content_len,
-                        "content_ref": None,
-                        "tool_name": None,
-                        "tool_input": None,
-                        "tool_output": None,
-                        "timestamp": timestamp,
-                        "file_path": None,
-                        "source_file": source_file,
-                        "metadata": _merge_metadata(payload, {
+                    evidence = (
+                        {"actor_evidence": "unpaired_response_item_user_role"}
+                        if role == "user" else {}
+                    )
+                    yield _annotate_source(_base_event(
+                        line_num=line_num,
+                        session_id=session_id,
+                        event_type="system_event",
+                        subtype="context_injection",
+                        role=role,
+                        event_kind="message.context",
+                        actor_kind="harness",
+                        content_role="context",
+                        origin_kind="harness_injected",
+                        timestamp=timestamp,
+                        source_file=source_file,
+                        content=context_text,
+                        content_len=content_len,
+                        metadata=_merge_metadata(payload, {
                             **current_configuration,
-                            "source_role": "user",
-                            "actor_evidence": (
-                                "unpaired_response_item_user_role"
-                            ),
-                            "content_truncated": (
-                                truncated or post_truncated
-                            ),
+                            "source_role": role,
+                            **evidence,
+                            "content_truncated": was_truncated or post_truncated,
                         }),
-                        "source_raw": source_raw,
-                    }, rtype, payload, line_num)
-                    if diagnostics is not None:
+                        source_raw=source_raw,
+                    ), rtype, payload, line_num)
+                    if role == "user" and diagnostics is not None:
                         diagnostics["harness_user_role_context_records"] = (
                             diagnostics.get(
                                 "harness_user_role_context_records", 0
                             ) + 1
                         )
                 elif role == "assistant":
-                    truncated, content_len = _truncate(text, TRUNCATE_RESPONSE)
+                    truncated, content_len = truncate_content(text, TRUNCATE_RESPONSE)
                     truncated = apply_processing(
                         truncated, opts, vendor="Codex", record_type="message",
                         event_kind="message.response", phase="post",
                     )
                     if truncated is None:
                         continue
-                    yield _annotate_source({
-                        "session_id": session_id,
-                        "event_id": str(line_num),
-                        "event_type": "assistant_message",
-                        "subtype": "response",
-                        "role": "assistant",
-                        "event_kind": "message.response",
-                        "actor_kind": "model",
-                        "content_role": "response",
-                        "origin_kind": "model_generated",
-                        "content": truncated,
-                        "content_len": content_len,
-                        "content_ref": None,
-                        "tool_name": None,
-                        "tool_input": None,
-                        "tool_output": None,
-                        "timestamp": timestamp,
-                        "file_path": None,
-                        "source_file": source_file,
-                        "metadata": _merge_metadata(payload, {
-                            **current_configuration,
-                            "source_role": "assistant",
-                            "actor_evidence": "response_item_assistant_role",
-                            "content_truncated": (
-                                content_len > TRUNCATE_RESPONSE
-                            ),
-                        }),
-                        "source_raw": source_raw,
-                    }, rtype, payload, line_num)
-                elif role in {"developer", "system"}:
-                    bounded, content_len, truncated = bound_context_content(
-                        text, opts
-                    )
-                    bounded = apply_processing(
-                        bounded, opts, vendor="Codex", record_type="message",
-                        event_kind="message.context", phase="post",
-                    )
-                    if bounded is None:
-                        continue
-                    bounded, _post_len, post_truncated = bound_context_content(
-                        bounded, opts
-                    )
-                    yield _annotate_source({
-                        "session_id": session_id,
-                        "event_id": str(line_num),
-                        "event_type": "system_event",
-                        "subtype": "context_injection",
-                        "role": role,
-                        "event_kind": "message.context",
-                        "actor_kind": "harness",
-                        "content_role": "context",
-                        "origin_kind": "harness_injected",
-                        "content": bounded,
-                        "content_len": content_len,
-                        "content_ref": None,
-                        "tool_name": None,
-                        "tool_input": None,
-                        "tool_output": None,
-                        "timestamp": timestamp,
-                        "file_path": None,
-                        "source_file": source_file,
-                        "metadata": _merge_metadata(payload, {
-                            **current_configuration,
-                            "source_role": role,
-                            "content_truncated": (
-                                truncated or post_truncated
-                            ),
-                        }),
-                        "source_raw": source_raw,
-                    }, rtype, payload, line_num)
+                    yield _annotate_source(_base_event(
+                        line_num=line_num,
+                        session_id=session_id,
+                        event_type="assistant_message",
+                        subtype="response",
+                        role="assistant",
+                        event_kind="message.response",
+                        actor_kind="model",
+                        content_role="response",
+                        origin_kind="model_generated",
+                        timestamp=timestamp,
+                        source_file=source_file,
+                        content=truncated,
+                        content_len=content_len,
+                        metadata=_merge_metadata(payload, { **current_configuration, "source_role": "assistant", "actor_evidence": "response_item_assistant_role", "content_truncated": ( content_len > TRUNCATE_RESPONSE ) }),
+                        source_raw=source_raw,
+                    ), rtype, payload, line_num)
                 elif diagnostics is not None:
                     diagnostics["ignored_records"] = (
                         diagnostics.get("ignored_records", 0) + 1
@@ -868,32 +1161,23 @@ def process_file(
                 arguments = sanitize_value(
                     payload.get("arguments") or {}, redact_enabled
                 )
-                yield _annotate_source({
-                    "session_id": session_id,
-                    "event_id": str(line_num),
-                    "event_type": "tool_call",
-                    "subtype": "tool_failure" if _failed_status(payload) else None,
-                    "role": "assistant",
-                    "event_kind": "tool.call",
-                    "actor_kind": "model",
-                    "content_role": "tool_request",
-                    "origin_kind": "model_generated",
-                    "content": None,
-                    "content_len": None,
-                    "content_ref": None,
-                    "tool_name": "tool_search",
-                    "tool_input": json.dumps(
-                        arguments, separators=(",", ":"), ensure_ascii=False
-                    ),
-                    "tool_output": None,
-                    "timestamp": timestamp,
-                    "file_path": None,
-                    "source_file": source_file,
-                    "metadata": _merge_metadata(
-                        payload, current_configuration
-                    ),
-                    "source_raw": source_raw,
-                }, rtype, payload, line_num)
+                yield _annotate_source(_base_event(
+                    line_num=line_num,
+                    session_id=session_id,
+                    event_type="tool_call",
+                    subtype="tool_failure" if _failed_status(payload) else None,
+                    role="assistant",
+                    event_kind="tool.call",
+                    actor_kind="model",
+                    content_role="tool_request",
+                    origin_kind="model_generated",
+                    timestamp=timestamp,
+                    source_file=source_file,
+                    tool_name="tool_search",
+                    tool_input=json.dumps( arguments, separators=(",", ":"), ensure_ascii=False ),
+                    metadata=_merge_metadata( payload, current_configuration ),
+                    source_raw=source_raw,
+                ), rtype, payload, line_num)
                 continue
 
             if item_type == "tool_search_output":
@@ -903,94 +1187,68 @@ def process_file(
                 text = json.dumps(
                     tools, separators=(",", ":"), ensure_ascii=False
                 )
-                text = apply_processing(
-                    text, opts, vendor="Codex",
-                    record_type="tool_search_output",
-                    event_kind="tool.result", phase="pre",
+                bounded = _bounded_content(
+                    text, opts, record_type="tool_search_output",
+                    event_kind="tool.result", limit=TRUNCATE_TOOL_RESULT,
                 )
-                if text is None:
+                if bounded is None:
                     continue
-                truncated, content_len = _truncate(
-                    text, TRUNCATE_TOOL_RESULT
-                )
-                truncated = apply_processing(
-                    truncated, opts, vendor="Codex",
-                    record_type="tool_search_output",
-                    event_kind="tool.result", phase="post",
-                )
-                if truncated is None:
-                    continue
-                yield _annotate_source({
-                    "session_id": session_id,
-                    "event_id": str(line_num),
-                    "event_type": "system_event",
-                    "subtype": "tool_result",
-                    "role": "harness",
-                    "event_kind": "tool.result",
-                    "actor_kind": "harness",
-                    "content_role": "tool_result",
-                    "origin_kind": "harness_generated",
-                    "content": truncated,
-                    "content_len": content_len,
-                    "content_ref": None,
-                    "tool_name": "tool_search",
-                    "tool_input": None,
-                    "tool_output": truncated,
-                    "timestamp": timestamp,
-                    "file_path": None,
-                    "source_file": source_file,
-                    "metadata": _merge_metadata(
-                        payload, current_configuration
-                    ),
-                    "source_raw": source_raw,
-                }, rtype, payload, line_num)
+                truncated, content_len = bounded
+                yield _annotate_source(_base_event(
+                    line_num=line_num,
+                    session_id=session_id,
+                    event_type="system_event",
+                    subtype="tool_result",
+                    role="harness",
+                    event_kind="tool.result",
+                    actor_kind="harness",
+                    content_role="tool_result",
+                    origin_kind="harness_generated",
+                    timestamp=timestamp,
+                    source_file=source_file,
+                    content=truncated,
+                    content_len=content_len,
+                    tool_name="tool_search",
+                    tool_output=truncated,
+                    metadata=_merge_metadata( payload, current_configuration ),
+                    source_raw=source_raw,
+                ), rtype, payload, line_num)
                 continue
 
             if item_type in ("function_call", "custom_tool_call"):
-                yield _annotate_source({
-                    "session_id": session_id,
-                    "event_id": str(line_num),
-                    "event_type": "tool_call",
-                    "subtype": "tool_failure" if _failed_status(payload) else None,
-                    "role": "assistant",
-                    "content": None,
-                    "content_len": None,
-                    "content_ref": None,
-                    "tool_name": payload.get("name"),
-                    "tool_input": _tool_input(payload, redact_enabled),
-                    "tool_output": None,
-                    "timestamp": timestamp,
-                    "file_path": None,
-                    "source_file": source_file,
-                    "metadata": _merge_metadata(payload, current_configuration),
-                    "source_raw": source_raw,
-                }, rtype, payload, line_num)
+                yield _annotate_source(_base_event(
+                    line_num=line_num,
+                    session_id=session_id,
+                    event_type="tool_call",
+                    subtype="tool_failure" if _failed_status(payload) else None,
+                    role="assistant",
+                    timestamp=timestamp,
+                    source_file=source_file,
+                    tool_name=payload.get("name"),
+                    tool_input=_tool_input(payload, redact_enabled),
+                    file_path=_patched_file(payload),
+                    metadata=_merge_metadata(payload, current_configuration),
+                    source_raw=source_raw,
+                ), rtype, payload, line_num)
                 continue
 
             if item_type == "web_search_call":
                 action = sanitize_value(
                     payload.get("action") or {}, redact_enabled
                 )
-                yield _annotate_source({
-                    "session_id": session_id,
-                    "event_id": str(line_num),
-                    "event_type": "tool_call",
-                    "subtype": None,
-                    "role": "assistant",
-                    "content": None,
-                    "content_len": None,
-                    "content_ref": None,
-                    "tool_name": "web_search",
-                    "tool_input": json.dumps(
-                        action, separators=(",", ":"), ensure_ascii=False
-                    ),
-                    "tool_output": None,
-                    "timestamp": timestamp,
-                    "file_path": None,
-                    "source_file": source_file,
-                    "metadata": _merge_metadata(payload, current_configuration),
-                    "source_raw": source_raw,
-                }, rtype, payload, line_num)
+                yield _annotate_source(_base_event(
+                    line_num=line_num,
+                    session_id=session_id,
+                    event_type="tool_call",
+                    subtype=None,
+                    role="assistant",
+                    timestamp=timestamp,
+                    source_file=source_file,
+                    tool_name="web_search",
+                    tool_input=json.dumps( action, separators=(",", ":"), ensure_ascii=False ),
+                    metadata=_merge_metadata(payload, current_configuration),
+                    source_raw=source_raw,
+                ), rtype, payload, line_num)
                 continue
 
             if item_type in ("function_call_output", "custom_tool_call_output"):
@@ -998,63 +1256,48 @@ def process_file(
                 call_id_text = str(call_id) if call_id else ""
                 application_failure = mcp_failures.get(call_id_text)
                 output = payload.get("output")
-                if isinstance(output, str):
-                    text = output
-                else:
-                    text = json.dumps(output, ensure_ascii=False)
-                text = apply_processing(
-                    text, opts, vendor="Codex", record_type="tool_result",
-                    event_kind="tool.result", phase="pre",
+                text = output if isinstance(output, str) else json.dumps(output, ensure_ascii=False)
+                bounded = _bounded_content(
+                    text, opts, record_type="tool_result",
+                    event_kind="tool.result", limit=TRUNCATE_TOOL_RESULT,
                 )
-                if text is None:
+                if bounded is None:
                     continue
-                truncated, content_len = _truncate(text, TRUNCATE_TOOL_RESULT)
-                truncated = apply_processing(
-                    truncated, opts, vendor="Codex", record_type="tool_result",
-                    event_kind="tool.result", phase="post",
-                )
-                if truncated is None:
-                    continue
-                yield _annotate_source({
-                    "session_id": session_id,
-                    "event_id": str(line_num),
-                    "event_type": "user_message",
-                    "subtype": (
-                        "tool_failure"
-                        if application_failure else "tool_result"
+                truncated, content_len = bounded
+                yield _annotate_source(_base_event(
+                    line_num=line_num,
+                    session_id=session_id,
+                    event_type="user_message",
+                    subtype="tool_failure" if application_failure else "tool_result",
+                    role="user",
+                    timestamp=timestamp,
+                    source_file=source_file,
+                    content=truncated,
+                    content_len=content_len,
+                    tool_name=call_map.get(str(call_id)) if call_id else None,
+                    tool_output=truncated,
+                    metadata=_merge_metadata(payload, { **current_configuration, **({ "application_status": "failed", "result_status_evidence": application_failure } if application_failure else {}) }),
+                    source_raw=source_raw,
+                    # The wrapper is kept verbatim; the header fields are lifted beside
+                    # it so wall time, token count, and exit code are queryable without
+                    # re-parsing the text.
+                    tool_output_structured=_decoded_output(payload.get("output")),
+                    # Codex states `status` on few outputs, so the exit code it states
+                    # in the output header is the fallback; where neither exists the
+                    # result stays unknown rather than being assumed successful.
+                    source_status=(
+                        "application_error" if application_failure
+                        else payload.get("status") or _exit_code_status(payload)
                     ),
-                    "role": "user",
-                    "content": truncated,
-                    "content_len": content_len,
-                    "content_ref": None,
-                    "tool_name": call_map.get(str(call_id)) if call_id else None,
-                    "tool_input": None,
-                    "tool_output": truncated,
-                    "timestamp": timestamp,
-                    "file_path": None,
-                    "source_file": source_file,
-                    "source_status": (
-                        "application_error"
-                        if application_failure else payload.get("status")
-                    ),
-                    "normalized_status": (
-                        "failed" if application_failure else None
-                    ),
-                    "metadata": _merge_metadata(payload, {
-                        **current_configuration,
-                        **({
-                            "application_status": "failed",
-                            "result_status_evidence": application_failure,
-                        } if application_failure else {}),
-                    }),
-                    "source_raw": source_raw,
-                }, rtype, payload, line_num)
+                    normalized_status="failed" if application_failure else None,
+                ), rtype, payload, line_num)
                 continue
 
             if diagnostics is not None:
                 if item_type == "ghost_snapshot":
-                    diagnostics["known_ignored_records"] = (
-                        diagnostics.get("known_ignored_records", 0) + 1
+                    _record_refused(
+                        context, "record_intermediate_state",
+                        record_type=str(item_type or ""),
                     )
                     diagnostics["intermediate_state_records"] = (
                         diagnostics.get("intermediate_state_records", 0) + 1
@@ -1142,7 +1385,7 @@ def process_file(
                     )
                     if prompt is None:
                         continue
-                    content, content_len = _truncate(
+                    content, content_len = truncate_content(
                         prompt, TRUNCATE_PROMPT
                     )
                     content = apply_processing(
@@ -1167,63 +1410,47 @@ def process_file(
                     if payload.get(key) is not None
                 }
                 metadata.update(current_configuration)
-                yield _annotate_source({
-                    "session_id": session_id,
-                    "event_id": str(line_num),
-                    "event_type": "system_event",
-                    "subtype": subtype,
-                    "role": "harness",
-                    "event_kind": event_kind,
-                    "actor_kind": "harness",
-                    "content_role": content_role,
-                    "origin_kind": "harness_generated",
-                    "content": content,
-                    "content_len": content_len,
-                    "content_ref": None,
-                    "tool_name": None,
-                    "tool_input": None,
-                    "tool_output": None,
-                    "timestamp": timestamp,
-                    "file_path": None,
-                    "source_file": source_file,
-                    "metadata": (
-                        json.dumps(metadata, separators=(",", ":"))
-                        if metadata else None
-                    ),
-                    "source_raw": source_raw,
-                }, rtype, payload, line_num)
+                yield _annotate_source(_base_event(
+                    line_num=line_num,
+                    session_id=session_id,
+                    event_type="system_event",
+                    subtype=subtype,
+                    role="harness",
+                    event_kind=event_kind,
+                    actor_kind="harness",
+                    content_role=content_role,
+                    origin_kind="harness_generated",
+                    timestamp=timestamp,
+                    source_file=source_file,
+                    content=content,
+                    content_len=content_len,
+                    metadata=json.dumps(metadata, separators=(",", ":")) if metadata else None,
+                    source_raw=source_raw,
+                ), rtype, payload, line_num)
                 continue
             if msg_type == "context_compacted":
                 if diagnostics is not None:
-                    diagnostics["known_ignored_records"] = (
-                        diagnostics.get("known_ignored_records", 0) + 1
+                    _record_refused(
+                        context, "record_context_compacted",
+                        record_type=str(msg_type or ""),
                     )
                 continue
             if msg_type == "thread_rolled_back":
-                yield _annotate_source({
-                    "session_id": session_id,
-                    "event_id": str(line_num),
-                    "event_type": "system_event",
-                    "subtype": "thread_rolled_back",
-                    "role": "harness",
-                    "event_kind": "context.rollback",
-                    "actor_kind": "harness",
-                    "content_role": "status",
-                    "origin_kind": "harness_generated",
-                    "content": None,
-                    "content_len": None,
-                    "content_ref": None,
-                    "tool_name": None,
-                    "tool_input": None,
-                    "tool_output": None,
-                    "timestamp": timestamp,
-                    "file_path": None,
-                    "source_file": source_file,
-                    "metadata": json.dumps({
-                        "removed_user_turns": payload.get("num_turns"),
-                    }, separators=(",", ":")),
-                    "source_raw": source_raw,
-                }, rtype, payload, line_num)
+                yield _annotate_source(_base_event(
+                    line_num=line_num,
+                    session_id=session_id,
+                    event_type="system_event",
+                    subtype="thread_rolled_back",
+                    role="harness",
+                    event_kind="context.rollback",
+                    actor_kind="harness",
+                    content_role="status",
+                    origin_kind="harness_generated",
+                    timestamp=timestamp,
+                    source_file=source_file,
+                    metadata=json.dumps({ "removed_user_turns": payload.get("num_turns") }, separators=(",", ":")),
+                    source_raw=source_raw,
+                ), rtype, payload, line_num)
                 continue
             if msg_type in {"task_started", "task_complete"}:
                 is_start = msg_type == "task_started"
@@ -1241,30 +1468,21 @@ def process_file(
                         payload["last_agent_message"]
                     )
                     metadata["last_agent_message_not_duplicated"] = True
-                yield _annotate_source({
-                    "session_id": session_id,
-                    "event_id": str(line_num),
-                    "event_type": "lifecycle_event",
-                    "subtype": msg_type,
-                    "role": "harness",
-                    "event_kind": (
-                        "lifecycle.start" if is_start else "lifecycle.complete"
-                    ),
-                    "actor_kind": "harness",
-                    "content_role": "status",
-                    "origin_kind": "harness_generated",
-                    "content": None,
-                    "content_len": None,
-                    "content_ref": None,
-                    "tool_name": None,
-                    "tool_input": None,
-                    "tool_output": None,
-                    "timestamp": timestamp,
-                    "file_path": None,
-                    "source_file": source_file,
-                    "metadata": json.dumps(metadata, separators=(",", ":")),
-                    "source_raw": source_raw,
-                }, rtype, payload, line_num)
+                yield _annotate_source(_base_event(
+                    line_num=line_num,
+                    session_id=session_id,
+                    event_type="lifecycle_event",
+                    subtype=msg_type,
+                    role="harness",
+                    event_kind="lifecycle.start" if is_start else "lifecycle.complete",
+                    actor_kind="harness",
+                    content_role="status",
+                    origin_kind="harness_generated",
+                    timestamp=timestamp,
+                    source_file=source_file,
+                    metadata=json.dumps(metadata, separators=(",", ":")),
+                    source_raw=source_raw,
+                ), rtype, payload, line_num)
                 continue
             if msg_type in {"web_search_end", "patch_apply_end"}:
                 call_id = payload.get("call_id")
@@ -1283,37 +1501,24 @@ def process_file(
                     ),
                     "duplicate_output_not_retained": True,
                 }
-                yield _annotate_source({
-                    "session_id": session_id,
-                    "event_id": str(line_num),
-                    "event_type": "user_message",
-                    "subtype": "tool_failure" if failed else "tool_result",
-                    "role": "tool",
-                    "event_kind": "tool.result",
-                    "actor_kind": "tool",
-                    "content_role": "tool_result",
-                    "origin_kind": "tool_generated",
-                    "content": None,
-                    "content_len": None,
-                    "content_ref": None,
-                    "tool_name": (
-                        "web_search"
-                        if msg_type == "web_search_end" else "apply_patch"
-                    ),
-                    "tool_input": None,
-                    "tool_output": None,
-                    "timestamp": timestamp,
-                    "file_path": None,
-                    "source_file": source_file,
-                    "source_status": payload.get("status"),
-                    "normalized_status": "failed" if failed else "succeeded",
-                    "metadata": json.dumps(
-                        {key: value for key, value in metadata.items()
-                         if value is not None},
-                        separators=(",", ":"),
-                    ),
-                    "source_raw": source_raw,
-                }, rtype, payload, line_num)
+                yield _annotate_source(_base_event(
+                    line_num=line_num,
+                    session_id=session_id,
+                    event_type="user_message",
+                    subtype="tool_failure" if failed else "tool_result",
+                    role="tool",
+                    event_kind="tool.result",
+                    actor_kind="tool",
+                    content_role="tool_result",
+                    origin_kind="tool_generated",
+                    timestamp=timestamp,
+                    source_file=source_file,
+                    tool_name="web_search" if msg_type == "web_search_end" else "apply_patch",
+                    metadata=json.dumps( {key: value for key, value in metadata.items() if value is not None}, separators=(",", ":") ),
+                    source_raw=source_raw,
+                    source_status=payload.get("status"),
+                    normalized_status="failed" if failed else "succeeded",
+                ), rtype, payload, line_num)
                 continue
             if msg_type == "mcp_tool_call_end":
                 invocation = payload.get("invocation") or {}
@@ -1366,40 +1571,24 @@ def process_file(
                     ),
                     "duplicate_result_body_not_retained": True,
                 }
-                yield _annotate_source({
-                    "session_id": session_id,
-                    "event_id": str(line_num),
-                    "event_type": "system_event",
-                    "subtype": "mcp_tool_call_end",
-                    "role": "harness",
-                    "event_kind": "tool.transport",
-                    "actor_kind": "harness",
-                    "content_role": "status",
-                    "origin_kind": "harness_generated",
-                    "content": None,
-                    "content_len": None,
-                    "content_ref": None,
-                    "tool_name": invocation.get("tool"),
-                    "tool_input": None,
-                    "tool_output": None,
-                    "timestamp": timestamp,
-                    "file_path": None,
-                    "source_file": source_file,
-                    "source_status": metadata["result_status"],
-                    "normalized_status": (
-                        "succeeded" if succeeded
-                        else "failed" if failed
-                        else None
-                    ),
-                    "metadata": json.dumps(
-                        {
-                            key: value for key, value in metadata.items()
-                            if value is not None
-                        },
-                        separators=(",", ":"),
-                    ),
-                    "source_raw": source_raw,
-                }, rtype, payload, line_num)
+                yield _annotate_source(_base_event(
+                    line_num=line_num,
+                    session_id=session_id,
+                    event_type="system_event",
+                    subtype="mcp_tool_call_end",
+                    role="harness",
+                    event_kind="tool.transport",
+                    actor_kind="harness",
+                    content_role="status",
+                    origin_kind="harness_generated",
+                    timestamp=timestamp,
+                    source_file=source_file,
+                    tool_name=invocation.get("tool"),
+                    metadata=json.dumps( { key: value for key, value in metadata.items() if value is not None }, separators=(",", ":") ),
+                    source_raw=source_raw,
+                    source_status=metadata["result_status"],
+                    normalized_status="succeeded" if succeeded else "failed" if failed else None,
+                ), rtype, payload, line_num)
                 continue
             if msg_type != "turn_aborted":
                 if diagnostics is not None:
@@ -1410,8 +1599,9 @@ def process_file(
                         "token_count": "usage_records",
                     }.get(msg_type)
                     if known_kind:
-                        diagnostics["known_ignored_records"] = (
-                            diagnostics.get("known_ignored_records", 0) + 1
+                        _record_refused(
+                            context, f"record_{known_kind}",
+                            record_type=str(msg_type or ""),
                         )
                         diagnostics[known_kind] = (
                             diagnostics.get(known_kind, 0) + 1
@@ -1428,36 +1618,27 @@ def process_file(
             )
             if content is None:
                 continue
-            truncated, content_len = _truncate(content, 500)
+            truncated, content_len = truncate_content(content, 500)
             truncated = apply_processing(
                 truncated, opts, vendor="Codex", record_type="turn_aborted",
                 event_kind="lifecycle.abort", phase="post",
             )
             if truncated is None:
                 continue
-            ev = {
-                "session_id": session_id,
-                "event_id": str(line_num),
-                "event_type": "assistant_message",
-                "subtype": "turn_aborted",
-                "role": "assistant",
-                "content": truncated,
-                "content_len": content_len,
-                "content_ref": None,
-                "tool_name": None,
-                "tool_input": None,
-                "tool_output": None,
-                "timestamp": timestamp,
-                "file_path": None,
-                "source_file": source_file,
-                "metadata": json.dumps({"event_msg_type": msg_type}) if msg_type else None,
-                "source_raw": source_raw,
-            }
+            ev = _base_event(
+                session_id=session_id, line_num=line_num,
+                event_type="assistant_message", subtype="turn_aborted",
+                role="assistant", timestamp=timestamp, source_file=source_file,
+                content=truncated, content_len=content_len,
+                metadata=json.dumps({"event_msg_type": msg_type}) if msg_type else None,
+                source_raw=source_raw,
+            )
             yield _annotate_source(ev, rtype, payload, line_num)
         elif diagnostics is not None:
             if rtype == "world_state":
-                diagnostics["known_ignored_records"] = (
-                    diagnostics.get("known_ignored_records", 0) + 1
+                _record_refused(
+                    context, "record_intermediate_state",
+                    record_type=str(rtype or ""),
                 )
                 diagnostics["intermediate_state_records"] = (
                     diagnostics.get("intermediate_state_records", 0) + 1
@@ -1468,14 +1649,45 @@ def process_file(
                 )
 
 
-def _truncate(text: str, limit: int) -> tuple[str, int]:
-    """Return (truncated, full_len)."""
+def _bounded_content(
+    text: str | None,
+    opts: dict,
+    *,
+    record_type: str,
+    event_kind: str,
+    limit: int,
+) -> tuple[str, int] | None:
+    """Apply content policy, bound the result, and apply it again.
+
+    Returns `(content, original_length)`, or None when the policy dropped the
+    value at either phase -- which the caller reads as "skip this record".
+
+    Every content-bearing branch repeated the same five steps: process before
+    bounding, check for a drop, truncate, process after bounding, check again.
+    Twenty of `process_file`'s branches were those two `None` guards rather
+    than record dispatch, so the shape of the function said "many kinds of
+    record" when it mostly said "one policy applied many times".
+
+    Both phases are kept because they answer different questions: the pre
+    phase sees the whole value and can reject it on content, while the post
+    phase sees what will actually be stored. Collapsing them into one call
+    would change what the policy is applied to, not merely how it is written.
+    """
     if text is None:
-        return "", 0
-    s = str(text)
-    n = len(s)
-    if limit <= 0:
-        return "…" if n else "", n
-    if n <= limit:
-        return s, n
-    return s[: limit - 1] + "…", n
+        return None
+    processed = apply_processing(
+        text, opts, vendor="Codex", record_type=record_type,
+        event_kind=event_kind, phase="pre",
+    )
+    if processed is None:
+        return None
+    truncated, content_len = truncate_content(processed, limit)
+    truncated = apply_processing(
+        truncated, opts, vendor="Codex", record_type=record_type,
+        event_kind=event_kind, phase="post",
+    )
+    if truncated is None:
+        return None
+    return truncated, content_len
+
+

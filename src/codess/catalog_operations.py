@@ -2,30 +2,27 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
-import subprocess
-import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from codess.baseline_validation import validate_project
+from codess.child_invocation import ChildInvocation, RunPolicy
+from codess.config import CURRENT_POINTER_FILE, RAW_MANIFEST_FILE, SNAPSHOTS_DIR
 from codess.fileio import read_json, write_json_atomic
+from codess.hashing import codess_bytes_hash, codess_canonical_hash
 from codess.project_catalog import (
-    add_project_location, durable_project_root, get_project_entry,
+    add_project_location,
+    durable_project_root,
+    get_project_entry,
     retire_project_location,
 )
-from codess.schema_contract import verify_package
-from codess.snapshot import current_store_paths
-
+from codess.schema_contract import contract_digest
+from codess.snapshot import current_stores
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 ONBOARD_RECEIPT_FORMAT = "codess.catalog-onboard/1"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def resolve_reviewed_selection(
@@ -46,44 +43,26 @@ def resolve_reviewed_selection(
     projects.sort(key=lambda item: (item.get("project_id") or "", item["path"]))
     if not projects:
         raise ValueError(f"catalog has no projects with review decision {decision!r}")
-    encoded = json.dumps(projects, sort_keys=True, separators=(",", ":")).encode()
     return {
         "catalog": str(catalog_path.resolve()),
-        "catalog_sha256": hashlib.sha256(catalog_path.read_bytes()).hexdigest(),
-        "selection_sha256": hashlib.sha256(encoded).hexdigest(),
-        "package_digest": verify_package(),
+        "catalog_digest": codess_bytes_hash(256, 256, catalog_path.read_bytes()),
+        "selection_digest": codess_canonical_hash(256, 256, projects),
+        "contract_digest": contract_digest(),
         "review_decision": decision,
         "projects": projects,
     }
 
 
 def _run_ingest_stage(
-    plan: dict[str, Any],
-    *,
-    validate: bool,
-    source: str,
-    raw_mode: str,
-    registry: Path,
-    repo_root: Path,
-    resource_policy: Path | None = None,
+    plan: dict[str, Any], run: RunPolicy, *, validate: bool, source: str,
 ) -> dict[str, Any]:
-    command = [sys.executable, "-m", "main", "ingest"]
-    for project in plan["projects"]:
-        command.extend(["--dir", project["path"]])
-    command.extend([
-        "--source", source, "--raw-mode", raw_mode,
-        "--registry", str(registry), "--min-size", "0",
-    ])
-    if resource_policy is not None:
-        command.extend(["--resource-policy", str(resource_policy)])
-    if validate:
-        command.append("--validate")
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(repo_root / "src")
-    result = subprocess.run(
-        command, cwd=repo_root, env=env, capture_output=True,
-        text=True, timeout=3600,
+    invocation = ChildInvocation(
+        policy=run,
+        projects=tuple(Path(item["path"]) for item in plan["projects"]),
+        vendor_selector=source, validate=validate,
     )
+    command = invocation.command()
+    result = invocation.run()
     parsed = None
     if validate and result.stdout.strip():
         try:
@@ -100,31 +79,31 @@ def _run_ingest_stage(
 
 def onboard_catalog(
     catalog_path: Path,
+    run: RunPolicy,
     *,
-    registry: Path,
-    repo_root: Path,
     decision: str = "approved",
     source: str = "all",
-    raw_mode: str = "reference",
     apply: bool = False,
     stop_after: str | None = None,
     receipt_path: Path | None = None,
-    resource_policy: Path | None = None,
 ) -> dict[str, Any]:
+    """Plan, preflight, and optionally apply an ingest for a reviewed catalog.
+
+    `run` rather than its four fields: `registry`, `repo_root`, `raw_mode`, and
+    `resource_policy` reached only the `_run_ingest_stage` calls below.
+    """
     plan = resolve_reviewed_selection(
         catalog_path, decision=decision, source=source
     )
-    plan["raw_mode"] = raw_mode
+    plan["raw_mode"] = run.raw_mode
     receipt: dict[str, Any] = {
         "receipt_format": ONBOARD_RECEIPT_FORMAT,
-        "created_at": _now(), "status": "planned", "plan": plan,
+        "created_at": now_iso(system_clock), "status": "planned", "plan": plan,
         "preflight": None, "apply": None,
     }
     if stop_after != "plan":
         preflight = _run_ingest_stage(
-            plan, validate=True, source=source, raw_mode=raw_mode,
-            registry=registry, repo_root=repo_root,
-            resource_policy=resource_policy,
+            plan, run, validate=True, source=source,
         )
         receipt["preflight"] = preflight
         if preflight["returncode"] != 0:
@@ -135,14 +114,12 @@ def onboard_catalog(
             current = resolve_reviewed_selection(
                 catalog_path, decision=decision, source=source
             )
-            if current["selection_sha256"] != plan["selection_sha256"]:
+            if current["selection_digest"] != plan["selection_digest"]:
                 raise RuntimeError("reviewed selection changed between preflight and apply")
-            if current["package_digest"] != plan["package_digest"]:
+            if current["contract_digest"] != plan["contract_digest"]:
                 raise RuntimeError("CoSchema package changed between preflight and apply")
             applied = _run_ingest_stage(
-                plan, validate=False, source=source, raw_mode=raw_mode,
-                registry=registry, repo_root=repo_root,
-                resource_policy=resource_policy,
+                plan, run, validate=False, source=source,
             )
             receipt["apply"] = applied
             receipt["status"] = "applied" if applied["returncode"] == 0 else "apply_failed"
@@ -153,12 +130,12 @@ def onboard_catalog(
 
 def _captured_current(registry: Path, project_id: str) -> bool:
     durable = durable_project_root(registry, project_id)
-    pointer = durable / "current.json"
+    pointer = durable / CURRENT_POINTER_FILE
     if not pointer.exists():
         return False
     value = read_json(pointer)
-    snapshot = durable / "snapshots" / value["snapshot_id"]
-    raw_manifest = snapshot / "raw-manifest.jsonl"
+    snapshot = durable / SNAPSHOTS_DIR / value["snapshot_id"]
+    raw_manifest = snapshot / RAW_MANIFEST_FILE
     if not raw_manifest.exists():
         return False
     records = [
@@ -205,7 +182,7 @@ def relocate_project(
     try:
         binding = add_project_location(registry, project_id, new_path)
         write_json_atomic(pointer_path, read_json(source_pointer))
-        if not current_store_paths(new_path):
+        if not current_stores(new_path):
             raise RuntimeError("new location cannot read the durable snapshot")
         retired = retire_project_location(
             registry, project_id, old_path, allow_last_active=False

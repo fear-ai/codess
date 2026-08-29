@@ -21,7 +21,7 @@ inputs to later research or assessment.
 
 ### I Want to Explore One Project
 
-Follow the [basic setup and first run](Operations.md#4-first-project) to scan,
+Follow the [basic setup and first run](Operations.md#first-project) to scan,
 ingest, orient, and search one repository. Start here if you want to answer:
 
 - Which Sessions exist for this Project?
@@ -31,14 +31,14 @@ ingest, orient, and search one repository. Start here if you want to answer:
 
 ### I Want to Investigate Sessions or Interactions
 
-Read [Search and Investigation](Codess.md#5-search-and-investigation), then use the typed query
+Read [Search and Investigation](Codess.md#search-and-investigation), then use the typed query
 actions described under [Investigation](#investigation). These operations can
 filter Events, expand complete Interactions or Model Turns, and retain stable
 identities for later evidence review.
 
 ### I Want to Compare Projects, Vendors, or Models
 
-Read [Vendor, Harness, and Model Comparison](Codess.md#43-vendor-harness-and-model-comparison) and
+Read [Vendor, Harness, and Model Comparison](Codess.md#vendor-harness-and-model-comparison) and
 the relevant vendor reference:
 
 - [Claude Code Source Schema](CCSchema.md)
@@ -52,13 +52,14 @@ available to qualify results.
 
 ### I Operate or Maintain Codess
 
-Use [First Project](Operations.md#4-first-project) for ordinary operation and
-[Basic Diagnosis](Operations.md#9-basic-diagnosis) when results or performance
-are unexpected.
+Use [Keeping a Store Current](#keeping-a-store-current) for the three ordinary
+maintenance operations, [First Project](Operations.md#first-project) for the
+full setup procedure, and [Basic Diagnosis](Operations.md#basic-diagnosis) when
+results or performance are unexpected.
 
 ## Quick Start
 
-Codess requires Python 3.10 or newer. From the repository root:
+Codess requires Python 3.11 or newer. From the repository root:
 
 ```bash
 python -m pip install -e .
@@ -79,6 +80,78 @@ Project's `.codess/` directory and the central registry, normally `~/.codess/`.
 Review [Data Safety](#data-safety) before capturing raw evidence or exporting
 content.
 
+## Keeping a Store Current
+
+Three operations cover ordinary maintenance. Each is bounded and reports what it
+did; [Operations](Operations.md) has the full procedures and the diagnosis paths.
+
+### One Project
+
+Re-read the vendor Sources for one Project and republish:
+
+```bash
+codess ingest --dir /path/to/project
+```
+
+Ingest decodes only Sources whose selected evidence changed. Add `--force` when
+update evidence is suspect or a contract change requires a full rebuild.
+
+### Every Project
+
+`refresh` is the corpus-wide operation. It resolves the cohort from the catalog,
+**preflights every selected Project before applying any**, and writes a receipt
+recording each stage:
+
+```bash
+python3 tools/project_inventory.py                    # gate; nonzero if Sources vanished
+codess refresh --designator included                  # plan, read-only; review it
+codess refresh --designator included --stage apply    # preflight, then apply
+```
+
+`--designator` names a computed cohort (`included`, `core`, `query_ready`,
+`large`, and others); `--project` and `--project-list` select explicitly. The
+catalog's own exclusions are honoured, so a linked worktree annotated as one is
+not ingested twice through its parent.
+
+Prefer this over a shell loop over Project paths. A loop has no preflight gate,
+no receipt, and no view of catalog state -- and `python` is often a shell alias a
+non-interactive subshell does not inherit, so a loop can fail on every iteration
+while reporting only that each failed.
+
+### After a CoSchema Format Change
+
+A format change is a **rebuild, not a migration**: the store is a projection of
+vendor Sources, so the way to change it is to recompute it. `require_store`
+accepts only the current format, so every published store is refused until
+rebuilt.
+
+```bash
+python3 tools/project_inventory.py                    # run first, and read it
+codess refresh --designator included --stage apply --force
+```
+
+**`--force` is required here and only here.** A routine refresh re-decodes only
+Sources whose evidence changed, so it opens the existing working store -- which a
+format change has just made unreadable, and every Project fails with
+`store CoSchema <n>, supported [<n+1>]`. `--force` rebuilds from the vendor
+Sources instead.
+
+**Read the inventory before rebuilding, not after.** It exits nonzero when a
+Project's vendor Sources are gone, and a store whose Sources no longer exist is
+the only surviving record of those Sessions. See [Data Safety](#data-safety).
+
+**Event counts move between rebuilds, and a fall has two very different
+causes.** A vendor may prune its own store, so a rebuild sees what survives.
+Cursor also prunes its *composer index* while keeping the conversations it
+indexes, and a composer with no index entry states no workspace -- so it drops
+out of a per-Project selection while its content is still there. The second is a
+selection effect and the first is data loss, and `failed_sources` and
+`sources_vanished` report 0 for both.
+
+Read `codess query --coverage`, whose `unbound_composers` states how many
+composers no index entry binds. Comparing totals alone cannot tell the two
+apart.
+
 ## Investigation
 
 The typed query interface supplies four primary actions:
@@ -89,6 +162,10 @@ The typed query interface supplies four primary actions:
 | `overview` | Summarize volumes, time coverage, Actors, tools, models, and activity. |
 | `events` | Select exact Events or structured Event groups. |
 | `search` | Find bounded content and structured matches. |
+
+`codess query --coverage` reports what each store mapped, which vendor record
+shapes it saw, and what it did not carry across, so a result can state what it
+missed rather than only what it found.
 
 Common filters include:
 
@@ -105,6 +182,10 @@ Common filters include:
 --tool-name
 --status
 --model
+--model-line
+--model-generation
+--model-version
+--model-gradation
 --reasoning-effort
 --service-tier
 --artifact
@@ -147,7 +228,7 @@ Each source-system store is a SQLite database and may be inspected read-only
 with the SQLite command line, Python's `sqlite3`, database browsers, notebooks,
 or other query tools. The physical schema is
 `schema/coschema/sqlite/schema.sql`; the
-[Query Contract](CoSchema.md#14-query-contract) explains the logical access
+[Query Contract](CoSchema.md#query-contract) explains the logical access
 surface.
 
 Open a store without allowing writes:
@@ -159,9 +240,9 @@ sqlite3 'file:/absolute/path/to/sessions_codex.db?mode=ro'
 Examples:
 
 ```sql
-SELECT source_system_id, COUNT(*) AS sessions
+SELECT source_system_key, COUNT(*) AS sessions
 FROM sessions
-GROUP BY source_system_id;
+GROUP BY source_system_key;
 
 SELECT event_kind, actor_kind, COUNT(*) AS events
 FROM events
@@ -173,6 +254,20 @@ FROM events
 WHERE session_id = ?
 ORDER BY sequence_no;
 ```
+
+Each entity row carries **two identities**. `id` addresses a row inside one store: a
+rowid for `events` and `sources`, the vendor's own identifier for `sessions`. The
+`*_entity_id` columns -- `session_entity_id`, `event_entity_id`, `source_entity_id` --
+are derived from vendor-stated facts, so the same Session ingested on another machine
+carries the same value. Join and filter within a store by `id`; cite or deduplicate
+across stores by `*_entity_id`, which is also what `--session-id` and `--event-id`
+accept.
+
+Stored JSON columns (`metadata`, `tool_input`, `output_json`) can be filtered with
+SQLite's `json_extract`. Use it for a **selective predicate**, so rows that do not match
+are never returned; read the column and parse it in your own language when you want
+several fields from rows you are reading anyway, which is measurably faster than one
+`json_extract` per field.
 
 Direct SQL is useful for exploratory joins, distributions, query-plan review,
 and access to physical fields. The Codess query interface is preferable when
@@ -192,30 +287,51 @@ local paths, credentials, and other private material.
 - Export or third-party indexing must be explicitly selected.
 - `.codess/` data should not be committed to a Project repository.
 
-The [Raw Evidence](Operations.md#8-raw-evidence) procedure covers explicit
+The [Raw Evidence](Operations.md#raw-evidence) procedure covers explicit
 capture. Storage deletion remains a reviewed maintenance operation.
+
+**A store can outlive the Sources it was built from.** Vendors prune their own
+records -- Claude Code on a 30-day default -- so a Codess store may become the
+only remaining record of Sessions that no longer exist anywhere else. Because a
+store is a projection that is recomputed rather than migrated, a format rebuild,
+a retention prune, or a superseded-store cleanup can destroy that record.
+`tools/project_inventory.py` reports which Projects are affected and exits
+nonzero when any is, so it gates those operations; see
+[Project Inventory](Operations.md#project-inventory).
 
 ## Documentation Map
 
 | Document or area | Focus |
 |---|---|
+| [Changelog](CHANGELOG.md) | What changed per version, and the rebuild a CoSchema format change requires |
 | [Codess](Codess.md) | Problem, solution, product capabilities, terminology, boundaries, and longer-term vision |
 | [Operations](Operations.md) | Installation, source locations, normal execution, diagnosis, and maintenance commands |
 | [Functional Design](Designs.md) | Decided functional behavior, rationale, invariants, and explicitly optional directions |
-| [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, current state, code review, and work registry |
+| [Reporting Design](Report.md) | Operational reporting: measured costs, event structure, capability gates, time sources, buffering, backends, and use profiles |
+| [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, and current state |
+| [Work Items](CoTasks.md) | Open engineering items and the prioritized queue |
+| [Code Review](CoReview.md) | Findings, the measurements that decided each, and real-Source validation |
+| [Developer Notes](CoNotes.md) | Duplication and constant audits, and observed process misses |
 | [CoSchema](CoSchema.md) | Common entities, relationships, fields, vocabularies, and query/store contracts |
+| [CoNames](CoNames.md) | **Authoritative** for every designator: vendor, harness, surface, provider, the model name parts, and the [command arguments](CoNames.md#command-arguments), in the database, the code, and the CLI |
 | [Claude Code Source Schema](CCSchema.md) | Claude Code storage, records, selective access, mapping, and limitations |
 | [Codex Source Schema](CodexSchema.md) | Codex storage, records, selective access, mapping, and limitations |
 | [Cursor Source Schema](CursorSchema.md) | Cursor storage, records, selective access, mapping, and limitations |
 | `schema/` | Executable SQL, JSON, mapping, policy, and fixture contracts |
 | `catalog/` and the configured registry | Project selections, source bindings, observations, reports, and receipts |
+| `tools/` | Development and diagnosis scripts, described in [Repository Tools](Operations.md#repository-tools) |
 | `experiments/` | Bounded investigations that are not part of the accepted design or implementation plan |
 
 ## Release Notes
 
-### v0.0.1 — Initial Three-Vendor Prototype
+The authoritative version is `codess.__version__`, reported by `codess
+--version`; [CHANGELOG](CHANGELOG.md) records what changed between versions.
+The notes below describe the capabilities established by the initial
+three-vendor pre-release and carried forward since.
 
-Codess v0.0.1 is the first integrated pre-release of a local investigation
+### Initial Three-Vendor Prototype
+
+Codess is a pre-release local investigation
 system for coding-assistant Sessions. It converts locally retained records
 from Claude Code, Codex, and Cursor into regular, provenance-preserving stores
 that can be searched individually or together.
@@ -252,22 +368,20 @@ analytics service.
 - **Transactional Project store sets.** Each source system contributes a
   separate database to a validated Project store set. Replacement is
   transactional, and an incomplete or invalid conversion is not published as
-  current. This release does not maintain one continuously growing global
-  content database; several selected Project store sets are composed at query
-  time.
+  current. Several selected Project store sets are composed at query time
+  rather than maintained as one continuously growing global database.
 
 - **Structured Session orientation.** Queries can summarize available
   Sessions, time coverage, Event and content volumes, Actors, tools, models,
   and source-system participation. These are measurements of retained local
-  evidence, not complete measures of everything transmitted between a harness
-  and a remote model.
+  evidence, not of everything transmitted between a harness and a remote
+  model.
 
 - **Bounded Event and content search.** Events can be selected by Project,
   source system, Session, Interaction, Model Turn, Event kind, Actor kind,
   content role, origin, tool, model, status, time, Artifact, stable identity,
-  or literal content. The current search is structured and bounded; it is not
-  fuzzy search, embedding search, a general raw-source search engine, or an
-  unrestricted full-corpus scan.
+  or literal content. Search is structured and bounded rather than fuzzy,
+  embedding-based, or an unrestricted full-corpus scan.
 
 - **Interaction reconstruction.** A selected Event can be expanded to its
   recorded Interaction or Model Turn, or examined with nearby Session Events.
@@ -287,23 +401,22 @@ analytics service.
   agent, subagent, harness, or model traffic that the local source actually
   records; it is not a proxy capturing the complete network exchange.
 
-- **Observed model configuration.** Exact model names and supported provider,
-  family, revision, reasoning-effort, speed-tier, service-tier, and mode values
-  can be queried when directly recorded or justifiably inherited. Missing
-  settings remain unknown rather than being inferred from unrelated defaults
-  or current product behavior.
+- **Observed model parameters.** Exact model names are retained verbatim, and
+  provider, line, generation, version, gradation, variant, revision,
+  reasoning-effort, speed-tier, service-tier, and mode can be queried when
+  directly recorded or resolvable from the name. A name Codess does not
+  recognize leaves the derived values null rather than guessed, and missing
+  settings remain unknown rather than being inferred from unrelated defaults or
+  current product behavior.
 
 - **Cross-Project and cross-vendor investigation.** Explicitly selected
   Project store sets can be queried as one bounded scope with deterministic
-  ordering and retained Project, Source, Session, and snapshot identity. The
-  release does not yet publish standardized merged SQLite, Parquet, or DuckDB
-  products.
+  ordering and retained Project, Source, Session, and snapshot identity.
 
 - **Reproducible query results.** Canonical query requests, structured JSON
   results, stable row identities, completeness information, facets, and
   derivation metadata can be saved and compared. Results can be narrowed or
-  expanded in later operations, but this is not yet a general-purpose query
-  language or workflow orchestration system.
+  expanded in later operations.
 
 - **Evidence-bound summaries.** A human, model, or external process can bind a
   summary to a saved result and record its processor identity. Codess preserves
@@ -312,9 +425,7 @@ analytics service.
 
 - **Direct analytical access.** Individual stores can be queried read-only
   through SQLite and consumed by Python, notebooks, database browsers, or other
-  analytical tools. JSON Lines and CSV output support external processing, but
-  this release contains no built-in graphical interface, dashboard,
-  visualization service, or notebook package.
+  analytical tools. JSON Lines and CSV output support external processing.
 
 - **Resource and content controls.** Configurable bounds cover Source size,
   Event counts, context bodies, retained content, and query output. Exceeding a
@@ -344,9 +455,9 @@ analytics service.
 - **Executable contracts and validation fixtures.** The repository includes
   SQLite DDL, JSON contracts, mapping profiles, controlled vocabularies,
   representative fixtures, hazard cases, and automated unit, contract,
-  adapter, integration, and scale tests. Real vendor Sources remain a separate
-  validation layer, and coverage is not yet equally strong across every vendor
-  feature and command path.
+  adapter, integration, and scale tests. Real vendor Sources are a separate
+  validation layer, exercised by the audit tools described in
+  [Repository Tools](Operations.md#repository-tools).
 
 #### Important Boundaries
 
@@ -371,6 +482,10 @@ requires explicit review.
 
 This release is suitable for controlled local evaluation, decoder validation,
 Project and Session investigation, and development of downstream research
-workflows. It remains a pre-release while cross-vendor classification, runtime
-mapping conformance, selective Cursor processing, performance workloads, and
-structured operational reporting continue to mature.
+workflows. Cross-vendor classification and decode are validated against real
+Sessions from all three source systems; selective Cursor processing,
+structured operational reporting, and repeatable content-free decode auditing
+are available.
+
+Released mapping profiles govern fixtures and contract tests rather than
+every candidate a decoder emits at runtime. Planned work is recorded in [Work Items](CoTasks.md).

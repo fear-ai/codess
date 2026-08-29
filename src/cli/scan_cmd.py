@@ -1,5 +1,6 @@
 """codess scan CLI command."""
 
+import argparse
 import csv
 import json
 import logging
@@ -7,21 +8,31 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from codess.config import get_stats_path
+from cli.failure import fail, fail_configuration
+from codess import reporting
+from codess.codex_source import build_session_index as build_codex_session_index
+from codess.config import (
+    CC_PROJECTS,
+    CODEX_SESSIONS,
+    CURSOR_DATA,
+    DAYS,
+    get_project_state_path,
+)
 from codess.helpers import unsafe_traversal_root_reason, write_csv
-from codess.sanitize import protect_csv_row
 from codess.project import (
     RootsWhenEmpty,
     build_scan_run_options,
     resolve_cli_roots,
-    resolve_registry_directory,
+    resolve_store_root,
     validate_scan_source_for_cli,
 )
-from codess.codex_source import build_session_index as build_codex_session_index
 from codess.registry_store import (
-    merge_scan_rows, prune_legacy_cursor_global_entries, update_project_entry,
+    merge_scan_rows,
+    prune_legacy_cursor_global_entries,
+    update_project_entry,
 )
-from codess.scan import run_scan
+from codess.sanitize import protect_csv_row
+from codess.walk_sessions import walk_sessions
 
 log = logging.getLogger(__name__)
 
@@ -34,9 +45,9 @@ def _registry_display_ts(ent: dict) -> str:
     )
 
 
-def _load_registry_map(registry_root: Path) -> tuple[dict[str, dict] | None, str | None]:
-    """Load ``ingested_projects.json`` into path (resolved string) -> entry dict."""
-    stats_path = get_stats_path(registry_root)
+def _load_registry_map(store_root: Path) -> tuple[dict[str, dict] | None, str | None]:
+    """Load ``projects_state.json`` into path (resolved string) -> entry dict."""
+    stats_path = get_project_state_path(store_root)
     if not stats_path.exists():
         return None, f"codess: registry file not found: {stats_path}"
     try:
@@ -60,47 +71,59 @@ def _print_scan_diagnostics(diagnostics: dict) -> None:
         "failed_roots": diagnostics.get("failed_roots", 0),
     }
     if any(counts.values()):
-        print(
-            "codess: scan diagnostics: "
-            + " ".join(f"{key}={value}" for key, value in counts.items()),
-            file=sys.stderr,
+        reporting.event(reporting.code("scan.diagnostics"), **counts)
+    # A Project omitted by the recency window is not a diagnostic among
+    # others: the result is incomplete in a way the reader cannot see from
+    # the output, so it is stated separately with the way to widen it.
+    hidden = diagnostics.get("projects_outside_recency_window", 0)
+    if hidden:
+        reporting.event(
+            reporting.code("scan.projects_hidden"),
+            projects=hidden, window_days=DAYS,
+            widen_with="--days 0, or CODESS_DAYS",
         )
 
 
-def run(args) -> int:
+def run(args: argparse.Namespace) -> int:
     """Run codess scan. Returns exit code."""
-    from codess.config import validate_config
-
-    config_errors = validate_config()
-    for msg in config_errors:
-        print(f"codess: {msg}", file=sys.stderr)
-    if config_errors:
+    if fail_configuration():
         return 1
 
     src_err = validate_scan_source_for_cli(getattr(args, "source", None))
     if src_err:
-        print(src_err, file=sys.stderr)
-        return 1
+        return fail(src_err)
 
     roots, err = resolve_cli_roots(args, when_empty=RootsWhenEmpty.CWD)
-    if err:
-        print(err, file=sys.stderr)
-        return 1
+    if err or roots is None:
+        return fail(err or "no roots resolved")
     for root in roots:
         reason = unsafe_traversal_root_reason(root)
         if reason:
-            print(f"codess: {reason}; select a project, workspace, or home subtree", file=sys.stderr)
-            return 1
+            return fail(f'codess: {reason}; select a project, workspace, or home subtree')
 
     opts = build_scan_run_options(args)
     if opts["recent_days"] is not None and opts["recent_days"] < 0:
-        print("codess: --days must be >= 0 (0 means all time)", file=sys.stderr)
-        return 1
+        return fail('codess: --days must be >= 0 (0 means all time)')
     merged: list[tuple[str, dict]] = []
     seen_paths: set[str] = set()
     had_error = False
     diagnostics: dict = {}
-    write_root = resolve_registry_directory(args)
+    write_root = resolve_store_root(args)
+    # `--debug` selects the reporting profile rather than a per-call flag: the
+    # discovery diagnostics are debug-level events, and the level gate is what
+    # decides whether they are emitted. Roots are registered so a
+    # `located` field renders against them under a sharing profile.
+    reporting.configure(
+        getattr(args, "report_profile", None) or ("debug" if opts["debug"] else None),
+        privacy=getattr(args, "report_privacy", None),
+        redaction_roots={
+            "home": Path.home(),
+            "registry": write_root,
+            "cc-projects": CC_PROJECTS,
+            "codex-sessions": CODEX_SESSIONS,
+            "cursor-data": CURSOR_DATA,
+        },
+    )
     codex_index = None
     if opts["vendors"] is None or "codex" in opts["vendors"]:
         codex_index = build_codex_session_index(
@@ -111,7 +134,7 @@ def run(args) -> int:
     for root_index, work_root in enumerate(roots):
         failures_before = diagnostics.get("failed_sources", 0)
         try:
-            rows = run_scan(
+            rows = walk_sessions(
                 work_root,
                 vendor_filter=opts["vendors"],
                 recent_days=opts["recent_days"],
@@ -143,12 +166,14 @@ def run(args) -> int:
                 merged.append((full, r))
 
     pruned_global = prune_legacy_cursor_global_entries(write_root)
-    if pruned_global and opts["debug"]:
-        print(
-            f"codess: removed {pruned_global} legacy Cursor global pseudo-projects",
-            file=sys.stderr,
+    if pruned_global:
+        # The reporting level decides whether this is shown, rather than an
+        # `opts["debug"]` test beside it: two gates for one decision is how a
+        # profile and a flag come to disagree.
+        reporting.event(
+            reporting.code("registry.legacy_cursor_pruned"), projects=pruned_global,
         )
-    reg_arg = getattr(args, "registry", None)
+    reg_arg = getattr(args, "store_root", None)
     filter_active = bool(reg_arg and str(reg_arg).strip())
 
     all_discovered = list(merged)
@@ -157,13 +182,9 @@ def run(args) -> int:
     if filter_active:
         registry_entries, reg_err = _load_registry_map(write_root)
         if reg_err:
-            print(reg_err, file=sys.stderr)
-            return 1
+            return fail(reg_err)
         if not registry_entries:
-            print(
-                "codess: warning: registry has no projects; scan output is empty",
-                file=sys.stderr,
-            )
+            reporting.event(reporting.code("scan.registry_empty"))
         initial_keys = set(registry_entries.keys())
         merged = [(f, r) for f, r in merged if f in initial_keys]
 
@@ -183,61 +204,55 @@ def run(args) -> int:
 
     out_path = getattr(args, "out", "codess_walk.csv")
     reg_cols = registry_entries is not None
+
+    def report_headers() -> list[str]:
+        headers = (
+            ["path", "dir_path", "vendor", "sess", "mb", "span_weeks"]
+            if opts["debug"]
+            else ["path", "vendor", "sess", "mb", "span_weeks"]
+        )
+        if reg_cols:
+            headers.extend(["reg_path", "reg_updated", "reg_sources"])
+        return headers
+
+    def report_row(full: str, r: dict) -> list:
+        """One report row, for either destination.
+
+        The stdout and file paths built this and the header list separately,
+        so a column added to one reached the other only if someone edited
+        both. They differ in where a row goes, which is the loop, not in what
+        a row is.
+        """
+        row = (
+            [r["path"], r["dir_path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
+            if opts["debug"]
+            else [r["path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
+        )
+        if reg_cols:
+            ent = registry_entries[full]
+            row.extend([
+                ent.get("path", full),
+                _registry_display_ts(ent),
+                json.dumps(ent.get("sources") or {}, separators=(",", ":")),
+            ])
+        return row
+
     if out_path == "-":
         w = csv.writer(sys.stdout)
-        headers = (
-            ["path", "dir_path", "vendor", "sess", "mb", "span_weeks"]
-            if opts["debug"]
-            else ["path", "vendor", "sess", "mb", "span_weeks"]
-        )
-        if reg_cols:
-            headers.extend(["reg_path", "reg_updated", "reg_sources"])
-        w.writerow(headers)
+        w.writerow(report_headers())
         for full, r in merged:
-            row = (
-                [r["path"], r["dir_path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
-                if opts["debug"]
-                else [r["path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
-            )
-            if reg_cols:
-                ent = registry_entries[full]
-                sources = ent.get("sources") or {}
-                row.extend(
-                    [
-                        ent.get("path", full),
-                        _registry_display_ts(ent),
-                        json.dumps(sources, separators=(",", ":")),
-                    ]
-                )
-            w.writerow(protect_csv_row(row))
+            w.writerow(protect_csv_row(report_row(full, r)))
     else:
-        headers = (
-            ["path", "dir_path", "vendor", "sess", "mb", "span_weeks"]
-            if opts["debug"]
-            else ["path", "vendor", "sess", "mb", "span_weeks"]
+        write_csv(
+            Path(out_path),
+            [report_row(full, r) for full, r in merged],
+            headers=report_headers(),
         )
-        if reg_cols:
-            headers.extend(["reg_path", "reg_updated", "reg_sources"])
-        data = []
-        for full, r in merged:
-            row = (
-                [r["path"], r["dir_path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
-                if opts["debug"]
-                else [r["path"], r["vendor"], r["sess"], r["mb"], r["span_weeks"]]
-            )
-            if reg_cols:
-                ent = registry_entries[full]
-                sources = ent.get("sources") or {}
-                row.extend(
-                    [
-                        ent.get("path", full),
-                        _registry_display_ts(ent),
-                        json.dumps(sources, separators=(",", ":")),
-                    ]
-                )
-            data.append(row)
-        write_csv(Path(out_path), data, headers=headers)
         print(f"Wrote {len(merged)} rows to {out_path}")
 
     _print_scan_diagnostics(diagnostics)
+    # A command boundary: whatever is still buffered must reach the sink before
+    # the process ends, or a batch smaller than the flush threshold is silently
+    # lost.
+    reporting.flush()
     return 1 if had_error else 0

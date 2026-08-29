@@ -5,7 +5,7 @@ investigation. It provides a durable path from dissimilar vendor records to
 regular, queryable evidence without pretending that every product records the
 same activity or uses the same concepts.
 
-## 1. Problem and Opportunity
+## Problem and Opportunity
 
 Coding assistants do much more than display chat messages. Their
 harnesses select context, invoke models, run tools, request permissions,
@@ -36,7 +36,7 @@ and provenance. Results become difficult to reproduce or compare, and a
 vendor update can silently change their meaning. Codess instead centralizes
 that source-specific work and exposes a disciplined common foundation.
 
-## 2. Codess Approach
+## Codess Approach
 
 Codess separates vendor access and interpretation from common storage and
 investigation. It first identifies the relevant Project, workspace, Session,
@@ -89,21 +89,28 @@ and subtype, mapping evidence, and available lineage. When Codess cannot
 interpret a value reliably, it records the limitation and preserves available
 source evidence instead of manufacturing a common value.
 
-## 3. Evidence Conversion and Storage
+## Evidence Conversion and Storage
 
 Codess treats ingestion as a continuing conversion discipline rather than a
 file copy or transcript-formatting operation. Source selection, decoding,
 classification, persistence, and publication form one evidence-preserving
 sequence.
 
-### 3.1 Project and Source Selection
+### Project and Source Selection
 
 A Project is the continuing body of work to which vendor activity is
-attributed. For Git-backed work, one repository is one Project; clones,
-worktrees, editor workspaces, and filesystem locations are bindings or
-observations of it. This distinction permits one Project to retain activity
-from several tools without creating a different identity for every checkout or
-workspace.
+attributed. For Git-backed work, one repository is normally one Project; clones,
+editor workspaces, and filesystem locations are bindings or observations of it.
+This distinction permits one Project to retain activity from several tools
+without creating a different identity for every checkout or workspace.
+
+**A linked git worktree is the exception, and it is a separate Project.** Every
+vendor already treats it as one -- Claude writes a separate slug directory,
+Codex records a distinct `cwd`, Cursor a distinct workspace -- so joining them
+would mean joining Sessions no vendor joined, with `git` deciding what a Session
+belongs to. The relation is recorded rather than implied: `related_project_id`
+names the parent repository's Project and both remain Projects. See
+[CoSchema](CoSchema.md#project) for the reasoning and the measured evidence.
 
 Selection begins with vendor indexes and metadata rather than unrestricted
 filesystem traversal. Claude project bindings, Codex Session metadata, and
@@ -111,7 +118,7 @@ Cursor workspace and composer indexes identify candidate Sources and Sessions.
 Ambiguous or obsolete locations remain reviewable instead of being silently
 assigned to a convenient directory.
 
-### 3.2 Specialized Source Access
+### Specialized Source Access
 
 Source access follows the storage family. Claude Code and Codex transcripts
 can be read as bounded JSON Lines streams. Cursor requires read-only, indexed
@@ -125,7 +132,7 @@ workspace indexes, and bubble ranges rather than the modification time of the
 entire application database. A source is decoded again when its selected
 evidence changes or when an explicit validation or rebuild requires it.
 
-### 3.3 Decode, Classification, and Mapping
+### Decode, Classification, and Mapping
 
 Vendor adapters interpret record envelopes, structural variants, ordering,
 lineage, content, and configuration evidence. They are strict about meaning
@@ -147,7 +154,7 @@ Actors, tool operations, content, and Artifacts provide regular predicates and
 relationships. A common value makes mixed-source search possible; it does not
 claim that all vendors expose identical semantics.
 
-### 3.4 CoSchema Persistence and Publication
+### CoSchema Persistence and Publication
 
 Normalized records are stored in constrained and indexed SQLite databases.
 Each source-system database represents that vendor's contribution to one
@@ -161,7 +168,7 @@ partly replaced Source, and incremental state advances only after the database
 commit. Publication selects a complete validated store set and preserves the
 previous selectable result if candidate construction or verification fails.
 
-## 4. Features and Benefits
+## Features and Benefits
 
 Codess reads the distinct stores maintained by Claude Code, Codex, and Cursor,
 preserves their evidence, and maps understood meaning into a common database
@@ -175,7 +182,7 @@ assessments, and research can operate on regular records with explicit
 provenance. Improvements to a decoder can be validated and applied without
 requiring every downstream consumer to understand the vendor store again.
 
-### 4.1 Project and Session Orientation
+### Project and Session Orientation
 
 An investigation often begins by establishing what evidence exists. Codess can
 identify the source systems and Sessions associated with a Project and
@@ -185,10 +192,11 @@ direct work from delegated or subagent-related work and helps a researcher
 choose a relevant Session or period before reading a large body of content.
 
 Because Project identity is separate from directory and workspace identity,
-orientation can also reveal activity recorded by several harnesses, workspaces,
-clones, or worktrees for the same continuing repository.
+orientation can reveal activity recorded by several harnesses, workspaces, or
+clones for one continuing Project. Worktrees are the exception: each is its own
+Project, and `related_project_id` is what connects them.
 
-### 4.2 Interaction and Development Reconstruction
+### Interaction and Development Reconstruction
 
 Codess can locate a distinctive prompt, response, tool operation, error,
 permission decision, file, status, or content fragment and recover its
@@ -203,7 +211,7 @@ overlapping work on common Artifacts. It becomes possible to ask not merely
 what the final answer said, but how the outcome was produced and which evidence
 supports that account.
 
-### 4.3 Vendor, Harness, and Model Comparison
+### Vendor, Harness, and Model Comparison
 
 Common fields permit comparison without erasing source distinctions. Similar
 Event kinds, Actors, tools, model configurations, or outcomes can be selected
@@ -218,7 +226,7 @@ records do not actually mean the same thing. Model, effort, service tier,
 speed, and mode remain independent dimensions and are compared only when the
 harness records them directly or supplies justified inheritance evidence.
 
-### 4.4 Communication and Behavior Assessment
+### Communication and Behavior Assessment
 
 Codess can prepare precisely selected, context-preserving inputs for systems
 that study misunderstandings, instruction following, assessment quality, or
@@ -231,14 +239,14 @@ vendor decoding, common storage, selection, and reconstruction. An assessment
 system remains responsible for defining its cases, labels, ratings,
 interpretation, and quantitative methodology.
 
-## 5. Search and Investigation
+## Search and Investigation
 
 Search is a principal Codess capability, not merely a presentation layer over
 ingest. Its purpose is to move reliably from a broad body of Project evidence
 to a bounded, reproducible selection and then recover enough surrounding
 structure to interpret that selection correctly.
 
-### 5.1 Progressive Investigation
+### Progressive Investigation
 
 A typical investigation starts with one or more Projects and source systems,
 reviews their Sessions and activity summaries, and narrows by time, model,
@@ -253,7 +261,7 @@ prompt was direct human input or harness-generated control traffic, connect a
 tool result to its invocation, and examine what occurred immediately before
 and after a failure or permission denial.
 
-### 5.2 Query Dimensions and Relationships
+### Query Dimensions and Relationships
 
 The common query surface covers Project, source system, Session, Event,
 Interaction, and Model Turn identity; Event kind and participant
@@ -267,7 +275,7 @@ prove causal links. Expansion follows recorded Interaction, Model Turn, tool,
 parent, and Artifact relationships and reports when the selected evidence
 cannot establish one.
 
-### 5.3 Results and Direct Access
+### Results and Direct Access
 
 Structured results retain stable record identities, selected Project and
 snapshot scope, deterministic ordering, row and byte limits, completeness or
@@ -281,13 +289,13 @@ distributions, query-plan inspection, and specialized research. Specialized
 analysis should consume the same stored entities and provenance rather than
 creating an alternate vendor-decoding path.
 
-## 6. Integration and External Ecosystem
+## Integration and External Ecosystem
 
 Regular source-system databases and Project store sets allow Codess to
 participate in a broader data ecosystem without requiring each consumer to
 reverse-engineer vendor formats.
 
-### 6.1 Database and Analytical Access
+### Database and Analytical Access
 
 SQLite command-line tools and database browsers can inspect individual Project
 stores directly. Python, R, pandas, Polars, notebooks, and analytical engines
@@ -295,7 +303,7 @@ can consume bounded query results or selected read-only databases. Derived
 datasets may use JSON, CSV, Parquet, DuckDB, or another appropriate format when
 a concrete consumer and provenance model justify the materialization.
 
-### 6.2 Early Adoption and External Systems
+### Early Adoption and External Systems
 
 Early adopters need a short path from a current Project store set to a useful
 answer. The first external interfaces should support the same progression as
@@ -334,7 +342,7 @@ silently converted into the other. External interfaces may browse Codess
 stores, render typed results, or accept selected exports. They must not become
 parallel vendor decoders or redefine common meaning without a CoSchema change.
 
-### 6.3 Derived Research and Assessment
+### Derived Research and Assessment
 
 Qualitative and quantitative assessment systems can use reproducible Codess
 selections as their evidence input. Statistical or machine-learning workflows
@@ -342,7 +350,7 @@ can combine records from several Projects or source systems while retaining
 the Project, snapshot, Source, query, and processing provenance needed to
 explain the resulting dataset.
 
-### 6.4 Privacy and Export
+### Privacy and Export
 
 Session records can contain private source code, prompts, paths, credentials,
 and operational details. Local read-only use is the normal boundary. Export,
@@ -350,13 +358,13 @@ remote indexing, shared visualization, or third-party processing requires
 explicit selection, appropriate content policy, bounded output, and a clear
 retention decision.
 
-## 7. Core Model and Terminology
+## Core Model and Terminology
 
 Codess uses the following concepts consistently across source systems.
 
 | Term | Meaning |
 |---|---|
-| **Project** | Stable identity for a continuing body of work. For Git-backed work, one repository is one Project; clones, worktrees, directories, and vendor workspaces are locations or bindings. |
+| **Project** | Stable identity for a continuing body of work. For Git-backed work, one repository is normally one Project; clones, directories, and vendor workspaces are locations or bindings. A linked git worktree is its own Project, related to its parent by `related_project_id`, because every vendor records it separately. |
 | **Project location** | An observed checkout, worktree, directory, or historical path associated with a Project. |
 | **workspace** | A source-system or editor scope associated with a Project; it is not a Codess entity or Project identity. |
 | **Source** | Logical upstream evidence container such as a transcript file or database. |
@@ -367,12 +375,20 @@ Codess uses the following concepts consistently across source systems.
 | **exchange** | Informal prose only; specifications use Interaction, Model Turn, or Event sequence. |
 | **Model Turn** | One evidenced model execution within an Interaction. It is not necessarily a displayed message or user-assistant pair. |
 | **Actor** | Immediate evidence-backed producer or operative participant, principally human, harness, tool, or model. |
+| **harness** | A program that runs on a laptop or server and mediates coding work, native or invoked from a shell: Claude Code, Codex, Cursor. It is not a Codess entity; a Session is evidence one produced. |
+| **vendor** | The company a harness originates from -- Anthropic, OpenAI, Anysphere. Names the company, never the program. |
+| **provider** | The company whose model was engaged for a Model Turn -- Anthropic, OpenAI, xAI, Anysphere. The same as the vendor when a harness runs its own models, and different when it does not. |
+| **Model** | One evidenced set of model parameters a Model Turn ran under: the exact name the harness recorded, plus the parts [CoNames](CoNames.md#model-name-parts) names. The parameters are independent and separately selected, not a configuration Codess composes, and they belong to the Model Turn rather than the Session: one Session commonly runs several. |
 | **Event** | One ordered normalized observation within a Session. |
 | **Artifact** | File, URI, repository object, or other durable object operated on or mentioned by an Event. |
 | **Source-system store** | One CoSchema SQLite database for one source system and Project observation. |
 | **Project store set** | Selected source-system stores, manifest, and current pointer representing one Project observation. |
 | **Unified Codess store** | Logical queryable collection of selected Project store sets; it need not be one SQLite file. |
 | **Search result** | Bounded result carrying stable record identities, scope, provenance, and limitations. |
+
+Vendor and provider are separate dimensions, and conflating them is a recorded
+defect rather than a hypothetical: a harness commonly engages models from
+providers other than its own vendor.
 
 Actor, source role, content role, origin, and Session relationship are separate
 dimensions. A vendor `user` envelope can carry harness-generated context or a
@@ -391,7 +407,7 @@ Use the capitalized entity names Project, Source, Source revision, Session,
 Interaction, Model Turn, Actor, Event, and Artifact for Codess concepts. Use
 lowercase words for generic or exact upstream concepts.
 
-## 8. Product Boundaries
+## Product Boundaries
 
 Codess concentrates on locally retained coding-assistant evidence and the
 structures needed to investigate it. It cannot recover server-hidden reasoning

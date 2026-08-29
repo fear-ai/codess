@@ -13,7 +13,7 @@ machine-readable contracts. Its subject is the behavior that must remain true
 when an implementation module, vendor release, physical table, or external
 consumer changes.
 
-## 1. Functional Scope and Authority
+## Functional Scope and Authority
 
 Codess conversion has two simultaneous obligations. It must preserve enough
 source evidence to explain and reconsider an interpretation, and it must emit
@@ -45,7 +45,7 @@ diagnosed, and optional malformed evidence does not invalidate an otherwise
 usable record. Publication and query must expose those boundaries rather than
 turning a successful conversion into an unqualified completeness claim.
 
-## 2. Conversion Pipeline
+## Conversion Pipeline
 
 The Conversion Pipeline describes one source-system contribution to one
 Project. Its purpose is narrower than the project-level diagram in Codess: it
@@ -89,9 +89,9 @@ Mapping cannot make an unavailable source relationship direct. Storage and
 query cannot reinterpret an unknown vendor record merely to satisfy a column or
 predicate.
 
-## 3. Identity, Entities, and Relationships
+## Identity, Entities, and Relationships
 
-### 3.1 Normative Terminology
+### Normative Terminology
 
 Codess specifications use entity names precisely:
 
@@ -117,7 +117,7 @@ Session identity. A model is configuration for a Model Turn, not an Actor. An
 agent-branded tool name is source evidence, not proof of a separate runtime
 participant.
 
-### 3.2 Identity Scope
+### Identity Scope
 
 Identity keys reflect the smallest authority that can establish sameness:
 
@@ -138,7 +138,7 @@ can be observed through successive Source revisions or Project store sets. A
 query result must be able to distinguish the stable entity from the particular
 observation that supplied it.
 
-### 3.3 Event Hierarchy and Cardinality
+### Event Hierarchy and Cardinality
 
 The common event hierarchy is intentionally not a user-message/assistant-message
 pair:
@@ -166,7 +166,7 @@ Session parentage and relation kind are stored only when the Source supplies a
 direct field or a supported structural mapping. Timestamp proximity, adjacent
 files, similar text, and agent-like names do not establish parentage.
 
-### 3.4 Ordering and Time
+### Ordering and Time
 
 `sequence_no` is the deterministic normalized order within a Session and the
 basis for reconstruction. Source order is preserved even when timestamps are
@@ -179,7 +179,7 @@ different facts and remain in separate fields. File modification time can help
 detect a changed Source but does not become Session or Event time without an
 explicit mapping rule.
 
-### 3.5 Tools, Artifacts, and Content
+### Tools, Artifacts, and Content
 
 A Tool Invocation is a requested operation associated with the requesting
 Event, Session, and available Interaction or Model Turn. It can have no result,
@@ -203,9 +203,9 @@ Artifact identity. Typed relations connect one retained or derived content
 object to those entities. Deduplicating equal bytes must not delete distinct
 Events or Source records.
 
-## 4. Conversion Semantics and Controlled Vocabulary
+## Conversion Semantics and Controlled Vocabulary
 
-### 4.1 Field States and Admission
+### Field States and Admission
 
 Absent, explicit null, empty, sentinel-valued, malformed, unsupported, and
 valid are distinct source-field states. Adapters decode those states before
@@ -218,7 +218,106 @@ No individual source value should crash the complete ingest. This tolerance is
 not silent coercion. The resulting Event, diagnostic, or Source failure must
 show which field or structure could not be used and why.
 
-### 4.2 Mapping and Retention
+### Decode Resilience
+
+**A vendor data surprise must not stop the program.** Codess reads records it
+did not write, in formats that change between releases, so a shape it has not
+seen is expected rather than exceptional. A decoder is strict about *meaning* --
+it does not guess an Actor, a relationship, or a time -- and tolerant about
+*shape*: a malformed field is an observation about the vendor, and raising from
+inside a decode discards every Session in that Source rather than the one record
+that was wrong.
+
+The blast radius is what makes this a design rule rather than a robustness
+preference. One Cursor bubble holding `"toolFormerData": "a string"` aborted an
+entire global-store read, and the Project ingested 3 Sessions instead of 29.
+
+#### Crash Site Classes
+
+Each was found by fuzzing an adapter with shapes a vendor could plausibly
+emit. They are listed by the assumption that fails, because that is what a
+reviewer can look for:
+
+| Class | The assumption | What it looks like |
+|---|---|---|
+| **Null guard mistaken for a type guard** | `(value or {}).get(k)` is safe | Guards absence only; a string passes the `or` and raises on `.get` |
+| **Default mistaken for a type guard** | `record.get("k", {}).get(j)` is safe | Same defect in a second spelling: the default applies only when the key is absent |
+| **Record assumed to be an object** | A JSONL line is a record | JSONL guarantees valid JSON, not an object; a bare list, string, or number is well-formed |
+| **Field accessor assumed a mapping** | A helper receives a record | The narrowest shared boundary, so one unguarded accessor reaches every field of every vendor |
+| **Container assumed to be a list** | An array field can be iterated | A string is iterable and yields characters, so this fails late and quietly rather than at the read |
+
+#### Detection
+
+**Fuzzing, not review.** Every class above passed code review: each site reads
+as a null guard, and the defect is that the guard is for the wrong condition.
+`tests/test_decode_resilience.py` drives each adapter with a fixed corpus of
+hostile shapes and asserts the run completes, reports, and still decodes the
+well-formed records beside them.
+
+The corpus is per-vendor and deliberately small. It states the shapes rather
+than generating them, so a failure names the shape that broke and a new one is
+added when a vendor produces it.
+
+#### Mitigation
+
+| Mechanism | Where |
+|---|---|
+| `mapping.as_mapping` | One vendor value read as a mapping, or an empty one. Guards type, not absence |
+| `mapping.is_decodable_record` | One JSONL line is an object, checked at the iteration boundary so no consumer sees a non-record |
+| `field_state.get_state` | A non-mapping record reads as ABSENT, which covers every field of every vendor at one point |
+| Per-source exception handling | A source that fails anyway is rolled back, reported, counted, and the run continues with the next |
+
+**Coercion and counting are different decisions.** `as_mapping` is right where a
+*field* may be malformed and the record is still worth decoding. It is wrong
+where a whole payload is malformed: coercing there makes the diagnostic
+unreachable and converts a crash into silence, which is worse. A record-level
+failure is counted; a field-level one is tolerated and recorded through
+`field_state`.
+
+### Grouping and Family Size
+
+**A count grouped by exact value is a floor.** Where the values are generated
+from a template -- a scripted run embedding varying content into a fixed
+preamble -- one logical family splits into as many groups as it has variants,
+and each group is reported honestly and separately. A reader taking the largest
+group for the family understates it by however many variants there are.
+
+Measured on one corpus: 327 prompts from an LLM-judge harness share a single
+opening, carry 6 distinct preambles and 24 distinct generated transcripts, and
+reduce to 34 exact texts. The largest exact group holds 13. The family is 327.
+
+#### The Rule
+
+Where a report groups by exact value and the values may be templated, emit
+**both** the exact grouping and a prefix roll-up beside it, with the length
+span of each group.
+
+**The length span is the falsifiable part.** Identical texts cannot have
+different lengths, so a span inside one prefix group *proves* the exact
+grouping split a family. `chars_min == chars_max` means the roll-up found
+nothing the exact keying missed. This is a check rather than a heuristic, which
+is what makes it worth storing rather than leaving to a reader's eye: the
+disconfirming evidence was present in the first report of this condition -- same
+opening, eight different lengths -- and was read past.
+
+#### What This Does Not Do
+
+**Exact grouping is kept, not replaced.** Exact identity is the honest answer
+to "is this the same text", and a resubmission check needs it: two identical
+submissions seconds apart is a different observation from two similar ones.
+The two questions are different and both are asked.
+
+**A shared opening is an observation; similarity is an inference.** The rule
+stops at a prefix rather than shingling or edit distance. Those catch more and
+begin asserting that two values *are* the same thing, which is a claim about
+meaning. CoSchema records what the vendor wrote and leaves that judgment to a
+reader.
+
+**The prefix length is not configurable.** One corpus and one observed family
+cannot inform a setting, and offering one would present a choice the evidence
+does not support.
+
+### Mapping and Retention
 
 Each supported normalized value names the source field or structure and the
 mapping rule that produced it. Mapping profiles describe supported selectors,
@@ -243,7 +342,7 @@ irregular states. Vendor-only evidence can be retained before it qualifies for
 the common model. Codess does not create point-to-point translations between
 vendors; every supported source maps independently into CoSchema.
 
-### 4.3 Vocabulary Classes
+### Vocabulary Classes
 
 Codess distinguishes vocabulary governance from physical type:
 
@@ -259,7 +358,7 @@ Field names and vocabulary values use lowercase `snake_case` in common storage.
 Exact vendor spelling remains in source fields. A normalized value never
 replaces the source value from which it was derived.
 
-### 4.4 Participant and Session Classification
+### Participant and Session Classification
 
 Participant evidence is classified along independent axes. `source_role`
 preserves the vendor role. `actor_kind` identifies the immediate producer or
@@ -281,7 +380,7 @@ relationships, participant evidence, delegated prompts, caller/callee fields,
 status, configuration, and timing. Branding a tool or record as `agent` does
 not by itself establish a new Actor or Session.
 
-### 4.5 Event and Outcome Classification
+### Event and Outcome Classification
 
 Common Event kinds describe observable function: message content, tool
 invocation or result, permission decision, context operation, lifecycle change,
@@ -300,7 +399,7 @@ family, exact model name, revision, reasoning effort, speed tier, service tier,
 and mode are recorded only from direct or explicitly inherited evidence. Codess
 does not parse one dimension from a suggestive value in another.
 
-### 4.6 Context, Compaction, and Content
+### Context, Compaction, and Content
 
 System and developer instructions, harness context, request context, memory
 operations, reasoning summaries, and compaction records have different source
@@ -323,7 +422,7 @@ record can carry tool, configuration, context, status, or Artifact evidence.
 Conversely, arbitrary metadata, binary data, or a massive log is not promoted
 to Session content merely because it occupies a text-capable field.
 
-### 4.7 Processing, Bounds, and Provenance
+### Processing, Bounds, and Provenance
 
 Content processing can decode declared character sets, normalize supported
 Unicode, remove invalid controls, redact secrets, mask private values, blank
@@ -343,7 +442,7 @@ system, Source revision, Source record locator and type, mapping rule, and
 applicable field evidence. Diagnostics distinguish Source, record, and field
 scope independently from severity and use bounded detail.
 
-### 4.8 Raw Evidence and Integrity
+### Raw Evidence and Integrity
 
 Raw evidence preserves an exact Source revision outside the searchable
 database when a decoder must be repeated against identical bytes, a Source can
@@ -351,22 +450,30 @@ disappear, or an investigation requires record-level inspection. It also
 copies private content and can consume substantial storage, especially for a
 shared Cursor database.
 
-`reference` is the normal mode: it records the locator and update evidence
-without copying source bytes. `capture` stores one content-addressed exact
-revision. `seal` binds selected captured revisions to a published Project store
-set. The precise meaning of `none` remains under review because the current
-implementation retains a `not_retained` raw-manifest observation while storing
-no raw bytes.
+The four modes are ordered by how much they retain. `observe` is the least
+retaining and still observes: it fingerprints the Source and records its
+locator, modification time, size, and consistency, keeping no bytes.
+`reference` is the normal mode, adding a resolvable reference to the same
+observation. `capture` stores one content-addressed exact revision. `seal`
+binds selected captured revisions to a published Project store set.
+
+`observe` retains its manifest entry deliberately, because that entry is what
+makes a Source's absence checkable: `availability=not_retained` states that
+Codess read the Source and kept nothing, which a manifest that never mentions
+the Source cannot state, and only the first can be audited later. The mode was
+previously spelled `none`, which promised nothing was recorded while the
+observation was written; the previous spelling is still accepted so retained
+manifests and operator scripts keep working.
 
 Raw objects remain outside Session content and are not an alternate search
 surface. JSONL capture streams input, while Cursor capture uses a consistent
-SQLite backup. Complete SHA-256 identifies retained objects and published
+SQLite backup. A complete digest identifies retained objects and published
 stores. Bounded fingerprints can detect routine change but do not authenticate
 content or replace complete verification.
 
-## 5. Storage and Query Semantics
+## Storage and Query Semantics
 
-### 5.1 Source-System Stores
+### Source-System Stores
 
 Each source-system store contains one vendor contribution to a selected
 Project observation. A Project store set combines the selected stores,
@@ -382,7 +489,7 @@ Physical tables and indexes implement CoSchema but do not define vendor
 meaning. Typed source fields, mapping evidence, and bounded extensions retain
 source-specific distinctions without creating incompatible vendor query models.
 
-### 5.2 Query Predicates and Ordering
+### Query Predicates and Ordering
 
 Typed predicates narrow before content search. Project, source system, Session,
 Event kind, Actor, content role, origin, tool, status, model configuration,
@@ -398,7 +505,7 @@ Results use deterministic order and global row and byte limits. Cross-store
 merge cannot apply a complete limit independently to each store and present the
 union as a globally bounded result.
 
-### 5.3 Reconstruction and Repetition
+### Reconstruction and Repetition
 
 Interaction or Model Turn reconstruction begins with stable selected identities
 and follows persisted relations and Session order. It returns the complete
@@ -413,7 +520,7 @@ every constituent Event identity remains available and the group expands
 losslessly. Similarity or topical relation requires a versioned derived method
 and never authorizes deletion.
 
-### 5.4 Result Contracts
+### Result Contracts
 
 A structured result binds its canonical request, Project and snapshot scope,
 store provenance, stable row identities, deterministic ordering, applied
@@ -426,7 +533,7 @@ distributions, query-plan inspection, and specialized research. Repeated public
 behavior belongs in the typed query contract so that command, library, and
 external consumers share predicate and result semantics.
 
-## 6. Derived Results and Composition
+## Derived Results and Composition
 
 Composition combines selected stores or bounded query results for a downstream
 investigation without creating another vendor decoder or common-schema

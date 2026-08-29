@@ -38,7 +38,7 @@ def test_codex_events_carry_declared_exact_mapping_evidence(tmp_path):
             "content": [{"type": "output_text", "text": "hi"}],
         },
     }) + "\n", encoding="utf-8")
-    event = list(process_file(path, "s1", "/p", {}))[0]
+    event = next(iter(process_file(path, "s1", "/p", {})))
     assert event["source_record_type"] == "response_item"
     assert event["source_record_subtype"] == "message"
     assert validate_mapped_event("codex", event) == []
@@ -84,7 +84,58 @@ class TestGetSessionMeta:
             "cli_version": "1.2.3",
             "model_provider": "openai",
             "originator": "codex_cli_rs",
+            # `originator` is retained as source evidence and also mapped to
+            # the common column, so a reader sees both what Codex said and
+            # what it was normalized to.
+            "harness_name": "codex_cli_rs",
         }
+
+
+class TestObservedHarness:
+    """Codex reports its harness and surface; the profile constant hid them.
+
+    `store.SOURCE_PROFILES` supplies one constant per vendor, correct for
+    Claude and Cursor because neither names its harness in a Session. Codex
+    does, and storing the constant recorded a Desktop or VS Code Session as
+    CLI.
+    """
+
+    def _metadata(self, tmp_path, payload):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(json.dumps({
+            "type": "session_meta",
+            "payload": {"id": "a", "cwd": "/x", **payload},
+        }) + "\n")
+        return get_session_metadata(path)
+
+    @pytest.mark.parametrize(
+        ("originator", "source", "harness", "surface"),
+        [
+            ("codex_cli_rs", "cli", "codex_cli_rs", "cli"),
+            ("Codex Desktop", "vscode", "Codex Desktop", "ide"),
+            ("codex-tui", "cli", "codex-tui", "cli"),
+            ("codex_exec", "exec", "codex_exec", "cli"),
+        ],
+    )
+    def test_observed(self, tmp_path, originator, source, harness, surface):
+        values = self._metadata(
+            tmp_path, {"originator": originator, "source": source},
+        )
+        assert values["harness_name"] == harness
+        assert values["surface_kind"] == surface
+
+    def test_unknown_surface(self, tmp_path):
+        """Unmapped surfaces stay absent; the profile default is a guess."""
+        values = self._metadata(
+            tmp_path, {"originator": "codex_cli_rs", "source": "hologram"},
+        )
+        assert "surface_kind" not in values
+        assert values["harness_name"] == "codex_cli_rs"
+
+    def test_absent(self, tmp_path):
+        values = self._metadata(tmp_path, {"cli_version": "1.0"})
+        assert "harness_name" not in values
+        assert "surface_kind" not in values
 
 
 class TestProcessFile:
@@ -141,7 +192,10 @@ class TestProcessFile:
         assert metadata["replacement_history_items"] == 2
         assert metadata["replacement_history_messages_not_duplicated"] == 1
         assert metadata["window_number"] == 3
-        assert diagnostics["known_ignored_records"] == 1
+        # Named for the condition rather than folded into one aggregate:
+        # `known_ignored` summed six unrelated kinds, so a vendor that
+        # started writing meaning into one moved the total silently.
+        assert diagnostics["record_context_compacted"] == 1
 
     def test_modern_fixture_contract(self, tmp_path):
         fixture = Path(__file__).parent / "fixtures" / "codex_modern.jsonl"
@@ -253,7 +307,7 @@ class TestProcessFile:
                 "content": [{"type": "output_text", "text": "response"}],
             },
         }) + "\n")
-        event = list(process_file(path, "s1", "/p", {}))[0]
+        event = next(iter(process_file(path, "s1", "/p", {})))
         assert event["actor_kind"] == "model"
         metadata = json.loads(event["metadata"])
         assert metadata["source_role"] == "assistant"
@@ -274,7 +328,7 @@ class TestProcessFile:
                 "content": [{"type": "input_text", "text": "legacy"}],
             },
         }) + "\n")
-        event = list(process_file(path, "s1", "/p", {}))[0]
+        event = next(iter(process_file(path, "s1", "/p", {})))
         assert event["actor_kind"] == "human"
         assert json.loads(event["metadata"])["actor_evidence"] == (
             "legacy_user_role_fallback"
@@ -599,7 +653,7 @@ class TestProcessFile:
             ))
             assert len(events) == 0
             assert diagnostics["usage_records"] == 1
-            assert diagnostics["known_ignored_records"] == 1
+            assert diagnostics["record_usage_records"] == 1
         finally:
             path.unlink()
 
@@ -626,7 +680,7 @@ class TestProcessFile:
                 "num_turns": 2,
             },
         }) + "\n")
-        event = list(process_file(path, "s1", "/p", {}))[0]
+        event = next(iter(process_file(path, "s1", "/p", {})))
         assert event["event_kind"] == "context.rollback"
         assert event["actor_kind"] == "harness"
         assert json.loads(event["metadata"]) == {"removed_user_turns": 2}
@@ -735,9 +789,12 @@ class TestProcessFile:
         assert diagnostics["configuration_records"] == 2
         assert metadata["model"] == "gpt-test"
         assert metadata["reasoning_effort"] == "high"
-        assert metadata["service_tier"] == "priority"
+        # Codex states the tier the client requested; Claude states the tier the API
+        # served. The provenance keeps Codex's exact field name either way.
+        assert metadata["request_tier"] == "priority"
+        assert "service_tier" not in metadata
         assert metadata["mode"] == "default"
-        assert metadata["configuration_provenance"]["service_tier"] == {
+        assert metadata["configuration_provenance"]["request_tier"] == {
             "source_record_type": "thread_settings_applied",
             "source_record_locator": "1",
             "source_field": "payload.thread_settings.service_tier",
@@ -781,3 +838,483 @@ def test_hostile_codex_fields_are_diagnosed_and_other_records_survive(tmp_path):
         and row["reason_code"] == "field_null"
         for row in tool_rows
     )
+
+
+class TestPatchedFile:
+    """`apply_patch` is the only Codex call that names a file.
+
+    Codex passes no path as a tool argument -- `exec_command` carries a shell
+    string, `apply_patch` an envelope -- so `events.file_path` was null for
+    every Codex Event while 4,639 real `apply_patch` calls named 5,722 file
+    operations in their envelope headers.
+    """
+
+    def _call(self, tmp_path, name, arguments):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(json.dumps({
+            "timestamp": "2026-07-10T00:00:00Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call", "name": name,
+                "call_id": "c1", "arguments": arguments,
+            },
+        }) + "\n")
+        calls = [
+            event for event in process_file(path, "s1", "/p", {})
+            if event.get("event_type") == "tool_call"
+        ]
+        assert len(calls) == 1
+        return calls[0]
+
+    @pytest.mark.parametrize(
+        ("operation", "expected"),
+        [
+            ("Add File: new/module.py", "new/module.py"),
+            ("Update File: src/existing.py", "src/existing.py"),
+            ("Delete File: old/gone.py", "old/gone.py"),
+        ],
+    )
+    def test_operations(self, tmp_path, operation, expected):
+        patch = f"*** Begin Patch\n*** {operation}\n+body\n*** End Patch"
+        event = self._call(
+            tmp_path, "apply_patch", json.dumps({"input": patch}),
+        )
+        assert event["file_path"] == expected
+
+    def test_first_of_several(self, tmp_path):
+        """One column, so the first path; `tool_input` retains them all."""
+        patch = (
+            "*** Begin Patch\n*** Update File: first.py\n+a\n"
+            "*** Update File: second.py\n+b\n*** End Patch"
+        )
+        event = self._call(
+            tmp_path, "apply_patch", json.dumps({"input": patch}),
+        )
+        assert event["file_path"] == "first.py"
+        assert "second.py" in event["tool_input"]
+
+    def test_other_tools(self, tmp_path):
+        """A shell command naming a file is not a file operation."""
+        event = self._call(
+            tmp_path, "exec_command",
+            json.dumps({"cmd": "cat src/thing.py"}),
+        )
+        assert event["file_path"] is None
+
+    def test_malformed_envelope(self, tmp_path):
+        event = self._call(
+            tmp_path, "apply_patch", "not json at all",
+        )
+        assert event["file_path"] is None
+
+
+class TestExitCodeStatus:
+    """Codex reports outcomes as an exit code inside the output body.
+
+    Most `function_call_output` records carry no `status` field, so 26,917 of
+    30,415 real results had neither a source nor a normalized outcome. The
+    exit code is there but embedded as JSON in text, which no field read
+    reaches.
+    """
+
+    def _result(self, tmp_path, output):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(json.dumps({
+            "timestamp": "2026-07-10T00:00:00Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output", "call_id": "c1",
+                "output": output,
+            },
+        }) + "\n")
+        results = [
+            event for event in process_file(path, "s1", "/p", {})
+            if event.get("subtype") == "tool_result"
+        ]
+        assert len(results) == 1
+        return results[0]
+
+    def test_zero_exit_code(self, tmp_path):
+        event = self._result(
+            tmp_path, '[{"text": "{\\"exit_code\\":0,\\"output\\":\\"ok\\"}"}]',
+        )
+        assert event["source_status"] == "exit_code:0"
+
+    def test_nonzero_exit_code(self, tmp_path):
+        event = self._result(
+            tmp_path, '[{"text": "{\\"exit_code\\":2,\\"output\\":\\"bad\\"}"}]',
+        )
+        assert event["source_status"] == "exit_code:2"
+
+    def test_no_exit_code_stays_unknown(self, tmp_path):
+        """Codex did not say, so neither does the store."""
+        event = self._result(tmp_path, "plain output with no code")
+        assert event["source_status"] is None
+
+
+class TestSessionProvider:
+    """Codex states provider and model on different records."""
+
+    def decode(self, tmp_path, *records):
+        path = tmp_path / "rollout.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in records))
+        return list(process_file(path, "s1", "/p", {}))
+
+    def meta(self, **payload):
+        return {
+            "timestamp": "2026-07-10T00:00:00Z", "type": "session_meta",
+            "payload": {"id": "s1", "cwd": "/p", **payload},
+        }
+
+    def turn(self, **payload):
+        return {
+            "timestamp": "2026-07-10T00:00:01Z", "type": "turn_context",
+            "payload": payload,
+        }
+
+    def message(self):
+        return {
+            "timestamp": "2026-07-10T00:00:02Z", "type": "response_item",
+            "payload": {
+                "type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello"}],
+            },
+        }
+
+    def configured(self, events):
+        for event in events:
+            metadata = json.loads(event.get("metadata") or "{}")
+            if "model" in metadata:
+                return metadata
+        return {}
+
+    def test_provider_reaches_turn(self, tmp_path):
+        """`model_provider` is on `session_meta` and `model` on `turn_context`, so
+        reading one record at a time never saw both."""
+        events = self.decode(
+            tmp_path,
+            self.meta(model_provider="openai"),
+            self.turn(model="gpt-5.6-sol", effort="high"),
+            self.message(),
+        )
+        metadata = self.configured(events)
+        assert metadata["model"] == "gpt-5.6-sol"
+        assert metadata["model_provider"] == "openai"
+        assert metadata["reasoning_effort"] == "high"
+
+    def test_provider_absent(self, tmp_path):
+        """A Session stating no provider records none rather than a guess."""
+        events = self.decode(
+            tmp_path, self.meta(), self.turn(model="gpt-5.6-sol"),
+            self.message(),
+        )
+        metadata = self.configured(events)
+        assert metadata["model"] == "gpt-5.6-sol"
+        assert "model_provider" not in metadata
+
+    def test_turn_provider_precedence(self, tmp_path):
+        """A provider stated on the turn describes that turn, so it wins over the
+        Session-level one it would otherwise inherit."""
+        events = self.decode(
+            tmp_path,
+            self.meta(model_provider="openai"),
+            self.turn(model="local", model_provider="ollama"),
+            self.message(),
+        )
+        assert self.configured(events)["model_provider"] == "ollama"
+
+
+class TestDecodedOutput:
+    """Codex states a header of facts before `Output:`, in several spellings."""
+
+    def test_exit_code_spellings(self):
+        """`Process exited with code N` appears on 14,795 results and
+        `Exit code: N` on 1,319; both state the same fact."""
+        from codess.adapters.codex import _decoded_output
+
+        a = _decoded_output("Exit code: 0\nWall time: 0.1 seconds\nOutput:\ndb.out")
+        b = _decoded_output(
+            "Wall time: 0.1 seconds\nProcess exited with code 0\nOutput:\ndb.out"
+        )
+        assert a["exit_code"] == b["exit_code"] == 0
+        assert a["output"] == b["output"] == "db.out"
+
+    def test_all_fields(self):
+        from codess.adapters.codex import _decoded_output
+
+        decoded = _decoded_output(
+            "Chunk ID: 112967\nWall time: 0.1578 seconds\n"
+            "Process exited with code 0\nOriginal token count: 16\nOutput:\nx"
+        )
+        assert decoded == {
+            "chunk_id": "112967", "wall_seconds": 0.1578,
+            "exit_code": 0, "output_tokens": 16, "output": "x",
+        }
+
+    def test_script_completed(self):
+        """A script that ran to completion without a stated code is not the same
+        fact as `exit_code: 0`, so it is its own marker."""
+        from codess.adapters.codex import _decoded_output
+
+        decoded = _decoded_output("Script completed\nWall time 15.4 seconds\nOutput:\n")
+        assert decoded["script_completed"] is True
+        assert "exit_code" not in decoded
+
+    def test_envelope_and_list_transports(self):
+        """Three transports carry the same payload; one header decode serves all."""
+        import json as _json
+
+        from codess.adapters.codex import _decoded_output
+
+        body = "Exit code: 2\nWall time: 1.5 seconds\nOutput:\nboom"
+        envelope = _json.dumps({"output": body})
+        blocks = [{"type": "input_text", "text": body}]
+        for value in (body, envelope, blocks):
+            assert _decoded_output(value)["exit_code"] == 2
+
+    def test_no_header(self):
+        from codess.adapters.codex import _decoded_output
+
+        assert _decoded_output("exec command rejected by user") is None
+
+    def test_output_marker_in_body_only(self):
+        """An unrecognized line before the marker means it was body text, so
+        nothing is claimed rather than half a header."""
+        from codess.adapters.codex import _decoded_output
+
+        assert _decoded_output("here is what I found\nOutput:\nstuff") is None
+
+
+class TestBoundedContent:
+    """One helper for the process/bound/process sequence.
+
+    Every content-bearing branch repeated five steps, and twenty of
+    `process_file`'s branches were the two `None` guards rather than record
+    dispatch -- so the function's shape said "many kinds of record" where it
+    mostly said "one policy applied many times".
+    """
+
+    def test_absent_text_is_dropped(self):
+        from codess.adapters.codex import _bounded_content
+
+        assert _bounded_content(
+            None, {"redact": False}, record_type="r",
+            event_kind="message.response", limit=100,
+        ) is None
+
+    def test_content_within_the_limit_is_returned_whole(self):
+        from codess.adapters.codex import _bounded_content
+
+        bounded = _bounded_content(
+            "short", {"redact": False}, record_type="r",
+            event_kind="message.response", limit=100,
+        )
+        assert bounded == ("short", 5)
+
+    def test_the_original_length_survives_truncation(self):
+        """The stored length describes the source, not the stored text.
+
+        A reader comparing `content_len` against the content sees that it was
+        bounded; reporting the truncated length would hide it.
+        """
+        from codess.adapters.codex import _bounded_content
+
+        content, original = _bounded_content(
+            "x" * 50, {"redact": False}, record_type="r",
+            event_kind="message.response", limit=10,
+        )
+        assert original == 50
+        assert len(content) == 10
+        assert content.endswith("…")
+
+    def test_a_policy_drop_at_either_phase_skips_the_record(self, monkeypatch):
+        """Both phases can refuse, and both mean the same to the caller."""
+        import codess.adapters.codex as codex
+
+        for dropped_phase in ("pre", "post"):
+            monkeypatch.setattr(
+                codex, "apply_processing",
+                lambda text, opts, *, phase, **kw: (
+                    None if phase == dropped_phase else text
+                ),
+            )
+            assert codex._bounded_content(
+                "text", {"redact": False}, record_type="r",
+                event_kind="message.response", limit=100,
+            ) is None, f"a drop at the {dropped_phase} phase must skip the record"
+
+
+class TestUnrolledHistorySessions:
+    """Codex retains a human side beside the rollouts, and they can disagree.
+
+    `history.jsonl` and the rollout tree are written independently, so a
+    Session can appear in one and not the other. Reporting that is a coverage
+    statement; admitting it as a Session with no Model Turns would be a
+    mapping decision, which this is not.
+    """
+
+    def _history(self, path, entries):
+        import json as _json
+
+        path.write_text(
+            "".join(_json.dumps(e) + "\n" for e in entries), encoding="utf-8"
+        )
+        return path
+
+    def test_a_session_with_a_rollout_is_not_reported(self, tmp_path, monkeypatch):
+        from codess import codex_source
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        (sessions / "rollout-2026-01-01-abcdef123456.jsonl").write_text("", encoding="utf-8")
+        history = self._history(
+            tmp_path / "history.jsonl",
+            [{"session_id": "0199aaaa-abcdef123456", "text": "x"}],
+        )
+        monkeypatch.setattr(codex_source, "CODEX_SESSIONS", sessions)
+        monkeypatch.setattr(codex_source, "CODEX_ARCHIVED_SESSIONS", None)
+
+        result = codex_source.unrolled_history_sessions(history_path=history)
+
+        assert (result["history_sessions"], result["without_rollout"]) == (1, 0)
+
+    def test_a_session_without_a_rollout_is_reported_with_its_count(
+        self, tmp_path, monkeypatch
+    ):
+        from codess import codex_source
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        history = self._history(
+            tmp_path / "history.jsonl",
+            [
+                {"session_id": "0199bbbb-ffffff000000", "text": "one"},
+                {"session_id": "0199bbbb-ffffff000000", "text": "two"},
+            ],
+        )
+        monkeypatch.setattr(codex_source, "CODEX_SESSIONS", sessions)
+        monkeypatch.setattr(codex_source, "CODEX_ARCHIVED_SESSIONS", None)
+
+        result = codex_source.unrolled_history_sessions(history_path=history)
+
+        assert result["without_rollout"] == 1
+        assert result["unrolled_prompt_counts"] == {"0199bbbb-ffffff000000": 2}
+
+    def test_an_archived_rollout_counts_as_rolled(self, tmp_path, monkeypatch):
+        """The measurement error worth pinning.
+
+        A first count reported three unrolled Sessions by reading only the
+        active tree; two had archived rollouts. The archive is a rollout
+        location, not a different Session identity.
+        """
+        from codess import codex_source
+
+        sessions = tmp_path / "sessions"
+        archived = tmp_path / "archived_sessions"
+        sessions.mkdir()
+        archived.mkdir()
+        (archived / "rollout-2026-01-01-cccccc999999.jsonl").write_text("", encoding="utf-8")
+        history = self._history(
+            tmp_path / "history.jsonl",
+            [{"session_id": "0199cccc-cccccc999999", "text": "x"}],
+        )
+        monkeypatch.setattr(codex_source, "CODEX_SESSIONS", sessions)
+        monkeypatch.setattr(codex_source, "CODEX_ARCHIVED_SESSIONS", archived)
+
+        result = codex_source.unrolled_history_sessions(history_path=history)
+
+        assert result["without_rollout"] == 0
+
+    def test_no_prompt_text_reaches_the_result(self, tmp_path, monkeypatch):
+        """The report may be published beside a store, so it carries no content."""
+        from codess import codex_source
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        history = self._history(
+            tmp_path / "history.jsonl",
+            [{"session_id": "0199dddd-dddddd111111", "text": "a secret prompt"}],
+        )
+        monkeypatch.setattr(codex_source, "CODEX_SESSIONS", sessions)
+        monkeypatch.setattr(codex_source, "CODEX_ARCHIVED_SESSIONS", None)
+
+        result = codex_source.unrolled_history_sessions(history_path=history)
+
+        assert "secret" not in json.dumps(result)
+
+    def test_a_missing_history_file_is_not_an_error(self, tmp_path, monkeypatch):
+        from codess import codex_source
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        monkeypatch.setattr(codex_source, "CODEX_SESSIONS", sessions)
+        monkeypatch.setattr(codex_source, "CODEX_ARCHIVED_SESSIONS", None)
+
+        result = codex_source.unrolled_history_sessions(
+            history_path=tmp_path / "absent.jsonl"
+        )
+
+        assert result["available"] is False
+
+
+class TestDeclaredParentage:
+    """The four parentage branches, and what the local corpus actually holds.
+
+    Measured across all 37 rollouts on the development machine: `thread_source`
+    is present on 15 and its only value is `user`; `parent_thread_id`,
+    `forked_from_id`, `agent_role`, and `agent_nickname` appear on none. So the
+    decode cannot be validated against stored data and is exercised here
+    against the shapes the protocol declares.
+
+    `user` producing no relation is the case the corpus does cover, and it is
+    the one worth pinning: a top-level thread must not acquire a parent from a
+    field that says it has none.
+    """
+
+    def _meta(self, tmp_path, payload):
+        import json
+
+        from codess.adapters.codex import get_session_metadata
+
+        path = tmp_path / "rollout.jsonl"
+        path.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "s1", **payload}})
+            + "\n",
+            encoding="utf-8",
+        )
+        return get_session_metadata(path)
+
+    def test_a_user_thread_gets_no_relation(self, tmp_path):
+        """The only value present in the local corpus, on 15 of 37 rollouts."""
+        values = self._meta(tmp_path, {"thread_source": "user"})
+        assert values.get("session_relation_kind") is None
+        assert values.get("parent_session_id") is None
+
+    def test_a_parent_thread_id_is_a_continuation(self, tmp_path):
+        values = self._meta(tmp_path, {"parent_thread_id": "p1"})
+        assert values["parent_session_id"] == "p1"
+        assert values["session_relation_kind"] == "continuation"
+        assert values["lineage_provenance"] == "session_meta.parent_thread_id"
+
+    def test_a_subagent_parent_is_a_subagent(self, tmp_path):
+        values = self._meta(
+            tmp_path, {"parent_thread_id": "p1", "thread_source": "subagent"},
+        )
+        assert values["parent_session_id"] == "p1"
+        assert values["session_relation_kind"] == "subagent"
+
+    def test_a_fork_names_the_thread_it_forked_from(self, tmp_path):
+        values = self._meta(tmp_path, {"forked_from_id": "f1"})
+        assert values["parent_session_id"] == "f1"
+        assert values["session_relation_kind"] == "fork"
+        assert values["lineage_provenance"] == "session_meta.forked_from_id"
+
+    def test_a_subagent_without_a_parent_states_the_kind_and_no_parent(self, tmp_path):
+        """A relation Codess can name without an identity it can resolve.
+
+        The kind is vendor-stated; the parent is not, and inventing one is what
+        the null-rather-than-guess rule forbids.
+        """
+        values = self._meta(tmp_path, {"thread_source": "subagent"})
+        assert values["session_relation_kind"] == "subagent"
+        assert values.get("parent_session_id") is None

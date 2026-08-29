@@ -5,11 +5,16 @@ from __future__ import annotations
 import platform
 from collections.abc import Iterable
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
+# Windows has no `resource`; every use guards on None. An import statement takes
+# no annotation, so the binding is declared separately: that is what lets the
+# absent case be a type rather than an error to accept.
+resource: ModuleType | None
 try:
     import resource
-except ImportError:  # Windows has no resource module.
+except ImportError:
     resource = None
 
 

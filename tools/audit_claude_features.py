@@ -11,9 +11,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codess.config import CC_PROJECTS  # noqa: E402
-from codess.fileio import write_json_atomic  # noqa: E402
-from codess.vendor_audits.claude_features import audit_claude_features  # noqa: E402
+from codess.config import CC_PROJECTS
+from codess.fileio import write_json_atomic
+from codess.vendor_audits.claude_features import audit_claude_features
 
 
 def main(argv: list[str] | None = None) -> int:

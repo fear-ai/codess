@@ -9,7 +9,6 @@ from typing import Any
 from codess.config import CODEX_ARCHIVED_SESSIONS, CODEX_SESSIONS
 from codess.fileio import read_json, write_json_atomic
 
-
 CODEX_INDEX_FORMAT = "codess.codex-session-index/1"
 
 
@@ -21,6 +20,71 @@ def get_session_roots() -> list[Path]:
     return list(dict.fromkeys(path.resolve() for path in roots))
 
 
+def unrolled_history_sessions(
+    *, history_path: Path | None = None, sample: int | None = None,
+) -> dict[str, Any]:
+    """Sessions Codex retained a human side for and no rollout.
+
+    `~/.codex/history.jsonl` records human prompts keyed by `session_id`,
+    beside the rollout tree. It is usually redundant -- a Session with a
+    rollout has its prompts there too -- but the two are written
+    independently, so a Session can appear in history with no rollout at all.
+    Measured on one machine: 19 Sessions in history, 18 with rollouts, and
+    one without, carrying 2 prompts. An earlier count of three
+    read only the active tree; two of those had archived rollouts, which is
+    why this consults `get_session_roots()` rather than one directory.
+
+    **This reports; it does not decode.** Admitting a history-only Session
+    would mean a Session with prompts and no Model Turns, which changes what
+    a Session is and is a mapping decision under 6.5. Reporting that evidence
+    exists which Codess cannot decode is a coverage statement, and is what the
+    record-level diagnostics are for -- the cheap, honest middle
+    path between silence and a new mapping.
+
+    Returns counts and Session identifiers only. No prompt text is read into
+    the result, so the report can be published beside a store.
+    """
+    history = history_path or (CODEX_SESSIONS.parent / "history.jsonl")
+    observed: dict[str, int] = {}
+    if history.is_file():
+        try:
+            with history.open(encoding="utf-8", errors="replace") as stream:
+                for index, line in enumerate(stream):
+                    if sample is not None and index >= sample:
+                        break
+                    try:
+                        record = json.loads(line)
+                    except ValueError:
+                        continue
+                    identifier = record.get("session_id")
+                    if isinstance(identifier, str) and identifier:
+                        observed[identifier] = observed.get(identifier, 0) + 1
+        except OSError:
+            return {"available": False, "history_path": str(history)}
+
+    rolled: set[str] = set()
+    for root in get_session_roots():
+        if not root.is_dir():
+            continue
+        for rollout in root.rglob("*.jsonl"):
+            rolled.add(rollout.stem.split("-")[-1])
+
+    # Rollout filenames carry a suffix of the identifier rather than the whole
+    # of it, so membership is tested on that suffix rather than on equality.
+    unrolled = {
+        identifier: count for identifier, count in observed.items()
+        if identifier[-12:] not in rolled
+    }
+    return {
+        "available": history.is_file(),
+        "history_path": str(history),
+        "history_sessions": len(observed),
+        "with_rollout": len(observed) - len(unrolled),
+        "without_rollout": len(unrolled),
+        "unrolled_prompt_counts": dict(sorted(unrolled.items())),
+    }
+
+
 def session_archive_evidence(path: Path) -> tuple[str, str]:
     """Classify archive state solely from the configured source root."""
     resolved = path.resolve()
@@ -30,22 +94,46 @@ def session_archive_evidence(path: Path) -> tuple[str, str]:
     return "active", "configured-active-root"
 
 
-def read_session_meta(path: Path) -> dict | None:
-    """Return the first session_meta record, tolerating malformed prefixes."""
+THREAD_INDEX_FILE = "session_index.jsonl"
+
+
+def read_thread_names(codex_home: Path | None = None) -> dict[str, str]:
+    """Operator-assigned thread names, keyed by Session id.
+
+    Codex keeps the name the operator gave a thread in `session_index.jsonl`
+    beside the rollouts, and the rollout itself does not carry it. A store
+    built from rollouts alone therefore reports Sessions the operator cannot
+    recognise by their own label -- measured on one machine, 21 of 28 ingested
+    Sessions had a name the store did not hold.
+
+    Named `thread_name` by the vendor and retained as an operator-set label,
+    which is what distinguishes it from Claude's generated `aiTitle`.
+
+    A missing or unreadable index yields no names rather than an error: the
+    label qualifies a Session and its absence must not stop a decode.
+    """
+    home = codex_home or (CODEX_SESSIONS.parent if CODEX_SESSIONS else None)
+    if home is None:
+        return {}
+    path = Path(home) / THREAD_INDEX_FILE
+    if not path.is_file():
+        return {}
+    names: dict[str, str] = {}
     try:
-        with path.open(encoding="utf-8", errors="replace") as stream:
-            for line in stream:
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if record.get("type") == "session_meta":
-                    return record
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            identity = entry.get("id")
+            name = entry.get("thread_name")
+            if isinstance(identity, str) and isinstance(name, str) and name.strip():
+                names[identity] = name.strip()
     except OSError:
-        return None
-    return None
+        return {}
+    return names
 
 
 def build_session_index(
@@ -140,13 +228,13 @@ def build_session_index(
 
 
 def get_session_files(
-    project_root: Path,
+    project_path: Path,
     *,
     index: list[dict[str, Any]] | None = None,
     cache_path: Path | None = None,
 ) -> list[Path]:
     """Return deduplicated transcripts whose indexed cwd is within Project."""
-    project_str = str(project_root.resolve())
+    project_str = str(project_path.resolve())
     selected: dict[str, tuple[tuple[int, float, str], Path]] = {}
     entries = index if index is not None else build_session_index(cache_path=cache_path)
     for item in entries:

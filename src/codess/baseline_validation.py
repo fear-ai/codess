@@ -1,65 +1,79 @@
-"""Read-only verification and semantic validation for CoSchema snapshots."""
+"""Read-only verification and semantic validation for CoSchema snapshots.
+
+**Reads core tables directly, and must.** `canonical_rows` enumerates every
+released table to compute the semantic digest that fixed-point validation
+compares -- 38 statements over 18 tables, more than the audit modules that
+documented combined. Routing them through the query layer would make the
+check depend on the code it exists to check, so the direct read *is* the
+verification.
+
+The enumeration is bound to the released schema rather than maintained by
+hand: `DIGEST_EXCLUDED_TABLES` names what is deliberately left out, and a test
+fails when a DDL table is neither covered nor excluded. That check exists
+because the digest silently ignores what it does not list, which is how
+`model_params` went missing.
+"""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sqlite3
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from codess.raw_store import RawCaptureError, RawStore, verify_captured_object
+from codess.config import (
+    CURRENT_POINTER_FILE,
+    MANIFEST_FILE,
+    RAW_MANIFEST_FILE,
+    RAW_MODES,
+    STORE_DIR,
+    canonical_raw_mode,
+)
 from codess.fileio import (
-    check_policy_format, hash_file, load_versioned_policy, source_fingerprint,
+    check_policy_format,
+    hash_file,
+    load_versioned_policy,
+    open_readonly,
+    quote_identifier,
+    read_source_revision,
     write_json_atomic,
 )
+from codess.hashing import codess_digest
 from codess.processing_contract import DECODER_VERSION, VALIDATOR_VERSION
-from codess.schema_contract import FORMAT_VERSION, require_store, verify_package
-from codess.snapshot import (
-    SnapshotError, current_store_paths, snapshot_store_paths_from_base,
+from codess.raw_store import (
+    RAW_FORMAT,
+    RawCaptureError,
+    RawStore,
+    verify_raw,
 )
-
+from codess.schema_contract import FORMAT_VERSION, contract_digest, require_store
+from codess.snapshot import (
+    SnapshotError,
+    current_snapshot,
+    current_stores,
+    read_manifest,
+    snapshot_store_paths_from_base,
+)
+from codess.store import integrity_report, table_counts
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 REPORT_FORMAT = "codess.validation-report/1"
 
-_TABLE_COUNT_QUERIES = {
-    "projects": "SELECT COUNT(*) FROM projects",
-    "project_locations": "SELECT COUNT(*) FROM project_locations",
-    "workspace_bindings": "SELECT COUNT(*) FROM workspace_bindings",
-    "sources": "SELECT COUNT(*) FROM sources",
-    "sessions": "SELECT COUNT(*) FROM sessions",
-    "interactions": "SELECT COUNT(*) FROM interactions",
-    "model_turns": "SELECT COUNT(*) FROM model_turns",
-    "events": "SELECT COUNT(*) FROM events",
-    "source_records": "SELECT COUNT(*) FROM source_records",
-    "content_objects": "SELECT COUNT(*) FROM content_objects",
-    "event_content": "SELECT COUNT(*) FROM event_content",
-    "source_record_content": "SELECT COUNT(*) FROM source_record_content",
-    "tool_result_content": "SELECT COUNT(*) FROM tool_result_content",
-    "artifact_content": "SELECT COUNT(*) FROM artifact_content",
-    "processing_runs": "SELECT COUNT(*) FROM processing_runs",
-    "content_derivations": "SELECT COUNT(*) FROM content_derivations",
-    "tool_invocations": "SELECT COUNT(*) FROM tool_invocations",
-    "tool_results": "SELECT COUNT(*) FROM tool_results",
-    "artifacts": "SELECT COUNT(*) FROM artifacts",
-    "event_artifacts": "SELECT COUNT(*) FROM event_artifacts",
-    "mapping_diagnostics": "SELECT COUNT(*) FROM mapping_diagnostics",
-    "correlation_assertions": "SELECT COUNT(*) FROM correlation_assertions",
-}
 
 _GLOBAL_IDENTITY_DUPLICATE_QUERIES = (
-    ("sources.global_id", "SELECT COUNT(*)-COUNT(DISTINCT global_id) FROM sources"),
-    ("sessions.global_id", "SELECT COUNT(*)-COUNT(DISTINCT global_id) FROM sessions"),
+    ("sources.source_entity_id", "SELECT COUNT(*)-COUNT(DISTINCT source_entity_id) FROM sources"),
+    ("sessions.session_entity_id", "SELECT COUNT(*)-COUNT(DISTINCT session_entity_id) FROM sessions"),
     (
         "sessions.observation_id",
         "SELECT COUNT(*)-COUNT(DISTINCT observation_id) FROM sessions",
     ),
-    ("events.global_id", "SELECT COUNT(*)-COUNT(DISTINCT global_id) FROM events"),
+    ("events.event_entity_id", "SELECT COUNT(*)-COUNT(DISTINCT event_entity_id) FROM events"),
 )
 
 _INVALID_JSON_QUERIES = (
@@ -101,8 +115,6 @@ REQUIRED_ARTIFACT_INDEXES = {
 }
 
 
-_sha256 = hash_file
-
 
 def load_policy(path: Path | None) -> dict[str, Any]:
     if path is None:
@@ -130,7 +142,10 @@ def load_policy(path: Path | None) -> dict[str, Any]:
             for key, count in value.items()
         ):
             raise ValueError(f"validation policy {field} must map sources to nonnegative integers")
-    if policy.get("raw_mode") not in {None, "none", "reference", "capture", "seal"}:
+    # None is accepted here and nowhere else: a validation policy that states
+    # no mode validates whatever the snapshot was built under.
+    stated_mode = policy.get("raw_mode")
+    if stated_mode is not None and canonical_raw_mode(str(stated_mode)) not in RAW_MODES:
         raise ValueError("validation policy raw_mode is invalid")
     diagnostics = policy.get("allowed_diagnostics", {})
     if not isinstance(diagnostics, dict):
@@ -139,13 +154,13 @@ def load_policy(path: Path | None) -> dict[str, Any]:
         valid = (
             isinstance(reason, str)
             and (
-                isinstance(specification, int) and not isinstance(specification, bool)
-                and specification >= 0
-                or isinstance(specification, dict)
+                (isinstance(specification, int) and not isinstance(specification, bool)
+                and specification >= 0)
+                or (isinstance(specification, dict)
                 and set(specification) == {"max"}
                 and isinstance(specification["max"], int)
                 and not isinstance(specification["max"], bool)
-                and specification["max"] >= 0
+                and specification["max"] >= 0)
             )
         )
         if not valid:
@@ -181,6 +196,20 @@ def load_policy(path: Path | None) -> dict[str, Any]:
     return policy
 
 
+# Released tables deliberately absent from the semantic digest, with the
+# reason. Stated as data rather than by omission because the digest silently
+# ignores whatever it does not list: `model_params` was missing for that
+# reason, so model evidence could differ between two stores and a fixed-point
+# check called them identical.
+DIGEST_EXCLUDED_TABLES = {
+    "store_meta": (
+        "build metadata -- format version, contract digest, and creation "
+        "stamps. The digest exists to compare what was decoded, not which "
+        "build decoded it, so including it would make every rebuild differ."
+    ),
+}
+
+
 def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sqlite3.Row]]]:
     """Yield stable logical rows; exclude build timestamps and surrogate keys."""
     queries = {
@@ -195,25 +224,25 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM project_locations ORDER BY id
         """,
         "workspace_bindings": """
-            SELECT id, project_id, location_id, source_system_id, workspace_id,
+            SELECT id, project_id, location_id, source_system_key, workspace_id,
                    relation_kind, source_project_path, path_obsolete,
                    selection_state, metadata
             FROM workspace_bindings ORDER BY id
         """,
         "sources": """
-            SELECT global_id, source_system_id, source_uri, storage_format, source_revision,
+            SELECT source_entity_id, source_system_key, source_path, storage_format, source_revision,
                    source_mtime, source_size, availability, capture_method,
-                   consistency, content_sha256, metadata
-            FROM sources ORDER BY source_system_id, source_uri, source_revision
+                   consistency, content_digest, metadata
+            FROM sources ORDER BY source_system_key, source_path, source_revision
         """,
         "sessions": """
-            SELECT id, global_id, observation_id, source_system_id, vendor_session_id, vendor_name,
-                   product_name, harness_name, storage_format, surface_kind,
-                   session_purpose, harness_version, source_cwd,
+            SELECT id, session_entity_id, observation_id, source_system_key, vendor_session_id, vendor_name,
+                   harness_name, storage_format, surface_kind,
+                   harness_version, source_cwd,
                    path_obsolete, started_at,
                    ended_at, source_mtime, time_basis, parent_session_id,
                    session_relation_kind, archive_state, archive_source,
-                   metadata, source, type, release, project_path
+                   metadata, adapter_key, type, release, project_path
             FROM sessions ORDER BY id
         """,
         "interactions": """
@@ -226,8 +255,23 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
                    boundary_source
             FROM model_turns ORDER BY session_id, sequence_no
         """,
+        # Selected by its natural columns, never by `id`: the row id is a
+        # surrogate assigned in insertion order, so two stores holding the
+        # same model evidence would differ on it and agree on nothing else.
+        # Ordering is by the same columns for the same reason.
+        "model_params": """
+            SELECT provider, model_line, model_generation, model_version,
+                   model_gradation, model_variant, model_name_exact,
+                   model_revision, reasoning_effort, speed_tier, service_tier,
+                   request_tier, mode, source_params
+            FROM model_params
+            ORDER BY provider, model_line, model_generation, model_version,
+                     model_gradation, model_variant, model_name_exact,
+                     model_revision, reasoning_effort, speed_tier,
+                     service_tier, request_tier, mode
+        """,
         "events": """
-            SELECT global_id, session_id, event_id, sequence_no, source_record_locator,
+            SELECT event_entity_id, session_id, event_id, sequence_no, source_record_locator,
                    source_record_type, source_record_subtype, event_kind,
                    actor_kind, content_role, origin_kind, interaction_id,
                    model_turn_id, parent_event_id, caused_by_event_id, content,
@@ -238,63 +282,61 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
             FROM events ORDER BY session_id, sequence_no, event_id
         """,
         "source_records": """
-            SELECT r.id, s.global_id, r.source_locator, r.source_sequence,
+            SELECT r.id, s.source_entity_id, r.source_locator, r.source_sequence,
                    r.source_record_type, r.source_record_subtype, r.parent_locator,
                    r.record_at, r.classification, r.parameters_json
             FROM source_records r JOIN sources s ON s.id=r.source_id
-            ORDER BY s.global_id, r.source_sequence, r.source_locator
+            ORDER BY s.source_entity_id, r.source_sequence, r.source_locator
         """,
         "content_objects": """
-            SELECT id, content_sha256, media_type, charset, byte_length,
-                   character_length, storage_class, inline_content,
+            SELECT id, content_digest, byte_length,
+                   character_length, inline_content,
                    raw_object_id, privacy_class, metadata
             FROM content_objects ORDER BY id
         """,
         "event_content": """
-            SELECT e.global_id, ec.content_id, ec.relation_kind, ec.sequence_no,
-                   ec.start_offset, ec.end_offset, ec.integrity_state
+            SELECT e.event_entity_id, ec.content_id, ec.relation_kind,
+                   ec.start_offset, ec.end_offset
             FROM event_content ec JOIN events e ON e.id=ec.event_id
-            ORDER BY e.global_id, ec.relation_kind, ec.sequence_no
+            ORDER BY e.event_entity_id, ec.relation_kind
         """,
         "source_record_content": """
-            SELECT source_record_id, content_id, relation_kind, sequence_no,
-                   integrity_state
+            SELECT source_record_id, content_id, relation_kind
             FROM source_record_content
-            ORDER BY source_record_id, relation_kind, sequence_no
+            ORDER BY source_record_id, relation_kind
         """,
         "tool_result_content": """
             SELECT r.invocation_id, r.sequence_no, c.content_id,
-                   c.relation_kind, c.sequence_no, c.integrity_state
+                   c.relation_kind
             FROM tool_result_content c JOIN tool_results r ON r.id=c.tool_result_id
-            ORDER BY r.invocation_id, r.sequence_no, c.relation_kind, c.sequence_no
+            ORDER BY r.invocation_id, r.sequence_no, c.relation_kind
         """,
         "artifact_content": """
             SELECT a.project_id, a.artifact_kind, a.relative_path, a.uri,
-                   c.content_id, c.relation_kind, c.sequence_no, c.integrity_state
+                   c.content_id, c.relation_kind
             FROM artifact_content c JOIN artifacts a ON a.id=c.artifact_id
             ORDER BY a.project_id, a.artifact_kind, a.relative_path, a.uri,
-                     c.relation_kind, c.sequence_no
+                     c.relation_kind
         """,
         "processing_runs": """
-            SELECT id, project_id, policy_sha256, processor_name,
+            SELECT id, project_id, policy_digest, processor_name,
                    software_version, scope_json, actions_json, rejection_reason
             FROM processing_runs ORDER BY id
         """,
         "content_derivations": """
-            SELECT processing_run_id, input_content_id, output_content_id,
-                   sequence_no, actions_json, rejection_reason
+            SELECT processing_run_id, sequence_no, actions_json, rejection_reason
             FROM content_derivations ORDER BY processing_run_id, sequence_no
         """,
         "tool_invocations": """
             SELECT id, session_id, interaction_id, model_turn_id, source_call_id,
                    source_tool_name, canonical_tool_name, tool_namespace,
                    invocation_kind, input_json, source_status, normalized_status,
-                   started_at, ended_at
+                   source_started_at
             FROM tool_invocations ORDER BY id
         """,
         "tool_results": """
             SELECT COALESCE(invocation_id, ''), sequence_no,
-                   producing_actor_kind, output_text, output_json, is_error,
+                   output_text, output_json, is_error,
                    source_status, normalized_status
             FROM tool_results
             ORDER BY COALESCE(invocation_id, ''), sequence_no, id
@@ -302,16 +344,15 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
         "artifacts": """
             SELECT project_id, artifact_kind, relative_path,
                    observed_absolute_path, uri, repository_object_id,
-                   content_sha256, metadata
+                   content_digest, metadata
             FROM artifacts
             ORDER BY project_id, artifact_kind, relative_path, uri,
-                     repository_object_id, content_sha256
+                     repository_object_id, content_digest
         """,
         "event_artifacts": """
             SELECT e.session_id, e.event_id, a.project_id, a.artifact_kind,
                    a.relative_path, a.uri, a.repository_object_id,
-                   a.content_sha256, ea.operation, ea.evidence_source,
-                   ea.confidence
+                   a.content_digest, ea.operation
             FROM event_artifacts ea
             JOIN events e ON e.id=ea.event_id
             JOIN artifacts a ON a.id=ea.artifact_id
@@ -319,11 +360,11 @@ def canonical_rows(conn: sqlite3.Connection) -> Iterable[tuple[str, Iterable[sql
                      a.relative_path, a.uri, ea.operation
         """,
         "mapping_diagnostics": """
-            SELECT d.session_id, e.event_id, d.level, d.severity, d.reason_code,
+            SELECT d.session_id, e.event_id, d.granularity, d.severity, d.reason_code,
                    d.source_field, d.source_value, d.mapping_rule, d.detail
             FROM mapping_diagnostics d
             LEFT JOIN events e ON e.id=d.event_id
-            ORDER BY d.session_id, e.event_id, d.level, d.reason_code,
+            ORDER BY d.session_id, e.event_id, d.granularity, d.reason_code,
                      d.source_field
         """,
         "correlation_assertions": """
@@ -342,16 +383,16 @@ def semantic_digest(
     store_paths: Iterable[Path], *, exclude_tables: frozenset[str] = frozenset(),
     normalize_observations: bool = False,
 ) -> str:
-    digest = hashlib.sha256()
+    digest = codess_digest()
     for path in sorted(store_paths, key=lambda item: item.name):
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(path)
         conn.row_factory = sqlite3.Row
         try:
             require_store(conn, write=False)
             for table, rows in canonical_rows(conn):
                 if table in exclude_tables:
                     continue
-                digest.update(f"{path.name}\0{table}\n".encode("utf-8"))
+                digest.update(f"{path.name}\0{table}\n".encode())
                 for row in rows:
                     values = tuple(row)
                     if normalize_observations and table == "sessions":
@@ -381,7 +422,7 @@ def _validate_store(
     expected: dict[str, Any],
     report: dict[str, Any],
 ) -> tuple[dict[str, int], dict[str, int]]:
-    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    conn = open_readonly(path)
     conn.row_factory = sqlite3.Row
     counts: dict[str, int] = {}
     diagnostic_counts: dict[str, int] = {}
@@ -393,15 +434,18 @@ def _validate_store(
         except Exception as exc:
             _add_check(report, f"{prefix}.format", False, str(exc))
             return counts, diagnostic_counts
-        integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-        _add_check(report, f"{prefix}.integrity", integrity == "ok", integrity)
-        fk_rows = conn.execute("PRAGMA foreign_key_check").fetchall()
-        _add_check(report, f"{prefix}.foreign_keys", not fk_rows, len(fk_rows))
+        structure = integrity_report(conn)
+        _add_check(
+            report, f"{prefix}.integrity",
+            structure["integrity_check"] == "ok", structure["integrity_check"],
+        )
+        _add_check(
+            report, f"{prefix}.foreign_keys",
+            not structure["foreign_key_violations"],
+            structure["foreign_key_violations"],
+        )
 
-        counts = {
-            table: int(conn.execute(query).fetchone()[0])
-            for table, query in _TABLE_COUNT_QUERIES.items()
-        }
+        counts = table_counts(conn)
         manifest_counts = expected.get("counts", {})
         _add_check(
             report,
@@ -428,7 +472,7 @@ def _validate_store(
             for label, query in _GLOBAL_IDENTITY_DUPLICATE_QUERIES
         }
         _add_check(
-            report, f"{prefix}.global_identity",
+            report, f"{prefix}.entity_identity",
             all(value == 0 for value in identity_failures.values()),
             identity_failures,
         )
@@ -439,14 +483,15 @@ def _validate_store(
             missing_indexes,
         )
         duplicates = 0
-        for column in ("relative_path", "uri", "repository_object_id", "content_sha256"):
+        for column in ("relative_path", "uri", "repository_object_id", "content_digest"):
+            quoted = quote_identifier(column)
             duplicates += int(
                 conn.execute(
                     f"""
                     SELECT COUNT(*) FROM (
-                      SELECT project_id, artifact_kind, {column}, COUNT(*) n
-                      FROM artifacts WHERE {column} IS NOT NULL
-                      GROUP BY project_id, artifact_kind, {column} HAVING n>1
+                      SELECT project_id, artifact_kind, {quoted}, COUNT(*) n
+                      FROM artifacts WHERE {quoted} IS NOT NULL
+                      GROUP BY project_id, artifact_kind, {quoted} HAVING n>1
                     )
                     """
                 ).fetchone()[0]
@@ -495,11 +540,21 @@ def _validate_raw(
     records: list[dict[str, Any]] = []
     revisions: list[str] = []
     try:
-        lines = (snapshot / "raw-manifest.jsonl").read_text(encoding="utf-8").splitlines()
-        header = json.loads(lines[0])
-        _add_check(report, "raw.header", header.get("raw_format") == "codess.raw/1", header)
-        records = [json.loads(line) for line in lines[1:] if line.strip()]
-    except (OSError, IndexError, json.JSONDecodeError) as exc:
+        # Streamed rather than read whole. A raw manifest grows with the number
+        # of Sources a Project has -- 212 KB at the largest observed -- and it is
+        # read on every validation, so materializing the text *and* the parsed
+        # records holds two copies of a file that has no stated upper bound. The
+        # records are still collected, because every one is checked below; what
+        # is avoided is the intermediate string.
+        with (snapshot / RAW_MANIFEST_FILE).open(encoding="utf-8") as stream:
+            header = json.loads(next(stream))
+            _add_check(
+                report, "raw.header", header.get("raw_format") == RAW_FORMAT, header,
+            )
+            records = [
+                json.loads(line) for line in stream if line.strip()
+            ]
+    except (OSError, IndexError, StopIteration, json.JSONDecodeError) as exc:
         _add_check(report, "raw.manifest", False, str(exc))
         return records, revisions
 
@@ -509,7 +564,7 @@ def _validate_raw(
             "\0".join(
                 str(record.get(key) or "")
                 for key in (
-                    "source_system_id", "source_locator", "source_revision_id"
+                    "source_system_key", "source_locator", "source_revision_id"
                 )
             )
         )
@@ -526,7 +581,7 @@ def _validate_raw(
                 )
                 continue
             try:
-                observed = verify_captured_object(object_path, record)
+                observed = verify_raw(object_path, record)
                 _add_check(
                     report, f"{label}.stored_size",
                     observed["stored_size"] == record.get("stored_size"),
@@ -534,7 +589,7 @@ def _validate_raw(
                 )
                 _add_check(
                     report, f"{label}.stored_hash",
-                    observed["stored_sha256"] == record.get("stored_sha256"),
+                    observed["stored_digest"] == record.get("stored_digest"),
                     str(object_path),
                 )
                 _add_check(
@@ -556,7 +611,7 @@ def _validate_raw(
             locator = record.get("source_locator")
             if locator and verify_reference_current:
                 try:
-                    current_revision = source_fingerprint(Path(locator))[0]
+                    current_revision = read_source_revision(Path(locator))[0]
                     matches = current_revision == record.get("source_revision_id")
                     _add_check(
                         report, f"{label}.current_reference", matches,
@@ -580,7 +635,7 @@ def _validate_raw(
 
 
 def _validate_policy(
-    project_root: Path,
+    project_path: Path,
     policy: dict[str, Any],
     report: dict[str, Any],
     counts_by_source: dict[str, dict[str, int]],
@@ -592,7 +647,7 @@ def _validate_policy(
     if configured_project:
         _add_check(
             report, "policy.project",
-            Path(configured_project).expanduser().resolve() == project_root,
+            Path(configured_project).expanduser().resolve() == project_path,
             configured_project,
         )
     for source in policy.get("required_sources", []):
@@ -606,7 +661,15 @@ def _validate_policy(
         _add_check(report, f"policy.minimum_events.{source}", actual >= int(minimum), actual)
     expected_raw = policy.get("raw_mode")
     if expected_raw:
-        _add_check(report, "policy.raw_mode", raw_mode == expected_raw, raw_mode)
+        # Both sides are canonicalized: the policy is operator-written and the
+        # observed mode comes from a manifest that may predate the rename, so
+        # comparing the raw strings would fail a store that is in fact
+        # compliant.
+        _add_check(
+            report, "policy.raw_mode",
+            canonical_raw_mode(str(raw_mode)) == canonical_raw_mode(str(expected_raw)),
+            raw_mode,
+        )
     if "expected_raw_records" in policy:
         _add_check(
             report, "policy.raw_records",
@@ -618,7 +681,7 @@ def _validate_policy(
     if expected_workspace_ids is not None:
         from codess.cursor_source import get_workspace_ids
 
-        actual_workspace_ids = get_workspace_ids(project_root)
+        actual_workspace_ids = get_workspace_ids(project_path)
         _add_check(
             report, "policy.cursor_workspace_ids",
             sorted(expected_workspace_ids) == actual_workspace_ids,
@@ -641,14 +704,14 @@ def _validate_policy(
         if cursor_path is None:
             _add_check(report, "policy.cursor_turns", False, "Cursor store missing")
         else:
-            conn = sqlite3.connect(cursor_path.resolve().as_uri() + "?mode=ro", uri=True)
+            conn = open_readonly(cursor_path)
             try:
                 invalid = int(
                     conn.execute(
                         """
                         SELECT COUNT(*) FROM model_turns mt
                         JOIN sessions s ON s.id=mt.session_id
-                        WHERE s.source='Cursor' AND (
+                        WHERE s.adapter_key='Cursor' AND (
                           mt.boundary_source!='inferred' OR mt.interaction_id IS NULL
                           OR mt.source_turn_id IS NOT NULL)
                         """
@@ -660,7 +723,7 @@ def _validate_policy(
                         SELECT COUNT(*) FROM (
                           SELECT mt.interaction_id, COUNT(*) n
                           FROM model_turns mt JOIN sessions s ON s.id=mt.session_id
-                          WHERE s.source='Cursor'
+                          WHERE s.adapter_key='Cursor'
                           GROUP BY mt.interaction_id HAVING n>1
                         )
                         """
@@ -675,7 +738,7 @@ def _validate_policy(
 
 
 def validate_project(
-    project_root: Path,
+    project_path: Path,
     *,
     policy: dict[str, Any] | None = None,
     raw_store_root: Path | None = None,
@@ -683,12 +746,12 @@ def validate_project(
     snapshot_path: Path | None = None,
 ) -> dict[str, Any]:
     """Validate an exact candidate or the current baseline without mutation."""
-    project_root = project_root.expanduser().resolve()
+    project_path = project_path.expanduser().resolve()
     policy = policy or {}
     report: dict[str, Any] = {
         "report_format": REPORT_FORMAT,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "project": str(project_root),
+        "generated_at": now_iso(system_clock),
+        "project": str(project_path),
         "status": "rejected",
         "errors": [],
         "limitations": [],
@@ -704,19 +767,14 @@ def validate_project(
                 snapshot.parent.parent, snapshot.name
             )
         else:
-            paths = current_store_paths(project_root)
+            paths = current_stores(project_path)
             if not paths:
                 raise SnapshotError("no current snapshot")
-            current = json.loads(
-                (project_root / ".codess" / "current.json").read_text()
-            )
-            current_path = Path(current["path"])
-            snapshot = (
-                current_path
-                if current_path.is_absolute()
-                else project_root / ".codess" / current_path
-            )
-        manifest = json.loads((snapshot / "manifest.json").read_text())
+            resolved = current_snapshot(project_path / STORE_DIR)
+            if resolved is None:
+                raise SnapshotError("no current snapshot")
+            snapshot, _pointer = resolved
+        manifest = read_manifest(snapshot)
     except (OSError, KeyError, json.JSONDecodeError, SnapshotError) as exc:
         report["errors"].append(f"snapshot: {exc}")
         return report
@@ -727,7 +785,7 @@ def validate_project(
             "project_id": manifest.get("project_id"),
             "snapshot_path": str(snapshot),
             "parent_snapshot_id": manifest.get("parent_snapshot_id"),
-            "package_digest": manifest.get("package_digest"),
+            "contract_digest": manifest.get("contract_digest"),
             "software_version": manifest.get("software_version"),
             "software_revision": manifest.get("software_revision"),
             "decoder_version": manifest.get("decoder_version"),
@@ -736,9 +794,9 @@ def validate_project(
         }
     )
     _add_check(
-        report, "package_digest",
-        manifest.get("package_digest") == verify_package(),
-        manifest.get("package_digest"),
+        report, "contract_digest",
+        manifest.get("contract_digest") == contract_digest(),
+        manifest.get("contract_digest"),
     )
     required_decoder = policy.get(
         "required_decoder_version", DECODER_VERSION
@@ -756,7 +814,7 @@ def validate_project(
     )
     _add_check(
         report, "validator_version",
-        VALIDATOR_VERSION == required_validator,
+        required_validator == VALIDATOR_VERSION,
         {"observed": VALIDATOR_VERSION, "required": required_validator},
     )
 
@@ -770,13 +828,13 @@ def validate_project(
         report["stores"][path.name] = counts
         for reason, count in diagnostic_counts.items():
             diagnostics[reason] = diagnostics.get(reason, 0) + count
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(path)
         try:
             for source, sessions, events in conn.execute(
                 """
-                SELECT s.source, COUNT(DISTINCT s.id), COUNT(e.id)
+                SELECT s.adapter_key, COUNT(DISTINCT s.id), COUNT(e.id)
                 FROM sessions s LEFT JOIN events e ON e.session_id=s.id
-                GROUP BY s.source
+                GROUP BY s.adapter_key
                 """
             ):
                 entry = counts_by_source.setdefault(source, {"sessions": 0, "events": 0})
@@ -800,7 +858,7 @@ def validate_project(
         normalize_observations=True,
     )
     _validate_policy(
-        project_root, policy, report, counts_by_source, diagnostics,
+        project_path, policy, report, counts_by_source, diagnostics,
         report.get("raw_mode"), stores,
     )
     if report["errors"]:
@@ -813,7 +871,7 @@ def validate_project(
 
 
 def run_query_smoke(
-    project_root: Path,
+    project_path: Path,
     *,
     snapshot_id: str | None = None,
     snapshot_path: Path | None = None,
@@ -838,21 +896,21 @@ def run_query_smoke(
     with tempfile.TemporaryDirectory(prefix="codess-query-smoke-") as temp:
         temp_root = Path(temp)
         registry = temp_root / "registry"
-        query_root = project_root
+        query_root = project_path
         if snapshot_path is not None:
             query_root = temp_root / "candidate-view"
-            pointer = query_root / ".codess" / "current.json"
+            pointer = query_root / STORE_DIR / CURRENT_POINTER_FILE
             write_json_atomic(pointer, {
                 "snapshot_id": snapshot_id,
                 "path": str(snapshot_path),
-                "manifest_sha256": hash_file(snapshot_path / "manifest.json"),
+                "manifest_digest": hash_file(snapshot_path / MANIFEST_FILE),
             })
         env = os.environ.copy()
         env["PYTHONPATH"] = str(repo_root / "src")
         for name, flags in modes:
             command = [
                 sys.executable, "-m", "main", "query", "--dir",
-                str(query_root), "--registry", str(registry),
+                str(query_root), "--store", str(registry),
             ]
             if snapshot_id is not None:
                 command.extend(["--snapshot-id", snapshot_id])

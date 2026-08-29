@@ -3,26 +3,36 @@
 
 from __future__ import annotations
 
-import hashlib
+import contextlib
 import heapq
+import itertools
 import json
 import os
 import re
+import sqlite3
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
+from codess.hashing import codess_bytes_hash
+from codess.identity import observation_row_id
+from codess.schema_contract import column_names
+from codess.timeval import now_iso
+from codess.units import DAY_MS
+from codess.wallclock import system_clock
 
 REQUEST_FORMAT = "codess.query-request/1"
-RESULT_FORMAT = "codess.query-result/1"
+RESULT_FORMAT = "codess.query-result/2"
 QUERY_PROCESSOR = "codess.query-api/1"
 SUPPORTED_ACTIONS = frozenset({"sessions", "overview", "events", "search"})
 SUPPORTED_FILTERS = frozenset({
     "session_ids", "event_ids", "interaction_ids", "model_turn_ids",
     "source_system_ids", "event_kinds", "statuses", "models",
-    "model_providers", "model_families", "model_revisions",
-    "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
+    "model_providers", "model_lines", "model_generations",
+    "model_versions", "model_gradations", "model_variants", "model_revisions",
+    "reasoning_efforts", "speed_tiers", "service_tiers", "request_tiers", "model_modes",
     "tool_names", "actor_kinds", "content_roles", "origin_kinds",
     "parent_session_ids", "session_relation_kinds", "initiation_kinds",
     "artifact", "text", "since", "until",
@@ -31,8 +41,9 @@ ACTION_FILTERS = {
     "sessions": frozenset({
         "session_ids", "source_system_ids", "parent_session_ids",
         "session_relation_kinds", "since", "until", "models",
-        "model_providers", "model_families", "model_revisions",
-        "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
+        "model_providers", "model_lines", "model_generations",
+        "model_versions", "model_gradations", "model_variants", "model_revisions",
+        "reasoning_efforts", "speed_tiers", "service_tiers", "request_tiers", "model_modes",
     }),
     "overview": SUPPORTED_FILTERS,
     "events": SUPPORTED_FILTERS,
@@ -56,7 +67,7 @@ class QueryContractError(ValueError):
 # concern (a very long LIKE pattern) and a legibility concern (control chars,
 # markup, or script-like content echoed back in results/errors).
 #
-# Searched content is bounded UTF-8 (CoPlan.md 7.3) and can legitimately
+# Searched content is bounded UTF-8 and can legitimately
 # contain any Unicode text (non-English strings, emoji, symbols in code).
 # The charset bound therefore excludes only control/formatting characters,
 # matching sanitize.py's CONTROL_CHARS_RE precedent, not non-ASCII text.
@@ -125,7 +136,7 @@ def _canonical_bytes(value: Any) -> bytes:
 
 def content_hash(value: Any) -> str:
     """Return a deterministic content identity (not an authenticity proof)."""
-    return "sha256:" + hashlib.sha256(_canonical_bytes(value)).hexdigest()
+    return "digest:" + codess_bytes_hash(256, 256, _canonical_bytes(value))
 
 
 def make_request(
@@ -148,8 +159,9 @@ def make_request(
     for key in (
         "session_ids", "event_ids", "interaction_ids", "model_turn_ids",
         "source_system_ids", "event_kinds", "statuses", "models",
-        "model_providers", "model_families", "model_revisions",
-        "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
+        "model_providers", "model_lines", "model_generations",
+        "model_versions", "model_gradations", "model_variants", "model_revisions",
+        "reasoning_efforts", "speed_tiers", "service_tiers", "request_tiers", "model_modes",
         "tool_names", "actor_kinds", "content_roles", "origin_kinds",
         "parent_session_ids", "session_relation_kinds", "initiation_kinds",
     ):
@@ -184,6 +196,44 @@ def make_request(
     }
     validate_request(request)
     return request
+
+
+def activity_bucket(day: str, **extra: Any) -> dict[str, Any]:
+    """The counters every activity bucket carries, plus a caller's own.
+
+    `query_api` and `orientation_audit` both accumulate per-day activity and
+    shared twenty-one keys spelled out at each site, which `pylint R0801`
+    reports as one cluster. Each also has keys the other does not -- the audit
+    tracks per-Actor and per-relation breakdowns, the query tracks the
+    interaction key of the last human prompt -- so this is the common core
+    rather than the whole bucket.
+
+    Sets are constructed per call, not shared: a default argument holding a set
+    would be one object across every bucket, and every day would then report
+    the same Sessions.
+    """
+    bucket: dict[str, Any] = {
+        "day": day,
+        "events": 0,
+        "content_characters": 0,
+        "sessions": set(),
+        "interactions": set(),
+        "first_event_at": None,
+        "last_event_at": None,
+        "human_prompts": 0,
+        "human_prompt_characters": 0,
+        "model_outputs": 0,
+        "model_output_characters": 0,
+        "human_prompt_interactions": set(),
+        "tool_calls": 0,
+        "tool_results": 0,
+        "tool_input_characters": 0,
+        "tool_output_characters": 0,
+        "tool_call_interactions": set(),
+        "tool_result_interactions": set(),
+    }
+    bucket.update(extra)
+    return bucket
 
 
 def validate_request(request: dict[str, Any]) -> None:
@@ -260,8 +310,9 @@ def validate_request(request: dict[str, Any]) -> None:
     for key in (
         "session_ids", "event_ids", "interaction_ids", "model_turn_ids",
         "source_system_ids", "event_kinds", "statuses", "models",
-        "model_providers", "model_families", "model_revisions",
-        "reasoning_efforts", "speed_tiers", "service_tiers", "model_modes",
+        "model_providers", "model_lines", "model_generations",
+        "model_versions", "model_gradations", "model_variants", "model_revisions",
+        "reasoning_efforts", "speed_tiers", "service_tiers", "request_tiers", "model_modes",
         "tool_names", "actor_kinds", "content_roles", "origin_kinds",
         "parent_session_ids", "session_relation_kinds", "initiation_kinds",
     ):
@@ -275,7 +326,7 @@ def validate_request(request: dict[str, Any]) -> None:
     for key in ("artifact", "text"):
         if key in filters and not isinstance(filters[key], str):
             raise QueryContractError(f"filters.{key} must be a string")
-        if key in filters and filters[key]:
+        if filters.get(key):
             sanitize_free_text_filter(filters[key], field=key)
     for key in ("since", "until"):
         if key in filters and not isinstance(filters[key], (int, float)):
@@ -381,10 +432,8 @@ def save_document(path: Path, value: dict[str, Any]) -> None:
             os.fsync(stream.fileno())
         os.replace(name, path)
     except Exception:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(name)
-        except FileNotFoundError:
-            pass
         raise
 
 
@@ -394,10 +443,10 @@ def selection_from_result(result: dict[str, Any]) -> dict[str, list[str]]:
     sessions: set[str] = set()
     events: set[str] = set()
     for row in result.get("rows") or []:
-        if row.get("global_session_id"):
-            sessions.add(str(row["global_session_id"]))
-        if row.get("global_event_id"):
-            events.add(str(row["global_event_id"]))
+        if row.get("session_entity_id"):
+            sessions.add(str(row["session_entity_id"]))
+        if row.get("event_entity_id"):
+            events.add(str(row["event_entity_id"]))
     selected: dict[str, list[str]] = {}
     if sessions:
         selected["session_ids"] = sorted(sessions)
@@ -429,14 +478,76 @@ def _like_literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def session_structure_counts(
+    conn: sqlite3.Connection, session_ids: Iterable[str],
+) -> dict[str, Any]:
+    """Interaction, Model Turn, relation, and initiation counts for Sessions.
+
+    The four aggregates that summarize how a set of Sessions is structured,
+    rather than what they contain. The overview and the orientation audit both
+    reported them and had written the same four statements out separately, so
+    a change to one report silently disagreed with the other.
+
+    Returns zero totals and empty breakdowns for an empty selection rather
+    than querying with an empty `IN ()`, which is not valid SQLite.
+    """
+    ids = sorted(session_ids)
+    empty = {
+        "interactions": 0, "model_turns": 0,
+        "session_relations": {}, "initiation_kinds": {},
+    }
+    if not ids:
+        return empty
+    placeholders = ",".join("?" for _ in ids)
+    return {
+        "interactions": int(conn.execute(
+            f"SELECT COUNT(*) FROM interactions WHERE session_id IN ({placeholders})",
+            ids,
+        ).fetchone()[0]),
+        "model_turns": int(conn.execute(
+            f"SELECT COUNT(*) FROM model_turns WHERE session_id IN ({placeholders})",
+            ids,
+        ).fetchone()[0]),
+        # A Session with no recorded relation is top level, named rather than
+        # left null so the breakdown sums to the Session count.
+        "session_relations": {
+            str(relation): int(count)
+            for relation, count in conn.execute(
+                f"""
+                SELECT COALESCE(session_relation_kind,'top_level'),COUNT(*)
+                FROM sessions WHERE id IN ({placeholders})
+                GROUP BY COALESCE(session_relation_kind,'top_level')
+                """,
+                ids,
+            )
+        },
+        "initiation_kinds": {
+            str(kind): int(count)
+            for kind, count in conn.execute(
+                f"""
+                SELECT initiation_kind,COUNT(*) FROM interactions
+                WHERE session_id IN ({placeholders})
+                GROUP BY initiation_kind
+                """,
+                ids,
+            )
+        },
+    }
+
+
 CONFIGURATION_FILTER_COLUMNS = {
     "models": "model_name_exact",
     "model_providers": "provider",
-    "model_families": "model_family",
+    "model_lines": "model_line",
+    "model_generations": "model_generation",
+    "model_versions": "model_version",
+    "model_gradations": "model_gradation",
+    "model_variants": "model_variant",
     "model_revisions": "model_revision",
     "reasoning_efforts": "reasoning_effort",
     "speed_tiers": "speed_tier",
     "service_tiers": "service_tier",
+    "request_tiers": "request_tier",
     "model_modes": "mode",
 }
 
@@ -460,11 +571,11 @@ def _configuration_predicates(
 def _event_predicate(filters: dict[str, Any]) -> tuple[str, list[Any]]:
     where: list[str] = []
     params: list[Any] = []
-    _in_clause("s.global_id", filters.get("session_ids") or [], where, params)
-    _in_clause("e.global_id", filters.get("event_ids") or [], where, params)
+    _in_clause("s.session_entity_id", filters.get("session_ids") or [], where, params)
+    _in_clause("e.event_entity_id", filters.get("event_ids") or [], where, params)
     _in_clause("e.interaction_id", filters.get("interaction_ids") or [], where, params)
     _in_clause("e.model_turn_id", filters.get("model_turn_ids") or [], where, params)
-    _in_clause("s.source_system_id", filters.get("source_system_ids") or [], where, params)
+    _in_clause("s.source_system_key", filters.get("source_system_ids") or [], where, params)
     _in_clause("e.event_kind", filters.get("event_kinds") or [], where, params)
     _in_clause("e.tool_name", filters.get("tool_names") or [], where, params)
     _in_clause("e.actor_kind", filters.get("actor_kinds") or [], where, params)
@@ -493,10 +604,10 @@ def _event_predicate(filters: dict[str, Any]) -> tuple[str, list[Any]]:
         _in_clause("COALESCE(e.normalized_status,e.source_status)", statuses, where, params)
     _configuration_predicates(filters, where, params)
     if filters.get("since") is not None:
-        where.append("COALESCE(e.event_at,e.timestamp)>=?")
+        where.append("e.event_at>=?")
         params.append(filters["since"])
     if filters.get("until") is not None:
-        where.append("COALESCE(e.event_at,e.timestamp)<=?")
+        where.append("e.event_at<=?")
         params.append(filters["until"])
     if filters.get("artifact"):
         where.append("e.artifact_path LIKE ? ESCAPE '\\'")
@@ -513,7 +624,7 @@ def _event_predicate(filters: dict[str, Any]) -> tuple[str, list[Any]]:
 
 
 def _expanded_event_predicate(
-    conn,
+    conn: sqlite3.Connection,
     request: dict[str, Any],
 ) -> tuple[str, list[Any]]:
     """Resolve explicit expansion/window selectors inside one store."""
@@ -538,8 +649,8 @@ def _expanded_event_predicate(
         placeholders = ",".join("?" for _ in event_ids)
         anchors = list(conn.execute(
             f"""
-            SELECT global_id,session_id,sequence_no,interaction_id,model_turn_id
-            FROM events WHERE global_id IN ({placeholders})
+            SELECT event_entity_id,session_id,sequence_no,interaction_id,model_turn_id
+            FROM events WHERE event_entity_id IN ({placeholders})
             """,
             event_ids,
         ))
@@ -547,7 +658,7 @@ def _expanded_event_predicate(
     branch_params: list[Any] = []
     if event_ids:
         branches.append(
-            f"e.global_id IN ({','.join('?' for _ in event_ids)})"
+            f"e.event_entity_id IN ({','.join('?' for _ in event_ids)})"
         )
         branch_params.extend(event_ids)
     if expand == "interaction":
@@ -591,48 +702,57 @@ def _expanded_event_predicate(
     )
 
 
+def store_project_ids(conn: sqlite3.Connection) -> list[str]:
+    """The Project identities one store holds, in stable order.
+
+    A store normally holds one Project, but a merged or relocated store can
+    hold several, and both provenance and selection report them. Ordered by
+    identity so two runs over the same store agree.
+    """
+    return [str(row[0]) for row in conn.execute("SELECT id FROM projects ORDER BY id")]
+
+
 def _store_provenance(store: dict[str, Any]) -> dict[str, Any]:
     conn = store["conn"]
     meta = dict(conn.execute("SELECT key,value FROM store_meta"))
     policies = [row[0] for row in conn.execute(
-        "SELECT DISTINCT policy_sha256 FROM processing_runs ORDER BY policy_sha256"
+        "SELECT DISTINCT policy_digest FROM processing_runs ORDER BY policy_digest"
     )] if conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='processing_runs'"
     ).fetchone() else []
     availability = dict(conn.execute(
         "SELECT availability,COUNT(*) FROM sources GROUP BY availability"
     ))
-    project_ids = [row[0] for row in conn.execute("SELECT id FROM projects ORDER BY id")]
+    project_ids = store_project_ids(conn)
     return {
         "project_ids": project_ids,
-        "project_path": str(store["project_root"]),
+        "project_path": str(store["project_path"]),
         "store_path": str(store["path"]),
-        "snapshot_id": meta.get("snapshot_id"),
+        # Read from the snapshot pointer rather than the store: the identity
+        # lives in the manifest above the stores (13.4.8).
+        "snapshot_id": _store_snapshot_id(store),
         "snapshot_created_at": meta.get("snapshot_created_at"),
-        "package_digest": meta.get("package_digest"),
+        "contract_digest": meta.get("contract_digest"),
         "format_version": meta.get("format_version"),
         "decoder_version": meta.get("decoder_version"),
         "validator_version": meta.get("validator_version"),
-        "policy_sha256": policies,
+        "policy_digest": policies,
         "source_availability": availability,
         "selection_kind": store.get("selection_kind"),
-        "selection_sha256": store.get("selection_sha256"),
-        "resolved_selection_sha256": store.get(
-            "resolved_selection_sha256"
+        "selection_digest": store.get("selection_digest"),
+        "resolved_selection_digest": store.get(
+            "resolved_selection_digest"
         ),
     }
 
 
 def selected_project_ids(stores: list[dict[str, Any]]) -> list[str]:
-    """Return stable Project IDs, with an explicit legacy location fallback."""
+    """Return the stable Project IDs the selected stores contain."""
     selected: set[str] = set()
     for store in stores:
-        ids = [row[0] for row in store["conn"].execute("SELECT id FROM projects")]
-        if ids:
-            selected.update(str(value) for value in ids)
-        else:
-            digest = hashlib.sha256(str(store["project_root"]).encode("utf-8")).hexdigest()
-            selected.add(f"codess:legacy-project-location:sha256:{digest}")
+        selected.update(
+            str(row[0]) for row in store["conn"].execute("SELECT id FROM projects")
+        )
     return sorted(selected)
 
 
@@ -651,17 +771,7 @@ def selected_project_snapshots(
     """Return canonical Project/snapshot observation inputs."""
     selected = []
     for store in stores:
-        project_ids = [
-            str(row[0])
-            for row in store["conn"].execute(
-                "SELECT id FROM projects ORDER BY id"
-            )
-        ]
-        if not project_ids:
-            digest = hashlib.sha256(
-                str(store["project_root"]).encode("utf-8")
-            ).hexdigest()
-            project_ids = [f"codess:legacy-project-location:sha256:{digest}"]
+        project_ids = store_project_ids(store["conn"])
         snapshot_id = _store_snapshot_id(store)
         selected.extend({
             "project_id": project_id,
@@ -678,22 +788,24 @@ def selected_project_snapshots(
 
 
 def _observation_id(
-    store: dict[str, Any], entity_kind: str, global_id: str | None,
+    store: dict[str, Any], entity_kind: str, entity_id: str | None,
 ) -> str | None:
     snapshot_id = _store_snapshot_id(store)
-    if not snapshot_id or not global_id:
+    if not snapshot_id or not entity_id:
         return None
     digest = content_hash({
         "project_id": store.get("project_id"),
         "snapshot_id": snapshot_id,
         "store": Path(store["path"]).name,
         "entity_kind": entity_kind,
-        "global_id": global_id,
-    }).removeprefix("sha256:")
-    return f"codess:observation:sha256:{digest}"
+        "entity_id": entity_id,
+    }).removeprefix("digest:")
+    return observation_row_id(digest)
 
 
-def _event_heap_sort_key(record, store: dict[str, Any]) -> tuple:
+def _event_heap_sort_key(
+    record: sqlite3.Row, store: dict[str, Any],
+) -> tuple:
     timestamp = record["event_at"]
     try:
         ordered_time = float(timestamp) if timestamp is not None else 0.0
@@ -702,10 +814,10 @@ def _event_heap_sort_key(record, store: dict[str, Any]) -> tuple:
     return (
         timestamp is None,
         ordered_time,
-        record["global_session_id"] or "",
+        record["session_entity_id"] or "",
         record["sequence_no"] if record["sequence_no"] is not None else -1,
-        record["global_id"] or "",
-        str(store.get("project_id") or store["project_root"]),
+        record["event_entity_id"] or "",
+        str(store.get("project_id") or store["project_path"]),
         str(store["path"]),
     )
 
@@ -726,26 +838,26 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
     row_limit = request.get("limit")
     limit_sql = " LIMIT ?" if row_limit is not None else ""
     sql_template = """
-        SELECT e.global_id,e.event_id,s.global_id AS global_session_id,e.session_id,
-               s.project_id,s.source_system_id,s.project_path,
+        SELECT e.event_entity_id,e.event_id,s.session_entity_id AS session_entity_id,e.session_id,
+               s.project_id,s.source_system_key,s.project_path,
                e.sequence_no,e.interaction_id,
                e.model_turn_id,e.event_kind,e.actor_kind,e.content_role,e.origin_kind,
-               COALESCE(e.event_at,e.timestamp) AS event_at,e.event_at_basis,
+               e.event_at AS event_at,e.event_at_basis,
                e.source_record_locator,e.source_record_type,e.source_record_subtype,
                e.content,e.content_len,e.tool_name,e.tool_input,e.tool_output,
                COALESCE(e.normalized_status,e.source_status) AS status,
                e.artifact_path,e.source_file,
-               mc.provider,mc.model_family,mc.model_name_exact,
+               mc.provider,mc.model_gradation,mc.model_name_exact,
                mc.model_revision,mc.reasoning_effort,mc.speed_tier,
                mc.service_tier,mc.mode,e.metadata
         FROM events e JOIN sessions s ON s.id=e.session_id
         LEFT JOIN interactions i ON i.id=e.interaction_id
         LEFT JOIN model_turns mt ON mt.id=e.model_turn_id
-        LEFT JOIN model_configurations mc ON mc.id=mt.model_config_id
+        LEFT JOIN model_params mc ON mc.id=mt.model_param_id
         WHERE {predicate}
-        ORDER BY (COALESCE(e.event_at,e.timestamp) IS NULL),
-                 COALESCE(e.event_at,e.timestamp),s.global_id,
-                 e.sequence_no,e.global_id,e.id
+        ORDER BY (e.event_at IS NULL),
+                 e.event_at,s.session_entity_id,
+                 e.sequence_no,e.event_entity_id,e.id
         {limit_sql}
     """
 
@@ -804,17 +916,17 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
             configuration_provenance_scope = None
         rows.append({
             "observation_id": _observation_id(
-                store, "event", record["global_id"]
+                store, "event", record["event_entity_id"]
             ),
-            "global_event_id": record["global_id"],
+            "event_entity_id": record["event_entity_id"],
             "event_id": record["event_id"],
-            "global_session_id": record["global_session_id"],
+            "session_entity_id": record["session_entity_id"],
             "session_id": record["session_id"],
             "project_id": record["project_id"] or store.get("project_id"),
             "snapshot_id": _store_snapshot_id(store),
-            "project_path": str(store["project_root"]),
+            "project_path": str(store["project_path"]),
             "source_project_path": record["project_path"],
-            "source_system_id": record["source_system_id"],
+            "source_system_key": record["source_system_key"],
             "sequence_no": record["sequence_no"],
             "interaction_id": record["interaction_id"],
             "model_turn_id": record["model_turn_id"],
@@ -839,7 +951,7 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
             "source_file": record["source_file"],
             "model": record["model_name_exact"],
             "model_provider": record["provider"],
-            "model_family": record["model_family"],
+            "model_gradation": record["model_gradation"],
             "model_revision": record["model_revision"],
             "reasoning_effort": record["reasoning_effort"],
             "speed_tier": record["speed_tier"],
@@ -868,9 +980,9 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
     facet_limit = request.get("facet_limit", 50)
     facets: dict[str, list[dict[str, Any]]] = {}
     for field in (
-        "source_system_id", "event_kind", "actor_kind", "content_role",
+        "source_system_key", "event_kind", "actor_kind", "content_role",
         "origin_kind", "tool_name", "status", "model", "model_provider",
-        "model_family", "model_revision", "reasoning_effort", "speed_tier",
+        "model_gradation", "model_revision", "reasoning_effort", "speed_tier",
         "service_tier", "model_mode",
     ):
         counts: dict[str, int] = {}
@@ -917,8 +1029,8 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
                 "occurrences": len(members),
                 "first_event_at": min(times) if times else None,
                 "last_event_at": max(times) if times else None,
-                "global_event_ids": sorted(
-                    row["global_event_id"] for row in members
+                "event_entity_ids": sorted(
+                    row["event_entity_id"] for row in members
                 ),
                 "observation_ids": sorted(
                     row["observation_id"] for row in members
@@ -940,18 +1052,18 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
         repetition_groups = repetition_groups[:facet_limit]
 
     observations_by_snapshot: dict[str, int] = {}
-    global_occurrences: dict[str, int] = {}
+    entity_occurrences: dict[str, int] = {}
     for row in rows:
         snapshot = row.get("snapshot_id") or "working"
         observations_by_snapshot[snapshot] = (
             observations_by_snapshot.get(snapshot, 0) + 1
         )
-        identity = row.get("global_event_id")
+        identity = row.get("event_entity_id")
         if identity:
-            global_occurrences[identity] = global_occurrences.get(identity, 0) + 1
-    duplicate_global_ids = sorted(
+            entity_occurrences[identity] = entity_occurrences.get(identity, 0) + 1
+    duplicate_entity_ids = sorted(
         identity
-        for identity, count in global_occurrences.items()
+        for identity, count in entity_occurrences.items()
         if count > 1
     )
     return rows, {
@@ -961,8 +1073,8 @@ def _event_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[
         "facets_from_returned_rows": facets,
         "repetition_groups_from_complete_returned_content": repetition_groups,
         "observations_by_snapshot": dict(sorted(observations_by_snapshot.items())),
-        "duplicate_global_event_ids": duplicate_global_ids[:facet_limit],
-        "duplicate_global_event_id_count": len(duplicate_global_ids),
+        "duplicate_event_entity_ids": duplicate_entity_ids[:facet_limit],
+        "duplicate_event_entity_id_count": len(duplicate_entity_ids),
         "truncated": bool(byte_truncated or row_limit_reached),
         "truncation_reasons": (["byte_limit"] if byte_truncated else [])
         + (["row_limit_reached"] if row_limit_reached else []),
@@ -973,8 +1085,8 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
     filters = request["filters"]
     where: list[str] = []
     params: list[Any] = []
-    _in_clause("s.global_id", filters.get("session_ids") or [], where, params)
-    _in_clause("s.source_system_id", filters.get("source_system_ids") or [], where, params)
+    _in_clause("s.session_entity_id", filters.get("session_ids") or [], where, params)
+    _in_clause("s.source_system_key", filters.get("source_system_ids") or [], where, params)
     _in_clause(
         "s.parent_session_id",
         filters.get("parent_session_ids") or [],
@@ -994,10 +1106,10 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
     )
     if configuration_where:
         where.append(
-            "EXISTS (SELECT 1 FROM model_configurations mc WHERE "
-            "(mc.id=s.default_model_config_id OR EXISTS ("
+            "EXISTS (SELECT 1 FROM model_params mc WHERE "
+            "(mc.id=s.session_model_param_id OR EXISTS ("
             "SELECT 1 FROM model_turns mt WHERE mt.session_id=s.id "
-            "AND mt.model_config_id=mc.id)) AND "
+            "AND mt.model_param_id=mc.id)) AND "
             + " AND ".join(configuration_where)
             + ")"
         )
@@ -1011,16 +1123,14 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
     predicate = " AND ".join(where) if where else "1"
     rows = []
     for store in stores:
-        session_columns = {
-            row[1] for row in store["conn"].execute("PRAGMA table_info(sessions)")
-        }
+        session_columns = column_names(store["conn"], "sessions")
         path_obsolete = (
             "s.path_obsolete" if "path_obsolete" in session_columns
             else "0 AS path_obsolete"
         )
         for row in store["conn"].execute(f"""
-            SELECT s.global_id,s.id,s.source_system_id,s.vendor_session_id,
-                   s.vendor_name,s.product_name,s.harness_name,s.harness_version,
+            SELECT s.session_entity_id,s.id,s.source_system_key,s.vendor_session_id,
+                   s.vendor_name,s.harness_name,s.harness_version,
                    s.started_at,s.ended_at,s.time_basis,s.source_cwd,
                    s.project_id,s.project_path,s.parent_session_id,
                    s.session_relation_kind,
@@ -1029,46 +1139,46 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
                    (SELECT COUNT(*) FROM model_turns mt WHERE mt.session_id=s.id) model_turns,
                    (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id) events
             FROM sessions s WHERE {predicate}
-            ORDER BY COALESCE(s.ended_at,s.started_at,s.source_mtime) DESC,s.global_id
+            ORDER BY COALESCE(s.ended_at,s.started_at,s.source_mtime) DESC,s.session_entity_id
         """, params):
             item = dict(row)
             source_project_path = item.pop("source_cwd") or item["project_path"]
             rows.append({
                 **item,
                 "observation_id": _observation_id(
-                    store, "session", item["global_id"]
+                    store, "session", item["session_entity_id"]
                 ),
                 "snapshot_id": _store_snapshot_id(store),
-                "project_path": str(store["project_root"]),
+                "project_path": str(store["project_path"]),
                 "source_project_path": source_project_path,
             })
-    rows.sort(key=lambda row: (-(row["ended_at"] or row["started_at"] or 0), row["global_id"]))
+    rows.sort(key=lambda row: (-(row["ended_at"] or row["started_at"] or 0), row["session_entity_id"]))
     matched = len(rows)
     if request.get("limit") is not None:
         rows = rows[:request["limit"]]
     observations_by_snapshot: dict[str, int] = {}
-    global_occurrences: dict[str, int] = {}
+    entity_occurrences: dict[str, int] = {}
     for row in rows:
         snapshot = row.get("snapshot_id") or "working"
         observations_by_snapshot[snapshot] = (
             observations_by_snapshot.get(snapshot, 0) + 1
         )
-        identity = row.get("global_id")
+        identity = row.get("session_entity_id")
         if identity:
-            global_occurrences[identity] = global_occurrences.get(identity, 0) + 1
-    duplicate_global_ids = sorted(
+            entity_occurrences[identity] = entity_occurrences.get(identity, 0) + 1
+    duplicate_entity_ids = sorted(
         identity
-        for identity, count in global_occurrences.items()
+        for identity, count in entity_occurrences.items()
         if count > 1
     )
     return rows, {
         "matched_rows": matched,
         "returned_rows": len(rows),
         "observations_by_snapshot": dict(sorted(observations_by_snapshot.items())),
-        "duplicate_global_session_ids": duplicate_global_ids[
+        "duplicate_session_entity_ids": duplicate_entity_ids[
             :request.get("facet_limit", 50)
         ],
-        "duplicate_global_session_id_count": len(duplicate_global_ids),
+        "duplicate_session_entity_id_count": len(duplicate_entity_ids),
         "truncated": len(rows) < matched,
         "truncation_reasons": ["row_limit"] if len(rows) < matched else [],
     }
@@ -1076,16 +1186,13 @@ def _session_rows(stores: list[dict[str, Any]], request: dict[str, Any]) -> tupl
 
 def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[list[dict], dict]:
     predicate, params = _event_predicate(request["filters"])
-    totals = {key: 0 for key in (
-        "sessions", "interactions", "model_turns", "events", "content_characters",
-        "tool_events", "artifact_events",
-    )}
+    totals = dict.fromkeys(("sessions", "interactions", "model_turns", "events", "content_characters", "tool_events", "artifact_events"), 0)
     times: list[float] = []
     vendors: dict[str, int] = {}
     kinds: dict[str, int] = {}
     models: dict[str, int] = {}
     providers: dict[str, int] = {}
-    families: dict[str, int] = {}
+    gradations: dict[str, int] = {}
     efforts: dict[str, int] = {}
     speeds: dict[str, int] = {}
     service_tiers: dict[str, int] = {}
@@ -1098,36 +1205,42 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
     monthly_tool_result_interactions: dict[str, set[tuple[int, str]]] = {}
     latest_model_response_by_interaction: dict[tuple[int, str], float] = {}
 
+    # A day and a month key per Event, cached by the millisecond timestamp
+    # truncated to its day. Consecutive Events in a Session almost always share
+    # a day, so the conversion runs once per day rather than once per Event.
+    #
+    # Measured: `overview` over 20,000 Events cost 5.64 s at a flat 282 us/row
+    # -- it did not amortize, while every other query action did. Profiling
+    # attributed it to 10,000 `strftime` and 20,000 `fromtimestamp` calls for
+    # 5,000 Events, which is three datetime constructions per row for two values
+    # that change at most once a day. This is the same class of defect Report R4
+    # names in the reporting facility: formatting a timestamp on a path that runs
+    # per record.
+    _calendar: dict[int, tuple[str, str]] = {}
+
+    def calendar_keys(timestamp: float) -> tuple[str, str]:
+        """The ISO day and `YYYY-MM` month for one vendor timestamp."""
+        day_index = int(timestamp // DAY_MS)
+        keys = _calendar.get(day_index)
+        if keys is None:
+            moment = datetime.fromtimestamp(timestamp / 1000, tz=UTC)
+            keys = (moment.date().isoformat(), moment.strftime("%Y-%m"))
+            _calendar[day_index] = keys
+        return keys
+
     def day_bucket(timestamp: float) -> dict[str, Any]:
-        day = datetime.fromtimestamp(
-            timestamp / 1000, tz=timezone.utc
-        ).date().isoformat()
-        return daily.setdefault(day, {
-            "day": day,
-            "events": 0,
-            "content_characters": 0,
-            "sessions": set(),
-            "interactions": set(),
-            "first_event_at": timestamp,
-            "last_event_at": timestamp,
-            "first_human_prompt_at": None,
-            "last_human_prompt_at": None,
-            "last_human_prompt_interaction_key": None,
-            "human_prompts": 0,
-            "human_prompt_characters": 0,
-            "model_outputs": 0,
-            "model_output_characters": 0,
-            "human_prompt_interactions": set(),
-            "tool_calls": 0,
-            "tool_results": 0,
-            "tool_input_characters": 0,
-            "tool_output_characters": 0,
-            "tool_call_interactions": set(),
-            "tool_result_interactions": set(),
-            "tool_calls_by_name": {},
-            "actor_activity": {},
-            "session_relation_activity": {},
-        })
+        day = calendar_keys(timestamp)[0]
+        return daily.setdefault(day, activity_bucket(
+            day,
+            first_event_at=timestamp,
+            last_event_at=timestamp,
+            first_human_prompt_at=None,
+            last_human_prompt_at=None,
+            last_human_prompt_interaction_key=None,
+            tool_calls_by_name={},
+            actor_activity={},
+            session_relation_activity={},
+        ))
 
     def actor_bucket(bucket: dict[str, Any], actor: str) -> dict[str, Any]:
         return bucket["actor_activity"].setdefault(actor, {
@@ -1154,54 +1267,30 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
             SELECT DISTINCT s.id FROM events e JOIN sessions s ON s.id=e.session_id
             LEFT JOIN interactions i ON i.id=e.interaction_id
             LEFT JOIN model_turns mt ON mt.id=e.model_turn_id
-            LEFT JOIN model_configurations mc ON mc.id=mt.model_config_id
+            LEFT JOIN model_params mc ON mc.id=mt.model_param_id
             WHERE {predicate}
         """, params)}
         totals["sessions"] += len(selected_sessions)
-        if selected_sessions:
-            placeholders = ",".join("?" for _ in selected_sessions)
-            ids = sorted(selected_sessions)
-            totals["interactions"] += conn.execute(
-                f"SELECT COUNT(*) FROM interactions WHERE session_id IN ({placeholders})", ids
-            ).fetchone()[0]
-            totals["model_turns"] += conn.execute(
-                f"SELECT COUNT(*) FROM model_turns WHERE session_id IN ({placeholders})", ids
-            ).fetchone()[0]
-            for relation, count in conn.execute(
-                f"""
-                SELECT COALESCE(session_relation_kind,'top_level'),COUNT(*)
-                FROM sessions WHERE id IN ({placeholders})
-                GROUP BY COALESCE(session_relation_kind,'top_level')
-                """,
-                ids,
-            ):
-                session_relations[relation] = (
-                    session_relations.get(relation, 0) + int(count)
-                )
-            for initiation, count in conn.execute(
-                f"""
-                SELECT initiation_kind,COUNT(*) FROM interactions
-                WHERE session_id IN ({placeholders})
-                GROUP BY initiation_kind
-                """,
-                ids,
-            ):
-                initiation_kinds[initiation] = (
-                    initiation_kinds.get(initiation, 0) + int(count)
-                )
+        structure = session_structure_counts(conn, selected_sessions)
+        totals["interactions"] += structure["interactions"]
+        totals["model_turns"] += structure["model_turns"]
+        for relation, count in structure["session_relations"].items():
+            session_relations[relation] = session_relations.get(relation, 0) + count
+        for initiation, count in structure["initiation_kinds"].items():
+            initiation_kinds[initiation] = initiation_kinds.get(initiation, 0) + count
         for row in conn.execute(f"""
-            SELECT s.source_system_id,e.event_kind,COALESCE(e.event_at,e.timestamp),
+            SELECT s.source_system_key,e.event_kind,e.event_at,
                    LENGTH(COALESCE(e.content,'')),e.tool_name,e.artifact_path,
-                   mc.provider,mc.model_family,mc.model_name_exact,mc.model_revision,
+                   mc.provider,mc.model_gradation,mc.model_name_exact,mc.model_revision,
                    mc.reasoning_effort,mc.speed_tier,mc.service_tier,mc.mode,
-                   e.actor_kind,e.content_role,s.global_id,e.interaction_id,e.global_id,
+                   e.actor_kind,e.content_role,s.session_entity_id,e.interaction_id,e.event_entity_id,
                    COALESCE(s.session_relation_kind,'top_level'),
                    LENGTH(COALESCE(e.tool_input,'')),
                    LENGTH(COALESCE(e.tool_output,''))
             FROM events e JOIN sessions s ON s.id=e.session_id
             LEFT JOIN interactions i ON i.id=e.interaction_id
             LEFT JOIN model_turns mt ON mt.id=e.model_turn_id
-            LEFT JOIN model_configurations mc ON mc.id=mt.model_config_id
+            LEFT JOIN model_params mc ON mc.id=mt.model_param_id
             WHERE {predicate}
         """, params):
             totals["events"] += 1
@@ -1214,9 +1303,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
                 timestamp = float(row[2])
                 times.append(timestamp)
                 bucket = day_bucket(timestamp)
-                month_key = datetime.fromtimestamp(
-                    timestamp / 1000, tz=timezone.utc
-                ).strftime("%Y-%m")
+                month_key = calendar_keys(timestamp)[1]
                 bucket["events"] += 1
                 bucket["content_characters"] += int(row[3])
                 bucket["sessions"].add((store_index, row[16]))
@@ -1316,7 +1403,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
                 models[row[8]] = models.get(row[8], 0) + 1
                 configurations.add(tuple(row[6:14]))
             for value, bucket in (
-                (row[6], providers), (row[7], families),
+                (row[6], providers), (row[7], gradations),
                 (row[10], efforts), (row[11], speeds),
                 (row[12], service_tiers), (row[13], modes),
             ):
@@ -1324,7 +1411,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
                     bucket[value] = bucket.get(value, 0) + 1
     times.sort()
     span = (times[-1] - times[0]) if len(times) > 1 else 0
-    gaps = [max(0.0, right - left) for left, right in zip(times, times[1:])]
+    gaps = [max(0.0, right - left) for left, right in itertools.pairwise(times)]
     caps = request.get("active_gap_caps_minutes", [5, 30, 120])
     active = {
         str(cap): sum(min(gap, cap * 60_000) for gap in gaps)
@@ -1343,9 +1430,7 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
     }
     events_by_month: dict[str, int] = {}
     for timestamp in times:
-        month = datetime.fromtimestamp(
-            timestamp / 1000, tz=timezone.utc
-        ).strftime("%Y-%m")
+        month = calendar_keys(timestamp)[1]
         events_by_month[month] = events_by_month.get(month, 0) + 1
     daily_activity: list[dict[str, Any]] = []
     tool_activity_by_month: dict[str, dict[str, int]] = {}
@@ -1504,11 +1589,11 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
     daily_activity = daily_activity[-daily_activity_limit:]
     summary = {
         **totals,
-        "model_configurations": len(configurations),
+        "model_params": len(configurations),
         "first_event_at": times[0] if times else None,
         "last_event_at": times[-1] if times else None,
         "elapsed_span_ms": span,
-        "event_days": len({datetime.fromtimestamp(ts / 1000, tz=timezone.utc).date().isoformat() for ts in times}),
+        "event_days": len({datetime.fromtimestamp(ts / 1000, tz=UTC).date().isoformat() for ts in times}),
         "active_time_estimates_ms_by_gap_cap_minutes": active,
         "event_gap_histogram": gap_histogram,
         "events_by_utc_month": dict(sorted(events_by_month.items())),
@@ -1527,8 +1612,8 @@ def _overview(stores: list[dict[str, Any]], request: dict[str, Any]) -> tuple[li
         "model_providers_by_event": dict(sorted(
             providers.items(), key=lambda item: (-item[1], item[0])
         )),
-        "model_families_by_event": dict(sorted(
-            families.items(), key=lambda item: (-item[1], item[0])
+        "model_gradations_by_event": dict(sorted(
+            gradations.items(), key=lambda item: (-item[1], item[0])
         )),
         "reasoning_efforts_by_event": dict(sorted(
             efforts.items(), key=lambda item: (-item[1], item[0])
@@ -1601,12 +1686,10 @@ def execute(
         )
     if any(row.get("content_complete") is False for row in rows):
         limitations.append("one or more returned rows has incomplete normalized content")
-    if any(value.startswith("codess:legacy-project-location:") for value in observed_project_ids):
-        limitations.append("one or more legacy stores lacks a stable Project ID; scope is location-bound")
     result = {
         "format": RESULT_FORMAT,
         "processor": QUERY_PROCESSOR,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now_iso(system_clock),
         "request": canonical_request,
         "request_hash": content_hash(canonical_request),
         "provenance": [_store_provenance(store) for store in stores],
@@ -1628,14 +1711,14 @@ def execute(
     result["result_hash"] = content_hash({
         "request_hash": result["request_hash"],
         "snapshots": sorted(
-            {(item.get("snapshot_id"), item.get("package_digest"))
+            {(item.get("snapshot_id"), item.get("contract_digest"))
              for item in result["provenance"]},
             key=lambda item: tuple(str(value or "") for value in item),
         ),
         "row_ids": [
             row.get("observation_id")
-            or row.get("global_event_id")
-            or row.get("global_session_id")
+            or row.get("event_entity_id")
+            or row.get("session_entity_id")
             for row in rows
         ],
         "summary": summary,
@@ -1654,7 +1737,7 @@ def compare_results(prior: dict[str, Any], current: dict[str, Any]) -> dict[str,
 
     issues = []
     if prior.get("format") != RESULT_FORMAT or current.get("format") != RESULT_FORMAT:
-        issues.append("both inputs must be codess.query-result/1")
+        issues.append(f"both inputs must be {RESULT_FORMAT}")
     if content_hash(logical_request(prior)) != content_hash(
         logical_request(current)
     ):
@@ -1670,9 +1753,9 @@ def compare_results(prior: dict[str, Any], current: dict[str, Any]) -> dict[str,
         for row in rows:
             if not isinstance(row, dict):
                 shapes.add("invalid")
-            elif row.get("global_event_id"):
+            elif row.get("event_entity_id"):
                 shapes.add("event")
-            elif row.get("global_session_id"):
+            elif row.get("session_entity_id"):
                 shapes.add("session")
             else:
                 shapes.add("anonymous")
@@ -1726,8 +1809,8 @@ def compare_results(prior: dict[str, Any], current: dict[str, Any]) -> dict[str,
                 }
                 continue
             identity = str(
-                row.get("global_event_id")
-                or row.get("global_session_id")
+                row.get("event_entity_id")
+                or row.get("session_entity_id")
                 or f"row:{index}:{content_hash(row)}"
             )
             if identity in found:

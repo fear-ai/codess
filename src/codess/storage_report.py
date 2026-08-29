@@ -1,46 +1,50 @@
 """Dated storage observations for CoSchema stores, snapshots, and Cursor.
+
+**Reads core tables directly** for row counts and byte sizes across every
+retained snapshot, including stores whose contract no longer matches -- which
+is precisely when a storage report is wanted and when the query layer would
+refuse.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from codess.config import MAX_CODESS_DB_BYTES, MAX_CURSOR_DB_BYTES
-from codess.fileio import write_json_atomic
-from codess.token_usage import collect_token_usage
+from codess.config import (
+    LARGE_RAW_OBJECT_BYTES,
+    MAX_CODESS_DB_BYTES,
+    MAX_CURSOR_DB_BYTES,
+    RAW_MANIFEST_FILE,
+)
+from codess.fileio import open_readonly, write_json_atomic
+from codess.registry_store import never_ingested_entries
 from codess.resources import allocated_bytes, file_usage, storage_usage, tree_usage
+from codess.schema_contract import FORMAT_VERSION
+from codess.snapshot import SNAPSHOTS_DIR, snapshot_generations, snapshot_stores
+from codess.store import table_counts, table_names
+from codess.token_usage import collect_token_usage
+from codess.wallclock import system_clock
 
 REPORT_FORMAT = "codess.storage-observation/1"
 
-_TABLE_COUNT_QUERIES = {
-    "projects": 'SELECT COUNT(*) FROM "projects"',
-    "sources": 'SELECT COUNT(*) FROM "sources"',
-    "sessions": 'SELECT COUNT(*) FROM "sessions"',
-    "interactions": 'SELECT COUNT(*) FROM "interactions"',
-    "model_turns": 'SELECT COUNT(*) FROM "model_turns"',
-    "events": 'SELECT COUNT(*) FROM "events"',
-    "source_records": 'SELECT COUNT(*) FROM "source_records"',
-    "content_objects": 'SELECT COUNT(*) FROM "content_objects"',
-    "tool_invocations": 'SELECT COUNT(*) FROM "tool_invocations"',
-    "tool_results": 'SELECT COUNT(*) FROM "tool_results"',
-    "artifacts": 'SELECT COUNT(*) FROM "artifacts"',
-}
+PENDING_PATHS_REPORTED = 10
+"""How many never-ingested paths the warning names before counting the rest."""
 
+REPORTED_TABLES = (
+    "projects", "sources", "sessions", "interactions", "model_turns", "events",
+    "source_records", "content_objects", "tool_invocations", "tool_results",
+    "artifacts",
+)
+"""The content tables this report counts.
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+A deliberate subset: the report describes what an operator's storage holds,
+so it names the entities they reason about rather than every table. The
+counting itself is `store.table_counts`, which reads the store's own catalog
+-- this list selects, it does not restate the schema."""
 
-
-def _tables(conn: sqlite3.Connection) -> set[str]:
-    return {
-        str(row[0]) for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
-    }
 
 
 def inspect_sqlite(path: Path) -> dict[str, Any]:
@@ -50,8 +54,7 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
         "allocated_bytes": allocated_bytes(path),
     }
     try:
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
-        conn.execute("PRAGMA query_only = ON")
+        conn = open_readonly(path)
         try:
             page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
             page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
@@ -64,11 +67,10 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
                 "utilization_ratio": round(used_pages / page_count, 6)
                 if page_count else None,
             }
-            tables = _tables(conn)
-            counts = {}
-            for table, query in _TABLE_COUNT_QUERIES.items():
-                if table in tables:
-                    counts[table] = int(conn.execute(query).fetchone()[0])
+            tables = table_names(conn)
+            # The report describes storage, so it counts the content tables an
+            # operator reads about rather than every table in the store.
+            counts = table_counts(conn, REPORTED_TABLES)
             result["counts"] = counts
             if "events" in tables:
                 row = conn.execute(
@@ -97,12 +99,12 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
                         "records": int(value[0]), "characters": int(value[1])
                     }
             if "sessions" in tables and "events" in tables:
-                rows = [dict(zip(("session_id", "source", "events", "characters"), row)) for row in conn.execute(
-                    "SELECT s.global_id, s.source, COUNT(e.id), "
+                rows = [dict(zip(("session_id", "source", "events", "characters"), row, strict=False)) for row in conn.execute(
+                    "SELECT s.session_entity_id, s.adapter_key, COUNT(e.id), "
                     "COALESCE(SUM(COALESCE(e.content_len,length(e.content),0) + "
                     "COALESCE(length(e.tool_input),0) + COALESCE(length(e.tool_output),0)),0) "
                     "FROM sessions s LEFT JOIN events e ON e.session_id=s.id "
-                    "GROUP BY s.id ORDER BY 3 DESC, 4 DESC, s.global_id LIMIT 10"
+                    "GROUP BY s.id ORDER BY 3 DESC, 4 DESC, s.session_entity_id LIMIT 10"
                 )]
                 small = int(conn.execute(
                     "SELECT COUNT(*) FROM (SELECT s.id FROM sessions s LEFT JOIN events e "
@@ -114,7 +116,12 @@ def inspect_sqlite(path: Path) -> dict[str, Any]:
                 }
             result["tokens"] = {
                 "availability": "not_normalized",
-                "reason": "CoSchema v4 does not yet persist vendor token observations",
+                # The format is read rather than spelled: this reason said v4
+                # two formats after the store stopped being one.
+                "reason": (
+                    f"CoSchema format {FORMAT_VERSION} does not persist vendor "
+                    "token observations"
+                ),
             }
         finally:
             conn.close()
@@ -132,7 +139,7 @@ def _load_pointer(path: Path) -> Path | None:
         return None
 
 
-def current_store_paths(registry: Path) -> tuple[list[Path], set[Path]]:
+def all_store_paths(registry: Path) -> tuple[list[Path], set[Path]]:
     stores: list[Path] = []
     current_snapshots: set[Path] = set()
     projects_root = registry / "projects"
@@ -143,15 +150,20 @@ def current_store_paths(registry: Path) -> tuple[list[Path], set[Path]]:
         if snapshot is None or not snapshot.is_dir():
             continue
         current_snapshots.add(snapshot.resolve())
-        stores.extend(sorted(snapshot.glob("*.db")))
+        stores.extend(snapshot_stores(snapshot))
     return stores, current_snapshots
 
 
 def _snapshot_inventory(registry: Path, current: set[Path]) -> dict[str, Any]:
+    projects_root = registry / "projects"
     snapshots = [
-        path for path in (registry / "projects").glob("*/snapshots/*")
-        if path.is_dir()
-    ] if (registry / "projects").exists() else []
+        path
+        for project_dir in (
+            sorted(p for p in projects_root.iterdir() if p.is_dir())
+            if projects_root.exists() else []
+        )
+        for path in snapshot_generations(project_dir / SNAPSHOTS_DIR)
+    ]
     current_paths = [path for path in snapshots if path.resolve() in current]
     old_paths = [path for path in snapshots if path.resolve() not in current]
     return {
@@ -177,7 +189,7 @@ def _raw_inventory(registry: Path, current_snapshots: set[Path]) -> dict[str, An
     # The retention policy keeps only current snapshots. Reading historical
     # manifests here made every routine observation scale with all prior runs
     # and disguised objects that become reclaimable under that policy.
-    for manifest in sorted(path / "raw-manifest.jsonl" for path in current_snapshots):
+    for manifest in sorted(path / RAW_MANIFEST_FILE for path in current_snapshots):
         try:
             with manifest.open(encoding="utf-8") as stream:
                 for line in stream:
@@ -193,7 +205,7 @@ def _raw_inventory(registry: Path, current_snapshots: set[Path]) -> dict[str, An
             continue
     referenced_paths = [by_relpath[key] for key in referenced if key in by_relpath]
     orphan_paths = [path for key, path in by_relpath.items() if key not in referenced]
-    large = [path for path in objects if path.stat().st_size > 300 * 1024**2]
+    large = [path for path in objects if path.stat().st_size > LARGE_RAW_OBJECT_BYTES]
     return {
         "root": str(raw_root),
         # `objects` is already the complete content-addressed inventory; do not
@@ -221,7 +233,7 @@ def _previous(history_dir: Path) -> dict[str, Any] | None:
 def _totals(report: dict[str, Any]) -> dict[str, int]:
     stores = report.get("stores") or []
     tokens = {
-        item.get("source_system_id"): sum(
+        item.get("source_system_key"): sum(
             int(month.get("total_tokens", 0)) for month in item.get("monthly", [])
         )
         for item in (report.get("token_usage") or {}).get("vendors", [])
@@ -255,9 +267,9 @@ def build_storage_report(
 ) -> dict[str, Any]:
     registry = registry.expanduser().resolve()
     history_dir = history_dir or registry / "observations" / "storage"
-    observed = _now()
+    observed = system_clock()
     previous = _previous(history_dir)
-    stores, current = current_store_paths(registry)
+    stores, current = all_store_paths(registry)
     report: dict[str, Any] = {
         "report_format": REPORT_FORMAT,
         "observed_at": observed.isoformat(),
@@ -287,6 +299,19 @@ def build_storage_report(
         report["warnings"].append({
             "kind": "cursor_db_size", "path": report["cursor"]["path"],
             "bytes": report["cursor"]["file_bytes"], "threshold": cursor_limit,
+        })
+    # A Project scanned and never ingested is absent from the catalog, so it is
+    # invisible to every enumeration drawn from there -- including a
+    # full-corpus rebuild. Reported here because this is the command an
+    # operator runs to ask what the registry holds.
+    pending = never_ingested_entries(registry)
+    if pending:
+        report["warnings"].append({
+            "kind": "scanned_never_ingested",
+            "count": len(pending),
+            "paths": sorted(
+                entry["path"] for entry in pending[:PENDING_PATHS_REPORTED]
+            ),
         })
     report["totals"] = _totals(report)
     if previous and previous.get("report_format") == REPORT_FORMAT:

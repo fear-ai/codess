@@ -1,25 +1,62 @@
 """Scan: discover projects with session data from CC, Codex, Cursor."""
 
+import contextlib
 import json
 import logging
-import time
-from datetime import datetime
 from pathlib import Path
 
-from codess.config import AGGREGATORS, CC_PROJECTS, CURSOR_WS
+from codess.codex_source import build_session_index as build_codex_session_index
+from codess.codex_source import get_session_files as get_codex_session_files
+from codess.config import BMB, CC_PROJECTS, CURSOR_WS, VENDOR_KEYS
 from codess.cursor_source import (
     get_db_metrics,
-    get_global_db as get_cursor_global_db,
     get_project_composer_headers,
+)
+from codess.cursor_source import (
+    get_global_db as get_cursor_global_db,
+)
+from codess.cursor_source import (
     get_workspace_dbs as get_cursor_workspace_dbs,
+)
+from codess.cursor_source import (
     get_workspace_ids as get_cursor_workspace_ids,
 )
 from codess.helpers import is_excluded, local_path_from_uri, slug_to_path
-from codess.codex_source import build_session_index as build_codex_session_index
-from codess.codex_source import get_session_files as get_codex_session_files
-from codess.project import get_cc_session_dir
+from codess.project import cc_session_files, get_cc_session_dir
+from codess.reporting import code as _code
+from codess.reporting import event
+from codess.timeval import epoch_ms, now_ms
+from codess.units import DAY_MS, DAY_SECONDS, WEEK_MS
+from codess.wallclock import system_clock
 
 log = logging.getLogger(__name__)
+
+# Resolved once at import: a code lookup is a dict hit, and doing it per call in
+# a loop over every candidate directory is the cost the integer code exists to
+# avoid.
+LINKED = _code("scan.source.linked")
+MAPPED = _code("scan.source.mapped")
+METRICS = _code("scan.project.metrics")
+
+
+def _report_metrics(vendor_key: str, project_path: str, metrics: dict) -> None:
+    """One event per vendor with metrics, rather than a formatted block.
+
+    These were four `print` statements composing a labelled line per vendor
+   . As events each field is a field, so a jsonl sink emits them
+    structurally and the privacy profile can classify `project` as a path rather
+    than having to find one inside rendered text.
+    """
+    event(
+        METRICS, kind=vendor_key, project=project_path,
+        sessions=metrics.get("count"),
+        events=metrics.get("events", 0),
+        size_mb=metrics.get("size_mb"),
+        span_weeks=metrics.get("span_weeks"),
+        days_ago=metrics.get("days_ago"),
+        header_count=metrics.get("header_count"),
+        timed_header_count=metrics.get("timed_header_count"),
+    )
 
 
 def _record_diagnostic(
@@ -60,11 +97,20 @@ def _record_count(diagnostics: dict | None, category: str, count: int) -> None:
         diagnostics[category] = diagnostics.get(category, 0) + count
 
 
-def _days_ago(max_ts: float) -> float | None:
-    """(now - max_ts) in days. None if max_ts is 0 or invalid."""
+def _days_ago(max_ts: float | None) -> float | None:
+    """(now - max_ts) in days. None if max_ts is absent, 0, or invalid.
+
+    Admits `None` because a store with no timed record supplies one, and the
+    guard below already treats it as absent. A signature narrower than the call
+    sites makes the caller assert what the callee then re-checks.
+    """
     if not max_ts:
         return None
-    return round((time.time() * 1000 - max_ts) / (24 * 3600 * 1000), 1)
+    # The injected clock rather than `time.time()`: both are the same clock, and
+    # having two spellings for "the current instant" is the divergence this
+    # removes. `time.monotonic` is a different clock and stays where it is used.
+    current = now_ms(system_clock)
+    return round((current - max_ts) / DAY_MS, 1)
 
 
 def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool = False) -> dict:
@@ -113,15 +159,12 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool 
                         sess_dir = cc_dir / sid
                         if sess_dir.exists():
                             for jf in sess_dir.rglob("*.jsonl"):
-                                try:
+                                with contextlib.suppress(OSError):
                                     total_bytes += jf.stat().st_size
-                                except OSError:
-                                    pass
             except (json.JSONDecodeError, OSError, KeyError):
                 pass
         if count == 0:
-            main_files = list(cc_dir.glob("*.jsonl"))
-            nested_files = list(cc_dir.glob("*/subagents/**/*.jsonl"))
+            main_files, nested_files = cc_session_files(cc_dir)
             subagent_sessions = len(nested_files)
             selected = [(path, False) for path in main_files]
             if subagent:
@@ -139,10 +182,10 @@ def _session_metrics_cc(p: Path, cutoff_ms: float | None = None, subagent: bool 
                     max_ts = max(max_ts, mtime)
                 except OSError:
                     pass
-    span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
+    span = (max_ts - min_ts) / WEEK_MS if max_ts > min_ts else None
     if cc_dir is not None and not subagent_sessions:
-        subagent_sessions = len(list(cc_dir.glob("*/subagents/**/*.jsonl")))
-    return {"count": count, "events": events, "size_mb": round(total_bytes / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "stale_index_entries": stale_index_entries, "main_sessions": main_sessions, "subagent_sessions_available": subagent_sessions, "subagents_included": subagent}
+        subagent_sessions = len(cc_session_files(cc_dir)[1])
+    return {"count": count, "events": events, "size_mb": round(BMB(total_bytes), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "stale_index_entries": stale_index_entries, "main_sessions": main_sessions, "subagent_sessions_available": subagent_sessions, "subagents_included": subagent}
 
 
 def _session_metrics_codex(
@@ -158,17 +201,7 @@ def _session_metrics_codex(
             cwd = str(item.get("cwd") or "")
             if not cwd or str(Path(cwd).resolve()) != p_res:
                 continue
-            ts = item.get("timestamp")
-            if isinstance(ts, (int, float)):
-                ts_ms = ts * 1000 if ts < 1e12 else ts
-            elif isinstance(ts, str):
-                try:
-                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                    ts_ms = dt.timestamp() * 1000
-                except (ValueError, TypeError):
-                    ts_ms = 0
-            else:
-                ts_ms = 0
+            ts_ms = epoch_ms(item.get("timestamp")) or 0
             if cutoff_ms and ts_ms < cutoff_ms:
                 continue
             count += 1
@@ -187,8 +220,8 @@ def _session_metrics_codex(
                 max_ts = max(max_ts, ts_ms)
         except (StopIteration, json.JSONDecodeError, OSError, KeyError):
             pass
-    span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
-    return {"count": count, "events": events, "size_mb": round(total_bytes / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts)}
+    span = (max_ts - min_ts) / WEEK_MS if max_ts > min_ts else None
+    return {"count": count, "events": events, "size_mb": round(BMB(total_bytes), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts)}
 
 
 def _session_metrics_cursor(p: Path) -> dict:
@@ -230,8 +263,8 @@ def _session_metrics_cursor(p: Path) -> dict:
                 max_ts = max(max_ts, m["max_ts"])
             if m.get("error"):
                 errors.append(f"{global_db}: {m['error']}")
-    span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if max_ts > min_ts else None
-    return {"count": count, "events": events, "size_mb": round(total_bytes / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts or None, "days_ago": _days_ago(max_ts), "invalid_keys": invalid_keys, "header_count": header_count, "timed_header_count": timed_header_count, "errors": errors}
+    span = (max_ts - min_ts) / WEEK_MS if max_ts > min_ts else None
+    return {"count": count, "events": events, "size_mb": round(BMB(total_bytes), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts or None, "days_ago": _days_ago(max_ts), "invalid_keys": invalid_keys, "header_count": header_count, "timed_header_count": timed_header_count, "errors": errors}
 
 
 def _session_metrics_cursor_global() -> dict:
@@ -241,34 +274,126 @@ def _session_metrics_cursor_global() -> dict:
         return {"count": 0, "events": 0, "size_mb": 0.0, "span_weeks": None, "max_ts": None, "days_ago": None}
     m = get_db_metrics(db)
     min_ts, max_ts = m.get("min_ts"), m.get("max_ts")
-    span = (max_ts - min_ts) / (7 * 24 * 3600 * 1000) if min_ts is not None and max_ts is not None and max_ts > min_ts else None
-    return {"count": m["count"], "events": m["events"], "size_mb": round(m["size_bytes"] / (1024 * 1024), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "invalid_keys": m.get("invalid_keys", 0), "header_count": m.get("header_count", 0), "timed_header_count": m.get("timed_header_count", 0), "errors": [m["error"]] if m.get("error") else []}
+    span = (max_ts - min_ts) / WEEK_MS if min_ts is not None and max_ts is not None and max_ts > min_ts else None
+    return {"count": m["count"], "events": m["events"], "size_mb": round(BMB(m["size_bytes"]), 2), "span_weeks": round(span, 1) if span else None, "max_ts": max_ts, "days_ago": _days_ago(max_ts), "invalid_keys": m.get("invalid_keys", 0), "header_count": m.get("header_count", 0), "timed_header_count": m.get("timed_header_count", 0), "errors": [m["error"]] if m.get("error") else []}
 
 
-def run_scan(
+def _has_any_sessions(
+    project: Path,
+    cc_paths: set,
+    codex_paths: set,
+    cursor_paths: set,
+    subagent: bool,
+    codex_index: list | None,
+) -> bool:
+    """Report whether a Project has any retained Session, ignoring recency.
+
+    Used only to distinguish "hidden by the time window" from "no coding
+    work", so an omission can be reported rather than looked like absence.
+    """
+    if project in cc_paths and _session_metrics_cc(project, None, subagent)["count"]:
+        return True
+    if project in codex_paths and _session_metrics_codex(
+        project, None, codex_index=codex_index
+    )["count"]:
+        return True
+    return bool(project in cursor_paths and _session_metrics_cursor(project)["count"])
+
+
+# --- Path canonicalization -------------------------------------------------
+#
+# These four decide *which directory is the Project*, which is the logic most
+# likely to be wrong and, until they were lifted, the logic hardest to test:
+# they were nested inside `walk_sessions` and reachable only by running vendor
+# discovery over a populated filesystem. None captured accumulating state --
+# only `work_root` and the set of live paths -- so each becomes a module-level
+# function by naming what it already read.
+
+
+def in_work_root(raw_path: str, work_root: Path) -> bool:
+    """Whether a vendor-reported path lies inside the scanned tree.
+
+    Resolved before comparing, so a symbolic link pointing outside the root is
+    refused rather than followed -- otherwise a link would attribute another
+    tree's Sessions to this one.
+    """
+    try:
+        Path(raw_path).resolve().relative_to(work_root)
+        return True
+    except ValueError:
+        return False
+
+
+def project_boundary(path: Path, work_root: Path, live_paths: set[Path]) -> Path:
+    """The repository a reported path belongs to.
+
+    Walks upward to the nearest ancestor holding `.git`, stopping at the work
+    root. Where no ancestor qualifies -- a path below a repository that was not
+    itself reported -- the deepest live path containing it is used, since a
+    Session recorded inside a subdirectory belongs to the repository around it
+    rather than to the subdirectory.
+    """
+    candidate = path
+    while candidate == work_root or candidate.is_relative_to(work_root):
+        if (candidate / ".git").exists():
+            return candidate
+        if candidate == work_root:
+            break
+        candidate = candidate.parent
+    parents = [
+        contender for contender in live_paths
+        if contender != path
+        and (contender / ".git").exists()
+        and path.is_relative_to(contender)
+    ]
+    return max(parents, key=lambda item: len(item.parts)) if parents else path
+
+
+def canonicalize(paths: set[Path], work_root: Path) -> set[Path]:
+    """Keep the most specific paths; drop a parent when a child is present.
+
+    Longest-first, so a nested repository is seen before the repository around
+    it and the outer one is dropped. Excluded trees are removed here rather
+    than by the caller, because that is a question about which directory is a
+    Project.
+    """
+    keep: set[Path] = set()
+    for candidate in sorted(paths, key=lambda item: -len(item.parts)):
+        # One question, one answer. `is_aggregator` asked a second version of
+        # it -- is this a tree the operator excluded -- against a setting whose
+        # definition turned out to be the same, so `exclude_paths` answers both
+        # and `is_excluded` already applies the precedence.
+        if is_excluded(candidate, work_root):
+            continue
+        if any(
+            kept != candidate and str(kept).startswith(str(candidate) + "/")
+            for kept in keep
+        ):
+            continue
+        keep.add(candidate)
+    return keep
+
+
+def walk_sessions(
     work_root: Path,
     vendor_filter: list[str] | None = None,
     recent_days: int | None = None,
-    debug: bool = False,
+    debug: bool = False,  # noqa: ARG001
     subagent: bool = False,
     diagnostics: dict | None = None,
     include_cursor_global: bool = True,
     codex_index: list[dict] | None = None,
 ) -> list[dict]:
     """Discover projects with session data. Return list of dicts: path, vendor, sess, mb, span_weeks.
-    recent_days: if set, only include sessions from last N days (CODESS_DAYS).
-    debug: print each dir visited with findings; include all projects regardless of filters."""
-    import sys
+    recent_days: if set, only include sessions from last N days (DAYS).
+    `debug` is retained for the call signature and no longer gates output. The
+    discovery diagnostics are debug-*level* events now, so whether they are
+    emitted is the reporting profile's decision rather than an argument threaded
+    through this function -- which the reporting contract removed. `scan_cmd` selects the
+    `debug` profile when `--debug` is passed."""
     work_root = work_root.resolve()
-    vendors = frozenset((vendor_filter or ["cc", "codex", "cursor"]))
+    vendors = frozenset(vendor_filter or VENDOR_KEYS)
     cc_paths, codex_paths, cursor_paths = set(), set(), set()
-
-    def in_work_root(raw_path: str) -> bool:
-        try:
-            Path(raw_path).resolve().relative_to(work_root)
-            return True
-        except ValueError:
-            return False
 
     if "cc" in vendors and CC_PROJECTS.exists():
         # An exact root may link to its historical Claude storage slug after
@@ -276,8 +401,7 @@ def run_scan(
         linked_cc_dir = get_cc_session_dir(work_root)
         if linked_cc_dir is not None:
             cc_paths.add(work_root)
-            if debug:
-                print(f"[dir] CC source link: {linked_cc_dir} -> {work_root}", file=sys.stderr)
+            event(LINKED, kind="cc", source=str(linked_cc_dir), target=str(work_root))
         for d in CC_PROJECTS.iterdir():
             if not d.is_dir():
                 continue
@@ -292,12 +416,11 @@ def run_scan(
                         if not isinstance(e, dict):
                             continue
                         pp = e.get("projectPath")
-                        if pp and in_work_root(str(pp)):
+                        if pp and in_work_root(str(pp), work_root):
                             r = Path(pp).resolve()
                             if r not in cc_paths:
                                 cc_paths.add(r)
-                                if debug:
-                                    print(f"[dir] CC dir: {d} -> {r}", file=sys.stderr)
+                                event(MAPPED, kind="cc", source=str(d), target=str(r))
                 except (json.JSONDecodeError, KeyError, TypeError) as exc:
                     _record_diagnostic(
                         diagnostics, "malformed_sources", idx, str(exc)
@@ -307,23 +430,21 @@ def run_scan(
                         diagnostics, "failed_sources", idx, str(exc)
                     )
             p = Path(str(slug_to_path(d.name)))
-            if in_work_root(str(p)):
+            if in_work_root(str(p), work_root):
                 r = p.resolve()
                 if r not in cc_paths:
                     cc_paths.add(r)
-                    if debug:
-                        print(f"[dir] CC dir: {d} -> {r}", file=sys.stderr)
+                    event(MAPPED, kind="cc", source=str(d), target=str(r))
     if "codex" in vendors:
         if codex_index is None:
             codex_index = build_codex_session_index(include_record_counts=True)
         for item in codex_index:
             cwd = str(item.get("cwd") or "")
-            if cwd and in_work_root(cwd):
+            if cwd and in_work_root(cwd, work_root):
                 r = Path(cwd).resolve()
                 if r not in codex_paths:
                     codex_paths.add(r)
-                    if debug:
-                        print(f"[dir] Codex file: {item.get('path')} -> {r}", file=sys.stderr)
+                    event(MAPPED, kind="codex", source=str(item.get("path")), target=str(r))
     if "cursor" in vendors and CURSOR_WS.exists():
         # Exact-root scans must honor the same reviewed source links as
         # ingestion.  A remote or historical Cursor workspace can remain a
@@ -332,24 +453,22 @@ def run_scan(
         linked_workspace_ids = get_cursor_workspace_ids(work_root)
         if linked_workspace_ids:
             cursor_paths.add(work_root)
-            if debug:
-                print(
-                    "[dir] Cursor source link: "
-                    f"{','.join(linked_workspace_ids)} -> {work_root}",
-                    file=sys.stderr,
-                )
+            event(
+                LINKED, kind="cursor",
+                workspace=",".join(linked_workspace_ids),
+                target=str(work_root),
+            )
         for ws in CURSOR_WS.iterdir():
             wj = ws / "workspace.json"
             if wj.exists():
                 try:
                     data = json.loads(wj.read_text())
                     local_folder = local_path_from_uri(data.get("folder"))
-                    if local_folder and in_work_root(str(local_folder)):
+                    if local_folder and in_work_root(str(local_folder), work_root):
                         r = local_folder
                         if r not in cursor_paths:
                             cursor_paths.add(r)
-                            if debug:
-                                print(f"[dir] Cursor workspace: {ws} -> {r}", file=sys.stderr)
+                            event(MAPPED, kind="cursor", workspace=str(ws), target=str(r))
                 except (json.JSONDecodeError, TypeError) as exc:
                     _record_diagnostic(
                         diagnostics, "malformed_sources", wj, str(exc)
@@ -373,8 +492,7 @@ def run_scan(
                 )
             if m["count"] or m["events"]:
                 cursor_global_has_data = True
-                if debug:
-                    print(f"[dir] Cursor central: {gdb}", file=sys.stderr)
+                event(MAPPED, kind="cursor-central", container=str(gdb))
     all_paths = set()
     if "cc" in vendors:
         all_paths |= cc_paths
@@ -388,51 +506,24 @@ def run_scan(
     # granularity from hiding the repository-level Claude/Codex evidence.
     live_paths = {path for path in all_paths if path.exists()}
 
-    def project_boundary(path: Path) -> Path:
-        candidate = path
-        while candidate == work_root or candidate.is_relative_to(work_root):
-            if (candidate / ".git").exists():
-                return candidate
-            if candidate == work_root:
-                break
-            candidate = candidate.parent
-        parents = [
-            candidate for candidate in live_paths
-            if candidate != path
-            and (candidate / ".git").exists()
-            and path.is_relative_to(candidate)
-        ]
-        return max(parents, key=lambda item: len(item.parts)) if parents else path
-
-    cc_paths = {project_boundary(path) for path in cc_paths}
-    codex_paths = {project_boundary(path) for path in codex_paths}
-    cursor_paths = {project_boundary(path) for path in cursor_paths}
+    cc_paths = {project_boundary(path, work_root, live_paths) for path in cc_paths}
+    codex_paths = {project_boundary(path, work_root, live_paths) for path in codex_paths}
+    cursor_paths = {project_boundary(path, work_root, live_paths) for path in cursor_paths}
     all_paths = cc_paths | codex_paths | cursor_paths
 
-    def _is_agg(p: Path) -> bool:
-        try:
-            rel = p.relative_to(work_root)
-            return len(rel.parts) == 1 and rel.parts[0] in AGGREGATORS
-        except ValueError:
-            return False
-
-    def canonicalize(paths):
-        """Keep most specific (leaf) paths; drop parent when child exists."""
-        keep = set()
-        for p in sorted(paths, key=lambda x: -len(x.parts)):
-            if _is_agg(p) or is_excluded(p, work_root):
-                continue
-            skip = any(q != p and str(q).startswith(str(p) + "/") for q in keep)
-            if not skip:
-                keep.add(p)
-        return keep
-
+    # Recency is a selection, not a diagnostic: `debug` must not change which
+    # Projects are reported, or a reader cannot trust a scan they did not run
+    # with it. Projects excluded by the window are counted and reported.
     cutoff_ms = None
-    if recent_days is not None and recent_days > 0 and not debug:
-        import time
-        cutoff_ms = (time.time() - recent_days * 86400) * 1000
+    if recent_days is not None and recent_days > 0:
+        cutoff_ms = (
+            system_clock().timestamp() - recent_days * DAY_SECONDS
+        ) * 1000
+    excluded_by_recency = 0
 
-    projects = sorted(canonicalize({p for p in all_paths if p.exists()}), key=str)
+    projects = sorted(
+        canonicalize({p for p in all_paths if p.exists()}, work_root), key=str
+    )
     rows = []
     for p in projects:
         try:
@@ -489,7 +580,16 @@ def run_scan(
             sess_count += m_cursor["count"]
             sess_mb += m_cursor["size_mb"]
             span_w = span_w or m_cursor["span_weeks"]
-        if not src or (not debug and cutoff_ms and not has_recent):
+        if not src:
+            # No sessions survived selection. When a window is active, check
+            # whether the Project has work at all: a Project hidden by the
+            # window is a different outcome from one with no coding work, and
+            # a reader cannot tell them apart from an empty result.
+            if cutoff_ms and _has_any_sessions(p, cc_paths, codex_paths, cursor_paths, subagent, codex_index):
+                excluded_by_recency += 1
+            continue
+        if cutoff_ms and not has_recent:
+            excluded_by_recency += 1
             continue
         row = {
             "path": rel,
@@ -525,14 +625,11 @@ def run_scan(
                 }} if m_cursor else {}),
             },
         }
-        if debug:
-            print(f"[scan] project {p} path={rel}", file=sys.stderr)
-            if m_cc:
-                print(f"  CC: sess={m_cc.get('count')} events={m_cc.get('events', 0)} mb={m_cc.get('size_mb')} span_weeks={m_cc.get('span_weeks')} days_ago={m_cc.get('days_ago')}", file=sys.stderr)
-            if m_codex:
-                print(f"  Codex: sess={m_codex.get('count')} events={m_codex.get('events', 0)} mb={m_codex.get('size_mb')} span_weeks={m_codex.get('span_weeks')} days_ago={m_codex.get('days_ago')}", file=sys.stderr)
-            if m_cursor:
-                print(f"  Cursor: sess={m_cursor.get('count')} events={m_cursor.get('events', 0)} mb={m_cursor.get('size_mb')} span_weeks={m_cursor.get('span_weeks')} days_ago={m_cursor.get('days_ago')} headers={m_cursor.get('header_count', 0)} timed_headers={m_cursor.get('timed_header_count', 0)}", file=sys.stderr)
+        for vendor_key, metrics in (
+            ("cc", m_cc), ("codex", m_codex), ("cursor", m_cursor),
+        ):
+            if metrics:
+                _report_metrics(vendor_key, str(p), metrics)
         rows.append(row)
 
     if include_cursor_global and cursor_global_has_data and "cursor" in vendors:
@@ -547,7 +644,7 @@ def run_scan(
                 "mb": m_global["size_mb"],
                 "span_weeks": m_global["span_weeks"],
             })
-            if debug:
-                print("[scan] project (global) path=(global)", file=sys.stderr)
-                print(f"  Cursor central: sess={m_global.get('count')} events={m_global.get('events', 0)} mb={m_global.get('size_mb')} span_weeks={m_global.get('span_weeks')} days_ago={m_global.get('days_ago')} headers={m_global.get('header_count', 0)} timed_headers={m_global.get('timed_header_count', 0)}", file=sys.stderr)
+            _report_metrics("cursor-central", "(global)", m_global)
+    if excluded_by_recency:
+        _record_count(diagnostics, "projects_outside_recency_window", excluded_by_recency)
     return rows

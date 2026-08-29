@@ -2,128 +2,80 @@
 
 from __future__ import annotations
 
-import os
 import shutil
-import sqlite3
-import subprocess
-import sys
-from datetime import datetime, timezone
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from codess.acceptance import compare_snapshots
 from codess.baseline_catalog import update_approved_catalog
 from codess.baseline_validation import (
-    load_policy, run_query_smoke, validate_project,
+    load_policy,
+    run_query_smoke,
+    validate_project,
 )
-from codess.fileio import hash_file, read_json, write_json_atomic
-from codess.schema_contract import FORMAT_VERSION, has_legacy_schema, verify_package
+from codess.child_invocation import ChildInvocation, RunPolicy
+from codess.config import (
+    CURRENT_POINTER_FILE,
+    LAST_INGEST_REPORT_FILE,
+    STATE_FILE,
+    STORE_DIR,
+    WORKING_ARCHIVES_DIR,
+)
+from codess.fileio import hash_file, open_readonly, read_json, write_json_atomic
+from codess.schema_contract import contract_digest, store_metadata
 from codess.snapshot import (
-    current_store_paths, publish_snapshot, snapshot_store_paths,
+    current_stores,
+    publish_snapshot,
+    snapshot_store_paths,
     snapshot_store_paths_from_base,
+    snapshot_stores,
 )
-
-_LEGACY_TABLE_COUNT_QUERIES = {
-    "sessions": "SELECT COUNT(*) FROM sessions",
-    "events": "SELECT COUNT(*) FROM events",
-}
-
-
-def preserve_legacy(project: Path, enabled: bool) -> Path | None:
-    base = project / ".codess"
-    legacy: list[Path] = []
-    for path in sorted(base.glob("*.db")):
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
-        try:
-            if has_legacy_schema(conn):
-                legacy.append(path)
-        finally:
-            conn.close()
-    if not legacy:
-        return None
-    if (base / "current.json").exists():
-        raise RuntimeError("legacy working databases coexist with current.json; review manually")
-    if not enabled:
-        raise RuntimeError("legacy stores found; rerun with --preserve-legacy")
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    destination = base / "legacy" / f"pre-coschema{FORMAT_VERSION}-{stamp}"
-    destination.mkdir(parents=True, exist_ok=False)
-    manifest: dict[str, Any] = {
-        "baseline_kind": "legacy-unversioned-codess",
-        "preserved_at": datetime.now(timezone.utc).isoformat(),
-        "files": {},
-    }
-    for source in legacy:
-        conn = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)
-        try:
-            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-            counts = {}
-            for table, count_query in _LEGACY_TABLE_COUNT_QUERIES.items():
-                exists = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-                    (table,),
-                ).fetchone()
-                if exists:
-                    counts[table] = int(conn.execute(count_query).fetchone()[0])
-        finally:
-            conn.close()
-        manifest["files"][source.name] = {
-            "sha256": hash_file(source), "size": source.stat().st_size,
-            "integrity_check": integrity, **counts,
-        }
-        shutil.move(str(source), destination / source.name)
-    state = base / "ingest_state.json"
-    if state.exists():
-        manifest["files"][state.name] = {
-            "sha256": hash_file(state), "size": state.stat().st_size,
-        }
-        shutil.move(str(state), destination / state.name)
-    write_json_atomic(destination / "baseline.json", manifest)
-    return destination
+from codess.wallclock import system_clock
 
 
 def archive_stale_working_stores(project: Path) -> Path | None:
-    base = project / ".codess"
-    databases = sorted(base.glob("*.db"))
+    base = project / STORE_DIR
+    databases = snapshot_stores(base)
     if not databases:
         return None
-    current_digest = verify_package()
-    package_digests: set[str | None] = set()
+    current_digest = contract_digest()
+    contract_digests: set[str | None] = set()
     for path in databases:
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(path)
         try:
-            if not has_legacy_schema(conn):
-                package_digests.add(
-                    dict(conn.execute("SELECT key, value FROM store_meta")).get(
-                        "package_digest"
-                    )
-                )
+            contract_digests.add(store_metadata(conn).get("contract_digest"))
         finally:
             conn.close()
-    if package_digests == {current_digest} or not package_digests:
+    if contract_digests == {current_digest} or not contract_digests:
         return None
-    pointer_path = base / "current.json"
+    pointer_path = base / CURRENT_POINTER_FILE
     if not pointer_path.exists():
         raise RuntimeError(
             "working stores use another package and no retained current snapshot exists"
         )
     pointer = read_json(pointer_path)
-    snapshot_store_paths(project, pointer["snapshot_id"], allow_package_mismatch=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    old_label = "-".join(sorted((value or "unknown")[:12] for value in package_digests))
-    destination = base / "working-archives" / f"pre-package-{old_label}-{stamp}"
+    snapshot_store_paths(project, pointer["snapshot_id"], allow_contract_mismatch=True)
+    # One archival event, one instant. The directory name and the manifest's
+    # `archived_at` are two renderings of the same moment, so reading the clock
+    # twice would let a directory claim a different second than the manifest
+    # inside it -- and the directory name is what an operator sorts by.
+    archived_at = system_clock()
+    stamp = archived_at.strftime("%Y%m%dT%H%M%SZ")
+    old_label = "-".join(sorted((value or "unknown")[:12] for value in contract_digests))
+    destination = base / WORKING_ARCHIVES_DIR / f"pre-package-{old_label}-{stamp}"
     destination.mkdir(parents=True, exist_ok=False)
     manifest: dict[str, Any] = {
-        "archive_format": "codess.working-archive/1",
-        "archived_at": datetime.now(timezone.utc).isoformat(),
+        "archive_format": "codess.working-archive/2",
+        "archived_at": archived_at.isoformat(),
         "reason": "released-package-change-requires-source-rebuild",
-        "prior_package_digests": sorted(value or "unknown" for value in package_digests),
-        "replacement_package_digest": current_digest,
+        "prior_contract_digests": sorted(value or "unknown" for value in contract_digests),
+        "replacement_contract_digest": current_digest,
         "retained_snapshot_id": pointer["snapshot_id"],
         "files": {},
     }
     for source in databases:
-        conn = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(source)
         try:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
         finally:
@@ -131,14 +83,14 @@ def archive_stale_working_stores(project: Path) -> Path | None:
         if integrity != "ok":
             raise RuntimeError(f"refusing to archive corrupt working store: {source}")
         manifest["files"][source.name] = {
-            "sha256": hash_file(source), "size": source.stat().st_size,
+            "digest": hash_file(source), "size": source.stat().st_size,
             "integrity_check": integrity,
         }
         shutil.move(str(source), destination / source.name)
-    state = base / "ingest_state.json"
+    state = base / STATE_FILE
     if state.exists():
         manifest["files"][state.name] = {
-            "sha256": hash_file(state), "size": state.stat().st_size,
+            "digest": hash_file(state), "size": state.stat().st_size,
         }
         shutil.move(str(state), destination / state.name)
     write_json_atomic(destination / "archive.json", manifest)
@@ -147,11 +99,11 @@ def archive_stale_working_stores(project: Path) -> Path | None:
 
 def reset_rebuildable_working_stores(project: Path) -> list[str]:
     """Discard derived working stores only after verifying a retained snapshot."""
-    base = project / ".codess"
+    base = project / STORE_DIR
     databases = sorted(base.glob("*.db"))
     if not databases:
         return []
-    if not (base / "current.json").exists() or not current_store_paths(project):
+    if not (base / CURRENT_POINTER_FILE).exists() or not current_stores(project):
         raise RuntimeError(
             "refusing to rebuild working stores without a readable retained snapshot"
         )
@@ -165,38 +117,32 @@ def reset_rebuildable_working_stores(project: Path) -> list[str]:
             Path(str(database) + "-shm"),
         ):
             path.unlink(missing_ok=True)
-    (base / "ingest_state.json").unlink(missing_ok=True)
+    (base / STATE_FILE).unlink(missing_ok=True)
     return removed
 
 
-def run_ingest(
-    project: Path,
-    *,
-    source: str,
-    raw_mode: str,
-    registry: Path,
-    min_size: int,
-    repo_root: Path,
-    resource_policy: Path | None = None,
-    candidate_snapshot: bool = False,
-) -> dict[str, Any]:
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(repo_root / "src")
-    command = [
-        sys.executable, "-m", "main", "ingest", "--dir", str(project),
-        "--source", source, "--force", "--min-size", str(min_size),
-        "--raw-mode", raw_mode, "--registry", str(registry),
-    ]
-    if candidate_snapshot:
-        command.append("--candidate-snapshot")
-    if resource_policy is not None:
-        command.extend(["--resource-policy", str(resource_policy)])
-    result = subprocess.run(
-        command, cwd=repo_root, env=env, capture_output=True,
-        text=True, timeout=3600,
-    )
+def run_ingest(invocation: ChildInvocation) -> dict[str, Any]:
+    """Run one ingest child and report what it produced.
+
+    Takes the invocation rather than its eight fields. The fields were a pure
+    relay -- every one existed only to reach `ChildInvocation` -- so passing them
+    individually meant a caller could mis-order four same-typed values silently,
+    and every added flag changed this signature and both call sites.
+
+    Reads the runtime report the child wrote, which is why this exists rather than
+    callers using `invocation.run()` directly: the report's location follows from
+    the Project, and finding it is this function's whole remaining subject.
+    """
+    if len(invocation.projects) != 1:
+        raise ValueError(
+            "run_ingest reports one Project's runtime report; "
+            f"got {len(invocation.projects)} projects"
+        )
+    project = invocation.projects[0]
+    command = invocation.command()
+    result = invocation.run()
     runtime_report = {}
-    runtime_path = project / ".codess" / "last-ingest-report.json"
+    runtime_path = project / STORE_DIR / LAST_INGEST_REPORT_FILE
     if result.returncode == 0 and runtime_path.exists():
         runtime_report = read_json(runtime_path)
     return {
@@ -211,34 +157,36 @@ def run_ingest(
 
 def apply_project(
     project: Path,
+    run: RunPolicy,
     *,
     source: str,
-    raw_mode: str,
-    registry: Path,
     policy_path: Path | None,
     repeat: bool,
-    preserve_legacy_stores: bool,
     approve_catalog: Path | None,
-    min_size: int,
     query_smoke: bool,
-    repo_root: Path,
     report_path: Path | None = None,
-    resource_policy: Path | None = None,
 ) -> dict[str, Any]:
+    """Validate one Project against a baseline policy and record the outcome.
+
+    `run` rather than its five fields: `registry`, `repo_root`, `raw_mode`,
+    `min_size`, and `resource_policy` were passed through unchanged to build the
+    `ChildInvocation` below, which is what a policy is for.
+    """
     project = project.expanduser().resolve()
-    registry = registry.expanduser().resolve()
+    registry = run.registry
     policy = load_policy(policy_path)
     if policy.get("require_fixed_point") and not repeat:
         raise RuntimeError("policy requires --repeat")
-    legacy = preserve_legacy(project, preserve_legacy_stores)
     working_archive = archive_stale_working_stores(project)
     first_reset = reset_rebuildable_working_stores(project)
-    first_ingest = run_ingest(
-        project, source=source, raw_mode=raw_mode, registry=registry,
-        min_size=min_size, repo_root=repo_root,
-        resource_policy=resource_policy,
-        candidate_snapshot=True,
+    # Built once and reused for the repeat run below. The two were identical
+    # eight-argument calls, and the second existing only to prove the first is
+    # reproducible means they must not be able to differ.
+    invocation = ChildInvocation(
+        policy=replace(run, force=True),
+        projects=(project,), vendor_selector=source, candidate_snapshot=True,
     )
+    first_ingest = run_ingest(invocation)
     if first_ingest["returncode"] != 0:
         raise RuntimeError("ingest failed: " + first_ingest["stderr"].strip())
     first_candidate = first_ingest.get("candidate_snapshot_path")
@@ -263,12 +211,7 @@ def apply_project(
     fixed_point = None
     if repeat:
         repeat_reset = reset_rebuildable_working_stores(project)
-        second_ingest = run_ingest(
-            project, source=source, raw_mode=raw_mode, registry=registry,
-            min_size=min_size, repo_root=repo_root,
-            resource_policy=resource_policy,
-            candidate_snapshot=True,
-        )
+        second_ingest = run_ingest(invocation)
         if second_ingest["returncode"] != 0:
             raise RuntimeError("repeat ingest failed: " + second_ingest["stderr"].strip())
         second_candidate = second_ingest.get("candidate_snapshot_path")
@@ -290,12 +233,12 @@ def apply_project(
         prior_paths = snapshot_store_paths_from_base(
             first_snapshot.parent.parent,
             first["snapshot_id"],
-            allow_package_mismatch=False,
+            allow_contract_mismatch=False,
         )
         rebuilt_paths = snapshot_store_paths_from_base(
             second_snapshot.parent.parent,
             second["snapshot_id"],
-            allow_package_mismatch=False,
+            allow_contract_mismatch=False,
         )
         value_acceptance = compare_snapshots(
             prior_paths,
@@ -330,13 +273,12 @@ def apply_project(
     published = publish_snapshot(
         project,
         final_snapshot,
-        registry_root=registry,
+        store_root=registry,
         project_id=final.get("project_id"),
     )
     result = {
         "report_format": "codess.apply-report/1",
         "project": str(project), "status": final["status"],
-        "legacy_preserved": str(legacy) if legacy else None,
         "working_stores_archived": str(working_archive) if working_archive else None,
         "working_stores_reset": {
             "before_first": first_reset,

@@ -7,11 +7,10 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from codess.fileio import write_json_atomic
-from codess.identity import global_session_id
+from codess.fileio import open_readonly, write_json_atomic
+from codess.identity import session_entity_id
 from codess.project_catalog import resolve_project_query_scopes
 from codess.snapshot import snapshot_store_paths_from_base
-
 
 SESSION_NAMES_FORMAT = "codess.session-names/1"
 
@@ -31,21 +30,21 @@ def load_session_names(registry: Path) -> dict[str, Any]:
         raise ValueError("Session-name registry names must be a list")
     seen_names: set[tuple[str, str]] = set()
     seen_sessions: set[tuple[str, str]] = set()
-    required = {"project_id", "global_session_id", "name", "source"}
+    required = {"project_id", "session_entity_id", "name", "source"}
     for item in value["names"]:
         if not isinstance(item, dict) or set(item) != required:
             raise ValueError(
                 "each Session-name mapping must contain exactly project_id, "
-                "global_session_id, name, and source"
+                "session_entity_id, name, and source"
             )
         project_id = str(item["project_id"])
-        session_id = str(item["global_session_id"])
+        session_id = str(item["session_entity_id"])
         name = _validated_name(str(item["name"]))
         if not project_id.startswith("codess:project:"):
             raise ValueError("Session-name project_id is not a Codess Project ID")
         if not session_id.startswith("codess:session:"):
             raise ValueError(
-                "Session-name global_session_id is not a Codess Session ID"
+                "Session-name session_entity_id is not a Codess Session ID"
             )
         if item["source"] != "user_alias":
             raise ValueError("Session-name source must be 'user_alias'")
@@ -63,13 +62,13 @@ def alias_index(registry: Path) -> dict[tuple[str, str], str]:
     return {
         (
             str(item["project_id"]),
-            str(item["global_session_id"]),
+            str(item["session_entity_id"]),
         ): str(item["name"])
         for item in value["names"]
         if (
             isinstance(item, dict)
             and item.get("project_id")
-            and item.get("global_session_id")
+            and item.get("session_entity_id")
             and item.get("name")
         )
     }
@@ -96,35 +95,19 @@ def resolve_session_id(
     paths = snapshot_store_paths_from_base(
         Path(selection["snapshot_base"]),
         selection["snapshot_id"],
-        allow_package_mismatch=True,
+        allow_contract_mismatch=True,
     )
     matches: set[str] = set()
     for path in paths:
-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        conn = open_readonly(path)
         conn.row_factory = sqlite3.Row
         try:
-            columns = {
-                str(row[1]) for row in conn.execute("PRAGMA table_info(sessions)")
-            }
-            global_column = (
-                "global_id" if "global_id" in columns else "NULL AS global_id"
-            )
-            system_column = (
-                "source_system_id"
-                if "source_system_id" in columns
-                else "'legacy.unknown' AS source_system_id"
-            )
-            vendor_column = (
-                "vendor_session_id"
-                if "vendor_session_id" in columns
-                else "id AS vendor_session_id"
-            )
             for row in conn.execute(
-                "SELECT id,"
-                f"{global_column},{system_column},{vendor_column} FROM sessions"
+                "SELECT id, session_entity_id, source_system_key, vendor_session_id "
+                "FROM sessions"
             ):
-                stable = row["global_id"] or global_session_id(
-                    row["source_system_id"], row["vendor_session_id"] or row["id"]
+                stable = row["session_entity_id"] or session_entity_id(
+                    row["source_system_key"], row["vendor_session_id"] or row["id"]
                 )
                 candidates = (stable, str(row["id"]), str(row["vendor_session_id"]))
                 if identifier in candidates or any(
@@ -158,7 +141,7 @@ def set_session_name(
             isinstance(item, dict)
             and item.get("project_id") == project_id
             and str(item.get("name", "")).casefold() == alias.casefold()
-            and item.get("global_session_id") != stable_id
+            and item.get("session_entity_id") != stable_id
         ):
             raise ValueError(
                 f"Session name {alias!r} is already used in {project_id}"
@@ -168,13 +151,13 @@ def set_session_name(
         if not (
             isinstance(item, dict)
             and item.get("project_id") == project_id
-            and item.get("global_session_id") == stable_id
+            and item.get("session_entity_id") == stable_id
         )
     ]
     entry = {
         "project_id": project_id,
         "name": alias,
-        "global_session_id": stable_id,
+        "session_entity_id": stable_id,
         "source": "user_alias",
     }
     value["names"] = sorted(
@@ -198,10 +181,10 @@ def remove_session_name(
         if not (
             isinstance(item, dict)
             and item.get("project_id") == project_id
-            and item.get("global_session_id") == stable_id
+            and item.get("session_entity_id") == stable_id
         )
     ]
     if len(value["names"]) == before:
         raise ValueError(f"Session {stable_id} has no human-readable name")
     write_json_atomic(_path(registry), value)
-    return {"project_id": project_id, "global_session_id": stable_id}
+    return {"project_id": project_id, "session_entity_id": stable_id}

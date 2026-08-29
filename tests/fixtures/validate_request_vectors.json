@@ -53,14 +53,14 @@
       "request": {"project_ids": ["b", "a"]},
       "outcome": "reject",
       "message_contains": "unique and canonically sorted",
-      "capability": "sortedness"
+      "capability": "canonical_form"
     },
     {
       "name": "project_ids_duplicate_rejected",
       "request": {"project_ids": ["a", "a"]},
       "outcome": "reject",
       "message_contains": "unique and canonically sorted",
-      "capability": "sortedness"
+      "capability": "canonical_form"
     },
     {
       "name": "project_ids_sorted_unique_accepted",
@@ -102,7 +102,7 @@
       },
       "outcome": "reject",
       "message_contains": "unique and canonically sorted",
-      "capability": "sortedness"
+      "capability": "canonical_form"
     },
     {
       "name": "project_snapshots_duplicate_rejected",
@@ -115,7 +115,7 @@
       },
       "outcome": "reject",
       "message_contains": "unique and canonically sorted",
-      "capability": "sortedness"
+      "capability": "canonical_form"
     },
     {
       "name": "project_snapshots_ids_mismatch_project_ids_rejected",
@@ -125,7 +125,7 @@
       },
       "outcome": "reject",
       "message_contains": "must equal project_ids",
-      "capability": "cross_field"
+      "capability": "related_fields"
     },
     {
       "name": "snapshot_id_wrong_type_rejected",
@@ -163,7 +163,7 @@
       "request": {"filters": {"session_ids": ["b", "a"]}},
       "outcome": "reject",
       "message_contains": "unique and canonically sorted",
-      "capability": "sortedness"
+      "capability": "canonical_form"
     },
     {
       "name": "filters_text_wrong_type_rejected",
@@ -189,7 +189,7 @@
       "request": {"filters": {"since": 100, "until": 50}},
       "outcome": "reject",
       "message_contains": "since must be <= filters.until",
-      "capability": "cross_field"
+      "capability": "related_fields"
     },
     {
       "name": "filters_since_before_until_accepted",
@@ -301,7 +301,7 @@
       },
       "outcome": "reject",
       "message_contains": "interaction expansion does not accept model_turn_ids",
-      "capability": "cross_field"
+      "capability": "related_fields"
     },
     {
       "name": "model_turn_expand_with_interaction_ids_rejected",
@@ -311,7 +311,7 @@
       },
       "outcome": "reject",
       "message_contains": "model_turn expansion does not accept interaction_ids",
-      "capability": "cross_field"
+      "capability": "related_fields"
     },
     {
       "name": "expansion_with_restricting_filter_rejected",
@@ -321,7 +321,7 @@
       },
       "outcome": "reject",
       "message_contains": "cannot be combined with event-content filters",
-      "capability": "cross_field"
+      "capability": "related_fields"
     },
     {
       "name": "group_repetitions_wrong_type_rejected",

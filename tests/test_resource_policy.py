@@ -26,7 +26,7 @@ def _args(**values):
         "debug": False,
         "redact": False,
         "resource_policy": None,
-        "no_resource_limits": False,
+        "no_resource": False,
     }
     defaults.update(values)
     return SimpleNamespace(**defaults)
@@ -37,7 +37,7 @@ def test_builtins_are_complete_and_separate_cursor_from_transcripts():
     assert policy.maximums == BUILTIN_MAXIMUMS
     assert policy.maximums["transcript_bytes"] == 256 * 1024**2
     assert policy.maximums["cursor_container_bytes"] == 10 * 1024**3
-    assert policy.origins == {key: "built-in" for key in BUILTIN_MAXIMUMS}
+    assert policy.origins == dict.fromkeys(BUILTIN_MAXIMUMS, "built-in")
 
 
 def test_partial_file_overrides_and_null_disables_one_limit(tmp_path):
@@ -59,7 +59,7 @@ def test_partial_file_overrides_and_null_disables_one_limit(tmp_path):
     assert policy.origins["transcript_bytes"] == "policy-file"
     assert policy.origins["events_per_source"] == "built-in"
     assert policy.file_path == str(path.resolve())
-    assert policy.file_sha256 == hashlib.sha256(payload).hexdigest()
+    assert policy.file_digest == hashlib.sha256(payload).hexdigest()
 
 
 @pytest.mark.parametrize(
@@ -108,7 +108,7 @@ def test_precedence_is_file_then_environment_then_command_line(
             "events_per_source": 200,
         },
     }), encoding="utf-8")
-    monkeypatch.setenv("CODESS_MAX_SOURCE_BYTES", "300")
+    monkeypatch.setenv("CODESS_MAX_TRANSCRIPT_BYTES", "300")
     monkeypatch.setenv("CODESS_MAX_EVENTS_PER_SOURCE", "400")
 
     options = build_ingest_run_options(_args(
@@ -123,16 +123,7 @@ def test_precedence_is_file_then_environment_then_command_line(
     assert options["resource_policy"]["origins"]["events_per_session"] == "built-in"
 
 
-def test_new_transcript_environment_name_wins_over_compatibility_name(
-    monkeypatch,
-):
-    monkeypatch.setenv("CODESS_MAX_SOURCE_BYTES", "300")
-    monkeypatch.setenv("CODESS_MAX_TRANSCRIPT_BYTES", "400")
-    options = build_ingest_run_options(_args())
-    assert options["max_source_bytes"] == 400
-
-
-def test_no_resource_limits_disables_every_maximum(tmp_path):
+def test_no_resource_disables_every_maximum(tmp_path):
     path = tmp_path / "resources.json"
     path.write_text(json.dumps({
         "format": RESOURCE_POLICY_FORMAT,
@@ -140,7 +131,7 @@ def test_no_resource_limits_disables_every_maximum(tmp_path):
     }), encoding="utf-8")
     options = build_ingest_run_options(_args(
         resource_policy=str(path),
-        no_resource_limits=True,
+        no_resource=True,
     ))
     assert options["max_source_bytes"] is None
     assert options["max_cursor_container_bytes"] is None
@@ -148,7 +139,7 @@ def test_no_resource_limits_disables_every_maximum(tmp_path):
     assert options["max_events_per_session"] is None
     assert options["max_context_content_chars"] is None
     assert set(options["resource_policy"]["origins"].values()) == {
-        "--no-resource-limits"
+        "--no-resource"
     }
 
 

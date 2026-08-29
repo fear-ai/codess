@@ -5,20 +5,16 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from codess.identity import artifact_uri_id
-
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 METHOD = "catalog.longest-root-containment/1"
 RELATION = "artifact_path_within_project_location"
 AMBIGUOUS_RELATION = "artifact_path_candidate_project_location"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _file_path(uri: str) -> Path | None:
@@ -108,13 +104,13 @@ def correlate_external_artifacts(conn: sqlite3.Connection, catalog: dict) -> dic
                 """
                 INSERT INTO correlation_assertions(
                   subject_kind, subject_id, object_kind, object_id,
-                  relation_kind, method, evidence, confidence, asserted_at)
+                  relation_kind, method, evidence, confidence, asserted_when)
                 VALUES ('artifact', ?, 'project', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     artifact_uri_id(uri), project_id, relation, METHOD,
                     json.dumps(evidence, sort_keys=True, separators=(",", ":")),
-                    confidence, _now(),
+                    confidence, now_iso(system_clock),
                 ),
             )
     return result

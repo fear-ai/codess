@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 from pathlib import Path
 
@@ -10,26 +11,44 @@ import pytest
 
 from codess.baseline_catalog import freeze_reviewed_catalogs, verify_reviewed_catalog
 from codess.baseline_operations import (
-    apply_project, reset_rebuildable_working_stores, run_ingest,
+    apply_project,
+    reset_rebuildable_working_stores,
+    run_ingest,
 )
 from codess.baseline_validation import validate_project
-from codess.candidate_review import (
-    discover_git_roots, observe_git, recommend, record_decision,
-    refresh_candidates, validate_policy,
-)
 from codess.catalog_operations import (
-    _run_ingest_stage, onboard_catalog, relocate_project, retire_location,
+    _run_ingest_stage,
+    onboard_catalog,
+    relocate_project,
+    retire_location,
 )
+from codess.child_invocation import ChildInvocation, RunPolicy
 from codess.fileio import hash_file, read_json, write_json_atomic
 from codess.project import parse_and_run
 from codess.project_catalog import (
-    add_project_location, ensure_project_binding, get_project_entry,
-    durable_project_root, retire_project_location, set_project_selection_state,
+    add_project_location,
+    durable_project_root,
+    ensure_project_binding,
+    get_project_entry,
+    retire_project_location,
+    set_project_selection_state,
 )
 from codess.raw_store import RawStore
+from codess.review_project import (
+    DiscoveryPolicy,
+    ScanBudget,
+    discover_git_roots,
+    observe_git,
+    recommend,
+    record_decision,
+    refresh_candidates,
+    validate_policy,
+)
 from codess.schema_evolution import compare, required
 from codess.session_names import (
-    alias_index, remove_session_name, set_session_name,
+    alias_index,
+    remove_session_name,
+    set_session_name,
 )
 from codess.snapshot import create_snapshot, current_raw_records, publish_snapshot
 from codess.store import connect, init_db, replace_session_events, sync_project_catalog
@@ -59,36 +78,42 @@ def test_admin_ingest_paths_forward_resource_policy(tmp_path, monkeypatch):
         calls.append(command)
         return Result()
 
+    # One patch point for both paths, because both now build the same
+    # `ChildInvocation`. Before, each caller ran the child itself and this test
+    # patched two modules -- which is what let three hand-built command lists
+    # drift apart without a test noticing.
     monkeypatch.setattr(
-        "codess.baseline_operations.subprocess.run", fake_run
+        "codess.child_invocation.subprocess.run", fake_run
     )
     policy = tmp_path / "resources.json"
-    run_ingest(
-        tmp_path / "project",
-        source="all",
-        raw_mode="reference",
-        registry=tmp_path / "registry",
-        min_size=0,
-        repo_root=tmp_path,
-        resource_policy=policy,
-    )
-    assert calls[0][-2:] == ["--resource-policy", str(policy)]
+    run_ingest(ChildInvocation(
+        policy=RunPolicy(
+            registry=tmp_path / "registry", repo_root=tmp_path,
+            raw_mode="reference", resource_policy=policy, force=True,
+        ),
+        projects=(tmp_path / "project",),
+        vendor_selector="all",
+    ))
+    def flag_value(command: list[str], flag: str) -> str | None:
+        return (
+            command[command.index(flag) + 1] if flag in command else None
+        )
+
+    assert flag_value(calls[0], "--resource-policy") == str(policy)
+    assert "--force" in calls[0]
 
     calls.clear()
-    monkeypatch.setattr(
-        "codess.catalog_operations.subprocess.run", fake_run
-    )
     _run_ingest_stage(
         {"projects": [{"path": str(tmp_path / "project")}]},
+        RunPolicy(
+            registry=tmp_path / "registry", repo_root=tmp_path,
+            raw_mode="reference", resource_policy=policy,
+        ),
         validate=True,
         source="all",
-        raw_mode="reference",
-        registry=tmp_path / "registry",
-        repo_root=tmp_path,
-        resource_policy=policy,
     )
-    assert ["--resource-policy", str(policy)] == calls[0][-3:-1]
-    assert calls[0][-1] == "--validate"
+    assert flag_value(calls[0], "--resource-policy") == str(policy)
+    assert "--validate" in calls[0]
 
 
 def _captured_project(tmp_path: Path) -> tuple[Path, Path, str]:
@@ -118,12 +143,12 @@ def _captured_project(tmp_path: Path) -> tuple[Path, Path, str]:
         conn.close()
     raw = RawStore(registry / "raw")
     record = raw.observe(
-        source, source_system_id="openai.codex",
+        source, source_system_key="openai.codex",
         storage_format="codex-jsonl", mode="capture",
     )
     create_snapshot(
         project, [store], [record], raw_store=raw,
-        build_policy={"raw_mode": "capture"}, registry_root=registry,
+        build_policy={"raw_mode": "capture"}, store_root=registry,
         project_id=binding["project_id"],
     )
     return project, registry, binding["project_id"]
@@ -141,13 +166,13 @@ def test_session_names_resolve_prefix_without_replacing_identity(tmp_path):
 
     named = set_session_name(registry, project_id, "s1", "slash_model")
     assert named["name"] == "slash_model"
-    assert named["global_session_id"].startswith("codess:session:")
+    assert named["session_entity_id"].startswith("codess:session:")
     assert alias_index(registry)[
-        (project_id, named["global_session_id"])
+        (project_id, named["session_entity_id"])
     ] == "slash_model"
 
     removed = remove_session_name(registry, project_id, "s1")
-    assert removed["global_session_id"] == named["global_session_id"]
+    assert removed["session_entity_id"] == named["session_entity_id"]
     assert alias_index(registry) == {}
 
 
@@ -163,7 +188,7 @@ def test_session_name_registry_rejects_session_id_as_the_mapping_field(
             "source": "user_alias",
         }],
     })
-    with pytest.raises(ValueError, match="global_session_id"):
+    with pytest.raises(ValueError, match="session_entity_id"):
         alias_index(tmp_path)
 
 
@@ -181,13 +206,15 @@ def test_candidate_refresh_uses_scan_and_preserves_review(tmp_path, monkeypatch)
         }],
     })
     monkeypatch.setattr(
-        "codess.candidate_review.run_scan",
+        "codess.review_project.walk_sessions",
         lambda *args, **kwargs: [{
             "path": "project", "dir_path": str(project), "vendor": "Claude|Codex",
             "sess": 3, "mb": 2.5, "span_weeks": 1.0,
         }],
     )
-    report = refresh_candidates([tmp_path], catalog_path=catalog, since="2020-01-01")
+    report = refresh_candidates(
+        [tmp_path], DiscoveryPolicy(), catalog_path=catalog, since="2020-01-01",
+    )
     item = report["projects"][0]
     assert item["review"]["decision"] == "approved"
     assert item["recommendation"]["outcome"] == "consider"
@@ -259,6 +286,161 @@ def test_git_discovery_never_walks_a_broad_system_root():
     assert discover_git_roots([Path("/")], max_depth=20) == []
 
 
+class TestScanIsBounded:
+    """A traversal states its budget and whether it reached it.
+
+    Before this, `discover_git_roots` had a depth limit and no bound on the work:
+    on a large or slow tree it ran until it finished and the operator's only
+    signal was that it had not returned.
+    """
+
+    def _tree(self, root, width):
+        for index in range(width):
+            (root / f"d{index}" / "nested").mkdir(parents=True)
+        return root
+
+    def test_a_scan_within_its_budget_is_not_partial(self, tmp_path):
+        budget = ScanBudget(max_directories=1_000)
+        discover_git_roots([self._tree(tmp_path, 3)], max_depth=5, budget=budget)
+        assert budget.partial is False
+        assert budget.report()["stopped_reason"] is None
+        assert budget.directories > 0
+
+    def test_a_scan_that_reaches_the_budget_says_so(self, tmp_path):
+        budget = ScanBudget(max_directories=2)
+        discover_git_roots([self._tree(tmp_path, 10)], max_depth=5, budget=budget)
+        assert budget.partial is True
+        assert budget.report()["stopped_reason"] == "directory_budget"
+
+    def test_a_partial_scan_returns_what_it_found(self, tmp_path):
+        """A scan that examined 90% of a tree found 90% of the Projects, and
+        discarding that to report nothing is the worse failure."""
+        for index in range(6):
+            (tmp_path / f"repo{index}" / ".git").mkdir(parents=True)
+        budget = ScanBudget(max_directories=3)
+        found = discover_git_roots([tmp_path], max_depth=3, budget=budget)
+        assert budget.partial is True
+        assert found, "a partial scan must report what it found"
+
+    def test_zero_disables_each_bound_independently(self):
+        """0 disables one bound without disabling the other.
+
+        The two bounds compose, and 0 is falsy in the guard each uses -- which is
+        what makes 0 mean "no limit" here and *not* mean it for the bounds whose
+        consumer compares directly. `SOURCE_READ_MAX` of 0 reads nothing; a
+        `byte_limit` of 0 emits no rows. The meaning of 0 is the consumer's, so
+        it is asserted per consumer rather than assumed uniform.
+        """
+        unbounded = ScanBudget(max_directories=0, scan_timeout=0)
+        assert all(unbounded.visit() for _ in range(50))
+        assert unbounded.report()["stopped_reason"] is None
+        assert unbounded.report()["partial"] is False
+
+        # One bound set, the other disabled: the set one still stops the scan.
+        counted = ScanBudget(max_directories=5, scan_timeout=0)
+        assert not all(counted.visit() for _ in range(7))
+        assert counted.report()["stopped_reason"] == "directory_budget"
+
+    def test_a_timeout_stops_the_scan(self, tmp_path):
+        """Zero seconds is already past, so the first visit trips it."""
+        budget = ScanBudget(scan_timeout=0)
+        budget.scan_timeout = 1
+        budget.started -= 3600
+        discover_git_roots([self._tree(tmp_path, 3)], max_depth=5, budget=budget)
+        assert budget.report()["stopped_reason"] == "timeout"
+
+    def test_a_zero_budget_disables_the_bound(self, tmp_path):
+        budget = ScanBudget(max_directories=0, scan_timeout=0)
+        discover_git_roots([self._tree(tmp_path, 4)], max_depth=5, budget=budget)
+        assert budget.partial is False
+
+    def test_the_report_names_the_bounds_it_ran_under(self, tmp_path):
+        budget = ScanBudget(max_directories=50, scan_timeout=30)
+        discover_git_roots([tmp_path], max_depth=2, budget=budget)
+        report = budget.report()
+        assert report["max_directories"] == 50
+        assert report["scan_timeout"] == 30
+        assert report["elapsed_seconds"] >= 0
+
+    def test_no_budget_keeps_the_previous_behaviour(self, tmp_path):
+        """Every existing caller passed depth alone and must be unaffected."""
+        (tmp_path / "repo" / ".git").mkdir(parents=True)
+        assert discover_git_roots([tmp_path], max_depth=3) == [
+            (tmp_path / "repo").resolve()
+        ]
+
+    def test_a_candidate_refresh_reports_its_scan(self, tmp_path):
+        report = refresh_candidates(
+            [tmp_path],
+            DiscoveryPolicy(discover_git=True, include_git=False, max_depth=2),
+        )
+        assert "scan" in report
+        assert report["scan"]["partial"] is False
+
+
+class TestFilesystemCrossingIsReported:
+    """`os.walk` crosses a device boundary without saying so.
+
+    A network mount inside the work root turns a seconds-long scan into a
+    minutes-long one with no explanation, and is a disclosure surface besides.
+    Reporting rather than refusing, because the common case -- an external disk
+    holding real Projects -- is one a refusal would break.
+    """
+
+    def test_an_ordinary_tree_reports_no_crossing(self, tmp_path):
+        (tmp_path / "a").mkdir()
+        budget = ScanBudget(max_directories=100)
+        discover_git_roots([tmp_path], max_depth=3, budget=budget)
+        assert budget.report()["filesystem_crossings"] == []
+
+    def test_a_crossing_is_recorded_and_traversed_by_default(
+        self, tmp_path, monkeypatch,
+    ):
+        """The default continues: a Project on an external disk is a Project."""
+        (tmp_path / "mounted" / "repo" / ".git").mkdir(parents=True)
+        real_stat = Path.stat
+
+        def fake_stat(self, *args, **kwargs):
+            result = real_stat(self, *args, **kwargs)
+            if "mounted" in str(self):
+                class Shifted:
+                    st_dev = result.st_dev + 1
+                    st_mode = result.st_mode
+                return Shifted()
+            return result
+
+        monkeypatch.setattr(Path, "stat", fake_stat)
+        budget = ScanBudget(max_directories=100)
+        found = discover_git_roots([tmp_path], max_depth=4, budget=budget)
+        crossings = budget.report()["filesystem_crossings"]
+        assert crossings, "the crossing must be reported"
+        assert any("mounted" in item for item in crossings)
+        assert found, "and the tree is still traversed"
+
+    def test_same_filesystem_refuses_to_descend(self, tmp_path, monkeypatch):
+        (tmp_path / "mounted" / "repo" / ".git").mkdir(parents=True)
+        (tmp_path / "local" / "repo" / ".git").mkdir(parents=True)
+        real_stat = Path.stat
+
+        def fake_stat(self, *args, **kwargs):
+            result = real_stat(self, *args, **kwargs)
+            if "mounted" in str(self):
+                class Shifted:
+                    st_dev = result.st_dev + 1
+                    st_mode = result.st_mode
+                return Shifted()
+            return result
+
+        monkeypatch.setattr(Path, "stat", fake_stat)
+        budget = ScanBudget(max_directories=100)
+        found = discover_git_roots(
+            [tmp_path], max_depth=4, budget=budget, same_filesystem=True,
+        )
+        names = {path.name for path in found}
+        assert "repo" in names, "the local repository is still found"
+        assert not any("mounted" in str(path) for path in found)
+
+
 def test_candidate_policy_rejects_unknown_or_mistyped_fields():
     with pytest.raises(ValueError, match="unknown"):
         validate_policy({"policy_format": "codess.candidate-policy/1", "worthy": True})
@@ -296,14 +478,18 @@ def test_decision_and_plan_only_onboarding_do_not_ingest(tmp_path):
         catalog, project_ref="p1", decision="approved", reviewer="tester", notes="ok"
     )
     receipt = onboard_catalog(
-        catalog, registry=tmp_path / "registry", repo_root=Path(__file__).parents[1],
-        stop_after="plan", source="cursor", raw_mode="capture",
+        catalog,
+        RunPolicy(
+            registry=tmp_path / "registry", repo_root=Path(__file__).parents[1],
+            raw_mode="capture",
+        ),
+        stop_after="plan", source="cursor",
     )
     assert receipt["status"] == "planned"
     assert receipt["plan"]["projects"][0]["project_id"] == "p1"
     assert receipt["plan"]["projects"][0]["source"] == "cursor"
     assert receipt["plan"]["raw_mode"] == "capture"
-    assert len(receipt["plan"]["package_digest"]) == 64
+    assert len(receipt["plan"]["contract_digest"]) == 64
     assert not (project / ".codess").exists()
 
 
@@ -443,12 +629,12 @@ def test_freeze_revalidates_verifies_and_rolls_back_reviewed_baseline(
     result = freeze_reviewed_catalogs(
         {"projects": [{"path": str(project), "policy": str(policy_path)}]},
         approved_path=approved, reviewed_path=reviewed,
-        repo_root=Path(__file__).parents[1],
+        catalog_base=Path(__file__).parents[1],
     )
     assert result["verification"]["status"] == "verified"
     assert read_json(approved)["projects"][0]["project_id"] == project_id
     assert verify_reviewed_catalog(
-        reviewed, repo_root=Path(__file__).parents[1]
+        reviewed
     )["status"] == "verified"
     prior_approved, prior_reviewed = approved.read_bytes(), reviewed.read_bytes()
     monkeypatch.setattr(
@@ -459,7 +645,7 @@ def test_freeze_revalidates_verifies_and_rolls_back_reviewed_baseline(
         freeze_reviewed_catalogs(
             {"projects": [{"path": str(project), "policy": str(policy_path)}]},
             approved_path=approved, reviewed_path=reviewed,
-            repo_root=Path(__file__).parents[1],
+            catalog_base=Path(__file__).parents[1],
         )
     assert approved.read_bytes() == prior_approved
     assert reviewed.read_bytes() == prior_reviewed
@@ -494,7 +680,7 @@ def test_freeze_preserves_explicit_accepted_with_limitations_state(
         {"projects": [{"path": str(project), "policy": str(policy_path)}]},
         approved_path=approved,
         reviewed_path=reviewed,
-        repo_root=Path(__file__).parents[1],
+        catalog_base=Path(__file__).parents[1],
     )
     assert result["verification"]["status"] == "verified"
     assert read_json(approved)["projects"][0]["validation_state"] == (
@@ -523,7 +709,7 @@ def test_reviewed_baseline_verifies_its_exact_retained_snapshot_after_current_ad
     freeze_reviewed_catalogs(
         {"projects": [{"path": str(project), "policy": str(policy_path)}]},
         approved_path=approved, reviewed_path=reviewed,
-        repo_root=Path(__file__).parents[1],
+        catalog_base=Path(__file__).parents[1],
     )
     reviewed_snapshot = read_json(reviewed)["projects"][0]["snapshot_id"]
 
@@ -538,14 +724,14 @@ def test_reviewed_baseline_verifies_its_exact_retained_snapshot_after_current_ad
         project, [store], current_raw_records(project),
         raw_store=RawStore(registry / "raw"),
         build_policy={"raw_mode": "capture"},
-        registry_root=registry, project_id=project_id,
+        store_root=registry, project_id=project_id,
     )
     assert read_json(project / ".codess/current.json")["snapshot_id"] != (
         reviewed_snapshot
     )
 
     result = verify_reviewed_catalog(
-        reviewed, repo_root=Path(__file__).parents[1]
+        reviewed
     )
     assert result["projects"][0]["snapshot_id"] == reviewed_snapshot
     assert result["projects"][0]["project_id"] == project_id
@@ -557,7 +743,7 @@ def test_relocation_rolls_back_catalog_and_pointer_on_verification_failure(
     project, registry, project_id = _captured_project(tmp_path)
     before = (registry / "projects.json").read_bytes()
     replacement = tmp_path / "replacement"
-    monkeypatch.setattr("codess.catalog_operations.current_store_paths", lambda path: [])
+    monkeypatch.setattr("codess.catalog_operations.current_stores", lambda path: [])
     with pytest.raises(RuntimeError, match="cannot read"):
         relocate_project(registry, project_id, project, replacement)
     assert (registry / "projects.json").read_bytes() == before
@@ -588,12 +774,9 @@ def test_candidate_snapshot_does_not_publish_before_validation(tmp_path, monkeyp
         [store],
         current_raw_records(project),
         raw_store=RawStore(registry / "raw"),
-        registry_root=registry,
+        store_root=registry,
         project_id=project_id,
         publish=False,
-    )
-    monkeypatch.setattr(
-        "codess.baseline_operations.preserve_legacy", lambda *args: None
     )
     monkeypatch.setattr(
         "codess.baseline_operations.archive_stale_working_stores",
@@ -623,16 +806,15 @@ def test_candidate_snapshot_does_not_publish_before_validation(tmp_path, monkeyp
     with pytest.raises(RuntimeError, match="first validation rejected"):
         apply_project(
             project,
+            RunPolicy(
+                registry=registry,
+                repo_root=Path(__file__).parents[1], raw_mode="capture",
+            ),
             source="all",
-            raw_mode="capture",
-            registry=registry,
             policy_path=None,
             repeat=False,
-            preserve_legacy_stores=False,
             approve_catalog=None,
-            min_size=0,
             query_smoke=False,
-            repo_root=Path(__file__).parents[1],
         )
 
     assert local_pointer.read_bytes() == prior_local
@@ -653,7 +835,7 @@ def test_pointer_pair_publication_rolls_back_on_second_replace(
         [project / ".codess/sessions_codex.db"],
         current_raw_records(project),
         raw_store=RawStore(registry / "raw"),
-        registry_root=registry,
+        store_root=registry,
         project_id=project_id,
         publish=False,
     )
@@ -671,7 +853,7 @@ def test_pointer_pair_publication_rolls_back_on_second_replace(
         publish_snapshot(
             project,
             candidate,
-            registry_root=registry,
+            store_root=registry,
             project_id=project_id,
         )
 
@@ -693,7 +875,7 @@ def test_repeat_build_failure_leaves_prior_pointers_current(
         [project / ".codess/sessions_codex.db"],
         current_raw_records(project),
         raw_store=RawStore(registry / "raw"),
-        registry_root=registry,
+        store_root=registry,
         project_id=project_id,
         publish=False,
     )
@@ -711,9 +893,6 @@ def test_repeat_build_failure_leaves_prior_pointers_current(
             "candidate_snapshot_path": None,
         },
     ))
-    monkeypatch.setattr(
-        "codess.baseline_operations.preserve_legacy", lambda *args: None
-    )
     monkeypatch.setattr(
         "codess.baseline_operations.archive_stale_working_stores",
         lambda *args: None,
@@ -741,16 +920,15 @@ def test_repeat_build_failure_leaves_prior_pointers_current(
     with pytest.raises(RuntimeError, match="repeat ingest failed"):
         apply_project(
             project,
+            RunPolicy(
+                registry=registry,
+                repo_root=Path(__file__).parents[1], raw_mode="capture",
+            ),
             source="all",
-            raw_mode="capture",
-            registry=registry,
             policy_path=None,
             repeat=True,
-            preserve_legacy_stores=False,
             approve_catalog=None,
-            min_size=0,
             query_smoke=False,
-            repo_root=Path(__file__).parents[1],
         )
 
     assert local_pointer.read_bytes() == prior_local
@@ -830,16 +1008,15 @@ def test_fixed_point_with_allowed_source_drift_does_not_recheck_live_reference(
     )
     result = apply_project(
         project,
+        RunPolicy(
+            registry=tmp_path / "registry",
+            repo_root=Path(__file__).parents[1], raw_mode="reference",
+        ),
         source="all",
-        raw_mode="reference",
-        registry=tmp_path / "registry",
         policy_path=tmp_path / "policy.json",
         repeat=True,
-        preserve_legacy_stores=False,
         approve_catalog=None,
-        min_size=0,
         query_smoke=False,
-        repo_root=Path(__file__).parents[1],
     )
     assert reference_checks == [False, False]
     assert result["fixed_point"] == {
@@ -849,3 +1026,160 @@ def test_fixed_point_with_allowed_source_drift_does_not_recheck_live_reference(
         "value_acceptance": value_acceptance,
         "passed": True,
     }
+
+
+def test_a_working_archive_is_named_the_instant_its_manifest_reports(tmp_path):
+    """One archival event, one instant.
+
+    The archive directory name and the manifest's `archived_at` render the
+    same moment. They were separate clock reads, so the directory an operator
+    sorts by could claim a different second than the manifest inside it.
+    """
+    import json
+    from datetime import datetime
+
+    from codess.baseline_operations import archive_stale_working_stores
+    from codess.config import CURRENT_POINTER_FILE, STORE_DIR, WORKING_ARCHIVES_DIR
+    from codess.raw_store import RawStore
+    from codess.snapshot import create_snapshot
+    from codess.store import connect, init_db
+
+    project = tmp_path / "project"
+    base = project / STORE_DIR
+    store = base / "sessions_cc.db"
+    init_db(store)
+
+    raw = RawStore(tmp_path / "raw")
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"type":"user"}\n', encoding="utf-8")
+    record = raw.observe(
+        source, source_system_key="anthropic.claude-code",
+        storage_format="claude-jsonl", mode="capture",
+    )
+    snapshot = create_snapshot(project, [store], [record], raw_store=raw)
+    assert (base / CURRENT_POINTER_FILE).exists(), snapshot
+
+    # Make the working store claim a package the release no longer matches,
+    # which is the condition the archival exists for.
+    conn = connect(store)
+    try:
+        conn.execute(
+            "UPDATE store_meta SET value=? WHERE key='contract_digest'", ("f" * 64,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    destination = archive_stale_working_stores(project)
+    assert destination is not None
+    assert destination.parent.name == WORKING_ARCHIVES_DIR
+    manifest = json.loads((destination / "archive.json").read_text(encoding="utf-8"))
+    archived_at = datetime.fromisoformat(manifest["archived_at"])
+    assert destination.name.endswith(archived_at.strftime("%Y%m%dT%H%M%SZ"))
+
+
+def test_package_verify_reports_both_digests_and_what_each_covers():
+    """Exact package verification has a named consumer now that the gate does not.
+
+    The fixtures are not in the write gate; the guarantee lives here instead, where its
+    question -- "is this working tree the reviewed one" -- is the right one to ask.
+    """
+    import io
+    import json
+    from contextlib import redirect_stdout
+
+    from cli.admin_cmd import run
+    from codess.schema_contract import CONTRACT_ROLES, contract_digest, verify_package
+
+    captured = io.StringIO()
+    with redirect_stdout(captured):
+        assert run(["package", "verify"]) == 0
+    report = json.loads(captured.getvalue())
+
+    assert report["format"] == "codess.package-verification/1"
+    assert report["contract_digest"] == contract_digest()
+    assert report["package_digest"] == verify_package()
+    assert report["contract_digest"] != report["package_digest"]
+    assert set(report["contract_files"]) == CONTRACT_ROLES
+    assert report["other_files"], "the fixtures outside the gate must be named"
+    assert not set(report["other_files"]) & CONTRACT_ROLES
+
+
+class TestTheFreezeHandlerCallsItsLibrary:
+    """The CLI handler, not just the function it calls.
+
+    `_baseline_freeze` passed `repo_root=` to a callee taking `catalog_base=`, so
+    every invocation raised `TypeError`. The library function was well tested and
+    the handler was not, which is how a wrong keyword survived: the tests exercised
+    the callee directly and never the one-line call site.
+    """
+
+    def test_the_handler_passes_the_keywords_its_callee_accepts(self):
+        """Signature agreement, checked without needing a valid selection.
+
+        Reaching the call requires a fully-formed selection document, which is why
+        no functional test covered it. Comparing the keywords the handler passes
+        against the callee's signature needs neither.
+        """
+        import ast
+        import inspect as inspect_module
+
+        import cli.admin_cmd as admin
+        from codess.baseline_catalog import freeze_reviewed_catalogs
+
+        accepted = set(
+            inspect_module.signature(freeze_reviewed_catalogs).parameters
+        )
+        # The whole module, not a re-indented function source: `getsource` of a
+        # nested definition is not parseable on its own.
+        tree = ast.parse(
+            pathlib.Path(admin.__file__).read_text(encoding="utf-8")
+        )
+        passed = {
+            keyword.arg
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "freeze_reviewed_catalogs"
+            for keyword in node.keywords
+            if keyword.arg
+        }
+        assert passed, "the scan found no call, so it is checking nothing"
+        assert passed <= accepted, (
+            f"passes keywords the callee does not accept: {sorted(passed - accepted)}"
+        )
+
+    def test_the_policy_base_is_the_selection_directory_not_the_checkout(self):
+        """The value was wrong as well as the keyword.
+
+        `catalog_base` is the directory a relative `policy` field resolves
+        against, and it is the selection document's own directory -- which is what
+        makes a selection and its policies portable as a pair. Resolving against
+        the checkout is precisely what moving the catalog out of it undid.
+        """
+        import ast
+
+        import cli.admin_cmd as admin
+
+        tree = ast.parse(pathlib.Path(admin.__file__).read_text(encoding="utf-8"))
+        handler = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_baseline_freeze"
+        )
+        # The keywords on the call, not the function's text: the docstring names
+        # `repo_root=` to explain the defect, and a substring check over the whole
+        # body would match that explanation.
+        keywords = {
+            keyword.arg
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "freeze_reviewed_catalogs"
+            for keyword in node.keywords
+            if keyword.arg
+        }
+        assert "catalog_base" in keywords
+        assert "repo_root" not in keywords
+        assert "selection_path.parent" in ast.unparse(handler)
+

@@ -1,27 +1,34 @@
-"""Read bounded routine-refresh receipts as conservative Project observations."""
+"""Read bounded routine-refresh receipts as conservative Project observations.
+
+Receipts live at `<store>/receipts/<kind>/<applied_at>.json` -- one directory per
+kind, so a reader globs one directory and gets one kind. The alternative, a flat
+tree with a filename prefix, makes every reader carry a prefix its producer must
+match: this module globbed `reports/refresh-*.json` and silently ignored a
+retention receipt written into the same directory, which is that coupling
+failing rather than a mistake someone made.
+
+The filename is the receipt's own `applied_at`, so the name and the contents are
+two renderings of one instant.
+"""
 
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from codess.timeval import parse_iso
 
 REFRESH_RECEIPT_FORMAT = "codess.refresh-receipt/1"
 DEFAULT_RECEIPT_LIMIT = 1_000
 
 
 def _time_value(value: object, *, fallback: float) -> tuple[float, str]:
-    if isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            return parsed.timestamp(), parsed.astimezone(timezone.utc).isoformat()
-        except ValueError:
-            pass
-    parsed = datetime.fromtimestamp(fallback, tz=timezone.utc)
+    parsed = parse_iso(value)
+    if parsed is not None:
+        return parsed.timestamp(), parsed.astimezone(UTC).isoformat()
+    parsed = datetime.fromtimestamp(fallback, tz=UTC)
     return parsed.timestamp(), parsed.isoformat()
 
 
@@ -39,7 +46,7 @@ def _normalized_status(stage: str, status: object) -> str | None:
 
 
 def latest_refresh_observations(
-    registry_root: Path,
+    store_root: Path,
     *,
     receipt_limit: int = DEFAULT_RECEIPT_LIMIT,
 ) -> dict[str, dict[str, Any]]:
@@ -50,11 +57,11 @@ def latest_refresh_observations(
     """
     if receipt_limit <= 0:
         raise ValueError("receipt_limit must be positive")
-    reports = registry_root.expanduser().resolve() / "reports"
-    if not reports.is_dir():
+    receipts = store_root.expanduser().resolve() / "receipts" / "refresh"
+    if not receipts.is_dir():
         return {}
     candidates = []
-    for path in reports.glob("refresh-*.json"):
+    for path in receipts.glob("*.json"):
         try:
             stat = path.stat()
         except OSError:

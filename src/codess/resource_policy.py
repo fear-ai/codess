@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
+from codess.hashing import codess_bytes_hash
 
 RESOURCE_POLICY_FORMAT = "codess.resource-policy/1"
 
@@ -31,14 +32,14 @@ class ResourcePolicy:
     maximums: dict[str, int | None]
     origins: dict[str, str]
     file_path: str | None = None
-    file_sha256: str | None = None
+    file_digest: str | None = None
 
     def with_overrides(
         self,
         values: Mapping[str, int | None],
         *,
         origin: str,
-    ) -> "ResourcePolicy":
+    ) -> ResourcePolicy:
         maximums = dict(self.maximums)
         origins = dict(self.origins)
         for key, value in values.items():
@@ -47,9 +48,9 @@ class ResourcePolicy:
             origins[key] = origin
         return replace(self, maximums=maximums, origins=origins)
 
-    def disabled(self, *, origin: str) -> "ResourcePolicy":
+    def disabled(self, *, origin: str) -> ResourcePolicy:
         return self.with_overrides(
-            {key: None for key in BUILTIN_MAXIMUMS},
+            dict.fromkeys(BUILTIN_MAXIMUMS),
             origin=origin,
         )
 
@@ -57,7 +58,7 @@ class ResourcePolicy:
         return {
             "format": RESOURCE_POLICY_FORMAT,
             "file": self.file_path,
-            "file_sha256": self.file_sha256,
+            "file_digest": self.file_digest,
             "effective_maximums": dict(self.maximums),
             "origins": dict(self.origins),
         }
@@ -77,7 +78,7 @@ def _validate_limit(key: str, value: Any) -> None:
 def load_resource_policy(path: str | Path | None = None) -> ResourcePolicy:
     """Load a partial policy over built-ins and retain its exact file identity."""
     maximums: dict[str, int | None] = dict(BUILTIN_MAXIMUMS)
-    origins = {key: "built-in" for key in BUILTIN_MAXIMUMS}
+    origins = dict.fromkeys(BUILTIN_MAXIMUMS, "built-in")
     if path is None:
         return ResourcePolicy(maximums=maximums, origins=origins)
 
@@ -114,5 +115,5 @@ def load_resource_policy(path: str | Path | None = None) -> ResourcePolicy:
         maximums=maximums,
         origins=origins,
         file_path=str(policy_path),
-        file_sha256=hashlib.sha256(payload).hexdigest(),
+        file_digest=codess_bytes_hash(256, 256, payload),
     )

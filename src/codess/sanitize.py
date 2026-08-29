@@ -1,6 +1,9 @@
 """Content sanitization: control chars, ANSI, redaction."""
 
 import re
+from collections.abc import Iterable
+from typing import Any
+
 from codess.config import REDACT_PATTERNS
 
 # Exclude tab/newline; carriage returns are normalized first. C1 controls are
@@ -16,8 +19,7 @@ def sanitize_text(s: str) -> str:
         return s
     t = s.replace('\r\n', '\n').replace('\r', '\n')
     t = ANSI_ESCAPE_RE.sub('', t)
-    t = CONTROL_CHARS_RE.sub('', t)
-    return t
+    return CONTROL_CHARS_RE.sub('', t)
 
 
 def sanitize_for_display(s: str, max_len: int = 512) -> str:
@@ -32,14 +34,55 @@ def sanitize_for_display(s: str, max_len: int = 512) -> str:
     return t
 
 
-def sanitize_tabular(value) -> str:
+def sanitize_tabular(value: Any) -> str:
     """Sanitize a scalar for one-line/tabular terminal output."""
     if value is None:
         return ""
     return sanitize_text(str(value)).replace("\t", " ").replace("\n", " ")
 
 
-def sanitize_value(value, redact_enabled: bool = False):
+TABULAR_SEPARATOR = "\t"
+"""One separator for every tabular row Codess emits.
+
+Tab because a value is sanitized to contain none, so a row is unambiguously
+splittable by a consumer without quoting -- which is what makes the output
+pipeable into `cut` or `awk`.
+"""
+
+
+def tabular_row(*values: object, separator: str = TABULAR_SEPARATOR) -> str:
+    """Render one tabular row: sanitize every field, join once.
+
+    `query_cmd` assembled a row by hand at twenty sites, each joining sanitized
+    fields with a tab or interpolating several into an f-string -- so every site
+    independently re-decided the separator, the column order, and which fields
+    needed sanitizing, and adding a field to one report reached the others only
+    if someone edited each.
+
+    The sanitizing belongs here rather than at the call site for the same reason
+    the separator does: a field that reaches output unsanitized can carry a tab
+    or a newline and split one row into two, which is a correctness property of
+    the format rather than a formatting preference.
+    """
+    return separator.join(sanitize_tabular(value) for value in values)
+
+
+def tabular_fields(*pairs: tuple[str, Any], separator: str = " ") -> str:
+    """Render `key=value` pairs, dropping the pairs whose value is absent.
+
+    The other shape `query_cmd` repeats: a summary line of labelled values where
+    an absent one is omitted rather than printed empty. Sanitizing applies for
+    the same reason, and dropping `None` here means a call site does not build a
+    conditional f-string per field.
+    """
+    return separator.join(
+        f"{key}={sanitize_tabular(value)}"
+        for key, value in pairs
+        if value is not None
+    )
+
+
+def sanitize_value(value: Any, redact_enabled: bool = False) -> Any:
     """Recursively sanitize strings in JSON-like tool input structures."""
     if isinstance(value, str):
         return apply_sanitization(value, redact_enabled)
@@ -57,7 +100,7 @@ def sanitize_value(value, redact_enabled: bool = False):
     return value
 
 
-def protect_csv_cell(value):
+def protect_csv_cell(value: Any) -> Any:
     """Prevent spreadsheet formula interpretation for string CSV cells."""
     if not isinstance(value, str) or not value:
         return value
@@ -66,7 +109,7 @@ def protect_csv_cell(value):
     return value
 
 
-def protect_csv_row(row) -> list:
+def protect_csv_row(row: Iterable[Any]) -> list:
     return [protect_csv_cell(value) for value in row]
 
 

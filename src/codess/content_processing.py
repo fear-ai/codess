@@ -9,7 +9,6 @@ apply first, followed by every matching scope in declaration order.
 from __future__ import annotations
 
 import fnmatch
-import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass, field, replace
@@ -62,7 +61,7 @@ class ContentPolicy:
     scopes: tuple[dict[str, Any], ...] = ()
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any] | None) -> "ContentPolicy":
+    def from_mapping(cls, value: dict[str, Any] | None) -> ContentPolicy:
         value = dict(value or {})
         scopes = tuple(value.pop("scopes", ()) or ())
         return cls(rules=value, scopes=scopes)
@@ -95,9 +94,7 @@ def _merged_rules(policy: ContentPolicy, context: ContentContext) -> dict[str, A
                 continue
             if key in list_fields:
                 merged[key] = list(merged.get(key) or []) + list(value or [])
-            elif key == "topics":
-                merged[key] = {**(merged.get(key) or {}), **(value or {})}
-            elif key == "charset":
+            elif key == "topics" or key == "charset":
                 merged[key] = {**(merged.get(key) or {}), **(value or {})}
             else:
                 merged[key] = value
@@ -107,7 +104,7 @@ def _merged_rules(policy: ContentPolicy, context: ContentContext) -> dict[str, A
 class ContentProcessor:
     """Apply explicit, scoped transformations at pre/post-normalization hooks."""
 
-    def __init__(self, policy: ContentPolicy):
+    def __init__(self, policy: ContentPolicy) -> None:
         self.policy = policy
 
     def decode(self, value: bytes, context: ContentContext) -> ContentResult:
@@ -130,7 +127,7 @@ class ContentProcessor:
                 observed_type="bytes", encoding=encoding,
             ) from exc
         result = self._process(text, context, rules)
-        actions = (f"decoded:{encoding}:{errors}",) + result.actions
+        actions = (f"decoded:{encoding}:{errors}", *result.actions)
         return replace(result, actions=actions)
 
     def preprocess(self, value: str, context: ContentContext) -> ContentResult:
@@ -173,7 +170,7 @@ class ContentProcessor:
         for pattern in rules.get("suppress_patterns") or []:
             if re.search(str(pattern), text, flags=re.IGNORECASE | re.MULTILINE):
                 return ContentResult(
-                    "", False, original_length, tuple(actions + ["suppressed"]),
+                    "", False, original_length, (*actions, "suppressed"),
                     "suppressed_pattern",
                 )
 
@@ -202,7 +199,7 @@ class ContentProcessor:
             for pattern in topics.get("exclude") or []
         ):
             return ContentResult(
-                "", False, original_length, tuple(actions + ["topic_excluded"]),
+                "", False, original_length, (*actions, "topic_excluded"),
                 "topic_excluded",
             )
         include = topics.get("include") or []
@@ -211,14 +208,14 @@ class ContentProcessor:
             for pattern in include
         ):
             return ContentResult(
-                "", False, original_length, tuple(actions + ["topic_not_included"]),
+                "", False, original_length, (*actions, "topic_not_included"),
                 "topic_not_included",
             )
 
         minimum = rules.get("min_chars")
         if minimum is not None and len(text) < int(minimum):
             return ContentResult(
-                "", False, original_length, tuple(actions + ["min_chars"]),
+                "", False, original_length, (*actions, "min_chars"),
                 "below_min_chars",
             )
         maximum = rules.get("max_chars")
@@ -252,7 +249,6 @@ def apply_processing(
     result = method(value, context)
     actions = opts.get("content_actions")
     if actions is not None:
-        input_text = str(value)
         output_text = result.content
         actions.append({
             "phase": phase,
@@ -264,11 +260,6 @@ def apply_processing(
             "actions": list(result.actions),
             "original_length": result.original_length,
             "output_length": len(output_text),
-            "input_sha256": hashlib.sha256(input_text.encode("utf-8")).hexdigest(),
-            "output_sha256": (
-                hashlib.sha256(output_text.encode("utf-8")).hexdigest()
-                if result.accepted else None
-            ),
         })
     if not result.accepted:
         diagnostics = opts.get("diagnostics")

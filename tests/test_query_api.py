@@ -6,17 +6,27 @@ import shutil
 import pytest
 
 from codess.configuration_audit import audit
-from codess.evidence_resolver import resolve_event
-from codess.fileio import source_fingerprint
+from codess.fileio import read_source_revision
 from codess.investigation import build_investigation
 from codess.orientation_audit import _compare, _sqlite_observations
 from codess.query_api import (
-    QueryContractError, compare_results, content_hash, execute, load_document,
-    make_request, merge_selection, sanitize_free_text_filter, save_document,
-    selected_project_ids, selected_project_snapshots, selection_from_result,
+    RESULT_FORMAT,
+    QueryContractError,
+    compare_results,
+    content_hash,
+    execute,
+    load_document,
+    make_request,
+    merge_selection,
+    sanitize_free_text_filter,
+    save_document,
+    selected_project_ids,
+    selected_project_snapshots,
+    selection_from_result,
 )
 from codess.raw_store import RawStore
 from codess.snapshot import create_snapshot, snapshot_store_paths
+from codess.source_verification import verify_event_source
 from codess.store import connect, init_db, replace_session_events
 
 
@@ -44,7 +54,7 @@ def _store(tmp_path):
 
 
 def _scope(project, store):
-    return {"conn": connect(store, read_only=True), "path": store, "project_root": project}
+    return {"conn": connect(store, read_only=True), "path": store, "project_path": project}
 
 
 def _timed_store(tmp_path, name, session_id, timestamps):
@@ -94,11 +104,11 @@ def test_typed_overview_events_search_and_saved_selection(tmp_path, monkeypatch)
         assert [row["event_id"] for row in search["rows"]] == ["e2"]
         selected = selection_from_result(search)
         events = execute([opened], merge_selection(make_request("events"), selected))
-        assert [row["global_event_id"] for row in events["rows"]] == selected["event_ids"]
+        assert [row["event_entity_id"] for row in events["rows"]] == selected["event_ids"]
 
         saved = tmp_path / "result.json"
         save_document(saved, search)
-        assert load_document(saved, "codess.query-result/1")["result_hash"] == search["result_hash"]
+        assert load_document(saved, RESULT_FORMAT)["result_hash"] == search["result_hash"]
         original = saved.read_bytes()
         monkeypatch.setattr(
             "codess.query_api.os.replace",
@@ -120,7 +130,10 @@ def test_configuration_filters_and_occurrence_provenance_are_queryable(
     init_db(store)
     configuration = {
         "model_provider": "openai",
-        "model_family": "gpt",
+        "model_line": "gpt",
+        "model_generation": "5",
+        "model_version": "5.6",
+        "model_gradation": "sol",
         "model": "gpt-test-2026-07",
         "model_revision": "2026-07",
         "reasoning_effort": "high",
@@ -179,7 +192,10 @@ def test_configuration_filters_and_occurrence_provenance_are_queryable(
     filters = {
         "models": ["gpt-test-2026-07"],
         "model_providers": ["openai"],
-        "model_families": ["gpt"],
+        "model_lines": ["gpt"],
+        "model_generations": ["5"],
+        "model_versions": ["5.6"],
+        "model_gradations": ["sol"],
         "model_revisions": ["2026-07"],
         "reasoning_efforts": ["high"],
         "speed_tiers": ["fast"],
@@ -582,7 +598,7 @@ def test_relation_orientation_filters_and_exchange_windows(tmp_path):
         """
     )
     anchor = conn.execute(
-        "SELECT global_id FROM events WHERE event_id='e2'"
+        "SELECT event_entity_id FROM events WHERE event_id='e2'"
     ).fetchone()[0]
     conn.commit()
     conn.close()
@@ -751,7 +767,7 @@ def test_saved_tool_result_expands_to_complete_four_actor_exchange(tmp_path):
         assert all(row["interaction_id"] == "s1:interaction:1" for row in exchange["rows"])
         assert exchange["derivations"] == [derivation]
         assert selection_from_result(exchange)["event_ids"] == sorted(
-            row["global_event_id"] for row in exchange["rows"]
+            row["event_entity_id"] for row in exchange["rows"]
         )
     finally:
         opened["conn"].close()
@@ -785,19 +801,19 @@ def test_event_facets_and_exact_repetition_groups_preserve_occurrences(tmp_path)
         ]
         assert len(groups) == 1
         assert groups[0]["occurrences"] == 2
-        assert groups[0]["global_event_ids"] == sorted(
-            row["global_event_id"] for row in result["rows"]
+        assert groups[0]["event_entity_ids"] == sorted(
+            row["event_entity_id"] for row in result["rows"]
         )
         investigation = build_investigation(
             result,
             summary="The complete-content repetition group has two occurrences.",
             processor_id="test-reviewer/1",
-            event_ids=groups[0]["global_event_ids"],
+            event_ids=groups[0]["event_entity_ids"],
         )
         assert {
-            citation["global_event_id"]
+            citation["event_entity_id"]
             for citation in investigation["citations"]
-        } == set(groups[0]["global_event_ids"])
+        } == set(groups[0]["event_entity_ids"])
     finally:
         opened["conn"].close()
 
@@ -822,7 +838,7 @@ def test_saved_result_derivation_and_comparison_detect_changed_rows(tmp_path):
             derivations=[derivation],
         )
         assert derived["derivations"] == [derivation]
-        assert [row["global_event_id"] for row in derived["rows"]] == (
+        assert [row["event_entity_id"] for row in derived["rows"]] == (
             selected["event_ids"]
         )
 
@@ -830,7 +846,7 @@ def test_saved_result_derivation_and_comparison_detect_changed_rows(tmp_path):
         changed["rows"][0]["content"] = "updated normalized content"
         comparison = compare_results(derived, changed)
         assert comparison["changed_ids"] == [
-            derived["rows"][0]["global_event_id"]
+            derived["rows"][0]["event_entity_id"]
         ]
         assert comparison["added_ids"] == []
         assert comparison["removed_ids"] == []
@@ -845,7 +861,7 @@ def test_saved_result_derivation_and_comparison_detect_changed_rows(tmp_path):
         )
         assert compare_results(derived, unrelated)["comparable"] is False
         incompatible = json.loads(json.dumps(derived))
-        incompatible["rows"][0].pop("global_event_id")
+        incompatible["rows"][0].pop("event_entity_id")
         shape_check = compare_results(derived, incompatible)
         assert shape_check["comparable"] is False
         assert any(
@@ -861,7 +877,7 @@ def test_cited_investigation_binds_summary_to_exact_result_rows(tmp_path):
     opened = _scope(project, store)
     try:
         result = execute([opened], make_request("events"))
-        event_id = result["rows"][0]["global_event_id"]
+        event_id = result["rows"][0]["event_entity_id"]
         record = build_investigation(
             result,
             summary="The selected prompt introduced the request.",
@@ -869,12 +885,12 @@ def test_cited_investigation_binds_summary_to_exact_result_rows(tmp_path):
             event_ids=[event_id],
         )
         assert record["input_result_hash"] == result["result_hash"]
-        assert record["citations"][0]["global_event_id"] == event_id
-        assert record["citations"][0]["content_sha256"].startswith("sha256:")
-        assert record["citations"][0]["row_sha256"] == content_hash(
+        assert record["citations"][0]["event_entity_id"] == event_id
+        assert record["citations"][0]["content_digest"].startswith("digest:")
+        assert record["citations"][0]["row_digest"] == content_hash(
             result["rows"][0]
         )
-        assert record["investigation_hash"].startswith("sha256:")
+        assert record["investigation_hash"].startswith("digest:")
         with pytest.raises(QueryContractError, match="absent"):
             build_investigation(
                 result,
@@ -925,7 +941,7 @@ def test_historical_union_preserves_observations_and_diff_uses_logical_ids(
             ),
         )
         assert len(union["rows"]) == 4
-        assert union["summary"]["duplicate_global_event_id_count"] == 2
+        assert union["summary"]["duplicate_event_entity_id_count"] == 2
         assert len({
             row["observation_id"] for row in union["rows"]
         }) == 4
@@ -949,7 +965,7 @@ def test_historical_union_preserves_observations_and_diff_uses_logical_ids(
         comparison = compare_results(before, after)
         assert comparison["comparable"] is True
         expected_changed = next(
-            row["global_event_id"]
+            row["event_entity_id"]
             for row in before["rows"]
             if row["event_id"] == "e2"
         )
@@ -964,15 +980,15 @@ def test_exact_evidence_prefers_verified_sealed_object_over_changed_live(tmp_pat
     project, store, source = _store(tmp_path)
     raw = RawStore(tmp_path / "raw")
     record = raw.observe(
-        source, source_system_id="openai.codex", storage_format="codex-jsonl",
+        source, source_system_key="openai.codex", storage_format="codex-jsonl",
         mode="capture",
     )
     conn = connect(store)
     conn.execute(
-        "UPDATE sources SET availability='captured',content_sha256=?",
-        (record["object_id"].removeprefix("sha256:"),),
+        "UPDATE sources SET availability='captured',content_digest=?",
+        (record["object_id"].removeprefix("digest:"),),
     )
-    event_id = conn.execute("SELECT global_id FROM events WHERE event_id='e1'").fetchone()[0]
+    event_id = conn.execute("SELECT event_entity_id FROM events WHERE event_id='e1'").fetchone()[0]
     conn.commit()
     conn.close()
     snapshot = create_snapshot(project, [store], [record], raw_store=raw, seal=True)
@@ -980,7 +996,7 @@ def test_exact_evidence_prefers_verified_sealed_object_over_changed_live(tmp_pat
     snapshot_store = snapshot_store_paths(project, snapshot.name)[0]
     opened = _scope(project, snapshot_store)
     try:
-        result = resolve_event(opened, event_id)
+        result = verify_event_source(opened, event_id)
         assert result["selected"]["kind"] == "sealed"
         assert result["selected"]["equality"] == "exact"
         assert next(c for c in result["candidates"] if c["kind"] == "live")["equality"] == "mismatch"
@@ -990,31 +1006,31 @@ def test_exact_evidence_prefers_verified_sealed_object_over_changed_live(tmp_pat
 
 def test_exact_evidence_marks_unsupported_digest_reference_incompatible(tmp_path):
     project, store, source = _store(tmp_path)
-    current = source_fingerprint(source)
+    current = read_source_revision(source)
     legacy = ("unsupported-fingerprint:" + ("0" * 32), *current[1:])
     conn = connect(store)
     conn.execute(
         """
         UPDATE sources
         SET source_revision=?,source_mtime=?,source_size=?,
-            availability='reference',content_sha256=NULL
+            availability='reference',content_digest=NULL
         """,
         legacy[:3],
     )
     event_id = conn.execute(
-        "SELECT global_id FROM events WHERE event_id='e1'"
+        "SELECT event_entity_id FROM events WHERE event_id='e1'"
     ).fetchone()[0]
     conn.commit()
     conn.close()
     opened = _scope(project, store)
     try:
-        result = resolve_event(opened, event_id)
+        result = verify_event_source(opened, event_id)
         live = next(
             item for item in result["candidates"] if item["kind"] == "live"
         )
         assert live["equality"] == "mismatch"
-        assert live["revision"].startswith("sha256-fingerprint:")
-        assert live["verification_method"] == "full-sha256-fingerprint"
+        assert live["revision"].startswith("digest-fingerprint:")
+        assert live["verification_method"] == "full-digest-fingerprint"
     finally:
         opened["conn"].close()
 
@@ -1023,7 +1039,7 @@ def test_configuration_audit_keeps_nullable_settings_independent(tmp_path):
     project, store, _source = _store(tmp_path)
     conn = connect(store)
     conn.execute("""
-        INSERT INTO model_configurations(provider,model_name_exact,reasoning_effort,source_config)
+        INSERT INTO model_params(provider,model_name_exact,reasoning_effort,source_params)
         VALUES ('openai','gpt-test','high',?)
     """, (json.dumps({"model": {"field": "payload.model", "value": "gpt-test"}}),))
     conn.commit()
@@ -1092,12 +1108,12 @@ def test_configuration_audit_honors_native_session_scope(tmp_path):
         ] == ["gpt-selected"]
         assert report["configurations"][0]["model_turn_occurrences"] == 1
         assert {
-            row["session_global_id"]
+            row["session_entity_id"]
             for row in report["configurations"][0]["occurrence_examples"]
         } == {
             conn_row[0]
             for conn_row in opened["conn"].execute(
-                "SELECT global_id FROM sessions WHERE id='selected'"
+                "SELECT session_entity_id FROM sessions WHERE id='selected'"
             )
         }
     finally:
@@ -1128,8 +1144,8 @@ def test_monthly_tool_interactions_are_distinct_across_days(tmp_path):
         """
     )
     conn.execute(
-        "UPDATE events SET event_at=?,timestamp=? WHERE event_id='e2'",
-        (86_404_000.0, 86_404_000.0),
+        "UPDATE events SET event_at=? WHERE event_id='e2'",
+        (86_404_000.0,),
     )
     conn.commit()
     conn.close()

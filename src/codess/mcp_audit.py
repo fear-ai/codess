@@ -1,4 +1,10 @@
-"""Evidence-backed audit of discovered and invoked MCP-related tools."""
+"""Evidence-backed audit of discovered and invoked MCP-related tools.
+
+**Reads core tables directly**, because the audit distinguishes an MCP tool
+that was *discovered* from one that was *invoked*, which is a join over
+`events` and `tool_invocations` against vendor tool-name spellings rather than
+a selection the typed request contract expresses.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +15,10 @@ from typing import Any
 
 from codess.adapters.codex import process_file
 from codess.project_catalog import catalog_readiness, durable_project_root
+from codess.snapshot import snapshot_stores
 from codess.store import connect
+from codess.tool_identity import bounded_source_call_id, is_mcp_tool
 from codess.tool_result_status import application_failure_evidence
-from codess.tool_identity import bounded_source_call_id
-
 
 MCP_AUDIT_FORMAT = "codess.mcp-interaction-audit/1"
 _MCP_NAMES = (
@@ -23,11 +29,8 @@ _MCP_NAMES = (
 
 
 def _mcp_candidate(name: str) -> bool:
-    lowered = name.lower()
-    return (
-        lowered.startswith(("mcp-", "mcp__", "mcp--"))
-        or lowered in _MCP_NAMES
-    )
+    """An MCP call by any vendor spelling, or one of the named built-in bridges."""
+    return is_mcp_tool(name) or name.lower() in _MCP_NAMES
 
 
 def _bounded(value: object, limit: int = 240) -> str | None:
@@ -77,7 +80,7 @@ def _discovery_details(value: object, depth: int = 0) -> dict[str, Any]:
         return {}
     if not isinstance(decoded, dict):
         return {}
-    details: dict[str, Any] = {}
+    details = {}
     if decoded.get("server") is not None:
         details["target_server"] = _bounded(decoded["server"], 120)
     if decoded.get("serverStatus") is not None:
@@ -152,13 +155,13 @@ def _store_records(
             SELECT ti.id,ti.session_id,ti.interaction_id,ti.source_call_id,
                    COALESCE(ti.source_tool_name,ti.canonical_tool_name) tool_name,
                    ti.input_json,ti.source_status,ti.normalized_status,
-                   s.source,s.vendor_name,
+                   s.adapter_key,s.vendor_name,
                    tr.output_text,tr.output_json,tr.source_status result_source_status,
                    tr.normalized_status result_normalized_status
             FROM tool_invocations ti
             JOIN sessions s ON s.id=ti.session_id
             LEFT JOIN tool_results tr ON tr.invocation_id=ti.id
-            ORDER BY ti.session_id,ti.started_at,ti.id,tr.sequence_no
+            ORDER BY ti.session_id,ti.source_started_at,ti.id,tr.sequence_no
             """
         ).fetchall()
         records = []
@@ -187,7 +190,7 @@ def _store_records(
                 "project_name": project.get("logical_name"),
                 "snapshot_id": snapshot_id,
                 "store": db_path.name,
-                "vendor": row["vendor_name"] or row["source"],
+                "vendor": row["vendor_name"] or row["adapter_key"],
                 "session_id": row["session_id"],
                 "interaction_id": row["interaction_id"],
                 "invocation_id": row["id"],
@@ -318,7 +321,7 @@ def audit_mcp_interactions(
             continue
         root = durable_project_root(registry, project["project_id"])
         snapshot = root / "snapshots" / snapshot_id
-        for db_path in sorted(snapshot.glob("*.db")):
+        for db_path in snapshot_stores(snapshot):
             records.extend(_store_records(
                 db_path, project=project, snapshot_id=snapshot_id,
                 include_excerpts=include_excerpts,

@@ -1,25 +1,31 @@
-"""Reusable structural evidence summaries and current-catalog inventory."""
+"""Reusable structural evidence summaries and current-catalog inventory.
+
+**Reads core tables directly** to inventory what a store holds across
+vendors, which is a measurement of the stored evidence rather than a
+selection over it; the typed request contract expresses selections. Reading
+core tables directly is deliberate and recorded here for that reason.
+"""
 
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from codess.codex_parent_audit import audit_parentage
 from codess.config import CC_PROJECTS
 from codess.cursor_feature_audit import audit_cursor_features
 from codess.project_catalog import load_catalog
-from codess.snapshot import current_store_paths
+from codess.snapshot import current_stores
 from codess.store import connect
 from codess.vendor_audits.claude_features import audit_claude_features
 from codess.vendor_audits.codex_features import audit_codex_features
 
-
 _TOTAL_COUNT_QUERIES = {
     "tool_invocations": "SELECT COUNT(*) FROM tool_invocations",
     "tool_results": "SELECT COUNT(*) FROM tool_results",
-    "model_configurations": "SELECT COUNT(*) FROM model_configurations",
+    "model_params": "SELECT COUNT(*) FROM model_params",
     "correlation_assertions": "SELECT COUNT(*) FROM correlation_assertions",
 }
 
@@ -29,7 +35,7 @@ def summarize_store_evidence(paths: Iterable[Path]) -> dict[str, Any]:
     totals = {
         "tool_invocations": 0,
         "tool_results": 0,
-        "model_configurations": 0,
+        "model_params": 0,
         "events_missing_time": 0,
         "correlation_assertions": 0,
     }
@@ -47,7 +53,7 @@ def summarize_store_evidence(paths: Iterable[Path]) -> dict[str, Any]:
             ).fetchone()[0]
             for row in conn.execute(
                 "SELECT reasoning_effort,speed_tier,service_tier "
-                "FROM model_configurations"
+                "FROM model_params"
             ):
                 for key in settings:
                     settings[key] += int(row[key] is not None)
@@ -60,14 +66,14 @@ def summarize_store_evidence(paths: Iterable[Path]) -> dict[str, Any]:
             for row in conn.execute(
                 """
                 SELECT COALESCE(a.relative_path,a.uri,a.observed_absolute_path) locator,
-                       s.source
+                       s.adapter_key
                 FROM artifacts a JOIN event_artifacts ea ON ea.artifact_id=a.id
                 JOIN events e ON e.id=ea.event_id
                 JOIN sessions s ON s.id=e.session_id
                 WHERE COALESCE(a.relative_path,a.uri,a.observed_absolute_path) IS NOT NULL
                 """
             ):
-                artifact_sources[row["locator"]].add(row["source"])
+                artifact_sources[row["locator"]].add(row["adapter_key"])
         finally:
             conn.close()
     shared = sorted(
@@ -105,7 +111,7 @@ def build_evidence_inventory(
         )
         if not active:
             continue
-        paths = current_store_paths(Path(active))
+        paths = current_stores(Path(active))
         stores += len(paths)
         project_summaries.append(
             (project["project_id"], summarize_store_evidence(paths))

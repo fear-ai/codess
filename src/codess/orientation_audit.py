@@ -1,68 +1,68 @@
 """Independent reconciliation of typed orientation results against SQLite.
+
+**Reads core tables directly, deliberately.** This module exists to check the
+typed executor's answers against the stores, so routing its own reads through
+`query_reports` would compare the query layer with itself and agree by
+construction. The direct SQL *is* the second opinion.
+
+The reads are bounded and read-only, and every identifier they name is
+checked against the released DDL by `tests/test_sql_identifiers.py`.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from codess.project_catalog import catalog_readiness, durable_project_root
-from codess.query_api import execute, make_request
+from codess.query_api import (
+    activity_bucket,
+    execute,
+    make_request,
+    session_structure_counts,
+)
 from codess.snapshot import snapshot_store_paths_from_base
 from codess.store import connect
-
 
 ORIENTATION_AUDIT_FORMAT = "codess.orientation-reconciliation/1"
 
 
 def _day(timestamp: float) -> str:
     return datetime.fromtimestamp(
-        timestamp / 1000, tz=timezone.utc
+        timestamp / 1000, tz=UTC
     ).date().isoformat()
 
 
 def _month(timestamp: float) -> str:
     return datetime.fromtimestamp(
-        timestamp / 1000, tz=timezone.utc
+        timestamp / 1000, tz=UTC
     ).strftime("%Y-%m")
 
 
 def _bucket(day: str) -> dict[str, Any]:
-    return {
-        "day": day,
-        "events": 0,
-        "content_characters": 0,
-        "sessions": set(),
-        "interactions": set(),
-        "first_event_at": None,
-        "last_event_at": None,
-        "human_prompts": 0,
-        "human_prompt_characters": 0,
-        "model_outputs": 0,
-        "model_output_characters": 0,
-        "human_prompt_interactions": set(),
-        "tool_calls": 0,
-        "tool_results": 0,
-        "tool_input_characters": 0,
-        "tool_output_characters": 0,
-        "tool_call_interactions": set(),
-        "tool_result_interactions": set(),
-        "tool_calls_by_name": Counter(),
-        "actor_events": Counter(),
-        "actor_characters": Counter(),
-        "actor_sessions": {},
-        "actor_interactions": {},
-        "relation_events": Counter(),
-        "relation_characters": Counter(),
-        "relation_sessions": {},
-        "relation_interactions": {},
-        "relation_actor_events": {},
-        "first_human_prompt_at": None,
-        "last_human_prompt_at": None,
-        "last_human_prompt_interaction": None,
-    }
+    """One day's activity, with the per-Actor and per-relation breakdowns.
+
+    The shared counters come from `query_api.activity_bucket`; the extras here
+    are what an orientation report needs and a query result does not.
+    """
+    return activity_bucket(
+        day,
+        tool_calls_by_name=Counter(),
+        actor_events=Counter(),
+        actor_characters=Counter(),
+        actor_sessions={},
+        actor_interactions={},
+        relation_events=Counter(),
+        relation_characters=Counter(),
+        relation_sessions={},
+        relation_interactions={},
+        relation_actor_events={},
+        first_human_prompt_at=None,
+        last_human_prompt_at=None,
+        last_human_prompt_interaction=None,
+    )
 
 
 def _sqlite_observations(
@@ -88,46 +88,18 @@ def _sqlite_observations(
             )
         }
         totals["sessions"] += len(session_ids)
-        if session_ids:
-            placeholders = ",".join("?" for _ in session_ids)
-            ids = sorted(session_ids)
-            totals["interactions"] += int(conn.execute(
-                f"SELECT COUNT(*) FROM interactions "
-                f"WHERE session_id IN ({placeholders})", ids,
-            ).fetchone()[0])
-            totals["model_turns"] += int(conn.execute(
-                f"SELECT COUNT(*) FROM model_turns "
-                f"WHERE session_id IN ({placeholders})", ids,
-            ).fetchone()[0])
-            relations.update({
-                str(relation): int(count)
-                for relation, count in conn.execute(
-                    f"""
-                    SELECT COALESCE(session_relation_kind,'top_level'),COUNT(*)
-                    FROM sessions WHERE id IN ({placeholders})
-                    GROUP BY COALESCE(session_relation_kind,'top_level')
-                    """,
-                    ids,
-                )
-            })
-            initiations.update({
-                str(kind): int(count)
-                for kind, count in conn.execute(
-                    f"""
-                    SELECT initiation_kind,COUNT(*) FROM interactions
-                    WHERE session_id IN ({placeholders})
-                    GROUP BY initiation_kind
-                    """,
-                    ids,
-                )
-            })
+        structure = session_structure_counts(conn, session_ids)
+        totals["interactions"] += structure["interactions"]
+        totals["model_turns"] += structure["model_turns"]
+        relations.update(structure["session_relations"])
+        initiations.update(structure["initiation_kinds"])
 
         rows = conn.execute(
             """
-            SELECT s.source_system_id,e.event_kind,
-                   COALESCE(e.event_at,e.timestamp),
+            SELECT s.source_system_key,e.event_kind,
+                   e.event_at,
                    LENGTH(COALESCE(e.content,'')),e.tool_name,e.artifact_path,
-                   COALESCE(e.actor_kind,'unknown'),e.content_role,s.global_id,
+                   COALESCE(e.actor_kind,'unknown'),e.content_role,s.session_entity_id,
                    e.interaction_id,
                    COALESCE(s.session_relation_kind,'top_level'),
                    LENGTH(COALESCE(e.tool_input,'')),
@@ -457,7 +429,7 @@ def audit_orientation(
                     "path": path,
                     "project_id": project_id,
                     "snapshot_id": snapshot_id,
-                    "project_root": Path(
+                    "project_path": Path(
                         project.get("canonical_path") or base
                     ),
                 })

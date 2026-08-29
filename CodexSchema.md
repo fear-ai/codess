@@ -7,7 +7,41 @@ format is not a stable public interface and may change. The shapes below
 describe the current tolerant Codess adapter and verified local fixtures, not a
 compatibility guarantee from Codex.
 
-## 1. Source Scope
+## Session Naming, Archiving, and Their Effects
+
+Codex maintains state about a Session beside the rollout, and two of those
+records change what a Session *is called* and *where it lives* without changing
+the rollout.
+
+| Location | Holds | Read by Codess |
+|---|---|---|
+| `~/.codex/session_index.jsonl` | `id`, `thread_name`, `updated_at` -- the operator's name for a thread | **No** |
+| `~/.codex/archived_sessions/` | Rollouts moved out of the active set | Yes, as a second Source root |
+| `~/.codex/history.jsonl` | Prompt history | No |
+
+**Renaming a thread is invisible to the store.** Measured on one machine: the
+index holds 25 named threads and **21 of them are Sessions Codess has
+ingested**, carrying names like `Codess Continue` and `AGENTS.md WPages.md
+Status.md`. The rollout does not carry the name, so a store built only from
+rollouts reports a Session the operator can no longer recognise by the label
+they gave it.
+
+This is not the same as `~/.codess/session-names.json`, which records an
+operator alias *within Codess*. One is the vendor's own label and the other is
+ours; a reader wants the first when asking "which Session was that".
+
+**Archiving moves the file and Codess follows it.** `CODEX_ARCHIVED_SESSIONS`
+is a second Source root, so an archived rollout is still ingested and
+`archive_state` records it. Measured: 6 archived rollouts, all 6 ingested, of
+which 3 carry `archive_state='archived'` -- the other 3 are decoded from the
+archive directory without the state being set, so the location and the recorded
+state disagree.
+
+**A Session moved between tabs leaves no trace in the rollout.** Codex records
+`cwd` per record and nothing about which surface displayed it, so tab movement
+is invisible by construction rather than by omission.
+
+## Source Scope
 
 | Field | Value |
 |-------|--------|
@@ -16,7 +50,7 @@ compatibility guarantee from Codex.
 | **Encoding** | UTF-8 JSONL |
 | **Time basis** | `timestamp` on lines: numeric (s or ms) or ISO 8601 string |
 
-## 2. Storage Layout
+## Storage Layout
 
 | Pattern | Role |
 |---------|------|
@@ -31,7 +65,7 @@ If active and archived roots contain the same session id, the active transcript
 wins; within one root the newest file wins. Re-ingest transactionally replaces
 the selected session rather than leaving events removed from the transcript.
 
-### 2.1 Names, Projects, and Runtime State
+### Names, Projects, and Runtime State
 
 ChatGPT desktop Projects are application groupings of chats. They are not the
 same entity as a Codex CLI working directory or a Codess Project. Recent Codex
@@ -46,7 +80,7 @@ index do not reconstruct that live state. Codess may record a dated runtime
 observation when such an interface supplies it; source mtime, an unanswered
 prompt, or an active-tree pathname alone yields runtime `unknown`.
 
-## 3. Selective Access
+## Selective Access
 
 | Method | Use |
 |--------|-----|
@@ -54,7 +88,7 @@ prompt, or an active-tree pathname alone yields runtime `unknown`.
 | **Codess ingest** | `codess ingest --dir <project>`; collects files whose `cwd` resolves to project root |
 | **Direct read** | Open file; locate `session_meta`, then stream records tolerantly |
 
-## 4. Session Metadata
+## Session Metadata
 
 | Field path | Type | Notes |
 |------------|------|--------|
@@ -65,7 +99,7 @@ prompt, or an active-tree pathname alone yields runtime `unknown`.
 | `payload.model_provider`, `originator`, `source` | scalar or version-specific structured value | Retained as bounded session metadata; provider can seed a session-level configuration. Current protocol releases can encode structured Session source/subagent evidence, so mapping must be shape- and release-aware |
 | `timestamp` | number or string | Session time for `--days` filter |
 
-## 5. Rollout Records and Mapping
+## Rollout Records and Mapping
 
 Ingest adapter primarily uses:
 
@@ -124,7 +158,7 @@ Malformed payload containers, tool inputs, timestamps, and configuration fields
 are diagnosed at field scope and dropped independently. A malformed optional
 field does not discard an otherwise supported record.
 
-## 6. Scan Observations
+## Scan Observations
 
 | Metric | Definition |
 |--------|------------|
@@ -134,7 +168,7 @@ field does not discard an otherwise supported record.
 | **days_ago** | From max `timestamp` among matching sessions (parsed to ms) |
 | **span_weeks** | Spread of timestamps across matching files |
 
-## 7. Limitations and Coverage Boundaries
+## Limitations and Coverage Boundaries
 
 - Timestamp formats mixed (Unix s, Unix ms, ISO); parser normalizes to ms where possible.
 - “Events” in scan ≠ only chat messages; includes structural lines.
@@ -143,7 +177,7 @@ field does not discard an otherwise supported record.
   reasoning state remains raw evidence, token accounting remains a specialized
   utilization input, and snapshots/turn context are not collapsed into chat
   messages. Selected scalar turn settings are normalized into
-  `model_configurations`.
+  `model_params`.
 - **Compaction is directly stored.** Current local transcripts contain
   top-level `type=compacted` envelopes. Each envelope has a
   `replacement_history` containing one dedicated `type=compaction` item plus
@@ -172,7 +206,7 @@ field does not discard an otherwise supported record.
 - A valid transcript with no supported events removes its prior normalized
   session and is counted in the `empty_sources` diagnostic.
 
-### 7.1 Parent-Session Evidence
+### Parent-Session Evidence
 
 Current Codex protocol source defines `parent_thread_id`, `forked_from_id`,
 structured `thread_source`
@@ -187,7 +221,7 @@ basis is the current protocol plus focused fixtures rather than a claim of
 local occurrence. Codess never infers parentage
 from timestamps, path proximity, archive location, or content.
 
-### 7.2 Coverage Boundary and Complete-Transport Capture
+### Coverage Boundary and Complete-Transport Capture
 
 The rollout is a durable harness-side event history, not a byte-for-byte model
 request/response trace. It preserves user, harness, model-summary, tool,
@@ -206,7 +240,7 @@ request assembly, transport retries/stream frames, or otherwise unavailable
 wire latency. Even then it does not reveal server-hidden reasoning and does not
 capture local tool execution unless harness telemetry is collected too.
 
-### 7.3 Configuration Evidence
+### Configuration Evidence
 
 `codess evidence audit codex-features` performs a bounded, structure-only
 audit. Exact model and effort occur in `turn_context`; settings records can

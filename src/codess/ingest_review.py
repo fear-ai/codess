@@ -7,7 +7,6 @@ source, boundary, decoder, or vendor mapping.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -102,7 +101,6 @@ def record_ingest_review(
     path = Path(source_text).expanduser()
     observation: dict[str, Any] = {
         "source_suffix": path.suffix.lower() or None,
-        "source_locator_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
     }
     try:
         stat = path.stat()

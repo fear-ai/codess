@@ -1,29 +1,28 @@
-"""Derived monthly token observations from current local vendor sources."""
+"""Derived monthly token observations from current local vendor sources.
+
+**Reads core tables directly** because its subject is recorded usage
+observations rather than a Session selection, and it must read stores the
+query layer would refuse on contract grounds.
+"""
 
 from __future__ import annotations
 
 import json
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from codess.fileio import read_json, write_json_atomic
+from codess.config import MAX_TOKEN_LINE_BYTES
+from codess.fileio import open_readonly, read_json, write_json_atomic
+from codess.timeval import month_key, parse_iso
 
 TOKEN_OBSERVATION_FORMAT = "codess.token-observation/1"
 TOKEN_CACHE_FORMAT = "codess.token-source-set-cache/1"
 TOKEN_VALIDATION_FORMAT = "codess.codex-token-validation/1"
-MAX_TOKEN_LINE_BYTES = 8 * 1024**2
 
 
-def _month(value: Any) -> str:
-    if isinstance(value, str) and len(value) >= 7:
-        try:
-            datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return value[:7]
-        except ValueError:
-            pass
-    return "unknown"
 
 
 def _integer(value: Any) -> int:
@@ -94,11 +93,11 @@ def _claude(paths: Iterable[Path]) -> dict[str, Any]:
                 }
                 values["total_tokens"] = sum(values.values())
                 _add(
-                    buckets[(_month(record.get("timestamp")), str(message.get("model") or "unknown"))],
+                    buckets[(month_key(record.get("timestamp")), str(message.get("model") or "unknown"))],
                     values,
                 )
     return {
-        "source_system_id": "anthropic.claude-code",
+        "source_system_key": "anthropic.claude-code",
         "method": "deduplicated_message_usage_sum_v1",
         "confidence": "local_observed",
         "files": files, "malformed_lines": malformed,
@@ -178,11 +177,11 @@ def _codex(paths: Iterable[Path]) -> dict[str, Any]:
                 delta = current
             if any(delta.values()):
                 _add(
-                    buckets[(_month(observation.get("timestamp")), observation["model"])], delta
+                    buckets[(month_key(observation.get("timestamp")), observation["model"])], delta
                 )
             previous = {**previous, **current}
     return {
-        "source_system_id": "openai.codex",
+        "source_system_key": "openai.codex",
         "method": "cumulative_positive_delta_v1",
         "confidence": "local_derived_provisional",
         "limitations": (
@@ -222,15 +221,7 @@ def validate_codex_token_usage(paths: Iterable[Path]) -> dict[str, Any]:
                     repeated += 1
                 elif any(current[key] < previous[key] for key in keys):
                     resets += 1
-            timestamp = None
-            raw_timestamp = observation.get("timestamp")
-            if isinstance(raw_timestamp, str):
-                try:
-                    timestamp = datetime.fromisoformat(
-                        raw_timestamp.replace("Z", "+00:00")
-                    )
-                except ValueError:
-                    pass
+            timestamp = parse_iso(observation.get("timestamp"))
             if timestamp and previous_timestamp and timestamp < previous_timestamp:
                 timestamp_regressions += 1
             if timestamp:
@@ -253,8 +244,8 @@ def validate_codex_token_usage(paths: Iterable[Path]) -> dict[str, Any]:
                 "monotonic_single_file_sequence"
             ),
         })
-    shared = [
-        {"counter_point": dict(zip(keys, point)), "files": sorted(paths)}
+    shared: list[dict[str, Any]] = [
+        {"counter_point": dict(zip(keys, point, strict=False)), "files": sorted(paths)}
         for point, paths in counter_files.items() if len(paths) > 1
     ]
     shared.sort(key=lambda item: (-len(item["files"]), tuple(item["counter_point"].values())))
@@ -289,7 +280,7 @@ def validate_codex_token_usage(paths: Iterable[Path]) -> dict[str, Any]:
 
 
 def source_paths(
-    store_paths: Iterable[Path], source_system_id: str,
+    store_paths: Iterable[Path], source_system_key: str,
 ) -> set[Path]:
     """Return distinct live source URIs selected by current CoSchema stores."""
     import sqlite3
@@ -297,11 +288,11 @@ def source_paths(
     selected: set[Path] = set()
     for store in store_paths:
         try:
-            conn = sqlite3.connect(store.resolve().as_uri() + "?mode=ro", uri=True)
+            conn = open_readonly(store)
             try:
                 for (uri,) in conn.execute(
-                    "SELECT source_uri FROM sources WHERE source_system_id=?",
-                    (source_system_id,),
+                    "SELECT source_path FROM sources WHERE source_system_key=?",
+                    (source_system_key,),
                 ):
                     path = Path(str(uri))
                     if path.is_file():
@@ -321,10 +312,10 @@ def collect_token_usage(
     for store in store_paths:
         try:
             import sqlite3
-            conn = sqlite3.connect(store.resolve().as_uri() + "?mode=ro", uri=True)
+            conn = open_readonly(store)
             try:
                 for system, uri in conn.execute(
-                    "SELECT source_system_id, source_uri FROM sources"
+                    "SELECT source_system_key, source_path FROM sources"
                 ):
                     path = Path(str(uri))
                     if path.is_file():
@@ -341,7 +332,7 @@ def collect_token_usage(
             except OSError:
                 continue
             fingerprints.append({
-                "source_system_id": system,
+                "source_system_key": system,
                 "path": str(path.resolve()),
                 "size": stat.st_size,
                 "mtime_ns": stat.st_mtime_ns,
@@ -368,7 +359,7 @@ def collect_token_usage(
             claude,
             codex,
             {
-                "source_system_id": "cursor.composer",
+                "source_system_key": "cursor.composer",
                 "method": None,
                 "confidence": "unknown",
                 "availability": "unavailable",

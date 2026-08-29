@@ -1,27 +1,27 @@
-"""Refreshable, evidence-backed annotations for the Project catalog.
-
-# ruff S608 exemption: CoPlan.md 10.4.2.2
-"""
+"""Refreshable, evidence-backed annotations for the Project catalog."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
 from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from codess.config import LARGE_EVENT_COUNT, LARGE_STORE_BYTES
+from codess.fileio import open_readonly, quote_identifier
 from codess.project_catalog import (
     catalog_readiness,
     durable_project_root,
     load_catalog,
 )
-
+from codess.schema_contract import column_names
+from codess.snapshot import SnapshotError, current_snapshot, read_manifest, snapshot_stores
+from codess.store import table_counts
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 ANNOTATION_REPORT_FORMAT = "codess.project-annotations/1"
-DEFAULT_LARGE_EVENT_COUNT = 25_000
-DEFAULT_LARGE_STORE_BYTES = 128 * 1024 * 1024
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -35,15 +35,15 @@ def _read_json(path: Path | None) -> dict[str, Any]:
 
 
 def _current_snapshot(base: Path) -> tuple[str | None, Path | None]:
-    pointer = _read_json(base / "current.json")
-    snapshot_id = pointer.get("snapshot_id")
-    target = pointer.get("path")
-    if not isinstance(snapshot_id, str) or not snapshot_id:
+    try:
+        resolved = current_snapshot(base)
+    except SnapshotError:
         return None, None
-    if isinstance(target, str) and target:
-        path = Path(target)
-        return snapshot_id, path if path.is_absolute() else base / path
-    return snapshot_id, base / "snapshots" / snapshot_id
+    if resolved is None:
+        return None, None
+    snapshot, pointer = resolved
+    snapshot_id = pointer.get("snapshot_id")
+    return (snapshot_id if isinstance(snapshot_id, str) and snapshot_id else None), snapshot
 
 
 def _snapshot_facts(snapshot: Path | None) -> dict[str, Any]:
@@ -57,41 +57,41 @@ def _snapshot_facts(snapshot: Path | None) -> dict[str, Any]:
     }
     if snapshot is None or not snapshot.is_dir():
         return facts
-    manifest = _read_json(snapshot / "manifest.json")
+    try:
+        manifest = read_manifest(snapshot)
+    except SnapshotError as exc:
+        facts["snapshot_read_error"] = str(exc)
+        manifest = {}
     build_policy = manifest.get("build_policy")
     if isinstance(build_policy, dict):
         facts["raw_mode"] = build_policy.get("raw_mode")
     source_counts: Counter[str] = Counter()
     try:
-        for store in sorted(snapshot.glob("*.db")):
+        for store in snapshot_stores(snapshot):
             facts["normalized_store_bytes"] += store.stat().st_size
-            conn = sqlite3.connect(
-                store.resolve().as_uri() + "?mode=ro", uri=True
-            )
+            conn = open_readonly(store)
             try:
-                conn.execute("PRAGMA query_only = ON")
-                facts["sessions"] += int(
-                    conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-                )
-                facts["events"] += int(
-                    conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-                )
-                columns = {
-                    str(row[1])
-                    for row in conn.execute("PRAGMA table_info(sessions)")
-                }
+                counts = table_counts(conn, ("sessions", "events"))
+                facts["sessions"] += counts.get("sessions", 0)
+                facts["events"] += counts.get("events", 0)
+                columns = column_names(conn, "sessions")
                 source_column = (
-                    "source_system_id"
-                    if "source_system_id" in columns else "source"
+                    "source_system_key"
+                    if "source_system_key" in columns else "source"
                 )
+                quoted_source = quote_identifier(source_column)
                 for source, count in conn.execute(
-                    f"SELECT {source_column},COUNT(*) FROM sessions "
-                    f"GROUP BY {source_column}"
+                    f"SELECT {quoted_source},COUNT(*) FROM sessions "
+                    f"GROUP BY {quoted_source}"
                 ):
                     source_counts[str(source or "unknown")] += int(count)
             finally:
                 conn.close()
-    except (OSError, sqlite3.Error) as exc:
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        # `ValueError` covers a malformed identifier from `quote_identifier`.
+        # This report degrades on an unreadable store rather than failing, and
+        # a name this module cannot render is the same class of fault: one bad
+        # store must not cost the annotations for every other Project.
         facts["snapshot_read_error"] = str(exc)
     facts["source_systems"] = dict(sorted(source_counts.items()))
     return facts
@@ -114,8 +114,8 @@ def build_project_annotations(
     *,
     baseline_selection: Path | None = None,
     reviewed_catalog: Path | None = None,
-    large_event_count: int = DEFAULT_LARGE_EVENT_COUNT,
-    large_store_bytes: int = DEFAULT_LARGE_STORE_BYTES,
+    large_event_count: int = LARGE_EVENT_COUNT,
+    large_store_bytes: int = LARGE_STORE_BYTES,
 ) -> dict[str, Any]:
     """Build annotations from catalog, snapshot, and reviewed-set evidence."""
     if large_event_count <= 0 or large_store_bytes <= 0:
@@ -204,7 +204,9 @@ def build_project_annotations(
                     f"{facts['normalized_store_bytes']} normalized-store bytes"
                 ),
             )
-        if facts["raw_mode"] in {"none", "reference"}:
+        # `none` is the previous spelling of `observe` and appears in manifests
+        # retained before the rename, so both classify as limited retention.
+        if facts["raw_mode"] in {"observe", "none", "reference"}:
             add(
                 "limited",
                 f"raw evidence mode is {facts['raw_mode']}",
@@ -276,7 +278,7 @@ def build_project_annotations(
     }
     return {
         "format": ANNOTATION_REPORT_FORMAT,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": now_iso(system_clock),
         "registry": str(registry),
         "definitions": definitions,
         "thresholds": {

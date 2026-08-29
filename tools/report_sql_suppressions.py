@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Report current ruff S608 exemption status instead of a number in prose.
 
-CoPlan.md 10.4 documents *why* certain files are exempted from `S608` in
+CoPlan documents *why* certain files are exempted from `S608` in
 `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]` and how to tell a
 rewritable site from one that genuinely needs the exemption. It deliberately
 does not document which files carry the exemption or how many sites each
@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {path}", file=sys.stderr)
         return 1
 
-    print(f"S608-exempted files (see CoPlan.md 10.4 for why): {len(exempted)}")
+    print(f"S608-exempted files (see CoPlan for why): {len(exempted)}")
     for path in sorted(exempted):
         print(f"  {path}")
     print(

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from codess.bounded_jsonl import DEFAULT_MAX_RECORD_BYTES, iter_bounded_jsonl
-
+from codess.timeval import now_iso
+from codess.wallclock import system_clock
 
 CODEX_AUDIT_FORMAT = "codess.codex-feature-audit/1"
 SETTING_FIELDS = {
@@ -23,19 +23,6 @@ SETTING_FIELDS = {
     "service_tier": "service_tier",
     "mode": "mode",
 }
-
-
-def extract_setting_values(payload: dict[str, Any]) -> dict[str, str]:
-    """Return supported scalar settings without interpreting vendor values."""
-    values: dict[str, str] = {}
-    for source_field, common_field in SETTING_FIELDS.items():
-        value = payload.get(source_field)
-        if value is None or isinstance(value, (dict, list)):
-            continue
-        text = str(value).strip()
-        if text:
-            values.setdefault(common_field, text)
-    return values
 
 
 def _setting_observations(
@@ -151,7 +138,7 @@ def audit_codex_features(
             diagnostics["io_error"] += 1
     return {
         "audit_format": CODEX_AUDIT_FORMAT,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": now_iso(system_clock),
         "privacy_boundary": (
             "record/payload field names, selected scalar configuration values, "
             "and aggregate counts only; message, reasoning, and tool bodies omitted"

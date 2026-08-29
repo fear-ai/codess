@@ -1,4 +1,11 @@
 """Audit normalized model/runtime settings and their source provenance.
+
+**Reads core tables directly**, because the audit's subject is the stored
+model evidence rather than a query result: it walks `model_params`,
+`model_turns`, and the Events that carry occurrence provenance, and reports
+which settings were observed against which source field. The typed executor
+answers selection questions, not "which provenance does each stored setting
+carry", so there is no report to route this through.
 """
 
 from __future__ import annotations
@@ -6,10 +13,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
 AUDIT_FORMAT = "codess.configuration-audit/1"
 SETTING_FIELDS = (
-    "provider", "model_family", "model_name_exact", "model_revision",
+    "provider", "model_gradation", "model_name_exact", "model_revision",
     "reasoning_effort", "speed_tier", "service_tier", "mode",
 )
 
@@ -22,7 +28,7 @@ def audit(
 ) -> dict[str, Any]:
     configurations = []
     source_values = 0
-    invalid_source_config = 0
+    invalid_source_params = 0
     turns = linked_turns = 0
     configuration_turn_occurrences = 0
     configuration_default_occurrences = 0
@@ -35,7 +41,7 @@ def audit(
         if source_system_ids:
             values = sorted(source_system_ids)
             session_clauses.append(
-                "s.source_system_id IN (" + ",".join("?" for _ in values) + ")"
+                "s.source_system_key IN (" + ",".join("?" for _ in values) + ")"
             )
             params.extend(values)
         if session_ids:
@@ -55,14 +61,14 @@ def audit(
         linked_turns += conn.execute(
             "SELECT COUNT(*) FROM model_turns mt JOIN sessions s ON s.id=mt.session_id" +
             session_filter + (" AND" if session_filter else " WHERE") +
-            " mt.model_config_id IS NOT NULL", params,
+            " mt.model_param_id IS NOT NULL", params,
         ).fetchone()[0]
         configuration_params = params
         configuration_sql = """
-            SELECT mc.id,mc.provider,mc.model_family,mc.model_name_exact,
+            SELECT mc.id,mc.provider,mc.model_gradation,mc.model_name_exact,
                    mc.model_revision,mc.reasoning_effort,mc.speed_tier,
-                   mc.service_tier,mc.mode,mc.source_config
-            FROM model_configurations mc
+                   mc.service_tier,mc.mode,mc.source_params
+            FROM model_params mc
         """
         if session_clauses:
             selected_sessions = " AND ".join(session_clauses)
@@ -73,10 +79,10 @@ def audit(
             default_branch_params = list(params)
             configuration_sql += f""" WHERE EXISTS (
                 SELECT 1 FROM model_turns mt JOIN sessions s ON s.id=mt.session_id
-                WHERE mt.model_config_id=mc.id AND {selected_sessions}
+                WHERE mt.model_param_id=mc.id AND {selected_sessions}
             ) OR EXISTS (
                 SELECT 1 FROM sessions s
-                WHERE s.default_model_config_id=mc.id AND {selected_sessions}
+                WHERE s.session_model_param_id=mc.id AND {selected_sessions}
             )"""
             configuration_params = turn_branch_params + default_branch_params
         configuration_sql += " ORDER BY mc.id"
@@ -84,41 +90,41 @@ def audit(
         if session_clauses:
             source_and = " AND " + " AND ".join(session_clauses)
         turn_counts = {
-            row["model_config_id"]: row["occurrences"]
+            row["model_param_id"]: row["occurrences"]
             for row in conn.execute(
                 """
-                SELECT mt.model_config_id,COUNT(*) AS occurrences
+                SELECT mt.model_param_id,COUNT(*) AS occurrences
                 FROM model_turns mt JOIN sessions s ON s.id=mt.session_id
-                WHERE mt.model_config_id IS NOT NULL
-                """ + source_and + " GROUP BY mt.model_config_id",
+                WHERE mt.model_param_id IS NOT NULL
+                """ + source_and + " GROUP BY mt.model_param_id",
                 params,
             )
         }
         default_counts = {
-            row["default_model_config_id"]: row["occurrences"]
+            row["session_model_param_id"]: row["occurrences"]
             for row in conn.execute(
                 """
-                SELECT s.default_model_config_id,COUNT(*) AS occurrences
+                SELECT s.session_model_param_id,COUNT(*) AS occurrences
                 FROM sessions s
-                WHERE s.default_model_config_id IS NOT NULL
-                """ + source_and + " GROUP BY s.default_model_config_id",
+                WHERE s.session_model_param_id IS NOT NULL
+                """ + source_and + " GROUP BY s.session_model_param_id",
                 params,
             )
         }
         provenance_counts = {
-            row["model_config_id"]: row["occurrences"]
+            row["model_param_id"]: row["occurrences"]
             for row in conn.execute(
                 """
-                SELECT mt.model_config_id,
+                SELECT mt.model_param_id,
                        COUNT(DISTINCT mt.id) AS occurrences
                 FROM model_turns mt JOIN sessions s ON s.id=mt.session_id
                 JOIN events e ON e.model_turn_id=mt.id
-                WHERE mt.model_config_id IS NOT NULL
+                WHERE mt.model_param_id IS NOT NULL
                 """ + source_and + """
                   AND json_type(
                     e.metadata,'$.configuration_provenance'
                   )='object'
-                GROUP BY mt.model_config_id
+                GROUP BY mt.model_param_id
                 """,
                 params,
             )
@@ -127,21 +133,21 @@ def audit(
         example_rows = conn.execute(
             """
             WITH ranked_turns AS (
-              SELECT mt.model_config_id,s.source_system_id,
-                     s.global_id AS session_global_id,
+              SELECT mt.model_param_id,s.source_system_key,
+                     s.session_entity_id AS session_entity_id,
                      mt.id AS model_turn_id,mt.sequence_no,
                      ROW_NUMBER() OVER (
-                       PARTITION BY mt.model_config_id
-                       ORDER BY s.source_system_id,s.global_id,
+                       PARTITION BY mt.model_param_id
+                       ORDER BY s.source_system_key,s.session_entity_id,
                                 mt.sequence_no,mt.id
                      ) AS occurrence_rank
               FROM model_turns mt
               JOIN sessions s ON s.id=mt.session_id
-              WHERE mt.model_config_id IS NOT NULL
+              WHERE mt.model_param_id IS NOT NULL
             """ + source_and + """
             ),
             ranked_events AS (
-              SELECT e.id,e.model_turn_id,e.global_id,
+              SELECT e.id,e.model_turn_id,e.event_entity_id,
                      e.source_record_locator,e.metadata,e.source_id,
                      ROW_NUMBER() OVER (
                        PARTITION BY e.model_turn_id
@@ -154,17 +160,17 @@ def audit(
               FROM events e
               WHERE e.model_turn_id IS NOT NULL
             )
-            SELECT rt.model_config_id,rt.source_system_id,
-                   rt.session_global_id,rt.model_turn_id,
-                   e.global_id AS event_global_id,e.source_record_locator,
-                   e.metadata,src.global_id AS source_global_id,
-                   src.source_uri,src.source_revision
+            SELECT rt.model_param_id,rt.source_system_key,
+                   rt.session_entity_id,rt.model_turn_id,
+                   e.event_entity_id AS event_entity_id,e.source_record_locator,
+                   e.metadata,src.source_entity_id AS source_entity_id,
+                   src.source_path,src.source_revision
             FROM ranked_turns rt
             LEFT JOIN ranked_events e ON e.model_turn_id=rt.model_turn_id
                                      AND e.event_rank=1
             LEFT JOIN sources src ON src.id=e.source_id
             WHERE rt.occurrence_rank<=3
-            ORDER BY rt.model_config_id,rt.occurrence_rank
+            ORDER BY rt.model_param_id,rt.occurrence_rank
             """,
             params,
         )
@@ -182,15 +188,15 @@ def audit(
                 if isinstance(metadata, dict) else None
             )
             examples_by_configuration.setdefault(
-                example["model_config_id"], []
+                example["model_param_id"], []
             ).append({
-                "source_system_id": example["source_system_id"],
-                "session_global_id": example["session_global_id"],
+                "source_system_key": example["source_system_key"],
+                "session_entity_id": example["session_entity_id"],
                 "model_turn_id": example["model_turn_id"],
-                "event_global_id": example["event_global_id"],
+                "event_entity_id": example["event_entity_id"],
                 "source_record_locator": example["source_record_locator"],
-                "source_global_id": example["source_global_id"],
-                "source_uri": example["source_uri"],
+                "source_entity_id": example["source_entity_id"],
+                "source_path": example["source_path"],
                 "source_revision": example["source_revision"],
                 "configuration_provenance": (
                     evidence if isinstance(evidence, dict) else None
@@ -201,17 +207,17 @@ def audit(
                 ),
             })
         for row in conn.execute(configuration_sql, configuration_params):
-            values = {field: row[field] for field in SETTING_FIELDS}
-            source_config = None
-            if row["source_config"]:
+            settings = {field: row[field] for field in SETTING_FIELDS}
+            source_params = None
+            if row["source_params"]:
                 try:
-                    source_config = json.loads(row["source_config"])
-                    if not isinstance(source_config, dict):
-                        invalid_source_config += 1
+                    source_params = json.loads(row["source_params"])
+                    if not isinstance(source_params, dict):
+                        invalid_source_params += 1
                 except json.JSONDecodeError:
-                    invalid_source_config += 1
-            if isinstance(source_config, dict):
-                source_values += len(source_config)
+                    invalid_source_params += 1
+            if isinstance(source_params, dict):
+                source_values += len(source_params)
             turn_occurrences = int(turn_counts.get(row["id"], 0))
             default_occurrences = int(default_counts.get(row["id"], 0))
             occurrence_provenance = int(
@@ -224,10 +230,10 @@ def audit(
             configuration_default_occurrences += default_occurrences
             turns_with_occurrence_provenance += occurrence_provenance
             configurations.append({
-                "project_path": str(store["project_root"]),
-                "configuration_id": row["id"], **values,
-                "source_config": source_config,
-                "provenance_state": "recorded" if source_config else "normalized_only",
+                "project_path": str(store["project_path"]),
+                "configuration_id": row["id"], **settings,
+                "source_params": source_params,
+                "provenance_state": "recorded" if source_params else "normalized_only",
                 "model_turn_occurrences": turn_occurrences,
                 "session_default_occurrences": default_occurrences,
                 "model_turns_with_configuration_provenance": (
@@ -237,7 +243,7 @@ def audit(
                     "recorded"
                     if occurrence_provenance
                     else "representative_only"
-                    if source_config and turn_occurrences
+                    if source_params and turn_occurrences
                     else "normalized_only"
                 ),
                 "occurrence_examples": occurrence_examples,
@@ -246,10 +252,10 @@ def audit(
                 ),
             })
         coverage_sql = """
-            SELECT s.source_system_id,COUNT(*) AS turns,
-                   SUM(mt.model_config_id IS NOT NULL) AS configured
+            SELECT s.source_system_key,COUNT(*) AS turns,
+                   SUM(mt.model_param_id IS NOT NULL) AS configured
             FROM model_turns mt JOIN sessions s ON s.id=mt.session_id
-        """ + session_filter + " GROUP BY s.source_system_id"
+        """ + session_filter + " GROUP BY s.source_system_key"
         for row in conn.execute(coverage_sql, params):
             entry = vendor_coverage.setdefault(row[0], {"turns": 0, "configured_turns": 0})
             entry["turns"] += row[1]
@@ -273,13 +279,13 @@ def audit(
             "model_turns_with_configuration_provenance": (
                 turns_with_occurrence_provenance
             ),
-            "source_config_values": source_values,
-            "invalid_source_configurations": invalid_source_config,
+            "source_params_values": source_values,
+            "invalid_source_params": invalid_source_params,
         },
         "vendor_coverage": dict(sorted(vendor_coverage.items())),
         "configurations": configurations,
         "limitations": [
-            "source_config is representative configuration-level evidence; occurrence_examples expose bounded event/source evidence where the adapter recorded it",
+            "source_params is representative configuration-level evidence; occurrence_examples expose bounded event/source evidence where the adapter recorded it",
             "occurrence_examples contain at most three Model Turns per normalized configuration and are not a complete event-history export",
             "availability varies by vendor and release; NULL must remain distinct from an explicit default",
         ],

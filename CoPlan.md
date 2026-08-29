@@ -1,8 +1,36 @@
 # CoPlan
 
-CoPlan explains how Codess is implemented, how components relate, how behavior
-is tested, what is operational now, and what engineering work remains. It is
-the sole current implementation-status and work registry.
+CoPlan explains how Codess is implemented: which code owns each responsibility,
+the allowed dependencies between components, the data passed at runtime, the
+physical store implementation, and the tests that establish conformance.
+
+It describes intended structure. Three companion documents carry what this one
+deliberately does not:
+
+| Document | Carries |
+|---|---|
+| [CoTasks](CoTasks.md) | Open work items and the prioritized queue |
+| [CoReview](CoReview.md) | Findings, measurements, and the rule each left behind |
+| [CoNotes](CoNotes.md) | Duplication and constant audits, and observed process misses |
+
+Product capabilities and functional rationale are in [Codess](Codess.md) and
+[Designs](Designs.md), and are not restated here unless they impose a concrete
+software boundary or verification obligation.
+
+## Table of Contents
+
+- [1. Implementation Scope](#1-implementation-scope)
+- [2. Repository Layout](#2-repository-layout)
+- [3. Architecture](#3-architecture)
+- [4. CoSchema Read and Write Path](#4-coschema-read-and-write-path)
+- [5. Data Flows](#5-data-flows)
+- [6. Vendor Record Processing](#6-vendor-record-processing)
+- [7. Common Conversion and Mapping](#7-common-conversion-and-mapping)
+- [8. Database Lifecycle and Indexing](#8-database-lifecycle-and-indexing)
+- [9. Command-Line Interface](#9-command-line-interface)
+- [10. Quality Requirements](#10-quality-requirements)
+- [11. Test Structure and Coverage](#11-test-structure-and-coverage)
+- [12. Current Implementation Status](#12-current-implementation-status)
 
 ## 1. Implementation Scope
 
@@ -12,13 +40,12 @@ at the software boundary. It identifies the code that owns each responsibility,
 the allowed dependencies between components, the data passed at runtime, the
 physical store implementation, and the tests that establish conformance.
 
-The first part of this document describes the intended implementation
-architecture. It distinguishes that intended structure from the current code:
-the implementation-status and code-review sections state what exists and where
-it diverges, while the work registry turns each unresolved finding into a
-prioritized item with completion evidence. Product capabilities and functional
-rationale are not restated here unless they impose a concrete software
-boundary or verification obligation.
+This document describes intended implementation architecture, and Section 12
+states what of it exists. Where the current code diverges, the finding and the
+measurement that decided its disposition are in [CoReview](CoReview.md), and any
+unresolved work is a numbered item in [CoTasks](CoTasks.md) with completion
+evidence. Product capabilities and functional rationale are not restated here
+unless they impose a concrete software boundary or verification obligation.
 
 Vendor record processing receives the most implementation attention because it
 contains the greatest structural variation and uncertainty. Catalog,
@@ -45,7 +72,7 @@ CodeSess/
 │       ├── vendor_audits/      # bounded structure-only evidence audits
 │       │   ├── claude_features.py
 │       │   └── codex_features.py
-│       └── *.py                # ~50 flat modules: catalog, store, query,
+│       └── *.py                # flat modules: catalog, store, query,
 │                                # scan/ingest coordination, snapshot,
 │                                # retention, evidence, per-vendor source
 │                                # access, and shared utilities together
@@ -64,13 +91,13 @@ every other module in that package -- catalog, store, query, scan/ingest
 coordination, snapshot, retention, evidence, per-vendor source access
 (`codex_source.py`, `cursor_source.py`), and shared utilities -- is a flat
 file at the same directory level, not grouped into further subdirectories.
-The Component Responsibilities table in 3.2 and the Dependency Rules in 3.3
+The Component Responsibilities table and the Dependency Rules below
 are the actual grouping and boundary authority; this diagram shows where
 files sit on disk, which is coarser than and does not substitute for either.
 A prior version of this diagram implied a directory split by concern (source
 access, domain, store, query, operations) that does not exist in the source
 tree; the dependency rules those directories would have encoded are enforced
-in code today (see 13.2, 13.4.1) independent of physical file placement.
+in code today independent of physical file placement.
 
 The installed entry point is `codess.project:console_main`. Normal users invoke
 `codess`; modules below `src/` are implementation surfaces rather than separate
@@ -138,14 +165,14 @@ the authorities for functional meaning rather than code ownership.
 | Component | Implementation location | Behavioral authority |
 |---|---|---|
 | Interface layer | `codess.project`, `cli.*_cmd` | Parse the public CLI, adapt arguments, render output, and return exit status. |
-| Application operations | `scan`, `query_api`, `refresh_operations`, `baseline_operations`, and currently parts of `cli.ingest_cmd` | Coordinate one use case without defining vendor formats or physical schemas. |
+| Application operations | `scan`, `query_api`, `refresh_operations`, `baseline_operations`, `ingest_sources`, `ingest_publication`, and currently parts of `cli.ingest_cmd` | Coordinate one use case without defining vendor formats or physical schemas. |
 | Project catalog | `project_catalog`, `catalog_operations`, `project_annotations`, `registry_store` | Project identity, locations, workspace bindings, selection, and observations. |
 | Source access | `bounded_jsonl`, `codex_source`, `cursor_source`, plus Claude selection in `scan` and ingest coordination | Locate and read attributable source records with stable locators and bounds. |
 | Vendor decode | `adapters.cc`, `adapters.codex`, `adapters.cursor` | Interpret one selected source family and emit source-annotated candidate Sessions and Events. |
 | Common mapping | `mapping`, `field_state`, `content_processing`, `context_content`, `tool_identity`, `tool_result_status`, `ingest_review` | Apply common classifications, field-state rules, content policy, diagnostics, and mapping evidence. |
 | Storage services | `store`, `schema_contract`, `identity`, `processing_contract`, `raw_store`, `snapshot` | Enforce CoSchema, transactions, identities, publication, and retained evidence. |
 | Query engine | `query_api`, `investigation`, `configuration_audit`, `artifact_correlation` | Execute typed predicates, bounded merge, expansion, correlation, and structured results. |
-| Operational services | `refresh_*`, `baseline_*`, `retention`, `storage_report`, `evidence_resolver` | Compose updates, verify publication, resolve evidence, report storage, and perform reviewed cleanup. |
+| Operational services | `refresh_*`, `baseline_*`, `retention`, `storage_report`, `source_verification` | Compose updates, verify publication, resolve evidence, report storage, and perform reviewed cleanup. |
 | Evidence audits | `vendor_audits.claude_features`, `vendor_audits.codex_features`, `cursor_feature_audit`, `codex_parent_audit`, `mcp_audit`, `orientation_audit`, `token_usage` | Measure a bounded source or stored capability without authorizing a mapping. |
 | Shared utilities | `config`, `helpers`, `fileio`, `resources`, `resource_policy`, `sanitize`, `progress` | Configuration, safe I/O, resource control, sanitization, and progress reporting. |
 
@@ -162,14 +189,203 @@ the authorities for functional meaning rather than code ownership.
 - DDL exists only in `schema/coschema/sqlite/schema.sql`.
 - Administrative wrappers call domain operations instead of implementing a
   second workflow.
+- `timeval` imports nothing from `codess` and reads no ambient clock. Time
+  parsing is needed by every layer -- adapters, store, query, catalog,
+  receipts -- so a dependency in either direction would make it either
+  unimportable from the bottom or a second parser at the top. Both constraints
+  are asserted by tests that walk the module's syntax tree rather than stated
+  in prose, because a prose constraint is one an edit can violate silently.
+- `wallclock` owns the ambient clock, and it is a separate module for the
+  constraint above rather than for size: a `system_clock` inside `timeval` would
+  be a `datetime.now` inside the module whose rule forbids one, whoever calls
+  it. A caller writes `now_iso(system_clock)`, so the injection point stays at
+  the call site and the clock has one definition. A third syntax-tree test
+  asserts no other `datetime.now` in the package, because the condition it
+  replaced was 43 inline spellings that a test needing a fixed clock could not
+  patch.
+- `reporting.clock` is a different clock and stays separate. It anchors
+  monotonic ticks for event timing, where a backward NTP step would make a
+  duration negative -- a hazard the wall clock does not have and a resolution
+  the wall clock cannot give.
+
+#### Filesystem Traversal
+
+**29 sites, and the question each asks is what decides whether it belongs to a
+helper.** The pattern is not the subject: five sites spelled
+`sorted(dir.glob("*.db"))` and meant one thing -- *the stores in a snapshot* --
+and three spelled a pair of globs and meant *Claude's transcripts, main and
+subagent*. Both are now one function, and the count fell from 34.
+
+| Group | Sites | What it asks | Owner |
+|---|---|---|---|
+| Snapshot stores | 1 | Which CoSchema stores a snapshot holds | `snapshot.snapshot_stores` |
+| Claude transcripts | 2 | Main and subagent transcripts under one slug | `project.cc_session_files` |
+| Codex rollouts | 3 | Which rollout files a session directory holds | `codex_source` |
+| Cursor workspaces | 1 | Which workspace directories exist | `cursor_source` |
+| Snapshot generations | 6 | Which snapshots a Project has, and which is current | `snapshot`, `retention`, `storage_report` |
+| Raw objects | 3 | Which captured objects exist, and which directories emptied | `retention`, `storage_report` |
+| Receipts and reports | 2 | Which receipts a store holds | `refresh_receipts`, `storage_report` |
+| Staging | 3 | Which stores a staging root holds mid-ingest | `ingest_cmd` |
+| Unbounded walks | 2 | What is under a tree nobody described | `review_project`, `retention` |
+
+**Two sites are `os.walk`, and only one needs a budget.** `review_project` walks
+a work root the operator names, so its size is unknown and `ScanBudget` bounds it
+by directory count, elapsed time, and device crossing. `retention` walks
+Codess's own raw-object tree to remove directories its own deletions emptied; the
+depth is the store's layout, so the bound is structural.
+
+**The rest name a directory Codess or a vendor created.** There is no tree to
+bound. What a helper owns there is not the traversal but the *layout knowledge*:
+that a snapshot holds its stores as `*.db` beside its manifest, and that Claude
+writes a delegated Session under `<parent>/subagents/`. A call site that globs
+those directly keeps working when the layout changes and quietly reports
+nothing, which is the failure the two helpers prevent.
+
+**What remains is not further consolidation.** The groups above ask different
+questions of different trees; merging them would produce a function taking a
+directory and a pattern and returning what `glob` returns, which moves the call
+site's own statement into an argument without owning anything.
 
 Focused evidence audits may inspect a vendor store directly when the source
 shape itself is the subject of the audit. That exception is read-only,
 explicitly bounded, and prohibited from becoming an alternate ingest path.
 
+The exception is a permission, not a preference, and it should be taken only
+where a source-access module does not already own the storage in question.
+`cursor_feature_audit` relied on it and should not have: `cursor_source`
+already owned Cursor connections and key ranges, so the audit's own
+connection was a second, weaker implementation of a solved problem rather
+than access the exception was needed for. Its queries now live with the rest
+of Cursor selection, and the audit owns the report. Where the exception
+does still apply -- an audit over a vendor shape no ingest path reads -- the
+bound is the same: read-only, structure-only, and not a second decode.
+
 Cross-cutting utilities remain content-neutral unless their stated purpose is
 content processing. Logging, progress, resource observation, and catalog code
 must not become hidden vendor parsers.
+
+### 3.4 Snapshot File-Access Case Study
+
+The Component Responsibilities table assigns `snapshot` sole behavioral authority over "publication
+and retained evidence." Before the consolidation described here, that
+assignment was true in intent but not in the code: the physical layout it
+governs -- `.codess/`, `current.json`, `manifest.json`,
+`raw-manifest.jsonl`, and related filenames -- was independently
+constructed and, in several cases, independently *read and hash-verified*
+by twelve modules with no shared implementation. This section records what
+was found, because the specific shape of the duplication is the evidence
+for the dependency rules above, not merely a historical note.
+
+#### 3.4.1 What Was Duplicated
+
+Every module below had its own literal `".codess"`, `"current.json"`,
+`"manifest.json"`, or `"raw-manifest.jsonl"` string, constructing the same
+paths `snapshot.py` already constructed, for a reason specific to that
+module's own stated purpose:
+
+| Module | Stated purpose | What it needed from snapshot files |
+|---|---|---|
+| `baseline_operations` | Baseline preservation, apply, fixed-point workflow | Legacy-store archival, working-store reset gated on a readable current snapshot |
+| `baseline_validation` | Read-only snapshot verification | An independent pointer/manifest read-and-hash-verify, parallel to `snapshot.py`'s own |
+| `catalog_operations` | Batch onboarding, Project-location lifecycle | Whether a Project's current snapshot has fully captured raw records |
+| `retention` | Retention planning, validated pruning | The strictest read: pointer, manifest, raw manifest, and every store hash, plus containment and identity checks before permitting deletion |
+| `project_annotations` | Catalog annotations for reporting | Best-effort snapshot facts (session/event counts, raw mode) for a report row |
+| `refresh_operations` | Staged refresh orchestration | Best-effort raw-mode inference to pick a sensible default for the next refresh |
+| `project_catalog` | Project identity, locations, durable roots | A verified current `snapshot_id`, consumed by three internal call sites with three different fault-tolerance needs |
+| `source_verification` | Locate an Event's original bytes and report whether they still match | Locating which ancestor directory of a store path is a snapshot root |
+| `storage_report` | Dated storage observations | A whole-registry, unverified scan of every Project's current snapshot for size/inventory reporting |
+| `cli.ingest_cmd` | Ingest CLI command | Runtime-report path, current-snapshot-id lookup, and a sealed-snapshot check gating raw capture upgrade |
+| `cursor_source` | Cursor discovery and read-only SQLite access | An unrelated file, `source-links.json`, under the same `.codess/` directory |
+| `project` | Project/Git roots, CLI dispatch | The same `source-links.json`, for Claude slug resolution |
+
+Three of the twelve (`project_catalog`, `cli.ingest_cmd`'s
+`_current_snapshot_id`/`_current_snapshot_is_sealed`, and
+`catalog_operations`) read `current.json` and used its `snapshot_id`
+**without verifying `manifest_digest` at all** -- not a weaker version of
+`snapshot.py`'s check, an absent one. A tampered or stale pointer in any of
+these paths would have been trusted silently.
+
+#### 3.4.2 Why It Duplicated Rather Than Reused
+
+No module above imported `.codess`/`current.json` from a broken build --
+each added its own literal because the module already existing at the time
+needed one fact from the snapshot layout, `snapshot.py` did not yet expose
+a function returning exactly that fact, and adding one inline string was
+smaller than extending the shared module. Repeated across twelve additions
+over time, this produced the file-literal duplication without any single
+change being the wrong call in isolation -- the structural gap was the
+absence of a rule requiring the *next* need to route through `snapshot.py`
+rather than repeat the pattern that had worked eleven times already.
+
+The two verified-vs-unverified variants split along a further-avoidable
+axis: `current_snapshot()` (formerly `resolve_current_snapshot`) already
+existed and performed the correct check when several of the unverified call
+sites were written; they did not fail to find it because it was hard to
+find, they constructed their own read because a three-line inline read
+looked equivalent to a function call and the missing hash comparison was
+not visible without deliberately comparing the two.
+
+#### 3.4.3 What Changed
+
+- Every filename and directory-name literal above moved to `config.py`
+  (`STORE_DIR`, `CURRENT_POINTER_FILE`, `MANIFEST_FILE`, `MANIFEST_BACKUP_FILE`,
+  `RAW_MANIFEST_FILE`, `SNAPSHOTS_DIR`, `LAST_INGEST_REPORT_FILE`,
+  `PROJECT_FILE`, `SOURCE_LINKS_FILE`, `WORKING_ARCHIVES_DIR`), which
+  `snapshot.py` itself now imports rather than defining locally -- a single
+  source for a name any module may cite, independent of whether that module
+  also uses `snapshot.py`'s functions.
+- The three unverified `current.json` reads (`project_catalog`,
+  `cli.ingest_cmd`, and the read/verify logic in `retention` and
+  `baseline_validation`) were redirected to call `current_snapshot()`
+  instead of re-reading the pointer file, closing the missing-hash-check
+  gap as a side effect of removing the duplication, not as a separate
+  change.
+- `retention._validate_current` keeps genuinely additional checks
+  `current_snapshot()` does not perform (containment inside the Project's
+  own `snapshots/` directory, snapshot-name-equals-snapshot-id identity,
+  raw-manifest hash, per-store hash, SQLite `quick_check`, raw-object
+  presence and size) -- these remain local to `retention.py` because they
+  exist specifically to gate a destructive pruning decision, not because
+  the consolidation was incomplete. A function that already performs a
+  stricter check than the shared primitive is not evidence of remaining
+  duplication; only an *independent, weaker* reimplementation is.
+- `refresh_operations` and `project_annotations`'s best-effort reads (raw
+  mode inference, annotation facts) were also redirected to
+  `current_snapshot()`, even though their prior unverified behavior was
+  low-risk by design (both already degrade gracefully on any read failure)
+  -- consistency of "one function reads the pointer" was judged more
+  valuable than preserving each site's slightly different historical
+  tolerance for a stale pointer.
+- The raw `hash_file`/comparison calls this consolidation exposed (nine
+  sites in `snapshot.py` alone) were themselves collapsed into four shared
+  `fileio` primitives -- `read_hash` and `write_hash` for small JSON
+  documents whose content a caller needs afterward, `verify_hash` for
+  pass/fail checks on files that may be large (a raw-capture object, a
+  SQLite store) and must stream rather than be held in memory, and
+  `rewrite_hash` for a verified read-modify-write. `CODESS_NO_HASH` /
+  `--no-hash` is a recovery/debugging bypass built on
+  the same primitives, not a separate mechanism -- every module that calls
+  `read_hash`/`verify_hash`/`rewrite_hash` observes the bypass identically,
+  rather than each needing its own opt-out check.
+- Two functions with unrelated implementations shared the name
+  `current_store_paths` (`snapshot.py`'s single-Project verified accessor
+  and `storage_report.py`'s unverified whole-registry scanner). Renamed to
+  `current_stores` and `all_store_paths` respectively so the name no longer
+  implies they are interchangeable.
+
+#### 3.4.4 What This Predicts Elsewhere
+
+The mechanism observed here -- a module needs one fact from a file another
+module already owns, a three-line inline read is smaller than a shared-code
+change, the inline read silently drops a check the canonical path performs
+-- is not specific to snapshot files. [CoTasks](CoTasks.md)
+tracked the Cursor SQL boundary as a comparable case: a second
+module reimplementing access to state its owning module already exposes.
+Any future audit for the same pattern should look for the same three
+preconditions -- a shared physical format, more than one module reading it
+for a locally justified reason, and no runtime or lint check requiring the
+canonical accessor -- rather than searching for the specific filenames
+already fixed here.
 
 ## 4. CoSchema Read and Write Path
 
@@ -283,6 +499,62 @@ facets, expansion, comparison, and byte/row limits. `cli.query_cmd` owns command
 adaptation and human or structured rendering. Direct report modes remain
 separate renderers over the same stores.
 
+### 5.4 Subprocess Invocation
+
+Several domain operations do not call `scan`/`ingest`/`query` in-process;
+they launch a second `codess` invocation as a child process and read its
+exit status, stdout, and stderr. This section describes that boundary --
+what data crosses it, and what happens to the child on completion, timeout,
+or failure -- since it is easy to miss when reading only the in-process call
+graph in 5.1-5.3.
+
+```mermaid
+flowchart TB
+    Parent["Parent codess process\n(baseline_operations, refresh_operations,\ncatalog_operations, baseline_validation)"]
+    Build["Build argv + env\n(python -m main ingest/query ...,\nCODESS_STORE_ROOT, PYTHONPATH, vendor dirs)"]
+    Child["Child process\npython -m main ...\n(full scan/ingest/query lifecycle)"]
+    Wait["subprocess.run(..., timeout=N)\nblocks until exit or timeout"]
+    Exit["Child exits\n(normal or killed on timeout)"]
+    Collect["CompletedProcess\nreturncode, stdout, stderr"]
+    Parse["Parent parses stdout as JSON\n(when the child ran --validate\nor another structured mode)\nor treats output as diagnostic text"]
+
+    Parent --> Build --> Child
+    Child --> Wait --> Exit --> Collect --> Parse
+```
+
+Every launch site (`baseline_operations.run_ingest`,
+`refresh_operations`'s ingest/query calls, `catalog_operations.
+_run_ingest_stage`, `baseline_validation.run_query_smoke`) follows the same
+shape:
+
+| Concern | Behavior |
+|---|---|
+| Launch | `subprocess.run([sys.executable, "-m", "main", ...], cwd=repo_root, env=env, capture_output=True, text=True, timeout=N)` |
+| Environment | `env = os.environ.copy()` plus explicit overrides -- always `PYTHONPATH` (so the child resolves the same `src/` checkout without an install step) and usually `CODESS_STORE_ROOT`; vendor-directory env vars (`CODESS_CC_PROJECTS`, `CODESS_CURSOR_DATA`, and similar) are forwarded only by call sites that need a non-default vendor source location, not universally |
+| IPC | Two channels: **exit status** (`0` accepted, nonzero rejected) and **stdout**, which is either free-form diagnostic text or one JSON document when the child ran in a structured mode (`ingest --validate`, `query` with `--output-format jsonl`); stderr is diagnostic/progress text only, never parsed |
+| Timeout | An explicit `timeout=` is required at every site (3600s for ingest, 120s for the baseline query smoke test, a configurable value for refresh); `subprocess.run` enforces it |
+| Termination and reap | `subprocess.run` is synchronous: it calls `Popen.wait()` internally and does not return control to the caller until the child has exited, so there is no separate reap step and no zombie-process risk from this code. A `timeout` expiring raises `subprocess.TimeoutExpired` -- the Python standard library kills the child (`Popen.kill()`) and waits for it before raising, so the child is not left running or orphaned; only `refresh_operations` catches this exception explicitly (to report a timeout as a structured failure rather than letting it propagate), the other three sites let an uncaught `TimeoutExpired` surface to their own caller |
+| Working directory | Always the parent's `repo_root` (the Codess checkout), not the target Project -- the child's own `--dir`/`--registry` arguments select the Project and registry, not `cwd` |
+
+A structurally identical but separate category launches `git` rather than
+`codess` itself: `project.get_project_root` (`git rev-parse
+--show-toplevel`) and `candidate_review._git_run` (arbitrary read-only `git`
+subcommands for repository and worktree discovery). These use the same
+`subprocess.run(..., capture_output=True, text=True, timeout=N)` shape with
+a short timeout (5-10s) and treat a nonzero exit or `FileNotFoundError` as
+"no Git information available" rather than a fatal error.
+
+No launch site in this codebase uses `subprocess.Popen` directly, threads a
+long-lived child, or manages a process pool; every child is a single
+bounded request-response invocation. One test uses `Popen`
+(`test_cli.py`), reading the child's stdout line by line to assert that
+query output streams rather than buffering to completion -- which is a
+property of the child that `subprocess.run` cannot observe, since it
+returns only after exit. That is an assertion about a launch site, not
+another one. A future streaming or long-running
+subprocess use case would need its own lifecycle design -- this section
+describes only the pattern actually implemented.
+
 ## 6. Vendor Record Processing
 
 Vendor record processing is the most specialized part of Codess. Each source
@@ -347,11 +619,11 @@ and remaining work are:
 
 | Source case | Current decision | Remaining action |
 |---|---|---|
-| Image-only user record | Record `attachment_only_records`; do not emit empty human text | Define Artifact/content-link mapping before retaining the image as searchable content (W02) |
-| `attachment` product-state record | Emit bounded attachment type, item count, initial/command flags, and content-presence metadata; do not copy an unbounded body | Validate newer attachment shapes and decide which fields support search (W02, W12) |
-| `toolUseResult.persistedOutputPath` | Accept only a path inside the selected Session tree and retain it as related external content | Replace the current complete-file read with bounded streaming and explicit oversize diagnostics (W07) |
-| `isSidechain`, `agentId`, fork context, or parent field | Preserve each observed field; create a Session relation only when an explicit parent identity resolves | Measure field availability by Claude Code release and report unresolved parentage (W02, W12) |
-| Mode, permission, title, queue, snapshot, and similar product state | Emit the currently mapped bounded subtypes; retain unknown shapes as diagnostics rather than message text | Add a subtype only when it has defined query or reconstruction value (W02, W12) |
+| Image-only user record | Record `attachment_only_records`; do not emit empty human text | **Owner: the Artifact-linkage group.** One mapping serves this, the attachment row below, and Cursor's file-backed content |
+| `attachment` product-state record | Emit bounded attachment type, item count, initial/command flags, and content-presence metadata; do not copy an unbounded body | **Owner: the Artifact-linkage group**, with the row above. Recurring rather than closable on its own: a vendor release adding an attachment shape reopens it |
+| `toolUseResult.persistedOutputPath` | Accept only a path inside the selected Session tree and retain it as related external content | Done: the size is checked before the read and an oversize body is refused with a recorded locator |
+| `isSidechain`, `agentId`, fork context, or parent field | Preserve each observed field; create a Session relation only when an explicit parent identity resolves | **Owner: the Session-parentage group** (Claude half). Measurement first, then a narrow relation; blocked on evidence rather than on code |
+| Mode, permission, title, queue, snapshot, and similar product state | Emit the currently mapped bounded subtypes; retain unknown shapes as diagnostics rather than message text | **Owner: none, and deliberately.** A retention decision made only where a query need exists; absent one, the standing answer is declined. Recorded so the row is not read as pending work |
 
 `vendor_audits.claude_features` inventories these shapes and field-presence
 rates without retaining content bodies.
@@ -381,12 +653,12 @@ reasoning, or omitted request/response traffic.
 
 | Source case | Current decision | Remaining action |
 |---|---|---|
-| Canonical `response_item` plus an `event_msg` notification carrying the same message or reasoning | Retain the `response_item`; count the notification as a known duplicate envelope | Extend duplicate-shape fixtures when Codex adds notification variants (W02, W12) |
-| `response_item.reasoning.summary` and `encrypted_content` | Store exposed summary text as reasoning-summary content; never decode encrypted reasoning. Encrypted compaction content remains bounded opaque context | Verify each placement of `encrypted_content`; field spelling alone cannot determine its meaning (W02) |
-| `turn_context` or settings update followed by Events | Attach only directly observed settings and explicitly inherited settings to subsequent Model Turns; keep provenance for each value | Define and test termination at the next replacement setting, Turn, or Session boundary for every supported field (W02) |
-| Collaboration begin/end records | Emit lifecycle/activity Events; do not create a separate Session merely because an agent nickname or operation appears | Create parent/child Sessions only from stable child and parent identifiers observed in rollout metadata (W02) |
-| `parent_thread_id` or `forked_from_id` | Preserve the exact field and create the corresponding relation only when the referenced Session resolves | Audit positive, missing, and dangling identifiers by supported release (W02, W12) |
-| `compacted` envelope plus `context_compacted` notification | Emit the replacement-history compaction once from `compacted`; suppress the notification duplicate | Verify that newer compaction item variants retain the complete searchable summary or mark opaque/partial content explicitly (W02) |
+| Canonical `response_item` plus an `event_msg` notification carrying the same message or reasoning | Retain the `response_item`; count the notification as a known duplicate envelope | **Owner: none; recurring by nature.** A vendor release adding a notification shape reopens it, so it is maintenance rather than a closable item. The hazard fixture `codex-reasoning-encrypted.json` carries the current shape |
+| `response_item.reasoning.summary` and `encrypted_content` | Store exposed summary text as reasoning-summary content; never decode encrypted reasoning. Encrypted compaction content remains bounded opaque context | Done: both placements are covered by `codex-reasoning-encrypted.json`, which asserts that a summary maps and that encrypted state is never retained. `reasoning_fidelity` distinguishes this précis from Cursor's full reasoning |
+| `turn_context` or settings update followed by Events | Attach only directly observed settings and explicitly inherited settings to subsequent Model Turns; keep provenance for each value | **Owner: the setting-inheritance group.** A correctness risk with narrow scope: needs one stated termination rule and a test per supported field, and nothing blocks it but the decision |
+| Collaboration begin/end records | Emit lifecycle/activity Events; do not create a separate Session merely because an agent nickname or operation appears | **Owner: the Session-parentage group** (Codex half). The protocol declares the identifiers; what is missing is a local Session that carries one |
+| `parent_thread_id` or `forked_from_id` | Preserve the exact field and create the corresponding relation only when the referenced Session resolves | Decode is **done** -- both fields, plus `thread_source`, reach `parent_session_id` and `session_relation_kind` with `lineage_provenance` naming which field supplied it. The audit is **not measurable here**: `audit_codex_parentage` reports 37 Sessions with `session_meta` and 0 carrying any parent field, so positive, missing, and dangling cannot be distinguished on this machine |
+| `compacted` envelope plus `context_compacted` notification | Emit the replacement-history compaction once from `compacted`; suppress the notification duplicate | **Owner: none; recurring by nature**, with the duplicate-envelope row above. A new compaction variant reopens it; the suppression itself is tested |
 
 `vendor_audits.codex_features` measures general record and setting shapes;
 `codex_parent_audit` measures resolvable, missing, and dangling parent evidence.
@@ -413,24 +685,160 @@ and selects indexed key ranges for the resulting composer IDs.
 | Update detection | Selected headers, fallback indexes, bubble ranges, and request-context ranges form the Project change marker; whole-database modification time is only a cheap container observation. |
 
 Cursor still violates the intended source-access boundary:
-`adapters.cursor` opens SQLite and executes bubble and request-context queries.
-That prevents testing decode from bounded source records alone and spreads
-vendor table knowledge across two components. W10 moves all Cursor SQL and
-key-range iteration into `cursor_source`; the adapter will receive selected
-records plus provenance and will have no SQLite dependency.
+`adapters.cursor` previously opened SQLite and executed bubble and
+request-context queries, which prevented testing decode from bounded source
+records alone and spread vendor table knowledge across two components. The Cursor boundary
+moved all Cursor SQL, connection handling, and key-range iteration into
+`cursor_source`. The adapter now requests records by path and has no SQLite
+dependency; its remaining `cursorDiskKV` references are record-type labels
+retained as source evidence.
 
 | Source case | Current decision | Remaining action |
 |---|---|---|
-| Composer absent from headers but present in workspace `composerData` | Use the workspace index only as a provenance-labelled fallback | Measure false attribution and stale entries before treating the fallback as equivalent to a header (W09, W12) |
-| Composer absent from both indexes | Do not attribute it to a Project from content or chronology alone | Report it as unbound source evidence and require an explicit catalog binding if it matters (W12) |
-| Agent/subagent-looking Composer state without a stable parent ID | Preserve the source fields; do not manufacture a parent Session | Identify and validate an explicit Cursor parent/child field before adding the relation (W02) |
-| File-backed or oversized context/tool content | Keep the reference and bounded metadata; do not load it as an ordinary message | Define Artifact linkage and bounded content access for observed reference shapes (W02, W07) |
-| Adapter projection omits a source field | The omitted field is neither normalized nor silently claimed as supported | Compare audit shape inventories with projected keys and report loss or unknown fields (W12) |
+| Composer absent from headers but present in workspace `composerData` | Use the workspace index only as a provenance-labelled fallback | **Owner: W85.** Measure false attribution and stale entries before treating the fallback as equivalent to a header. Blocked on evidence rather than effort: the header set is a retention window, so the ground truth a measurement needs is what the vendor has already pruned |
+| Composer absent from both indexes | Do not attribute it to a Project from content or chronology alone | Done: `coverage_report.unbound_composers` reports the count per store -- 164 composers, 66 with a header, 98 without -- so an unattributed Session is visible rather than silently excluded. An operator-stated binding remains the only way to attribute one |
+| Agent/subagent-looking Composer state without a stable parent ID | Preserve the source fields; do not manufacture a parent Session | **Owner: W75**, machine part. No stored Session on this machine carries such a field, so inspection cannot settle whether one exists; a harness run that delegates is what would produce it |
+| File-backed or oversized context/tool content | Keep the reference and bounded metadata; do not load it as an ordinary message | **Owner: the Artifact-linkage group**, one CoSchema mapping serving this row and the two Claude rows above it. Highest value per unit of work in this table; the three close together or not at all |
+| Adapter projection omits a source field | The omitted field is neither normalized nor silently claimed as supported | Done: `coverage_report.projection_coverage` compares the decoder's declared projection against the measured bubble shape and reports both counts, so a field dropped before an Event existed is stated rather than reading as absent from the vendor |
 
-`cursor_feature_audit` performs the structure-only inventory. W09 verifies that
+`cursor_feature_audit` performs the structure-only inventory. Measurement verifies that
 selection remains bounded as unrelated global-database content grows.
 
-### 6.5 Evidence Audits
+**The four-module split, confirmed and corrected.** Cursor needs more modules
+than the other vendors because it stores Sessions in shared SQLite databases
+rather than per-session files, so selection, caching, and decode are genuinely
+separate concerns. Reviewed against the closed source-access boundary, the
+split holds, but one module spanned two concerns and now does not:
+
+| Module | Owns |
+|---|---|
+| `cursor_source` | Selection: storage layout, connections, key ranges, and every selective SQL statement |
+| `cursor_cohort` | Caching: when a captured cohort is still valid, and restoring it |
+| `adapters/cursor` | Decode: selected records to common Events |
+| `cursor_feature_audit` | Reporting: which counted evidence an audit states, and what each shape is taken to mean |
+
+`cursor_feature_audit` had kept its own connection and fifteen vendor SQL
+statements -- the same violation closed for the adapter, left in place
+because the audit is not on the ingest path. The queries are now
+`cursor_source.read_feature_evidence`, and the audit composes the report and
+joins the catalog, which is Codess state rather than vendor storage. Output
+is byte-identical.
+
+The move removed a defect the boundary had concealed rather than only
+tidying ownership. The audit's hand-rolled connection was weaker than the
+shared one: no `query_only` pragma, no busy timeout, and no fallback for the
+sidecar-free workspace shape that `connect_readonly` handles. A second,
+pre-existing fault became visible once the queries sat beside the accessors
+that state their preconditions -- a workspace database has no
+`composerHeaders` table, so pointing the audit at one produced a bare SQLite
+"no such table" rather than saying the audit is scoped to the global store.
+Selection now rejects it by name.
+
+The cohort cache stays where it is. It was worth asking whether it belongs
+with source access, since both concern the shared database, but they answer
+different questions: `cursor_source` decides which rows exist, and
+`cursor_cohort` decides whether a capture may be reused across Projects. The
+cache holds no vendor SQL, which is the test that would have shown otherwise.
+
+### 6.5 What Each Vendor Actually Produces
+
+The three preceding sections describe how each source family is decoded. This
+compares the result, because the differences are evidence about the vendors
+rather than about the decoders, and a reader comparing two stores needs to know
+which absences are expected.
+
+Measured over the current-format stores on the development machine:
+
+| Event kind | Claude | Codex | Cursor |
+|---|---|---|---|
+| `message.prompt` | 599 | 4,065 | 4,112 |
+| `message.response` | 2,740 | 11,946 | 9,386 |
+| `message.context` | 54 | 321 | 25 |
+| `message.reasoning_summary` | -- | 4,343 | -- |
+| `tool.call` | 3,232 | 27,992 | 60,875 |
+| `tool.result` | 3,232 | 30,415 | 60,875 |
+| `context.compact` | 1 | 227 | 2 |
+| `context.inject` | 1 | -- | 52 |
+| `lifecycle.start` / `.complete` / `.abort` | -- | 2,716 / 2,665 / 68 | -- |
+| `lifecycle.vendor` | 1,058 | -- | -- |
+| `session.label` / `.marker` | 1,071 / 1,046 | -- | -- |
+| `harness.setting` | 1,448 | -- | -- |
+| `content.attachment` | 2,110 | -- | -- |
+| `command.invoke` / `.result` | 11 / 11 | -- | -- |
+| `tool.transport` | -- | 97 | -- |
+| `context.rollback` | -- | 7 | -- |
+
+**Three readings, and only one is a gap.**
+
+*Messages and tools are universal, and the call/result counts differ for two
+distinct reasons.* Every result links to a call -- zero orphans across all three
+vendors -- so a difference is never an unmatched result. Claude is strictly 1:1
+across 3,232 pairs. Codex has 1,075 calls with no result, which is a vendor
+condition: an aborted turn leaves a request unanswered. Cursor's excess is
+byte-identical duplicate results concentrated in three stores while three
+comparable stores have almost none, which reads as a decode defect rather than
+vendor data and is tracked in W74.
+
+*Product state is Claude's alone.* `session.label`, `session.marker`,
+`harness.setting`, `content.attachment`, and the command pair exist because
+Claude writes those as separate record shapes. Their absence elsewhere is the
+vendor not recording them, not a decoder omission.
+
+*Lifecycle is a real asymmetry.* Codex produces 5,449 lifecycle Events and
+Claude 1,058 under its own vendor kind; Cursor produces none and has no
+lifecycle rule. Whether Cursor records task start and completion anywhere is an
+open decode question rather than a settled mapping choice.
+
+**One rule can produce several kinds, and Cursor is where that concentrates.**
+`cursor.bubble` alone yields `message.prompt`, `message.response`, and
+`message.context`, classified in the adapter from the bubble's type and content.
+Claude splits the same ground across `claude.typed-prompt` and `claude.message`.
+Neither is wrong: Cursor stores prompts, responses, and injected context in one
+bubble structure, so one rule matching that structure describes the source
+honestly, while Claude's separate record shapes justify separate rules.
+
+### 6.6 Request and Response Evidence, and Where the Role Lies
+
+Each vendor records who produced a message differently, and each records the
+request-to-response edge differently. Both matter to the same question -- which
+model execution answered which request -- so they are compared together.
+
+| Vendor | Request/response edge | How it is evidenced |
+|---|---|---|
+| Codex | `turn_context.payload.turn_id` | Stated directly; one identity per Model Turn |
+| Claude | `parentUuid` chain | Stated per record; the edge is lineage rather than a turn identity |
+| Cursor | `requestId` on a `type=1` bubble, `usageUuid` on `type=2` | Not stated as an edge. Measured: 664 of 1,505 `requestId` values equal a `usageUuid` within the next five bubbles, so the correlation is real and partial |
+
+Cursor's two identities are not one field under two names: no bubble carries
+both, `requestId` appears only on user bubbles and `usageUuid` only on assistant
+bubbles. Mapping them to one column would erase the direction.
+
+**The envelope role is wrong often enough to measure.** Comparing the vendor's
+own `role` against the classified `actor_kind` over the current-format stores:
+
+| Vendor | `role` | `actor_kind` | Events | Share of store |
+|---|---|---|---|---|
+| Codex | `user` | `tool` | 26,933 | **31.7%** |
+| Claude | `user` | `tool` | 3,232 | **19.5%** |
+| Codex | `user` | `harness` | 229 | 0.3% |
+| Codex | `assistant` | `harness` | 68 | 0.1% |
+
+Nearly a third of the Codex store and a fifth of Claude's carry a `user`
+envelope around content no human wrote -- tool results, chiefly, and
+harness-injected context. Cursor shows none of this, because its bubble type is
+a structural position rather than a role claim.
+
+This is the measured form of the rule Codess states elsewhere: a `user` envelope
+does not establish a human Actor. Anything correlating requests to responses by
+role alone would attribute a third of Codex's tool results to a person.
+
+**Where a mismatch should warn.** A `role`/`actor_kind` pair outside the four
+combinations above is a shape no vendor has been observed to produce, and is
+worth a diagnostic rather than silent acceptance -- the classifier reaching an
+unobserved combination means either a vendor change or a decode fault, and both
+are findings.
+
+### 6.7 Evidence Audits
 
 “Audit” is Codess implementation terminology, not a vendor record type or a
 CoSchema field. It does not mean a security or compliance audit. It is a
@@ -452,6 +860,23 @@ the audit has no continuing purpose.
 A mapping decision additionally requires understood semantics, a common or
 specialized consumer, a declared retention class, and fixtures covering normal
 and irregular states.
+
+**Those four gate a mapping, not an audit, and conflating the two makes this
+section read as more restrictive than it is.** An audit needs only to be
+read-only, bounded, and to feed a decision. It may be a script run once,
+reported, and deleted; nothing here requires a fixture or a consumer to
+*look* at a vendor file. What the four requirements prevent is the step after:
+admitting a field into CoSchema because it was observed, which is how a
+schema acquires columns that mean nothing on the next vendor release.
+
+The distinction matters when a survey finds something -- `~/.codex/history.jsonl`
+holding prompts for Sessions with no rollout, say. Measuring it is an
+audit and needs no ceremony. Deciding that a history-only Session becomes a
+Session with prompts and no Model Turns is a mapping decision, and that is
+where semantics, consumer, retention, and fixtures apply. The cheap middle
+path this section already permits, and which record-level diagnostics now make possible, is to
+record a diagnostic saying evidence exists that Codess cannot decode -- a
+statement about coverage rather than a new mapping.
 
 Audits are deliberately narrower than adapters. Feature audits omit content
 bodies; parentage audits inspect only candidate lineage fields; MCP audits
@@ -536,6 +961,19 @@ instead of disappearing as an undifferentiated limit failure. Source, Session,
 Event, and context bounds come from versioned policies with safe built-in
 defaults.
 
+**Every open-ended text field carries a bound, stated in KiB.** A bound is
+applied at decode, the original length is retained, and the truncation is
+recorded as a diagnostic -- a bound applied silently would make a completeness
+claim false. Bounds are set from measured distributions rather than chosen round
+numbers, and each states what proportion of observed values it retains intact;
+`experiments/format-decisions.md` holds the current table and its basis.
+
+A bound is set even where nothing observed reaches it. An unbounded field is a
+resource question rather than a size observation: the bound exists so a changed
+vendor format cannot introduce an unbounded body without the bound reporting it.
+Where a vendor publishes its own caps, they are the right neighbourhood to sit
+in -- Codess retains evidence for search, not for replay.
+
 ### 7.5 Mapping Profiles and Conformance
 
 The released profiles in `schema/mappings` declare source selectors, target
@@ -554,7 +992,7 @@ do not yet govern every vendor. The intended boundary is:
 4. diagnostics preserve partial, unsupported, and malformed evidence; and
 5. only a conforming candidate enters transactional persistence.
 
-This work is tracked explicitly in the work registry and code review.
+This work is tracked as an item in [CoTasks](CoTasks.md).
 
 ## 8. Database Lifecycle and Indexing
 
@@ -583,6 +1021,357 @@ The manifest and current pointer combine the selected source-system databases
 into a Project store set. Published sets are also retained in the central
 registry so query and evidence access do not depend entirely on the checkout.
 This layout does not change the logical entities exposed to query.
+
+#### 8.1.1 Registry Snapshot Layout
+
+The registry keeps **generations**, not one store per Project:
+
+```text
+~/.codess/projects/<project-id>/
+├── current.json                       pointer: which generation is live
+└── snapshots/
+    ├── <timestamp>-coschema<N>-<digest>/
+    │   ├── manifest.json              counts, digests, sizes, lineage
+    │   ├── manifest.json.bak
+    │   ├── raw-manifest.jsonl         raw-evidence observations
+    │   ├── sessions_cc.db
+    │   ├── sessions_codex.db
+    │   └── sessions_cursor.db
+    ├── <newer generation>/
+    └── archive/                       retained deliberately, never current
+        └── <generation>/
+            └── archive-note.json      why it was kept
+```
+
+**Publication writes a new directory and repoints `current.json`.** Nothing is
+overwritten, so an interrupted conversion leaves the previous generation live
+rather than a half-written store. That is what makes replacement transactional
+without a database transaction spanning the whole ingest.
+
+**The snapshot name carries three facts** -- creation instant, CoSchema format,
+and a content digest -- so a directory listing alone answers which generations
+exist, which format each is, and whether two are identical:
+
+```
+20260820T072320.663752Z-coschema7-5ea564bf15abd238
+^^^^^^^^^^^^^^^^^^^^^^^ ^^^^^^^^^ ^^^^^^^^^^^^^^^^
+created (UTC, sortable) CoSchema  content digest
+```
+
+**Versioning is layered, and the layers move independently.** Five identifiers
+appear in the manifest, and conflating them is the mistake to avoid:
+
+| Identifier | Example | Changes when | Forces a rebuild |
+|---|---|---|---|
+| `snapshot_format` | `codess.snapshot/1` | The snapshot *directory* layout changes | No -- a reader can migrate the wrapper |
+| `format_version` | `7` | A stored column is added, renamed, or retyped | **Yes** -- `require_store` refuses other formats for reading as well as writing |
+| `contract_digest` | `f19623df…` | Any released contract file changes, including without a format bump | No, but a write under a different digest is reported |
+| `decoder_version` / `validator_version` | `0.2` | Decode or validation behaviour changes without a schema change | No -- but two snapshots at one format can differ in what they decoded |
+| `software_version` + `software_revision` | `0.3.0`, `20e3dc9b…+worktree` | Every commit | No |
+
+**Why `decoder_version` matters even though it forces nothing.** Two snapshots
+can share `format_version` and hold different Events, because the decoder
+learned to map a field between them. That is the ordinary case during
+development -- the three generations retained for one Project on 2026-08-20
+hold 89,288, 89,601, and 89,685 Events at the same format for exactly this
+reason. So a same-format comparison is a comparison of decoders, and the
+manifest is where that is visible.
+
+**Date and version are tied by construction**: the name begins with a sortable
+UTC instant and `created_at` repeats it in RFC 3339, so a directory listing is
+chronological without parsing and a program reads the precise value without
+parsing a filename.
+
+**What the name deliberately omits** is the software revision, which would make
+directory names unstable across every commit while adding nothing a manifest
+read does not answer. The rule: the name carries what a *listing* must answer;
+the manifest carries what a *reader* must answer.
+
+#### 8.1.2 DDL and Contract: Which Is Authoritative
+
+`schema.sql` and `contract.json` describe the same store and neither is
+primary. They are authoritative for different questions, and the relationship
+is a two-way check rather than a derivation:
+
+| Question | Authority | Read by |
+|---|---|---|
+| What does a new store physically contain | `schema.sql` | `store.create` executes it verbatim |
+| What must a store logically contain | `contract.json` | `validate_database_contract` |
+| Which SQLite types and indexes | `schema.sql` alone | The contract states it defers these |
+| Which entities, fields, identities, vocabularies | `contract.json` alone | Consumers that never import Python |
+
+**At runtime the DDL wins, because it is what runs.** `conn.executescript(load_ddl())`
+creates the tables; nothing builds a table from the contract. So a column that
+exists in the contract and not the DDL simply does not exist in the store.
+
+**The contract's authority is that the DDL is checked against it**, in both
+directions: every contracted entity and field must appear in the database, and
+every table and column in the database must be contracted or explicitly
+excluded as a physical-compatibility detail. A column added to the DDL and not
+the contract is reported as `uncontracted`; one added to the contract and not
+the DDL as `missing column`. Neither can drift silently, which is what makes
+two files tolerable.
+
+**Why not generate one from the other.** Generating the DDL from the contract
+would put SQLite types, `CHECK` constraints, and partial indexes into a JSON
+document that exists to be readable without SQLite. Generating the contract
+from the DDL would require parsing SQL to recover intent the SQL does not
+state -- which field is an identity, which vocabulary a column draws from. The
+two-way check keeps each file in the language that suits it and makes
+disagreement a test failure rather than a discovery.
+
+#### When the Contract Is Checked, and What Happens
+
+`require_store(conn, write=...)` is the single gate, called on every store open
+-- `store.connect` for reading, `store.create` and every write path for
+writing. It runs five checks in order, and each failure is distinct:
+
+| Check | Applies | On failure |
+|---|---|---|
+| `application_id` matches | read and write | `not a Codess store` |
+| `PRAGMA user_version` is a supported format | read and write | Refuses, naming the rebuild command |
+| `store_meta` agrees with the SQLite identity | read and write | `store_meta disagrees with SQLite format identity` |
+| `contract_digest` matches the released files | **write only** | Refuses unless `CODESS_NO_CONTRACT_CHECK=1`, which warns and records the override |
+| `validate_database_contract` two-way layout | read and write, current format only | Lists every missing, uncontracted, or unenforced column |
+
+**Reading is deliberately more permissive than writing.** A store whose digest
+differs was produced under different rules, and *extending* it would mix
+records written under two contracts in one table -- which is unrecoverable
+without knowing which row came from which. Reading it answers a question about
+what was recorded then, which the digest difference does not invalidate.
+
+**The layout check is the two-way one**, and it runs on every open rather than
+only at creation, because a store can be modified outside Codess.
+
+**Three uses of `schema.sql`, and only one executes it.**
+
+| Use | Where | What it establishes |
+|---|---|---|
+| Executed to create a store | `store.create` -> `conn.executescript(load_ddl())` | The physical layout, and `PRAGMA user_version` stamps the format |
+| Hashed as a released file | `contract_digest`, role `sqlite_schema` | Which contract produced a store |
+| Compared against the constant | `load_ddl` | That the stamp it will write matches the declared format |
+
+The third is new and exists because the first two cannot catch a stale
+`user_version`: executing it writes the wrong stamp successfully, and hashing
+it succeeds because the file is internally consistent. Only a comparison
+against `FORMAT_VERSION` detects it, and `load_ddl` runs that before
+`contract_digest` so the message names the file rather than reporting a hash.
+
+**Both files are released under one digest.** `contract_digest` folds
+`schema.sql`, `contract.json`, and the four mapping files together, so a store
+records which set produced it.
+
+#### 8.1.3 Where the Format Number Lives
+
+Four files carry the CoSchema format number. That is more than can be held in
+agreement by attention, and the current state is an improvement rather than a
+resolution -- W94 owns reducing it.
+
+| Location | Read by | Kept current by |
+|---|---|---|
+| `schema_contract.FORMAT_VERSION` | Everything | It is the declaration |
+| `schema/coschema/manifest.json` | `load_manifest`, `snapshot`, `snapshot_inventory` | `refresh_schema_manifest.py`, when run |
+| `schema/coschema/sqlite/schema.sql` | Executed; stamps `PRAGMA user_version` | Compared by `load_ddl`, which fails on drift |
+| `schema/coschema/contract.json` | Declarative only; no code reads the field | Compared by `load_contract`, which fails on drift |
+
+**Each is justified differently, and one is not justified at all.**
+
+- **The manifest's** is consumed: `snapshot.py` copies it into every snapshot
+  manifest and compares it when reading one. It cannot simply be deleted.
+- **The DDL's** must stay literal, because the script is executed verbatim as a
+  digest-verified released file and cannot carry a substitution.
+- **The contract's** is read by no code. It exists so a consumer that never
+  imports Python can tell which format the contract describes -- a real reason,
+  and one that should be stated rather than assumed.
+
+**Warning scenarios, stated because they were not.**
+
+| Drift | Detected by | Message |
+|---|---|---|
+| Manifest stale | `load_manifest`, on any store open | `CoSchema manifest format_version mismatch` -- names the manifest |
+| Manifest stale, before any open | `refresh_schema_manifest.py --check` | `stale: format_version 6 -> 7`, exit 1 |
+| DDL stale | `load_ddl`, at store creation | `DDL user_version 6, declared CoSchema 7: update schema.sql` |
+| Contract stale | `load_contract`, on any contract read | `contract format_version 6, declared CoSchema 7: update contract.json` |
+
+All four are now compared against the declaration. The contract's field is read
+by no other code -- it exists for a consumer that never imports Python -- which
+is why a wrong value there was worse than an absent one: the only reader was
+the one with no way to check.
+
+#### How Drift Is Detected
+
+**Two layers, and they answer different questions.**
+
+*At use* -- each restatement is compared where it is read, so a stale value
+fails whatever operation touches it:
+
+| Layer | Fires on | Names |
+|---|---|---|
+| `load_manifest` | Any store open | The manifest |
+| `load_ddl` | Store creation | The DDL |
+| `load_contract` | Any contract read | The contract |
+
+This is what caught the format-7 bump: not reasoning, and not a check that ran
+on purpose. 289 tests failed on `CoSchema manifest format_version mismatch`
+because they open stores, and the message named the manifest. The detection was
+real but incidental -- had no test opened a store, nothing would have reported
+it.
+
+*Before collection* -- `tests/conftest.py` checks the released package in
+`pytest_configure`, so a stale file stops the run before a single test executes:
+
+| Condition | Message |
+|---|---|
+| A stated format disagrees | `declared CoSchema 7, manifest.json states 6: run tools/refresh_schema_manifest.py` |
+| A released file's digest is stale | `hash mismatch for schema/coschema/contract.json …: run tools/refresh_schema_manifest.py` |
+
+Each names the file and the remedy for *that* file -- the manifest is
+regenerated, the DDL and contract are edited -- and the remedies are
+deduplicated when several are stale at once.
+
+Measured against the alternative: editing `contract.json` without refreshing
+its digest produced **391 failures and 38 collection errors** in 39 seconds.
+The same edit now produces one message in under a second.
+
+`CODESS_NO_CONTRACT_CHECK=1` still bypasses the digest half, because the
+recovery case it exists for -- reading a store whose released files are no
+longer reconstructible -- is exactly when a developer needs the suite to run.
+
+*Directly* -- `tests/test_refresh_schema_manifest.py::TestFormatNumberAgreement`
+asserts the four agree as ordinary tests, so the property is stated where a
+reader looks for it rather than only enforced by a hook.
+
+**What is still manual.** `refresh_schema_manifest.py` writes the correction and
+only when someone runs it. The suite now says *that* a file is stale and which
+one; running the tool is the operator's step. A pre-commit hook would move
+detection earlier still, and is W94's remainder.
+
+**Where a check belongs, and where it does not.** The agreement test costs
+microseconds and runs with every suite, which is the right place. A global scan
+or a large ingest is the wrong place: by then a store has already been written
+with whatever stamp the DDL carried, and the check would report a condition it
+is too late to act on cheaply. The rule is that a released-file check belongs
+before the first write, not during it.#### 8.1.4 Manifest Contents
+
+Every snapshot carries `manifest.json` recording, per store: row counts for all
+20 tables, a `digest` over the file, and its byte size. Alongside them:
+`created_at`, `parent_snapshot_id`, `format_version`, `contract_digest`,
+`decoder_version`, `software_version`, and `sealed`.
+
+**Every table is counted, read from the store's own catalog.** The list was
+hardcoded and had drifted to twenty of twenty-four -- `correlation_assertions`,
+`event_artifacts`, `model_params`, and `store_meta` were counted nowhere, so a
+manifest described a snapshot as complete while saying nothing about four of
+its tables, and comparing two manifests could not show one of them gaining or
+losing rows. This is the same drift `store.table_counts` was written to remove,
+reappearing in a second place: two modules had kept their own table lists, at
+eleven and twenty-two names against a DDL declaring twenty-four.
+
+**The manifest is the reason assessment is cheap.** Volume, lineage, identity,
+and size are read from JSON without opening a database -- which matters
+because the stores are large and, once a format is superseded, unopenable by
+the installed contract. A superseded snapshot can be described accurately by
+software that cannot read it.
+
+#### 8.1.5 Per-Vendor Store Characteristics
+
+Measured across 29 published Projects:
+
+| Store | Sessions | Events | MiB | Bytes/Event |
+|---|---|---|---|---|
+| `sessions_cc.db` | 375 | 67,796 | 351 | 5,435 |
+| `sessions_codex.db` | 36 | 162,125 | 1,315 | 8,511 |
+| `sessions_cursor.db` | 86 | 156,138 | 1,091 | 7,332 |
+
+**The aggregate is dominated by one Project and must not be read as a vendor
+property.** 343 of the 375 Claude Sessions come from a single Project holding
+7,653 Events -- many very short Sessions -- which drags the Claude
+Events-per-Session figure from a per-Project median of 1,629 down to an
+aggregate 180. Per-Project medians are the comparable figure:
+
+| Store | Projects with data | Median Events per Session |
+|---|---|---|
+| `sessions_cc.db` | 7 | 1,629 |
+| `sessions_codex.db` | 16 | 2,736 |
+| `sessions_cursor.db` | 6 | 1,325 |
+
+On that basis the vendors are far closer than the aggregate suggests, and the
+ordering changes: Codex Sessions are the longest, Cursor the shortest, Claude
+between. What the aggregate does show correctly is that **Codex appears in far
+more Projects (16) than Cursor (6) or Claude (7)** on this machine, so its
+total dominates for reasons of usage rather than of record shape.
+
+**Bytes per Event is the more stable measure**, since it does not depend on how
+a vendor bounds a Session: 5,435 for Claude, 7,332 for Cursor, 8,511 for Codex.
+Codex costs the most per Event, and the `content_objects` and `tool_results`
+counts say why -- 130,934 and 61,156 against Claude's 41,619 and 15,504.
+
+**The consequence for retention holds regardless of which reading is used:** a
+Project's store size is not proportional to its Session count, so "how many
+Sessions does this hold" is a poor proxy for "how much disk will pruning
+reclaim". The manifest's `size` is the direct answer.
+
+**One machine, one corpus -- and the ingested corpus is not the usage.** The
+figures above describe what *reached a store*, which differs from what the
+operator did, because the vendors retain for different periods. Measured at the
+vendor stores rather than at ours:
+
+| Vendor | Retained sources | Span retained | Bytes |
+|---|---|---|---|
+| Claude | 376 transcripts | **2026-07 to 2026-08 only** | 120 MiB |
+| Codex | 28 rollouts | 2025-11 to 2026-08 | 543 MiB |
+| Cursor | 150 composers | 2025-08 to 2026-08 | -- |
+
+**Claude retains roughly two months and Codex ten.** So a store built today
+under-represents Claude usage by however much of it the vendor has already
+pruned, and any statement of the form "this operator used X more than Y" made
+from ingested counts is measuring vendor retention policy at least as much as
+operator behaviour.
+
+This is also why an archived store can be the only record of a period: two
+Projects hold Claude Sessions from 2026-05 that the vendor no longer has.
+
+#### 8.1.6 Retention Policy and Observed Outcomes
+
+`CODESS_KEEP_SNAPSHOTS` bounds how many generations are kept, current
+included: 1 the current alone, 2 the current and one past, 0 every one. The policy exists because generations accumulate silently: each
+`ingest --force` adds one, and nothing warns.
+
+**Observed, and the reason the policy needs stating rather than assuming.** A
+registry reached 8.1 GB across 86 snapshots for 30 Projects. Of that, **two
+thirds was superseded generations** of the same data, produced by repeated
+reingests in one session -- each `ingest --force` adds a generation and nothing
+warns.
+
+Pruning the superseded set took the registry to **4.1 GB across 38 snapshots**,
+with zero superseded remaining and no Project losing a queryable Event: every
+removed generation was a strict subset of the current one, verified per store
+rather than in total.
+
+**Three retention classes, and the evidence that separates them:**
+
+| Class | Test | Action |
+|---|---|---|
+| Current | `current.json` names it | Keep |
+| Superseded subset | Current holds at least as many Sessions and Events **in every store** | Prune |
+| Archival | A recorded `source_uri` no longer exists on disk | Move to `snapshots/archive/` with a note |
+
+**The third class is the one that cannot be inferred from counts.** Two
+Projects were found holding stores whose vendor Sources had been pruned by the
+vendor -- 976 and 8 vanished source files. Those stores are the only remaining
+record of what they hold, so they are archived rather than deleted, and the
+`archive-note.json` beside each records the vanished-source count that
+justified it.
+
+**Counts alone mislead, and the date range is the check.** One Project's older
+store holds 154 Sessions and 29,161 Events against a current 343 and 7,653 --
+which reads as superseded until the ranges are compared: 2026-05-28 to 07-30
+against 2026-07-29 to 08-02. Four days of overlap, and two months held only by
+the older store.
+
+**Snapshots under `archive/` are outside the generation count** and are never
+selected as current. They are recovered by inspection, not by query: a store at
+a superseded format is refused for reading as well as writing.
 
 ### 8.2 Transaction Boundaries
 
@@ -741,82 +1530,37 @@ performs concurrent reads.
 
 #### 9.6.1 Future Logging Task
 
-**W18** implements `codess.reporting` as the single application facility for
-status logging, progress messages, and error reporting. It must preserve the
-existing separation of output channels:
+**Implemented.** `codess.reporting` is the single application facility for status
+logging, progress messages, and error reporting. [Report](Report.md) is the
+authoritative specification -- measured costs, event structure, capability gates,
+time sources, buffering, backends, profiles, the error boundary, and privacy
+classes -- and what the implementation established, including one cost figure
+Report over-predicted, is in [CoReview](CoReview.md#the-reporting-facility).
 
-- stdout contains the requested human or machine-readable result;
-- stderr contains ordinary human status, progress, warnings, and errors;
-- JSON Lines operational output contains the same events under a stable
-  machine-readable contract; and
-- durable ingest or refresh reports retain only selected bounded operational
+The design sketch that stood here is removed rather than retained beside a fuller
+one: two specifications of the same subsystem is how a reader ends up
+implementing the older. What remains is the boundary this document owns.
+
+**The channel separation, which is a CLI contract rather than a reporting
+detail:**
+
+- stdout contains the requested human or machine-readable result, and nothing
+  else. This is what lets `--output-format jsonl` be piped safely.
+- stderr contains ordinary human status, progress, warnings, and errors.
+- JSON Lines operational output carries the same events under a stable
+  machine-readable contract.
+- Durable ingest or refresh reports retain only selected bounded operational
   events, not the complete live log.
 
-Every event has a fixed envelope:
+**`mapping_diagnostics` stays outside the facility.** It is evidence about
+decoded data, stored in CoSchema and queried beside it, and subject to the
+content policy that governs stored content. Applying an operational redaction
+profile to it would redact the evidence a reader opened the store to see.
 
-| Field | Meaning |
-|---|---|
-| `format` | `codess.operational-event/1` contract identifier |
-| `at` | UTC observation time |
-| `elapsed_seconds` | Monotonic time since the operation began |
-| `level` | `debug`, `info`, `warning`, or `error` |
-| `event` | Stable dotted event code such as `ingest.source.done` |
-| `message` | Concise human explanation |
-| `operation_id` | Correlation identity for one command operation |
+**A reporting call never raises into the operation it reports on.** A full disk
+or a closed pipe must not abort an ingest, which would make the facility a
+liability rather than an aid.
 
-Optional scope fields identify the command, phase, Project, vendor, Source, or
-Session only when known. Numeric observations such as events, bytes, rows,
-duration, and queue or buffer size remain numeric. Additional details are
-bounded JSON scalars or shallow arrays under a defined extension object; they
-must not carry transcript bodies, tool input or output, raw request data,
-secrets, or unbounded exception text.
-
-One event is rendered by interchangeable sinks rather than reconstructed at
-each call site:
-
-- a concise human stderr renderer;
-- a one-object-per-line JSON renderer;
-- a bounded collector for selected report events; and
-- a standard logging bridge for library call sites that cannot receive a
-  reporter directly.
-
-Expected domain failures remain typed where boundaries need different
-behavior. The command boundary converts them into a stable event code, safe
-message, appropriate exit status, and optional debug exception detail. A deep
-shared exception hierarchy is not required. Unexpected exceptions are logged
-once at the owning boundary; ordinary mode omits the traceback, while debug
-mode includes bounded exception information. Mapping diagnostics and content
-validation records continue through their existing CoSchema paths and are not
-silently replaced by operational logs.
-
-Implementation and transition proceed in this order:
-
-1. define the event value types, privacy bounds, renderers, and contract tests;
-2. implement the synchronous reporter and bounded collector in a standalone
-   module with no dependency on vendor adapters, stores, or command parsers;
-3. adapt `ProgressTrace` event names and report collection to the new facility;
-4. route ingest status and its top-level failures through the reporter;
-5. route scan, query, and administrative errors and status through the same
-   command-boundary handling;
-6. replace operational `print()` calls and ad hoc logger setup while retaining
-   dedicated stdout result renderers; and
-7. remove the transitional progress and logging paths after their tests and
-   report consumers use the common contract.
-
-Completion requires:
-
-- default human output remains concise and machine-result stdout remains clean;
-- every JSON log line validates and preserves numeric value types;
-- normal expected failures have a stable event code, message, and exit status
-  without a traceback;
-- debug mode exposes useful bounded exception evidence;
-- sensitive or conversational content cannot enter operational fields through
-  ordinary reporter calls;
-- retained report events are bounded and disclose their dropped-event count;
-- scan, ingest, query, and administrative integration tests cover success,
-  warning, expected failure, and unexpected failure; and
-- emission remains correct under the small amount of current concurrent or
-  subprocess work without adding a queue or lifecycle framework.
 
 ### 9.7 External Investigation Interfaces
 
@@ -984,7 +1728,7 @@ path.
 
 | Stage | Required decision or evidence | Completion condition |
 |---|---|---|
-| Requirement | Named use case, defect, source gap, or measured limitation in the work registry | Scope, priority, affected vendors or components, and expected outcome are explicit |
+| Requirement | Named use case, defect, source gap, or measured limitation, recorded as a [CoTasks](CoTasks.md) item | Scope, priority, affected vendors or components, and expected outcome are explicit |
 | Source analysis | Representative exact records, field states, source versions, and relationship evidence | The observed source behavior and unsupported cases are reproducible |
 | Design | Functional rule in Designs, source interpretation in the vendor schema, common contract in CoSchema, or component plan here | Only the documents and executable contracts whose authority changes are updated |
 | Implementation | Changes in the modules that own source access, decode, mapping, store, query, or interface behavior | Dependency boundaries remain intact or the deviation is recorded |
@@ -1005,7 +1749,13 @@ exceptional, and the standing rule is one of construction discipline rather
 than an outright ban on string composition:
 
 - every bound value reaches SQLite through `execute(sql, params)`'s
-  parameter argument, never through interpolation into the SQL text;
+  parameter argument, never through interpolation into the SQL text. A single
+  parameter is written `(value,)`: the trailing comma is what makes it a tuple,
+  and without it the parentheses are ordinary grouping, so `execute(sql, (pid))`
+  passes the string itself and SQLite binds one parameter per *character* --
+  `Incorrect number of bindings supplied. The current statement uses 1, and
+  there are 3 supplied.` The comma is syntax rather than style, and the rules
+  below about removing a trailing comma do not reach it;
 - SQL text may itself be built from an f-string or concatenation only when
   the interpolated fragment is a `?`-placeholder skeleton (e.g.
   `",".join("?" for _ in values)`), a column or table name drawn from a
@@ -1038,22 +1788,22 @@ unrecognized pattern, and no exploitable injection was found.
 
 Neither the count of currently-suppressed sites nor the list of files that
 carry them belongs in this document: both change as sites are read,
-rewritten (10.4.2 gives the rewrite criteria), or newly introduced and
+rewritten under the criteria below, or newly introduced and
 reviewed, and a number or file list written into prose goes stale the next
 time either happens without anyone updating the text. Run
 `tools/report_sql_suppressions.py` for the current figures instead of
 citing one here; it also flags any `S608` finding that is *not* currently
 suppressed, which is the signal that actually matters day to day -- a
 nonzero result there means a site was added since the last review pass, or
-an existing `# noqa` was removed without a rewrite, and needs the same
+an existing exemption was removed without a rewrite, and needs the same
 read-and-classify treatment as every other site before it ships.
 
-Each remaining site carries `# noqa: S608`, added mechanically with
-`ruff check --select S608 --add-noqa` after manual verification (not
-before), and the module docstring of every affected file carries a short
-note naming which permitted pattern that file's sites use, so the
-suppression is locally justified rather than opaque at the point a reader
-encounters it.
+Each remaining site is covered by a file-level
+`[tool.ruff.lint.per-file-ignores]` entry in `pyproject.toml` (see Suppression Mechanism below), added
+only after manual verification (not before). A source file carries at most a
+single-line pointer at its first S608 site or in its module docstring naming
+the permitted pattern its sites use, so the suppression is locally traceable
+rather than opaque at the point a reader encounters it.
 
 This is the model for any future rule where the scanner's finding rate and
 its true-positive rate diverge: run broad, read every hit once, classify
@@ -1083,7 +1833,7 @@ need:
   apart across separate triple-quoted blocks, splitting `IN (` from its
   closing `)` across list items — a net readability loss, not a style
   disagreement; the SQL's own structure is what gets fragmented. An
-  f-string with no source annotation (10.4.4) is the better response here
+  f-string with no source annotation (see Suppression Mechanism below) is the better response here
   even though a mechanical rewrite exists.
 
 **Choose per function, not per query.** If one function contains both a
@@ -1169,8 +1919,8 @@ judgment once a human has named the patterns:
 
 None of this replaces the initial human read that produced the three named
 patterns; it prevents the verified conclusion from silently going stale as
-the codebase changes. It belongs with the mechanical-enforcement checks in
-13.5 once implemented, as a Secure Coding-specific companion to the
+the codebase changes. It belongs with the mechanical-enforcement checks CoReview records
+once implemented, as a Secure Coding-specific companion to the
 import-boundary and SQL-ownership checks already listed there: those check
 *where* SQL may be constructed, this checks *how* the SQL that is
 constructed there stays safe.
@@ -1180,15 +1930,13 @@ constructed there stays safe.
 `S608` suppression is a file-level `pyproject.toml`
 `[tool.ruff.lint.per-file-ignores]` entry, not a per-line `# noqa: S608`
 comment — a file with several sites matching the patterns in 10.4.2 needs
-one `pyproject.toml` line, not one comment per site. The rationale for
-*why* a file is exempted belongs once, here in 10.4, not repeated in the
-file's docstring or in the `pyproject.toml` comment; a source file carries
-at most a single-line pointer at its first S608 site or in its module
-docstring, e.g. `# ruff S608 exemption: 10.4.2.3 [CoPlan.md]`, naming the
-specific subsection so a reader lands on the exact scenario rather than the
-whole of 10.4. Three explanations of the same reasoning (source file,
-`pyproject.toml`, this document) is the failure mode this convention
-exists to prevent.
+one `pyproject.toml` line, not one comment per site. This document is the
+sole place the rationale for an exemption is written down: `pyproject.toml`
+carries only the mechanical ignore list, and no source file carries a
+docstring note, a pointer comment, or any other reference to this section.
+A reader auditing why a file is exempted starts and ends here in 10.4,
+against the current `pyproject.toml` list, rather than piecing the reasoning
+together from a comment that can drift from the file it was written for.
 
 #### 10.4.5 Scope Note
 
@@ -1221,6 +1969,7 @@ establishes source-format support or correctness on current real data.
 | CLI | Packaging entry, argument parsing, dispatch, exit status, and structured rendering | Installed or source-tree command surface |
 | Integration | Scan, ingest, update, query, evidence, and publication across temporary vendor layouts | Several components and filesystem/database boundaries together |
 | Scale and hazard | Large counts, skewed Sessions, oversized records, rollback, and bounded allocation cases | A named resource or failure claim rather than general correctness |
+| Structural | Import boundaries, SQL ownership, duplicate function shapes, and name rebinding | The source tree read as an AST, or a checker run over it. Asserts a property of the code rather than of its behaviour, so it fails on a violation instead of waiting for one to cause a defect |
 
 Tests and fixtures live under `tests/`; contract inputs also come from `schema/`.
 Temporary vendor roots, registries, and Project store sets prevent the automated
@@ -1230,6 +1979,137 @@ is:
 ```bash
 pytest -q
 ```
+
+#### 11.1.1 Suite Shape and Utilization
+
+Measured rather than asserted, so a claim about coverage can be checked. The
+census is re-derivable by counting `def test_` and file properties under
+`tests/`.
+
+**Scale:** 70 files, 1,545 test functions, roughly 27,000 lines.
+
+**By subsystem**, grouped by what the file exercises rather than by its name:
+
+| Subsystem | Files | Tests |
+|---|---|---|
+| Store | 9 | 320 |
+| Adapter | 4 | 257 |
+| CLI | 5 | 175 |
+| Source access | 6 | 109 |
+| Query | 4 | 85 |
+| Reporting | 2 | 80 |
+| Identity | 3 | 54 |
+| Policy | 5 | 49 |
+| Audit tools | 6 | 70 |
+| Integration | 4 | 27 |
+| Unclassified by filename | 21 | 311 |
+
+**The unclassified fifth is the honest part of this table.** 21 files group
+under no subsystem the architecture names, so any per-subsystem coverage claim
+is provisional until they are reassigned. Filename is the weakest of the
+available criteria; these are stronger and cut across it:
+
+| Criterion | Files | What it identifies |
+|---|---|---|
+| Opens SQLite directly | 30 | Store-shaped, wherever filed |
+| Runs a subprocess | 13 | The installed-command surface: integration regardless of name |
+| Declares a fixture | few | Shared setup, so an edit reaches several tests |
+| Uses `parametrize` | few | Vector-driven; `test_helpers` has 18, most files have none |
+| Uses `pytest.raises` | -- | Error-path coverage |
+| Has no test class | 39 | Flat files, grouped by convention rather than structure |
+
+**Method.** Every test builds its own inputs -- temporary vendor roots,
+registries, and Project store sets -- so the suite cannot read or mutate live
+Claude Code, Codex, or Cursor data. Vendor databases are constructed by shared
+builders (`tests/cursor_fixtures.py`) rather than restated per module, which is
+what keeps a vendor-shape change from becoming a search-and-replace. Nothing is
+skipped: the suite has zero `skip` and zero `xfail` markers, so a passing run
+means every test ran.
+
+**Verification standard.** A check is confirmed by watching it fail, not by
+watching it pass. The import-cycle guard, the tools-SQL smoke test, and the
+refresh-receipt stage rank were each verified by reintroducing the defect they
+exist to catch and confirming the failure named it. A test that has never
+failed has not been shown to test anything.
+
+**Known thin areas**, by module size against tests naming the module:
+`retention` (450 lines, 6), `token_usage` (394, 5), `mcp_audit` (395, 4), and
+`storage_report` (310, 3). The ratio locates candidates; it is not a coverage
+percentage and does not prove those paths untested.
+
+**Docstring coverage is 35%** -- 544 of 1,545 tests. Since the convention puts
+the reasoning in the docstring and only the subject in the name, this is where
+the explanation is missing rather than where the testing is.
+
+#### 11.1.2 Test Naming
+
+**A test name identifies; the docstring explains.** The name answers "which
+test failed" from a one-line pytest summary. The reasoning -- why the
+behavior is what it is, what would break otherwise -- goes in the docstring,
+where it can be a sentence with punctuation and does not have to survive
+being read as an identifier.
+
+**Form: `test_<subject>_<condition>`.** Both parts are noun phrases naming
+what is under test and which case; neither is a clause. Articles (`a`,
+`an`, `the`), copulas (`is`, `are`, `does`), and conjunctions are the signal
+that a name has become a sentence, because an identifier does not need
+grammar to be read:
+
+| Instead of | Write | Why |
+|---|---|---|
+| `test_capture_rejects_a_source_that_changed_during_the_read` | `test_capture_source_changed` | Subject `capture`, condition `source_changed`. The rejection is the assertion, and the docstring already says it. `mid_read` is the docstring's job too -- the condition needs only enough to distinguish the test from its siblings. |
+| `test_criticality_is_decided_by_the_field_not_the_state` | `test_criticality` | One test, no sibling to distinguish from; the claim is the docstring's. |
+| `test_a_delta_without_a_backup_still_decodes` | `test_delta_without_backup` | The condition names the case; "still decodes" is what the assertions check. |
+| `test_git_discovery_never_walks_a_broad_system_root` | `test_discovery_broad_system_root` | The refusal is the behavior under test, not part of its identity. |
+
+**The rule that decides:** if the name contains a verb asserting an outcome
+-- `rejects`, `records`, `is`, `never_walks`, `still_decodes` -- that verb
+belongs in the docstring, and the condition it applied to stays in the name.
+Removing the verb should leave a name that still distinguishes the test from
+its siblings; if it does not, the condition was under-specified rather than
+the verb necessary.
+
+**Shorter than feels natural is usually right.** The condition needs only
+enough to separate a test from its siblings, and the class or module already
+supplies the subject: inside `TestResolveSlug`, `test_leading_dotdot` is
+complete. Applying this to `tests/test_helpers.py` brought its longest name
+from 56 characters to 38 and its median from 47 to 17, without losing a
+distinction -- the removed words were all restating what the assertions do.
+
+**This is the house style, not an isolated slip.** Measured over the current
+suite: the median name is 6 words, 702 names run to 7 words or more, and 179
+are 2 words or fewer. Neither extreme is right for the same reason -- a
+sentence-shaped name repeats what the assertions already say, and a bare noun
+(`test_empty`, `test_bash`) names an input without naming its subject.
+
+**The target is a short noun phrase naming the subject under test**, not a
+sentence and not a bare word:
+
+| Too long | Too short | Preferred |
+|---|---|---|
+| `test_an_empty_error_field_is_not_evidence` | `test_empty` | `test_empty_error_field` |
+| `test_a_status_outside_the_vocabulary_yields_no_observation` | -- | `test_status_outside_vocabulary` |
+| `test_the_file_time_stands_in_for_an_unstated_completion` | -- | `test_file_time_fallback` |
+| -- | `test_empty` | `test_empty_transcript` |
+
+`test_zero_limit` is already correct: two words that name the subject exactly.
+The rule is not a word count, it is whether the name identifies the case.
+
+Renaming every file at once would be a large diff touching no behavior; the
+convention applies to new and edited tests, and a file being changed for other
+reasons is the occasion to bring its names along, as `test_helpers.py`,
+`test_field_state.py`, `test_snapshot_raw.py`, and the four files added or
+edited most recently were here.
+
+**A stale name is worse than a verbose one.** Four tests cited design
+identifiers `A14`, `A16`, `D17`, and `D18` that appear in no document in the
+repository -- a name that has stopped identifying anything, which no length
+or grammar rule catches.
+
+No linter enforces this. `flake8-pytest-style` (`PT`) checks assertion
+structure rather than naming, and no rule caps length or detects a verb
+phrase, so this is a review convention. Writing it down is the enforcement:
+the rule was previously unstated, which is why it was not applied.
 
 ### 11.2 Coverage Measurement
 
@@ -1257,10 +2137,33 @@ Coverage must therefore be read along several dimensions:
 
 CLI integration tests launch child processes. An ordinary parent-process
 coverage run does not attribute those child paths, so a low scan or ingest
-percentage can coexist with successful installed-command tests. W13 must add
-subprocess-aware collection or directly test extracted domain coordinators
-while retaining the subprocess tests. Coverage percentage remains diagnostic;
-completion depends on the named behavior and expected evidence.
+percentage can coexist with successful installed-command tests. Coverage
+percentage remains diagnostic; completion depends on the named behavior and
+expected evidence.
+
+**The command-layer figures from a parent-only run are wrong, not merely
+incomplete**, and by enough to mislead. Measured both ways over the same suite:
+
+| Module | Parent-process only | With child processes attributed |
+|---|---|---|
+| `cli/scan_cmd.py` | 0% | fully covered |
+| `cli/query_cmd.py` | 12% | 73% |
+| `cli/ingest_cmd.py` | 66% | 93% |
+| `codess/walk_sessions.py` | 36% | 87% |
+| **Whole tree** | **79%** | **87%** |
+
+A module reported at 0% that 53 CLI tests exercise is the failure mode to
+recognize: the number describes where coverage was collected, not what the
+suite ran.
+
+**Collecting the child processes** needs `coverage`'s own subprocess support --
+`parallel = True`, `COVERAGE_PROCESS_START` pointing at the configuration, and
+`coverage combine`. This is wired into the ordinary invocation: `tests/conftest.py`
+sets the variable and places a `sitecustomize` on `PYTHONPATH` for the children,
+active only when the parent is already measuring. A `sitecustomize` rather than
+the documented `.pth`, because a `.pth` must be written into site-packages and a
+checkout must not modify the machine it runs on; Python imports both at the same
+point in start-up.
 
 ### 11.3 Validation Sequence
 
@@ -1269,12 +2172,30 @@ For a change:
 1. inspect the exact source shape and distinguish absent, malformed,
    unsupported, and valid field states;
 2. state the mapping and retained source evidence;
-3. run focused unit, contract, adapter, store, or query tests;
-4. run the complete automated suite;
-5. exercise the smallest real Project containing the affected source shape;
-6. add one Project for each additional adapter changed;
-7. use a multi-source Project for common classification or query behavior; and
-8. use a large or skewed Project only for the scale claim being made.
+3. run `ruff check` and `mypy` over the changed files **before** any test;
+4. run focused unit, contract, adapter, store, or query tests;
+5. run the complete automated suite;
+6. exercise the smallest real Project containing the affected source shape;
+7. add one Project for each additional adapter changed;
+8. use a multi-source Project for common classification or query behavior;
+9. use a large or skewed Project only for the scale claim being made; and
+10. for any decode, classification, or mapping change, run
+    `tools/decode_audit.py` over the Projects exercised in steps 6 to 8 and
+    confirm it exits zero.
+
+**Step 3 precedes step 4 because a static defect is cheap to find and expensive
+to find late.** An undefined name is reported by both checkers in about a
+second, naming the file and the line. The same defect reaching the suite is
+reported by whichever test happened to execute that path -- and where the path
+runs in an ingest subprocess, it arrives as `source.failed ... error_type=...`
+in progress output, with no file, no line, and no traceback. Observed: a missing
+import surfaced as 43 failing tests rather than one linter line.
+
+Step 10 is what makes the classification claim re-checkable rather than
+observed once. The audit is content-free, so it can run over whatever real
+Projects a developer has locally, and its nine invariants fail the run rather
+than reporting a number nobody compares. `tools/quality_report.py` covers the
+same ground for lint, type, and test counts.
 
 Every classification or mapping change inspects exact source evidence and the
 resulting normalized row. Every query change compares stable result identities
@@ -1311,340 +2232,106 @@ observation, and reviewed pruning are implemented sufficiently for current
 operation. Work in these areas is maintenance unless a correctness, recovery,
 or storage defect blocks the core pipeline.
 
-Operational reporting is partial. Ingest has bounded structured progress
-records and attaches selected records to its report, but application logging,
-status rendering, error rendering, and exit behavior do not yet share one
-contract. W18 defines the transition without changing CoSchema mapping
-diagnostics or stdout query results.
+Operational reporting is **built but not adopted**, and the distinction
+matters: `codess.reporting` implements the contract -- gates, event structure,
+sinks, profiles, privacy -- and is exercised by its own tests, while the
+command layer still writes status through the facilities it was built to
+replace. The imbalance is the point rather than its exact size: `reporting.*`
+call sites number in the low tens against roughly sixty direct `sys.stderr`
+writes, all in the four command modules. Re-derive with a grep over `src/`
+before acting, since the figure moves as adoption proceeds.
 
-## 13. Code Review
+The stdout half is correct and should not change: a `print()` carrying a
+requested result is the result channel, which is what lets `--output-format
+jsonl` pipe safely. What has not moved is the stderr half -- status, progress,
+warnings, and errors -- which is exactly what the facility exists for. Adoption
+is tracked as a work item; until it lands, the channel separation holds by
+convention at each call site rather than by construction.
 
-This section records durable conclusions from comparing the implementation and
-tests with the architecture, data flows, contracts, and operating model above.
-It does not reproduce generated Project status, corpus measurements, or a
-transient list of passing test counts.
+### 12.3 Functionality Baselines
 
-### 13.1 Review Method
+12.1 and 12.2 record what is implemented. This section states what the
+implemented parts should add up to, in the order the additions become
+useful. A baseline is a state in which the system is dependable for a named
+reader, not a fraction of the task list completed: the point of naming them
+is to make "is this ready for X" answerable without re-reading 14.
 
-The review examines:
+Two are defined. A third -- external consumption -- is deliberately not,
+because it has no requester; see the note at the end.
 
-1. package entry points, command dispatch, module imports, and SQL ownership;
-2. source discovery, vendor access, adapter output, and mapping enforcement;
-3. CoSchema package verification, DDL agreement, transactions, publication,
-   and read-only query behavior;
-4. identity, provenance, raw evidence, resource bounds, and large-file access;
-5. unit, contract, adapter, store, query, CLI, integration, and scale tests; and
-6. branch coverage as evidence about which implementation paths the tests
-   actually execute in the measured process.
+#### 12.3.1 Baseline 1: Trustworthy Single-Project Investigation
 
-`pytest -q`, package-contract tests, `compileall`, static import inspection,
-targeted SQL-location searches, and branch coverage provide the repeatable
-automated basis. Real vendor Sources remain a separate validation layer: the
-automated suite uses temporary roots and fixtures so it cannot alter a
-developer's live harness data.
+*For an operator investigating their own Project on their own machine, who
+needs the answers to be right rather than merely produced.*
 
-### 13.2 Compliance Summary
+The claim this baseline makes is narrow and checkable: what Codess reports
+about one Project matches what the vendor actually recorded, and where it
+cannot, it says so.
 
-| Area | Assessment | Basis |
-|---|---|---|
-| Entry and packaging | Compliant | The installed `codess` command and source-tree entry both dispatch through `codess.project:console_main`; package discovery follows the documented `src/` layout. |
-| Discovery | Largely compliant | Scan is index-led, rejects broad system roots, prunes known generated trees, and attributes nested workspaces to repository Projects. Known-source fallback traversal remains bounded to vendor storage rather than arbitrary work trees. |
-| Vendor separation | Partially compliant | Claude Code and Codex source traversal are separated from their adapters. Cursor selection is centralized substantially, but the Cursor adapter still issues vendor-table SQL. |
-| Mapping and classification | Partially compliant | Mapping profiles, traces, field diagnostics, and representative adapter fixtures exist. Common runtime conformance and strict behavior are not yet enforced uniformly across vendors. |
-| CoSchema persistence | Compliant in the principal path | The released package is hash-checked, the DDL is centralized, logical and physical contracts are compared, foreign keys are enabled, and source replacement commits or rolls back atomically. |
-| Query | Partially compliant | The typed executor provides bounded, deterministic, multi-store results with provenance and stable identities. Several report modes still execute separate SQL inside the command renderer. |
-| Publication and evidence | Largely compliant | SQLite backup, manifest hashes, atomic pointer replacement, content-addressed raw objects, and read-time verification implement reproducible publication. Raw-mode semantics remain unresolved under W15. |
-| Configuration | Compliant | Scan, ingest, and query validate resolved configuration before source work; built-ins, environment, command arguments, and JSON policies have explicit ownership. |
-| Operational reporting | Partially compliant | `ProgressTrace` supplies bounded timed ingest events, but ordinary logging, direct stderr messages, error conversion, and result-channel rules are not implemented through one structured facility. |
-| Maintenance wrappers | Partially compliant | Most wrappers adapt arguments and call library operations. A small number still contain catalog or pruning workflow logic that belongs in a domain module. |
-| Tests | Broad but unevenly observable | Contract, adapter, store, query, CLI, integration, hazard, and scale behaviors are exercised. Subprocess execution prevents the current coverage run from attributing much scan and ingest execution to those modules. |
+Already in place: decode for the three source systems, transactional
+publication with verified snapshots, the typed query surface over Sessions,
+overview, Events, and search, Interaction and Model Turn expansion, and
+bounded JSON and CSV output. The identity and integrity foundation is
+settled -- the write gate consults the executable contract, every
+derived value states what it identifies, and no derivation happens
+outside one module.
 
-### 13.3 Finding-to-Work Map
+**Met.** Decode is validated against real Sessions rather than fixtures, with no
+classification inconsistency across every Project the development machine holds
+([CoReview](CoReview.md#real-source-validation) records the scale and the
+method) -- the discovery lists are environment-configurable rather than fixed to
+one machine's tree, and lint, type, and test counts report together so the claims
+are measurable rather than asserted.
 
-| Finding | Impact | Related work |
-|---|---|---|
-| Source and command boundaries | Cursor decode and CLI coordinators own SQL or workflow outside their intended layer | W06, W10 |
-| Runtime mapping conformance | Released profiles do not govern every emitted vendor candidate uniformly | W04 |
-| Query path fragmentation | Some reports bypass the typed executor and query-contract parity is incomplete | W05, W06, W13 |
-| Ancillary unbounded reads | Tool output and worktree identity can materialize large bodies | W07 |
-| Project identity fallback | Direct library writes can create unrelated provisional Project IDs | W14 |
-| Raw mode ambiguity | `none` has no bytes but still creates a raw-manifest observation | W15 |
-| Package identity coupling | Non-semantic package changes can affect current-layout write compatibility | W03 |
-| Test observability | Child-process scan and ingest paths are not attributed by ordinary coverage | W13 |
-| Operational reporting fragmentation | Status, progress, logger calls, exceptions, and exit results lack one event and rendering contract | W18 |
+What this baseline does not require: cross-Project work, external output
+contracts, or performance characterisation. A single Project answered
+correctly is the whole claim.
 
-### 13.4 Deviations and Defects
+#### 12.3.2 Baseline 2: Reproducible, Shareable Results
 
-#### 13.4.1 Source and Command Boundaries
+*For a reader acting on a result they did not produce -- a review, a report,
+a second person checking the first.*
 
-Completing the Cursor source-access boundary is tracked by **W10**.
-`adapters.cursor` still opens and queries `cursorDiskKV`, coupling selection to
-interpretation. `cursor_source` must return bounded selected records and
-metadata, after which the adapter can lose its SQLite dependency. Direct
-vendor SQL remains acceptable only in the bounded audit exception.
+The added claim is that a result carries enough with it to be re-derived and
+challenged: what was selected, what was mapped, what was missed, and under
+which released contract.
 
-Command-layer separation is tracked by **W06**. `cli.ingest_cmd` contains
-source workflows, transactions, raw-record handling, and publication
-coordination. `cli.query_cmd` contains direct report queries that do not use the
-typed executor. Vendor ingest coordinators and specialized read-only analyses
-belong in `codess` modules. Command modules should retain argument adaptation,
-presentation, and exit status. The few maintenance scripts that still perform
-catalog or pruning workflows require the same treatment.
+In place: coverage reporting states what a store mapped, missed, and could not
+name, including evidence a vendor retained that no adapter decodes; one reporting
+contract separates status, progress, warnings, and errors from results, so a
+consuming program can read stdout alone.
 
-#### 13.4.2 Mapping and Query Contracts
+| Remaining | Why the baseline needs it |
+|---|---|
+| **W04** | A shared candidate-record contract enforced at the decode boundary, so every vendor is held to the same released profile rather than to whatever its adapter emits. |
+| **W05** | Predicates and reconstruction reviewed against real investigations, so the query surface is known to answer the questions asked of it. |
+| **Mechanical enforcement** | The architecture and contract paths are checked rather than described. Import boundaries, SQL ownership, module-level import cycles, request-rejection vectors, and subprocess coverage attribution each have a test; mapping-profile conformance over emitted fixtures is the remaining piece and belongs to W04. |
 
-Uniform runtime mapping conformance is tracked by **W04**. Released profiles are
-package-checked and sampled by adapter tests, but `validate_mapped_event` is not
-a common ingest boundary. Strict mapping currently covers selected Claude Code
-failures without equivalent Codex and Cursor semantics. A vendor-neutral
-post-decode stage must provide diagnostic and strict modes over partial,
-malformed, unsupported, and hazard records.
+**Order within the baseline.** W04 comes first: coverage reporting states loss
+against exactly the profiles W04 enforces, so a report built before that
+enforcement attests to nothing -- it is already built, which means W04 now
+qualifies a report rather than gating it. W05 wants real investigations to check
+against, which is the same input Baseline 1's decode validation used.
 
-Query-contract parity is part of **W13**. Checked-in JSON schemas and the
-hand-written runtime validator do not merely risk drifting independently —
-verified during a later review pass that every `schema/*-v1.json` and
-`schema/*-contract.json` file declaring `"$schema":
-"https://json-schema.org/draft/2020-12/schema"` (`query-request-v1.json`,
-`query-result-v1.json`, `query-row-v1.json`, `investigation-v1.json`,
-`project-set-v1.json`, `candidate-policy-v1.json`,
-`resource-policy-contract.json`, `baseline-selection-v1.json`) has zero
-references anywhere in `src/` or `tools/`; none is ever loaded or validated
-against at runtime. `query_api.py::validate_request` hand-checks the same
-contract `query-request-v1.json` already declares in structured form,
-independently and without reference to it.
+**The wire-format work regenerates in batches, which is what keeps the count
+down.** Time columns, the `contract_digest` rename, algorithm names out of
+stored values, identity derivation, and an Event-kind split landed together as
+CoSchema format 5; nine constant columns, a diagnostic-granularity rename, and
+one shared vendor description landed together as format 6
+([CoReview](CoReview.md#coschema-format-6)); token columns and `duplicate_of` as
+format 10; and the naming resolutions -- `adapter_key`, `source_system_key`, the
+seven `_when` time columns, and twelve `*_digest` fields -- as format 11.
+Batching is what makes those four rebuilds rather than the twenty-odd the
+individual changes would have cost.
 
-The `jsonschema` package (a mature, actively released, widely adopted
-implementation of the spec) is already an installed dependency but is
-likewise never imported. Tested directly against `query-request-v1.json`
-and representative request shapes: it correctly validates the structural
-half of the contract (types, enums, required fields, `uniqueItems`), but
-one of `validate_request`'s rules has no JSON Schema equivalent under any
-draft (checked every published draft the library implements, draft3
-through 2020-12; none has a "sorted" keyword) — canonical array
-*sortedness* (`project_ids`, `filters.session_ids`, and others must be
-unique **and sorted**) would remain hand-written under any jsonschema
-adoption. The `since <= until` cross-field comparison is expressible
-through `if`/`then` combinators, confirmed working, but reads less
-directly than the current one-line check.
+#### 12.3.3 Why a Third Baseline Is Not Defined
 
-Action-dependent filter validity (`ACTION_FILTERS[request["action"]]`) is a
-different kind of rule than the other two, not merely a harder one:
-`ACTION_FILTERS` encodes which query dimensions each action's SQL
-generation can actually join against (`sessions` queries never touch the
-`events` table, so `event_kinds`/`tool_names` are not merely disallowed by
-convention, they are inexpressible for that action) — this is a fact about
-`query_api.py`'s own query-construction code, not a constraint on the
-request document's grammar. It is technically expressible via JSON Schema
-`if`/`then` (confirmed working against a proof-of-concept) but doing so
-would duplicate business logic about query capabilities into a document
-meant to describe syntax; it does not belong in a schema regardless of
-which validation library is chosen.
-
-**Pydantic is a materially different candidate, not a variant of the same
-choice.** Tested directly: `pydantic` (also already an installed but unused
-dependency) expresses all three gaps — sortedness, `since <= until`, and
-`ACTION_FILTERS` — as ordinary Python methods (`@field_validator`,
-`@model_validator`) within the same class as the structural checks, so
-there is no bifurcation between "schema handles this, hand-written code
-handles that." The published, standard path from an existing JSON Schema
-file to a pydantic model is `datamodel-code-generator` (a real, actively
-maintained, separately published tool, recommended in pydantic's own
-documentation for this exact scenario; not installed in this environment).
-It is a **one-time code-generation step**, not a live bridge: after
-generation, the produced Python class is the authoritative definition
-going forward, and the source `.json` file is no longer necessarily kept
-in sync. Whether that is acceptable depends on whether any of the eight
-checked-in schema files are meant to remain independently consumable by
-something other than this codebase (an external tool, another service,
-documentation generation) — that has not been established and is a
-precondition for choosing between "adopt pydantic, retire the JSON files"
-and "keep the JSON files load-bearing, accept jsonschema's two permanent
-gaps, or keep hand-writing all of it."
-
-`tests/fixtures/validate_request_vectors.json` and
-`tests/test_validate_request_vectors.py` (51 vectors covering every
-`raise QueryContractError` path in `validate_request`, each tagged where
-it exercises `sortedness`, `cross_field`, or `action_dependent`) now supply
-the before/after correctness baseline either migration path needs. The
-fixture is tool-agnostic by construction — request/outcome pairs with no
-reference to `validate_request`'s internals — so it can validate a future
-pydantic model or jsonschema-based validator without being rewritten
-first; a migration is complete only when every vector still passes against
-the replacement.
-
-W13's resolution is therefore bounded, not open-ended: full replacement of
-`validate_request` with jsonschema alone is not available, since sortedness
-cannot move to a declarative schema under any draft and `ACTION_FILTERS`
-should not move to one regardless of expressibility. Pydantic does not have
-either limitation. The honest completions are (a) adopt pydantic, using
-`datamodel-code-generator` against the existing schema files as the
-starting point if and only if those files do not need to remain
-independently authoritative outside this codebase, verified against the
-vector suite; (b) adopt jsonschema for the structural checks only, with
-sortedness and `ACTION_FILTERS` permanently hand-written and a contract
-test asserting the two stay in agreement; or (c) remove the eight currently
-dead schema files if no adoption is wanted, since an unused file declaring
-itself a validation contract is a worse state than no file: it invites a
-future reader to assume it is load-bearing when it is not.
-
-#### 13.4.3 Bounded Processing
-
-Ancillary large-file handling is tracked by **W07**. Persisted Claude tool output
-uses `read_bytes`, while snapshot worktree identity captures complete binary
-diffs and untracked files in memory. Both paths can encounter exactly the large
-logs or binary objects that resource policy is intended to contain. They must
-stat and classify first, then stream through bounded hashing or decoding and
-record an explicit rejection or limitation before excessive allocation.
-
-#### 13.4.4 Identity and Evidence Semantics
-
-Uncatalogued Project identity is tracked by **W14**. Store code can generate a
-new Project UUID when no catalog binding is supplied. Normal CLI operation
-supplies the binding, but direct library writes can assign different Project
-identities to separate vendor stores for one repository. Current-format writes
-should require Project identity, or mark the generated identity explicitly
-provisional and reconcile it before publication.
-
-Raw mode `none` is tracked by **W15**. It retains no raw bytes but writes
-a `not_retained` source-revision observation into the snapshot raw manifest.
-The design can be read as promising no raw-manifest record. The decision must
-state whether `none` means no bytes or no raw observation and then align the
-mode name, manifest, documentation, and tests. Normalized Source provenance is
-required either way.
-
-Package identity separation is tracked by **W03** because it can
-block current-format writes. Snapshot identity currently uses one digest over exact package files;
-a non-semantic packaged-file edit therefore changes write compatibility. Exact
-package integrity must remain available without equating it to logical schema,
-physical layout, decoder, mapping, or fixture compatibility.
-
-#### 13.4.5 Test Observability
-
-Subprocess coverage is tracked by **W13**. CLI integration tests execute scan and
-ingest in child processes, so ordinary branch coverage cannot attribute those
-paths and cannot locate their untested branches reliably. Subprocess coverage
-or directly tested domain coordinators should supply that evidence while the
-installed-interface subprocess tests remain in place.
-
-#### 13.4.6 Operational Reporting
-
-The current implementation has four distinct reporting paths. Command modules
-write requested results and many status or error messages directly with
-`print()`. Project, scan, helper, Cursor-source, adapter, and command modules
-use standard library loggers, but `parse_and_run()` configures them only through
-`logging.basicConfig()` when verbose mode is selected. `ProgressTrace`
-independently emits timed ingest events to stderr and retains a bounded deque.
-Domain functions also return or mutate report and diagnostic dictionaries that
-command code later renders.
-
-`ProgressTrace` is the most complete current contract. It records UTC and
-monotonic time, uses stable dotted event names, declares transcript content
-out of scope for its call sites, caps retained events, reports drops, and can
-select the events attached to each Project report. Ingest, raw capture, Cursor
-cohort work, and selected adapters emit useful stage, count, size, reuse, and
-completion events through it. Focused tests cover rendering, disabled output,
-retention, drop reporting, and representative ingest progress sequences.
-
-Its limits are also concrete. Arbitrary field names and values have no runtime
-contract or privacy enforcement. Human rendering is built into the collector,
-and only ingest uses it systematically. Scan and query rely primarily on direct
-stderr text. Standard logger records and progress records have different
-formats and configuration. There is no operation correlation identity, stable
-application error code, JSON operational stream, or common boundary that maps
-typed failures to messages and exit status.
-
-Error handling is correspondingly distributed. The administrative dispatcher
-catches a selected group of exceptions, scan logs some unexpected root
-failures, and ingest and query contain many local catches and stderr messages.
-`console_main()` handles `BrokenPipeError` but is not a general application
-error boundary. Tests establish several valuable surface rules—invalid input
-must not expose a traceback, progress stays on stderr, machine outputs remain
-parseable, and broken downstream pipes remain quiet—but those rules are not
-owned by one implementation component.
-
-This finding does not apply to CoSchema mapping diagnostics. Those diagnostics
-are evidence about decoded Source records and must remain queryable beside the
-data. W18 consolidates only application operation reporting under the contract
-in Section 9.6.1.
-
-### 13.5 Mechanical Enforcement
-
-The test layout matches the intended validation layers, but file names alone do
-not prove architectural compliance. The following checks should become
-mechanical:
-
-- an import-boundary test for adapter, source, store, query, and CLI layers;
-- an SQL-ownership check that recognizes the narrow focused-audit exception;
-- mapping-profile conformance over every emitted adapter fixture;
-- runtime-versus-JSON query contract parity cases;
-- transaction-failure tests at each source replacement and publication edge;
-- subprocess-aware coverage for scan and ingest, without replacing installed
-  CLI integration tests;
-- operational-event contract, channel-separation, privacy, and error-boundary
-  tests for scan, ingest, query, and administrative commands; and
-- small real-Source validation for each changed vendor decoder, followed by a
-  multi-vendor Project only when common classification or query behavior
-  changes.
-
-Coverage percentage is supporting evidence, not an acceptance criterion by
-itself. Completion depends on the named failure, boundary, and use case being
-exercised with the expected normalized identities and results.
-
-## 14. Current Work Registry
-
-This registry contains only incomplete work. Its identifiers connect
-requirements, code-review findings, implementation changes, and completion
-evidence. Status means **WIP** for active work, **Planned** for accepted and
-ordered work, **TODO** for accepted but unscheduled work, **Under review** for
-an established problem without an accepted resolution, and **Postponed** for
-work intentionally outside the current phase.
-
-### 14.1 Immediate Core Work
-
-| ID | Priority | Status | Work | Completion evidence |
-|---|---|---|---|---|
-| W01 | Critical | WIP | Audit source-type and Actor classification across representative Claude Code, Codex, and Cursor Sessions. | Fixtures and real-source checks agree on Actors, roles, origins, relations, and source-accounting totals. |
-| W02 | Critical | WIP | Strengthen tool, context, compaction, model-setting, and agent/subagent decode. | Each supported family has exact source evidence, mapping, partial/malformed coverage, diagnostics, and an explicit validation basis. |
-| W03 | Critical | Under review | Separate exact package integrity from SQLite layout, logical schema, decoder, mapping, and fixture identity. | A non-semantic package-file change cannot make an unchanged store layout unwritable; each identity has a defined consumer and test. |
-| W04 | High | Planned | Define the shared candidate-record contract and enforce released mapping profiles at the runtime decode boundary. | All three adapters satisfy the typed and runtime candidate contract, pass the same post-decode conformance check, and share strict/diagnostic semantics. |
-| W05 | High | Planned | Review high-value predicates and reconstruction against actual investigations. | Bounded deterministic results and complete requested expansions agree with focused direct queries. |
-| W06 | High | Planned | Move domain SQL and workflows out of command modules. | Commands adapt arguments and render results; ingest operations live in domain modules; repeated reports use the typed executor or an explicit read-only analysis component. |
-| W07 | High | Planned | Bound ancillary reads that can encounter large source or repository content. | Persisted tool output, worktree fingerprinting, and growing manifests stream or reject by explicit policy without first materializing the complete body. |
-| W08 | High | Planned | Establish repeatable query and ingest performance workloads. | Small correctness and representative scale cases report timing, query plans, rows, memory, and stable result identities. |
-| W09 | High | WIP | Confirm selective Cursor work remains independent of unrelated shared-database content. | Selection, fingerprinting, decode, and query remain bounded as unrelated Cursor content grows. |
-| W10 | High | Planned | Complete the Cursor source-access boundary. | `cursor_source` owns vendor SQL and returns bounded selected records and metadata; the adapter has no SQLite dependency. |
-
-### 14.2 Next Functional Work
-
-| ID | Priority | Status | Work | Start or completion condition |
-|---|---|---|---|---|
-| W11 | Normal | TODO | Improve search reports and structured-query examples. | Core predicate and reconstruction checks are stable. |
-| W12 | Normal | TODO | Report source-to-common coverage, loss, and unknown shapes. | The report derives from profiles, diagnostics, and selected source observations. |
-| W13 | Normal | TODO | Mechanically enforce architecture and contract paths and make coverage observe child-process execution. | Import and SQL ownership checks enforce declared layers; query schemas exercise runtime validation; scan and ingest execution contributes usable coverage evidence. |
-| W14 | Normal | TODO | Require or explicitly mark Project identity for direct library writes. | Separate vendor stores cannot silently create unrelated Project identities for one repository. |
-| W15 | Normal | Under review | Resolve the meaning and name of raw mode `none`. | Mode semantics, manifest behavior, documentation, and tests agree while normalized Source provenance remains intact. |
-| W16 | Normal | TODO | Evaluate, design, and plan the external investigation interfaces described in Section 9.7; this backlog item does not authorize implementation. | A written decision maps existing capabilities and gaps, selects or rejects data and code integration paths, specifies any proposed contracts, and defines staged work with licensing, privacy, security, and validation criteria. |
-| W17 | Normal | Under review | Expand cross-Project analysis inputs. | A consumer identifies entities, fields, selection, transformation, and output checks. |
-| W18 | Normal | Planned | Implement and transition to the structured operational-reporting subsystem defined in Section 9.6.1. | One event contract and its renderers govern status, progress, warnings, and command-boundary errors; stdout results remain clean, retained events remain bounded, and all command families pass channel, privacy, and failure-path tests. |
-
-### 14.3 Secondary Maintenance
-
-- Fix publication, catalog, raw, refresh, or retention behavior when it
-  threatens correctness, bounded storage, or normal operation.
-- Add resource controls for observed accidental or pathological input.
-- Maintain Session names and utilization observations without displacing
-  source decode, mapping, or search work.
-
-### 14.4 Deferred Directions
-
-The following remain **Postponed** until a concrete consumer or measured
-limitation justifies reopening them:
-
-- a mapping expression language;
-- remote schema or mapping registries;
-- fuzzy cross-vendor identity resolution;
-- a built-in general search engine beyond current SQLite predicates;
-- standardized Parquet, DuckDB, or merged-database products;
-- automatic narrative or assessment generation;
-- cost, quota, or billing analysis; and
-- broad raw-source search.
+External consumption -- W16's interface evaluation, W17's cross-Project
+inputs, and the deferred analytical products -- would be the natural third.
+It is not stated as a baseline because no consumer has asked for it. 9.7
+analyses the capability intersection carefully, but building an interface
+against no requester is how a system acquires surfaces nobody uses and
+everybody maintains. The standing rule for deferred directions applies: reopen when a
+concrete consumer or a measured limitation justifies it, and let that
+consumer's requirements define the baseline rather than this document
+guessing them.

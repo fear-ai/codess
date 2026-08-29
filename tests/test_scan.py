@@ -1,14 +1,15 @@
-"""Tests for codess scan CLI and run_scan."""
+"""Tests for the codess scan CLI command (backed by codess.walk_sessions)."""
 
 import json
-import sqlite3
-
-import pytest
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+import pytest
+from cursor_fixtures import create_bubble_table, create_header_table, put_headers
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -17,7 +18,7 @@ def _run(cmd, cwd=None, env=None, **kw):
     env = env or os.environ.copy()
     cwd = cwd or PROJECT_ROOT
     return subprocess.run(
-        [sys.executable, "-m", "main"] + cmd,
+        [sys.executable, "-m", "main", *cmd],
         cwd=PROJECT_ROOT,
         env=env,
         capture_output=True,
@@ -27,10 +28,10 @@ def _run(cmd, cwd=None, env=None, **kw):
 
 
 def _scan_env(base: Path, **extra: str) -> dict:
-    """Isolate ``ingested_projects.json`` writes from the developer home."""
+    """Isolate ``projects_state.json`` writes from the developer home."""
     reg = base / "_test_codess_registry"
     reg.mkdir(parents=True, exist_ok=True)
-    return {**os.environ.copy(), "CODESS_REGISTRY": str(reg), **extra}
+    return {**os.environ.copy(), "CODESS_STORE_ROOT": str(reg), **extra}
 
 
 def _write_codex_session(root: Path, project: Path, session_id: str = "session") -> None:
@@ -70,7 +71,7 @@ def test_scan_exact_root_honors_approved_remote_cursor_source_link(tmp_path):
     (sidecar / "source-links.json").write_text(json.dumps({
         "format": "codess.source-links/1",
         "links": [{
-            "source_system_id": "cursor.composer",
+            "source_system_key": "cursor.composer",
             "source_project_path": "vscode-remote://ssh-remote+host/repo",
             "target_project_path": str(project),
             "source_identity": {"workspace_id": workspace_id},
@@ -83,16 +84,9 @@ def test_scan_exact_root_honors_approved_remote_cursor_source_link(tmp_path):
     global_dir = cursor / "globalStorage"
     global_dir.mkdir()
     conn = sqlite3.connect(global_dir / "state.vscdb")
-    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
-    conn.execute(
-        "CREATE TABLE composerHeaders ("
-        "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-        "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-    )
-    conn.execute(
-        "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
-        ("composer", workspace_id, 1_000, 2_000, 0, 0),
-    )
+    create_bubble_table(conn)
+    create_header_table(conn)
+    put_headers(conn, [("composer", workspace_id, 1_000, 2_000, 0, 0)])
     conn.execute(
         "INSERT INTO cursorDiskKV VALUES (?, ?)",
         ("bubbleId:composer:bubble", json.dumps({"type": 1, "text": "prompt"})),
@@ -135,7 +129,7 @@ def test_scan_coalesces_nested_workspace_into_observed_git_project(tmp_path):
     ws.mkdir(parents=True)
     (ws / "workspace.json").write_text(json.dumps({"folder": str(child)}))
     conn = sqlite3.connect(ws / "state.vscdb")
-    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    create_bubble_table(conn)
     conn.commit()
     conn.close()
     env = _scan_env(
@@ -257,13 +251,13 @@ def test_multi_root_scan_does_not_register_cursor_global_as_project(tmp_path):
     conn.commit()
     conn.close()
     reg = tmp_path / "registry"
-    env = _scan_env(tmp_path, CODESS_CURSOR_DATA=str(cursor), CODESS_REGISTRY=str(reg))
+    env = _scan_env(tmp_path, CODESS_CURSOR_DATA=str(cursor), CODESS_STORE_ROOT=str(reg))
     result = _run(
         ["scan", "--dir", str(first), "--dir", str(second), "--days", "0", "--out", "-"],
         env=env,
     )
     assert result.returncode == 0
-    registry_path = reg / "ingested_projects.json"
+    registry_path = reg / "projects_state.json"
     if registry_path.exists():
         registry = json.loads(registry_path.read_text())
         assert not any("(global)" in row["path"] for row in registry["projects"])
@@ -274,16 +268,16 @@ def test_scan_prunes_legacy_cursor_global_pseudo_project(tmp_path):
     work.mkdir()
     reg = tmp_path / "registry"
     reg.mkdir()
-    (reg / "ingested_projects.json").write_text(json.dumps({"projects": [{
+    (reg / "projects_state.json").write_text(json.dumps({"projects": [{
         "path": str(work / "(global)"),
         "scan": {"by_vendor": {"Cursor": {"sess": 5}}},
     }]}))
     result = _run(
         ["scan", "--dir", str(work), "--days", "0", "--out", "-"],
-        env=_scan_env(tmp_path, CODESS_REGISTRY=str(reg)),
+        env=_scan_env(tmp_path, CODESS_STORE_ROOT=str(reg)),
     )
     assert result.returncode == 0
-    registry = json.loads((reg / "ingested_projects.json").read_text())
+    registry = json.loads((reg / "projects_state.json").read_text())
     assert registry["projects"] == []
 
 
@@ -444,7 +438,7 @@ def test_scan_source_filter_ignores_other_vendor_corruption(tmp_path):
     )
 
     assert result.returncode == 0
-    assert "scan diagnostics" not in result.stderr
+    assert "scan.diagnostics" not in result.stderr
 
 
 def test_scan_cursor_metric_failure_exits_1_and_stop_suppresses_csv(tmp_path):
@@ -502,7 +496,7 @@ def test_scan_cursor_invalid_key_is_reported_but_nonfatal(tmp_path):
     ws.mkdir(parents=True)
     (ws / "workspace.json").write_text(json.dumps({"folder": str(proj)}))
     conn = sqlite3.connect(ws / "state.vscdb")
-    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+    create_bubble_table(conn)
     conn.execute("INSERT INTO cursorDiskKV VALUES ('bubbleId:broken', '{}')")
     conn.commit()
     conn.close()
@@ -682,8 +676,14 @@ def test_scan_cc_subagent(subagent_flag, env_val, expected_sess):
         assert int(parts[2]) == expected_sess
 
 
-def test_scan_debug_dir_label():
-    """Scan --debug prints [dir] for directory visits when projects found."""
+def test_scan_debug_reports_discovery_events():
+    """`--debug` emits the discovery diagnostics as structured events.
+
+    These were `[dir]` and `[scan]` prefixed prints. They are now
+    `scan.source.mapped` and `scan.project.metrics` through the reporting
+    contract, so the assertion is on the event names rather than on a prefix that
+    only the print statements had.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         work = tmp / "work"
@@ -704,10 +704,12 @@ def test_scan_debug_dir_label():
             CODESS_CODEX_SESSIONS=str(tmp / "codex"),
             CODESS_CURSOR_DATA=str(cursor_base),
         )
-        r = _run(["scan", "--dir", str(work), "--debug", "--out", "-"], env=env)
+        r = _run(["scan", "--dir", str(work), "--debug", "--days", "0", "--out", "-"], env=env)
         assert r.returncode == 0
-        assert "[dir]" in r.stderr
-        assert "[scan]" in r.stderr
+        assert "scan.source.mapped" in r.stderr, r.stderr
+        assert "scan.project.metrics" in r.stderr, r.stderr
+        # Still stderr, never stdout: stdout carries the requested result (R9).
+        assert "scan.source.mapped" not in r.stdout
 
 
 def test_scan_cursor_central_db():
@@ -723,7 +725,7 @@ def test_scan_cursor_central_db():
         gs.mkdir(parents=True)
         db = gs / "state.vscdb"
         conn = sqlite3.connect(db)
-        conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        create_bubble_table(conn)
         conn.execute(
             "INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
             ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "hi", "timingInfo": {}})),
@@ -743,7 +745,7 @@ def test_scan_cursor_central_db():
         lines = r.stdout.strip().split("\n")
         assert lines[0] == "path,vendor,sess,mb,span_weeks"
         assert any("(global)" in ln for ln in lines)
-        row = [ln for ln in lines if "(global)" in ln][0]
+        row = next(ln for ln in lines if "(global)" in ln)
         assert "1," in row or ",1," in row  # sess=1
 
 
@@ -758,20 +760,13 @@ def test_scan_days_filters_cursor_global_with_header_timestamps(tmp_path):
     global_dir.mkdir(parents=True)
     db = global_dir / "state.vscdb"
     conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
-    conn.execute(
-        "CREATE TABLE composerHeaders ("
-        "composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, "
-        "lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER)"
-    )
+    create_bubble_table(conn)
+    create_header_table(conn)
     conn.execute(
         "INSERT INTO cursorDiskKV VALUES (?, ?)",
         ("bubbleId:c1:b1", json.dumps({"type": 1, "text": "old"})),
     )
-    conn.execute(
-        "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
-        ("c1", "ws", 1_000_000_000_000, 1_000_000_001_000, 0, 0),
-    )
+    put_headers(conn, [("c1", "ws", 1_000_000_000_000, 1_000_000_001_000, 0, 0)])
     conn.commit()
     conn.close()
     cc = tmp_path / "cc"
@@ -818,7 +813,7 @@ def test_scan_days_ago_in_debug():
             CODESS_CODEX_SESSIONS=str(tmp / "codex"),
             CODESS_CURSOR_DATA=str(cursor_base),
         )
-        r = _run(["scan", "--dir", str(work), "--debug", "--out", "-"], env=env)
+        r = _run(["scan", "--dir", str(work), "--debug", "--days", "0", "--out", "-"], env=env)
         assert r.returncode == 0
         assert "days_ago=" in r.stderr
 
@@ -833,7 +828,7 @@ def test_scan_invalid_source_exit(tmp_path):
 
 
 def test_scan_registry_missing_file_exit(tmp_path):
-    """--registry with no ingested_projects.json exits 1."""
+    """--registry with no projects_state.json exits 1."""
     reg = tmp_path / "reg"
     reg.mkdir()
     work = tmp_path / "work"
@@ -849,7 +844,7 @@ def test_scan_registry_missing_file_exit(tmp_path):
         CODESS_CURSOR_DATA=str(cursor_base),
     )
     r = _run(
-        ["scan", "--dir", str(work), "--registry", str(reg), "--out", "-"],
+        ["scan", "--dir", str(work), "--store", str(reg), "--out", "-"],
         env=env,
     )
     assert r.returncode == 1
@@ -859,11 +854,11 @@ def test_scan_registry_missing_file_exit(tmp_path):
 def test_scan_registry_corrupt_json_exit(tmp_path):
     reg = tmp_path / "reg"
     reg.mkdir()
-    (reg / "ingested_projects.json").write_text("{broken")
+    (reg / "projects_state.json").write_text("{broken")
     work = tmp_path / "work"
     work.mkdir()
     r = _run(
-        ["scan", "--dir", str(work), "--registry", str(reg), "--out", "-"],
+        ["scan", "--dir", str(work), "--store", str(reg), "--out", "-"],
         env=_scan_env(tmp_path),
     )
     assert r.returncode == 1
@@ -873,15 +868,15 @@ def test_scan_registry_corrupt_json_exit(tmp_path):
 def test_scan_empty_registry_warns_and_outputs_only_header(tmp_path):
     reg = tmp_path / "reg"
     reg.mkdir()
-    (reg / "ingested_projects.json").write_text('{"projects":[]}')
+    (reg / "projects_state.json").write_text('{"projects":[]}')
     work = tmp_path / "work"
     work.mkdir()
     r = _run(
-        ["scan", "--dir", str(work), "--registry", str(reg), "--out", "-"],
+        ["scan", "--dir", str(work), "--store", str(reg), "--out", "-"],
         env=_scan_env(tmp_path),
     )
     assert r.returncode == 0
-    assert "registry has no projects" in r.stderr.lower()
+    assert "scan.registry_empty" in r.stderr
     assert len(r.stdout.strip().splitlines()) == 1
 
 
@@ -898,7 +893,7 @@ def test_scan_dirs_file_without_usable_roots_is_error(tmp_path, contents):
 
 
 def test_scan_merges_registry_without_registry_flag(tmp_path):
-    """Every scan upserts index metrics into CODESS_REGISTRY (isolated in test)."""
+    """Every scan upserts index metrics into CODESS_STORE_ROOT (isolated in test)."""
     work = tmp_path / "work"
     work.mkdir()
     proj = work / "proj"
@@ -937,7 +932,7 @@ def test_scan_merges_registry_without_registry_flag(tmp_path):
         env=env,
     )
     assert r.returncode == 0
-    stats_path = reg_home / "ingested_projects.json"
+    stats_path = reg_home / "projects_state.json"
     assert stats_path.exists()
     data = json.loads(stats_path.read_text())
     byp = {p["path"]: p for p in data.get("projects", [])}
@@ -986,7 +981,7 @@ def test_scan_registry_filter_and_ref_columns(tmp_path):
             }
         ]
     }
-    (reg / "ingested_projects.json").write_text(json.dumps(stats))
+    (reg / "projects_state.json").write_text(json.dumps(stats))
     env = _scan_env(
         tmp_path,
         CODESS_CC_PROJECTS=str(cc),
@@ -1000,7 +995,7 @@ def test_scan_registry_filter_and_ref_columns(tmp_path):
             str(work),
             "--days",
             "9999",
-            "--registry",
+            "--store",
             str(reg),
             "--out",
             "-",
@@ -1015,3 +1010,82 @@ def test_scan_registry_filter_and_ref_columns(tmp_path):
     assert len(lines) == 2
     assert "Claude" in lines[1]
     assert str(proj.resolve()) in lines[1]
+
+
+def test_debug_does_not_change_which_projects_are_listed():
+    """Diagnostic output must describe the same selection an ordinary run gets.
+
+    `--debug` previously disabled the recency window, so a project older than
+    the window appeared only when debugging. A reader could then not reproduce
+    what they had been shown.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        work = tmp / "work"
+        work.mkdir()
+        proj = work / "old"
+        proj.mkdir()
+        cc = tmp / "cc"
+        cc.mkdir()
+        slug = "-" + str(proj.resolve()).lstrip("/").replace("/", "-")
+        (cc / slug).mkdir(parents=True)
+        (cc / slug / "sessions-index.json").write_text(
+            json.dumps({"entries": [{
+                "projectPath": str(proj), "sessionId": "s1",
+                "fileMtime": 1e12, "messageCount": 2, "isSidechain": False,
+            }]})
+        )
+        (tmp / "codex").mkdir()
+        (tmp / "cursor" / "User").mkdir(parents=True)
+        env = _scan_env(
+            tmp, CODESS_CC_PROJECTS=str(cc),
+            CODESS_CODEX_SESSIONS=str(tmp / "codex"),
+            CODESS_CURSOR_DATA=str(tmp / "cursor"),
+        )
+
+        plain = _run(["scan", "--dir", str(work), "--out", "-"], env=env)
+        debug = _run(["scan", "--dir", str(work), "--debug", "--out", "-"], env=env)
+
+        def project_names(result):
+            rows = [
+                line.split(",")[0]
+                for line in result.stdout.strip().splitlines()[1:]
+                if line
+            ]
+            return sorted(name for name in rows if name != "(global)")
+
+        assert project_names(plain) == project_names(debug)
+        # The project is outside the window, so neither run lists it ...
+        assert project_names(plain) == []
+        # ... and the omission is stated rather than left as an empty result.
+        assert "scan.projects_hidden" in plain.stderr
+
+
+def test_projects_outside_the_window_are_listed_with_days_zero():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        work = tmp / "work"
+        work.mkdir()
+        proj = work / "old"
+        proj.mkdir()
+        cc = tmp / "cc"
+        cc.mkdir()
+        slug = "-" + str(proj.resolve()).lstrip("/").replace("/", "-")
+        (cc / slug).mkdir(parents=True)
+        (cc / slug / "sessions-index.json").write_text(
+            json.dumps({"entries": [{
+                "projectPath": str(proj), "sessionId": "s1",
+                "fileMtime": 1e12, "messageCount": 2, "isSidechain": False,
+            }]})
+        )
+        (tmp / "codex").mkdir()
+        (tmp / "cursor" / "User").mkdir(parents=True)
+        env = _scan_env(
+            tmp, CODESS_CC_PROJECTS=str(cc),
+            CODESS_CODEX_SESSIONS=str(tmp / "codex"),
+            CODESS_CURSOR_DATA=str(tmp / "cursor"),
+        )
+
+        result = _run(["scan", "--dir", str(work), "--days", "0", "--out", "-"], env=env)
+        assert "old" in result.stdout
+        assert "scan.projects_hidden" not in result.stderr
