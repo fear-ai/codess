@@ -1,3 +1,5 @@
+# Codess
+
 <p align="center">
   <img
     src="prism34.png"
@@ -6,16 +8,11 @@
   >
 </p>
 
-# Codess
 
-Codess discovers, decodes, normalizes, and searches local coding-assistant
-Sessions from Claude Code, Codex, and Cursor. It preserves exact vendor evidence
-while providing regular Project, Session, Event, tool, model, and Artifact
-structures that can be queried together.
+Codess discovers, decodes, normalizes, and supports ad-hoc content and relationship searches for actual session artifacts of local LLM AI coding harnesses Claude Code, Codex, and Cursor.
+It preserves exact vendor evidence, while providing regular Project, Session, Event, tool, model, and Artifact structures that can be queried together.
 
-Use Codess to find work associated with a repository, reconstruct an Interaction,
-inspect tool or model activity, compare source systems, and supply structured
-inputs to later research or assessment.
+Use Codess to find work associated with a repository, reconstruct an Interaction, inspect tool or model activity, compare source systems, and supply structured inputs to later research or assessment.
 
 ## Choose a Starting Point
 
