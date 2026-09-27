@@ -66,6 +66,7 @@ from codess.session_names import (
     remove_session_name,
     set_session_name,
 )
+from codess.snapshot import reference_catalog_paths
 from codess.storage_report import all_store_paths, build_storage_report
 from codess.token_usage import source_paths, validate_codex_token_usage
 from codess.vendor_audits.claude_features import audit_claude_features
@@ -1230,10 +1231,7 @@ def _registry_prune(args: argparse.Namespace) -> int:
 
 
 def _storage_prune(args: argparse.Namespace) -> int:
-    catalogs = args.reference_catalog or [
-        catalog_root() / "approved-baselines.json",
-        catalog_root() / "reviewed-baselines.json",
-    ]
+    catalogs = args.reference_catalog or reference_catalog_paths()
     result = (
         apply_retention_plan(
             args.store_root, reference_catalogs=catalogs,

@@ -24,7 +24,7 @@ diplomatic one doing identical work. What travels is the *change* in a
 Project's own rate over time, which is why `--since` exists.
 
     python tools/friction_signals.py
-    python tools/friction_signals.py --project proj-j --examples
+    python tools/friction_signals.py --project <project> --examples
 """
 
 from __future__ import annotations

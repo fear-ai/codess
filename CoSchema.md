@@ -21,9 +21,9 @@ Current store identity is:
 | Property | Value |
 |---|---|
 | Format ID | `codess.coschema` |
-| Format version | `4` |
+| Format version | `12` |
 | SQLite `application_id` | `0x434F4445` |
-| SQLite `user_version` | `4` |
+| SQLite `user_version` | `12` |
 | Decoder profile | `0.2` |
 | Validator profile | `0.2` |
 
@@ -38,7 +38,7 @@ questions. Conflating them would force a rebuild whenever any one changed:
 
 | Identifier | Declares | Changing it means |
 |---|---|---|
-| `FORMAT_VERSION` (5) | The CoSchema layout: tables, columns, constraints | Stores must be rebuilt; a different layout cannot be read |
+| `FORMAT_VERSION` (12) | The CoSchema layout: tables, columns, constraints | Stores must be rebuilt; a different layout cannot be read |
 | `contract_digest` | The executable contract -- the DDL, the logical and mapping contracts, and the three vendor profiles | Something that determines how a store is written or decoded changed. Validation fixtures are deliberately outside it |
 | `DECODER_VERSION` (0.2) | How vendor records are interpreted into common Events | The same source would now decode differently, so existing rows are not comparable to new ones |
 | `VALIDATOR_VERSION` (0.2) | What is accepted, rejected, or diagnosed | The same records would now be admitted or refused differently |
@@ -300,7 +300,7 @@ schemes are distinguishable across stores.
 **A Source identity is derived from vendor-stated facts, not from a local
 path.** `source-revision` previously took the absolute path, so the same
 transcript read on two machines produced two identities and cross-store
-deduplication on `sources.entity_id` failed silently. It now takes the
+deduplication on `sources.source_entity_id` failed silently. It now takes the
 source system, the vendor-assigned name within that store (the trailing two
 path segments), and the revision fingerprint. The name is retained because a
 fingerprint alone does not identify a Source: a Claude subagent transcript
@@ -646,7 +646,7 @@ has, while leaving the provenance question it does have unanswered.
 The exact spelling is settled with the change. A `source_` prefix on the
 vendor-reported columns follows the precedent `source_mtime` already sets,
 leaves the Codess-recorded columns untouched, and makes the distinction
-visible at the point of use: `sessions.source_started_at` against
+visible at the point of use: `tool_invocations.source_started_at` against
 `processing_runs.started_at`. This is a breaking schema change and is
 tracked with the other CoSchema strengthening work rather than applied
 piecemeal.

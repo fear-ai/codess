@@ -39,6 +39,23 @@ duplicating its content elsewhere.
 - Capitalize principal words and Codess entity names; lowercase short articles, conjunctions, and prepositions unless they begin or end the title
 - Code blocks may specify language like bash or python
 
+## Documentation Tiers
+
+- **Released documents** -- README, Operations, Codess, the Co*.md set, the
+  vendor schema documents, Designs, Report, CHANGELOG, and `experiments/` --
+  serve daily operators and developers adapting or contributing to Codess. They
+  state durable facts: how the system works, why, and what is open.
+- **Internal notes** live in `.docs/`, which is ignored: review ledgers, working
+  analysis, measurements that name one machine, and repository and publication
+  plans. A released document never links into `.docs/`.
+- **Project work and repository work are separate tracks.** CoTasks lists
+  functionality and documentation work. Commits, history rewriting, merging, and
+  publication are tracked in `.docs/codess-git.md`, not in any released
+  document or task list.
+- **No transient history in persistent documents.** Omit which session, commit,
+  or push produced a change, pass/fail tallies of a particular run, and
+  step-by-step narrative. State the outcome and the evidence that still holds.
+
 ## Code Comments
 
 - State the durable fact, not the history: what the code does and why it must, not what
@@ -140,9 +157,29 @@ employers, clients, or private projects.
   configuration at load.
 - **Third-party projects are citable; private ones are not.** A published
   tool evaluated as an integration candidate is verifiable by any reader. A
-  private repository is not, so its role belongs in developer notes under
-  `experiments/`, with the released text carrying the requirement and the
-  evidence.
+  private repository is not, so released text describes its role by shape ("a
+  sibling project by the same author", "an operator fork") and never by name,
+  path, or origin URL. `experiments/` is tracked and released, so this section
+  applies to it in full; material that must name private work goes in `.docs/`.
+- **Host names and encoded forms count as disclosure.** A vendor URI embeds the
+  machine: a Cursor `vscode-remote://ssh-remote%2B<hex>` authority is
+  hex-encoded JSON carrying `hostName`, a Claude slug directory
+  (`-Users-<user>-...`) encodes a home path, and percent-encoded or base64 values
+  decode to the same thing. Scrub the decoded meaning, not only the visible
+  text, and encode a synthetic example from a synthetic value
+  (`{"hostName":"remote-host"}`) so decoding it shows the placeholder.
+- **Identifiers from real data are replaced, not truncated.** Session, bubble,
+  and tool-call UUIDs, git origins, and hexdumps taken from a real store become
+  obviously synthetic values (`11111111-2222-4333-8444-555555555555`), with
+  offsets and length bytes kept consistent so the example still teaches the
+  format.
+- **Vendor-schema documents describe the vendor's layout, not the operator's.**
+  CCSchema, CodexSchema, and CursorSchema show vendor paths with placeholder
+  segments (`~/.claude/projects/<slug>/<session>.jsonl`,
+  `/home/user/work/<project>`). A measured count states its scale and nothing
+  that identifies the machine.
+- **Ignoring is not removing.** Listing a tracked file in `.gitignore` leaves it
+  in the tree and in history; removal is repository work (see Git).
 
 ## Security
 
@@ -153,6 +190,8 @@ employers, clients, or private projects.
 ## Git
 
 - Do NOT commit to git, add, rename or remove files, push or pull unless explicitly instructed
+- Keep repository work apart from project work: plan and record it in `.docs/codess-git.md`,
+  and do not mix commit, history, or publication steps into a functionality or documentation change
 - Commit message: present-tense imperative, focus on operational and functional changes
 - NEVER discard uncommitted work: `checkout --`, `restore`, `reset --hard`, and
   `clean` destroy changes that exist nowhere else, including changes made

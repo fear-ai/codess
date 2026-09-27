@@ -234,10 +234,10 @@ model behavior. Instead of copying an isolated transcript quotation, a derived
 assessment can point to the exact Events, their Interaction, participant
 classification, tool activity, and Source provenance.
 
-The proj-j project is one possible consumer. Codess remains responsible for
-vendor decoding, common storage, selection, and reconstruction. An assessment
-system remains responsible for defining its cases, labels, ratings,
-interpretation, and quantitative methodology.
+A separate assessment project is one possible consumer. Codess remains
+responsible for vendor decoding, common storage, selection, and reconstruction.
+An assessment system remains responsible for defining its cases, labels,
+ratings, interpretation, and quantitative methodology.
 
 ## Search and Investigation
 

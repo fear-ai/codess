@@ -5,7 +5,7 @@ set -u
 
 requested_project=${1:-"$PWD"}
 project=$requested_project
-registry=${2:-"${CODESS_REGISTRY:-$HOME/.codess}"}
+registry=${2:-"${CODESS_STORE_ROOT:-$HOME/.codess}"}
 
 if ! project=$(cd "$project" 2>/dev/null && pwd -P); then
   printf 'codess status: Project location is unavailable: %s\n' "$requested_project" >&2

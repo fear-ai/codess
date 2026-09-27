@@ -1,5 +1,6 @@
 """Pytest fixtures and configuration."""
 
+import atexit
 import os
 import shutil
 import sys
@@ -7,6 +8,41 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
+# Every location a run reads operator data from or writes state to. `config`
+# resolves most of them into constants at import, so they are set here, before
+# any test module imports `codess`; the per-test fixture below repeats them for
+# subprocesses and for the readers that resolve at call time.
+ISOLATED_LOCATIONS = (
+    "CODESS_STORE_ROOT",
+    "CODESS_CATALOG",
+    "CODESS_CC_PROJECTS",
+    "CODESS_CODEX_SESSIONS",
+    "CODESS_CODEX_ARCHIVED_SESSIONS",
+    "CODESS_CURSOR_DATA",
+    "CODESS_WORK_ROOT",
+)
+
+
+def _isolate_environment(root: Path) -> None:
+    """Drop the developer's Codess settings and point every location at `root`.
+
+    A shell's `CODESS_*` settings otherwise reach the suite: a changed day
+    window or bound alters results, and a policy or discovery file names one
+    machine's tree. The vendor locations point at empty directories, so a test
+    that does not supply its own Sources reads none rather than the developer's.
+    """
+    for name in [name for name in os.environ if name.startswith("CODESS_")]:
+        del os.environ[name]
+    for name in ISOLATED_LOCATIONS:
+        location = root / name.removeprefix("CODESS_").lower()
+        location.mkdir(parents=True, exist_ok=True)
+        os.environ[name] = str(location)
+
+
+_SESSION_ROOT = Path(tempfile.mkdtemp(prefix="codess-tests-"))
+atexit.register(shutil.rmtree, _SESSION_ROOT, ignore_errors=True)
+_isolate_environment(_SESSION_ROOT)
 
 # Ensure src/ is on path for codess package
 _src = Path(__file__).resolve().parent.parent / "src"
@@ -90,9 +126,19 @@ def _enable_subprocess_coverage() -> None:
 
 
 @pytest.fixture(autouse=True)
-def isolate_codess_registry(tmp_path, monkeypatch):
-    """No test or subprocess may mutate the operator's personal catalog."""
+def isolate_codess_registry(tmp_path, tmp_path_factory, monkeypatch):
+    """No test or subprocess may read operator data or mutate operator state.
+
+    Per test rather than only per session, so a subprocess one test starts
+    cannot see what another left behind. The vendor locations sit outside
+    `tmp_path`, which several tests assert holds only what they wrote.
+    """
     monkeypatch.setenv("CODESS_STORE_ROOT", str(tmp_path / "codess-registry"))
+    root = tmp_path_factory.mktemp("codess-isolated")
+    for name in ISOLATED_LOCATIONS[1:]:
+        location = root / name.removeprefix("CODESS_").lower()
+        location.mkdir()
+        monkeypatch.setenv(name, str(location))
 
 
 @pytest.fixture

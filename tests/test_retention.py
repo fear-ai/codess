@@ -257,3 +257,89 @@ def test_the_plan_records_the_depth_it_applied(tmp_path):
             "keep-newest; one-large-revision-per-logical-source"
         ), "the rule is named; the count is a field beside it"
 
+
+
+def _three_generations(registry):
+    """A current snapshot and two superseded ones, each with its own raw object."""
+    current, current_raw = _snapshot(registry, snapshot_id="ccc-current", raw_name="c")
+    older, older_raw = _snapshot(registry, snapshot_id="aaa-old", raw_name="a")
+    newer, newer_raw = _snapshot(registry, snapshot_id="bbb-old", raw_name="b")
+    pointer = {
+        "snapshot_id": current.name, "path": str(current),
+        "manifest_digest": hash_file(current / "manifest.json"),
+    }
+    (current.parents[1] / "current.json").write_text(json.dumps(pointer))
+    return (current, current_raw), (older, older_raw), (newer, newer_raw)
+
+
+def test_a_retained_snapshot_keeps_the_raw_objects_it_references(tmp_path):
+    """Retaining a superseded snapshot retains its raw objects.
+
+    A rollback target whose raw objects were deleted cannot be restored, so the
+    raw objects kept are those of every surviving snapshot, not of the current
+    one alone.
+    """
+    registry = tmp_path / "registry"
+    _current, (older, older_raw), (newer, newer_raw) = _three_generations(registry)
+
+    plan = build_retention_plan(registry, keep_total=2)
+    assert plan["safe_to_apply"]
+    assert plan["delete"]["snapshot_paths"] == [str(older.resolve())]
+    assert plan["keep"]["retained_snapshot_ids"] == [newer.name]
+    assert str(newer_raw) not in plan["delete"]["raw_object_paths"]
+    assert str(older_raw) in plan["delete"]["raw_object_paths"]
+
+
+def test_an_unreadable_retained_manifest_blocks_the_plan(tmp_path):
+    registry = tmp_path / "registry"
+    _current, _older, (newer, _newer_raw) = _three_generations(registry)
+    (newer / "raw-manifest.jsonl").unlink()
+
+    plan = build_retention_plan(registry, keep_total=2)
+    assert not plan["safe_to_apply"]
+    assert any("retained snapshot raw manifest unreadable" in error for error in plan["errors"])
+
+
+def test_apply_verifies_at_the_total_it_applied(tmp_path, monkeypatch):
+    """The postcondition re-plans at the plan's own total, not the default.
+
+    At the default, a snapshot an explicit larger total retained reads as a
+    remaining candidate, and a completed prune is reported as failed.
+    """
+    monkeypatch.setattr("codess.config.KEEP_SNAPSHOTS", 1)
+    registry = tmp_path / "registry"
+    (current, current_raw), (older, _), (newer, newer_raw) = _three_generations(registry)
+
+    receipt = apply_retention_plan(
+        registry, receipt_path=tmp_path / "receipt.json", keep_total=2,
+    )
+    assert receipt["postcondition"]["remaining_candidates"] == 0
+    assert current.exists() and current_raw.exists()
+    assert newer.exists() and newer_raw.exists()
+    assert not older.exists()
+
+
+def test_a_failed_postcondition_still_writes_the_receipt(tmp_path, monkeypatch):
+    registry = tmp_path / "registry"
+    _current, (older, _), _newer = _three_generations(registry)
+    import codess.retention as retention
+
+    real_plan = retention.build_retention_plan
+    calls = []
+
+    def plan_then_fail(*args, **kwargs):
+        plan = real_plan(*args, **kwargs)
+        calls.append(plan)
+        if len(calls) == 2:
+            plan["safe_to_apply"] = False
+            plan["errors"] = ["injected"]
+        return plan
+
+    monkeypatch.setattr(retention, "build_retention_plan", plan_then_fail)
+    receipt_path = tmp_path / "receipt.json"
+    with pytest.raises(RuntimeError, match="postcondition failed"):
+        apply_retention_plan(registry, receipt_path=receipt_path, keep_total=2)
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["deleted"]["snapshot_paths"] == [str(older.resolve())]
+    assert receipt["postcondition"]["safe_to_apply"] is False
+    assert receipt["postcondition"]["errors"] == ["injected"]

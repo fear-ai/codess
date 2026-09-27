@@ -18,7 +18,7 @@ from codess.mapping import (
     as_mapping,
     is_decodable_record,
 )
-from codess.sanitize import sanitize_value
+from codess.sanitize import redact_value, sanitize_value
 from codess.timeval import epoch_ms
 from codess.tool_result_status import application_failure_evidence
 
@@ -1281,7 +1281,9 @@ def process_file(
                     # The wrapper is kept verbatim; the header fields are lifted beside
                     # it so wall time, token count, and exit code are queryable without
                     # re-parsing the text.
-                    tool_output_structured=_decoded_output(payload.get("output")),
+                    tool_output_structured=redact_value(
+                        _decoded_output(payload.get("output")), redact_enabled,
+                    ),
                     # Codex states `status` on few outputs, so the exit code it states
                     # in the output header is the fallback; where neither exists the
                     # result stays unknown rather than being assumed successful.

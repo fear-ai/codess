@@ -1686,20 +1686,29 @@ def run(args: argparse.Namespace) -> int:
         and (workspace_ids := get_cursor_workspace_ids(root))
     }
     live_cursor_global = get_cursor_global_db() if cursor_workspace_ids else None
+    project_headers: dict[str, dict[str, dict]] = {}
+    # Per Project, because the global ingest deletes Sessions absent from the
+    # selection these headers define: a Project whose index read failed must not
+    # be ingested against a selection that merely looks smaller.
+    header_read_errors: dict[str, list[str]] = {}
+    if live_cursor_global is not None:
+        for root in cursor_workspace_ids:
+            read_errors: list[str] = []
+            project_headers[str(root)] = get_cursor_project_composer_headers(
+                live_cursor_global, root, diagnostics=diagnostics,
+                read_errors=read_errors,
+            )
+            if read_errors:
+                header_read_errors[str(root)] = read_errors
     # One object rather than four parallel values: they are derived together and every
     # following step uses all of them.
     cursor = CursorSelection(
         workspace_ids=cursor_workspace_ids,
         global_db=live_cursor_global,
-        project_headers={
-            str(root): get_cursor_project_composer_headers(
-                live_cursor_global, root, diagnostics=diagnostics
-            )
-            for root in cursor_workspace_ids
-            if live_cursor_global is not None
-        },
+        project_headers=project_headers,
     )
     opts["cursor_project_headers"] = cursor.project_headers
+    opts["cursor_header_read_errors"] = header_read_errors
     preflight_code, cursor_cohort_temp = _cursor_preflight(
         config=config,
         run_totals=totals,

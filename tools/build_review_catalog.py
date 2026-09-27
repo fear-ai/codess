@@ -9,20 +9,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from codess.catalog import CatalogError, load_candidate_csv
-
+from codess.config import DEFAULT_WORK
 from codess.fileio import write_json_atomic
+from codess.review_project import CandidateReviewError, load_candidate_csv
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("candidate_csv", type=Path)
     parser.add_argument("output", type=Path)
-    parser.add_argument("--work-root", type=Path, default=Path.home() / "Work")
+    parser.add_argument("--work-root", type=Path, default=DEFAULT_WORK)
     args = parser.parse_args(argv)
     try:
         catalog = load_candidate_csv(args.candidate_csv, work_root=args.work_root)
-    except CatalogError as exc:
+    except CandidateReviewError as exc:
         print(f"codess: {exc}", file=sys.stderr)
         return 1
     write_json_atomic(args.output, catalog)

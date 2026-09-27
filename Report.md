@@ -535,10 +535,10 @@ test shapes, and `clock`, `buffer`, and `codes` must be importable by
 `fileio` and the adapters without a cycle, which a single module mixing them
 with sinks could not offer.
 
-`codess/progress.py` is retained during the transition and deleted at step 8.
-It has **2 importers and 83 lines**, so the compatibility bridge is small --
-`ProgressTrace.__call__` becomes a shim over `event()`, and its existing
-event names become the first entries in the code table.
+`codess/progress.py` bridged the transition and was deleted at step 8. It had
+**2 importers and 83 lines**, so the compatibility bridge was small --
+`ProgressTrace.__call__` became a shim over `event()`, and its existing
+event names became the first entries in the code table.
 
 ### 13.3 When It Can Enter Codess
 

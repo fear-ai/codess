@@ -11,7 +11,7 @@ that changes the format, run `codess ingest --force` for each Project and
 republish. The cost scales with Project count rather than with the size of the
 change, and is minutes of machine time for a corpus of this scale.
 
-## Unreleased
+## 0.2.0
 
 ### CoSchema Format 12
 
@@ -86,10 +86,12 @@ fails on the working store the format change just made unreadable.
   retained copy of the pre-migration store, so a decode comparison across the
   migration could not be made. Three spans one migration.
 
-- **`.python-version` pins the interpreter.** `pyproject.toml` states the
-  supported floor; the new file states what the repository is developed against.
-  Scripts should call `python3` rather than `python`, which is commonly an alias
-  a non-interactive subshell does not inherit.
+- **Python 3.11 is the floor, up from 3.10.** **Breaking** for a 3.10
+  interpreter. `pyproject.toml` states `requires-python = ">=3.11"` and is the
+  only interpreter requirement the repository carries; `.python-version` is
+  gitignored, so a pyenv pin is a local operator choice rather than a tracked
+  file. Scripts should call `python3` rather than `python`, which is commonly an
+  alias a non-interactive subshell does not inherit.
 
 ### CoSchema Format 11
 
@@ -198,6 +200,24 @@ remaining record of those Sessions.
   deleted. A reader wanting the raw count ignores the column; one excluding
   replays selects on it.
 
+### CoSchema Format 7
+
+Requires a rebuild. Stores at format 6 and earlier are unreadable by this
+version.
+
+- **Session model evidence is recorded for every vendor that supplies it.**
+  `sessions.session_model_basis` states how the Session-level model was
+  obtained -- `vendor` where the vendor made a Session-level statement,
+  `initial_event` where the first model observed to serve a turn was recorded
+  instead. `sessions.session_model_count` holds the number of distinct models
+  across the Session's Model Turns, so a model-switch question is a predicate
+  rather than a join.
+
+  Claude records the model per assistant record and never as a Session header,
+  so its Session-level model coverage was zero and is now complete. A derived
+  value is never presented as a vendor statement: the basis column is what
+  keeps the two claims distinct.
+
 ### Time
 
 - **`codess.timeval` is the time subsystem**, and it is standalone by
@@ -272,6 +292,34 @@ remaining record of those Sessions.
   exercises the same builder on both sides cannot detect a change in what the
   builder produces.
 
+- **Cursor reasoning is decoded and emitted as `message.reasoning_summary`**,
+  the Event kind Codex already uses, so a cross-vendor reasoning query needs no
+  per-vendor case. Cursor never places reasoning beside a response -- every
+  bubble carrying `thinking` has empty `text` -- so the evidence previously
+  produced no Event at all.
+- **Cursor bubble fields mapped**: turn and client timings, recorded error
+  details, terminal working directory, symbol and file links, todos, code
+  blocks, the populated `context` leaves, and the request and response
+  identifiers, which are kept as separate values because they name the two ends
+  of a Model Turn.
+- **Cursor Session times fall back to the composer header.** Where a composer's
+  bubbles carry no timestamp, `created_at` and `last_updated_at` supply the
+  Session span and `time_basis` records `session`, so a header-stated span
+  stays distinguishable from an Event-derived one. Sessions that previously
+  carried no time at any level could not be ordered or filtered by `--since`.
+
+- **Cursor composers absent from `composerHeaders` are recovered.** The header
+  table is the smallest of three indexes the vendor keeps; 107 composers held
+  bubbles it does not list. Settings are now read for every known composer
+  rather than only for headered ones, raising composer coverage from 66 to 164
+  and Sessions carrying a stated model from 32 to 134. A recovered composer
+  states no workspace, so it is never admitted under a workspace selection --
+  attributing it to a Project would be an inference rather than a decode.
+- **`modelConfig.selectedModels` supplies `speed_tier` and `reasoning_effort`.**
+  A `fast` parameter is set on models whose name does not encode it, and an
+  `effort` parameter on models whose name never does. Values are strings, so
+  `"false"` is a stated value rather than an assertion.
+
 ### Checks
 
 - **The format number is declared once per file that can be checked.**
@@ -309,6 +357,13 @@ remaining record of those Sessions.
   `purged` -- because a vendor prune removes transcripts individually, and
   reading it as two reports a partly purged store as intact.
 
+- **The module-level import graph is asserted acyclic.** Counting every import
+  reports two components; both are closed only by imports deferred into a
+  function body, which is the mechanism that keeps the layering loadable.
+- **Static checks precede tests in the documented validation sequence.** An
+  undefined name is reported by ruff and mypy in about a second with a file and
+  line; the same defect reaching the suite surfaces as a subprocess failure
+  with no location.
 ### Reporting
 
 - **Every command module attaches a sink and reports.** `admin` and `query` now
@@ -372,7 +427,8 @@ remaining record of those Sessions.
 ### Retention
 
 - **`CODESS_KEEP_SNAPSHOTS` counts snapshots kept, current included.** 1 keeps
-  only the current, 2 keeps it and one past, 0 keeps every one. The default is 2.
+  only the current, 2 keeps it and one past, 0 keeps every one. The default is 3
+  (see Format 12).
 
   Counting the total is what gives 0 its own meaning: a count of prior
   generations has no spare value -- "keep nothing past" and "keep everything"
@@ -380,6 +436,14 @@ remaining record of those Sessions.
   directions. One implementation, `snapshot.superseded_beyond_depth`, now serves
   both the trim that follows a publication and `codess storage prune`, and each
   takes a parameter as well as reading the variable.
+
+- **Publication trims superseded snapshots automatically.** **Breaking** for an
+  operator who relied on every snapshot surviving: each publication now removes
+  superseded snapshots beyond `CODESS_KEEP_SNAPSHOTS`, oldest first, where
+  earlier releases retained every one until `codess storage prune` ran. Set
+  `CODESS_KEEP_SNAPSHOTS=0` to keep every snapshot. The trim runs after the new
+  snapshot is published, so an interruption leaves more snapshots than asked for
+  rather than a Project with no readable store.
 
 - **`codess.retention-plan/3` names the rule and carries the count as a field.**
   `policy` is `keep-newest` with `keep_total` beside it, rather than
@@ -429,6 +493,35 @@ remaining record of those Sessions.
 
 ### Configuration
 
+- **Project review ships with no directory names of its own.** Review no longer
+  treats two named directories under the work root specially. Name reference
+  topics in `CODESS_REFERENCE_TOPICS` and dormant topics in
+  `CODESS_DORMANT_TOPICS`: comma-separated directory names matched against the
+  first segment below the work root, both empty by default.
+  `CODESS_REFERENCE_SEGMENTS` still matches a name at any depth, and a reference
+  topic or segment takes precedence over a dormant topic. A review over an
+  explicit root now takes the topic below that root even when it lies inside
+  the default work root.
+- **The evidence inventory reads Codex Sources from configuration.** It reads
+  `CODESS_CODEX_SESSIONS` and `CODESS_CODEX_ARCHIVED_SESSIONS` instead of fixed
+  `~/.codex` paths.
+- **`CODESS_WORK_ROOT` names the directory holding the operator's Projects.** It
+  anchors discovery proposals, path exclusion when no root is passed, and the
+  topic in path labels. The default is `~/Work`, `~` is expanded, and a relative
+  value is rejected by configuration validation.
+- **Tools take their default locations from configuration.**
+  `tools/gather_evidence.py`, `audit_cursor_features.py`,
+  `audit_codex_parentage.py`, and `build_review_catalog.py` read the configured
+  store root, Cursor data, Claude projects, Codex session roots, and work root
+  rather than fixed home-directory paths; `audit_codex_parentage.py` omits the
+  archive when none is configured. `gather_evidence.py` prints to stdout unless
+  `--output` is given, instead of writing into the checkout.
+  `demo_model_metrics.py --timezone` defaults to the machine's zone.
+- **Three tools that failed on every run work again.**
+  `audit_cursor_features.py` read an attribute its `--store` flag never set;
+  `build_review_catalog.py` imported a module that no longer exists; and
+  `variable_reference.py` wrote and checked a file other than `CoVars.md`, so
+  `--check` could not detect a stale reference.
 - **One declaration per setting, and one stated precedence.** `codess.settings`
   holds a row per setting -- name, flag, environment variable, whether it
   composes, whether a leaf module reads it -- and `resolve` applies **flag, then
@@ -475,6 +568,38 @@ remaining record of those Sessions.
   state: the file is rebuilt by the next `scan`, `ingest`, or `query`.
 
 ### Command Surface
+
+- **Six flags and two environment variables were renamed or removed.**
+  **Breaking.** The old spellings are not accepted as aliases: a removed flag
+  fails argument parsing, and a removed variable is no longer read, so a shell
+  that still exports it gets the default. Scan, ingest, and query warn while a
+  removed variable is still set, naming its replacement, and then continue.
+
+  | Removed | Replacement |
+  |---|---|
+  | `--registry` (every command) | `--store` |
+  | `CODESS_REGISTRY` | `CODESS_STORE_ROOT` |
+  | `CODESS_MAX_SOURCE_BYTES` | `CODESS_MAX_TRANSCRIPT_BYTES` |
+  | `--no-query-smoke` | `--no-smoke` |
+  | `--no-resource-limits` | `--no-resource` |
+  | `--snapshot-package-policy` | `--snapshot-policy` |
+  | `--model-family` | `--model-line`, `--model-generation`, `--model-version`, `--model-variant` |
+  | `--preserve-legacy` | None; the option is gone |
+
+  `--model-family` is replaced by four flags rather than renamed, because one
+  string carried four independent parts of a model name; see
+  [CoNames](CoNames.md) for the vocabulary.
+
+- **Catalog state defaults to the machine store.** **Breaking** for a workflow
+  that read or wrote `catalog/*.json` in the checkout. Reviewed selections and
+  acceptance policies now default to `~/.codess/catalog/` (beside
+  `projects_state.json`), and `CODESS_CATALOG` overrides the location. Every
+  command still accepts an explicit path, so a checked-in selection can be named
+  directly.
+
+- **Cursor record metadata key `model_selection` is `model_set`.** **Breaking**
+  for a consumer reading that key from Cursor candidate metadata; the value is
+  unchanged.
 
 - **A flag name declares one type.** `--store` is declared 22 times across two
   modules and one of them said `type=str` where the other 21 said `type=Path`,
@@ -578,6 +703,58 @@ remaining record of those Sessions.
   sink and is silently dropped. 50 of the 59 stderr writes report a fatal
   condition immediately before `return 1`.
 
+### Correctness
+
+- **An unreadable Cursor database no longer deletes stored Sessions.** A
+  storage error while reading bubbles, request contexts, or composer headers
+  ended the scan early, and every composer the scan had not reached was then
+  treated as deleted by Cursor. The error now reaches the Source coordinator,
+  which rolls the Source back and records it failed:
+  `Cursor composer index unreadable: <db>: <error>: stored Sessions kept; rerun
+  ingest once the index reads`.
+- **`storage prune` keeps the raw objects of every retained snapshot.** Only the
+  current snapshot's objects were kept, so a rollback target inside the retained
+  total lost its raw evidence. Plans and receipts gain `retained_snapshot_ids`,
+  and `keep.snapshots` counts current plus retained.
+- **A prune receipt is written before any postcondition failure.** The re-plan
+  after deletion ignored the applied `--keep` total, so any total above
+  `CODESS_KEEP_SNAPSHOTS` reported leftover work and raised before the receipt
+  was written. The re-plan now uses the applied total, and the receipt records
+  `postcondition.errors`.
+- **The trim after publication keeps catalog-selected snapshots.** A snapshot an
+  approved or reviewed baseline selects by `snapshot_id` is kept and does not
+  count against the total. A catalog that exists but does not parse skips the
+  trim with a `snapshot.trim_failed` warning. `storage prune` at the same total
+  still refuses while such a snapshot exists and asks for the catalog entry to
+  be refrozen or dropped.
+- **Workspace bindings written by an earlier release survive a catalog rewrite.** Bindings
+  stored under `source_system_id` were dropped on the next save, unbinding their
+  Cursor workspaces. They are read under either name and rewritten as
+  `source_system_key`.
+- **`--redact` covers structured content.** Tool result objects
+  (`tool_results.output_json`) for all three vendors, Codex tool arguments
+  stated as a JSON member, and Cursor reasoning, error details, and code blocks
+  in Event metadata kept secrets. Redaction now applies to every stored form of
+  Session content, and a JSON member whose key and value together match a
+  pattern is stored as `[REDACTED]`. Re-ingest with `--redact` to clean an
+  existing store.
+- **Cursor token usage is counted once per bubble.** The response, reasoning
+  summary, and compaction Events each carried the bubble's full `tokenCount`,
+  so sums over Events counted one bubble up to three times. The count is carried
+  by the response where there is one, and by the tool call for a bubble that
+  produces only a call. Re-ingest Cursor Sources to correct stored totals.
+
+- **Timestamp scale is decided once.** `units.epoch_milliseconds` normalizes
+  ISO-8601 text, epoch seconds, and epoch milliseconds to the milliseconds
+  CoSchema defines, and the three vendor parsers delegate to it. The Claude
+  parser previously returned a seconds-scale number unchanged, which would have
+  stored a 1970 instant, and accepted `True` as a number.
+- **`tools/decode_audit.py` queried a column renamed in format 6**, so the
+  audit the validation sequence mandates after every decode change had been
+  failing at runtime.
+- **`tools/gather_evidence.py` read an argument name that was never defined**,
+  so it had never run.
+
 ### Typing
 
 - **The typing posture is decided on measured cost.** `disallow_untyped_defs`
@@ -605,76 +782,3 @@ remaining record of those Sessions.
   guards it, and a `roots`/`err` correlation the checker cannot follow. Each was
   repaired rather than suppressed, so the error count returned to its baseline
   instead of being reclassified.
-
-## 0.3.0
-
-### CoSchema Format 7
-
-Requires a rebuild. Stores at format 6 and earlier are unreadable by this
-version.
-
-- **Session model evidence is recorded for every vendor that supplies it.**
-  `sessions.session_model_basis` states how the Session-level model was
-  obtained -- `vendor` where the vendor made a Session-level statement,
-  `initial_event` where the first model observed to serve a turn was recorded
-  instead. `sessions.session_model_count` holds the number of distinct models
-  across the Session's Model Turns, so a model-switch question is a predicate
-  rather than a join.
-
-  Claude records the model per assistant record and never as a Session header,
-  so its Session-level model coverage was zero and is now complete. A derived
-  value is never presented as a vendor statement: the basis column is what
-  keeps the two claims distinct.
-
-### Decode
-
-- **Cursor reasoning is decoded and emitted as `message.reasoning_summary`**,
-  the Event kind Codex already uses, so a cross-vendor reasoning query needs no
-  per-vendor case. Cursor never places reasoning beside a response -- every
-  bubble carrying `thinking` has empty `text` -- so the evidence previously
-  produced no Event at all.
-- **Cursor bubble fields mapped**: turn and client timings, recorded error
-  details, terminal working directory, symbol and file links, todos, code
-  blocks, the populated `context` leaves, and the request and response
-  identifiers, which are kept as separate values because they name the two ends
-  of a Model Turn.
-- **Cursor Session times fall back to the composer header.** Where a composer's
-  bubbles carry no timestamp, `created_at` and `last_updated_at` supply the
-  Session span and `time_basis` records `session`, so a header-stated span
-  stays distinguishable from an Event-derived one. Sessions that previously
-  carried no time at any level could not be ordered or filtered by `--since`.
-
-- **Cursor composers absent from `composerHeaders` are recovered.** The header
-  table is the smallest of three indexes the vendor keeps; 107 composers held
-  bubbles it does not list. Settings are now read for every known composer
-  rather than only for headered ones, raising composer coverage from 66 to 164
-  and Sessions carrying a stated model from 32 to 134. A recovered composer
-  states no workspace, so it is never admitted under a workspace selection --
-  attributing it to a Project would be an inference rather than a decode.
-- **`modelConfig.selectedModels` supplies `speed_tier` and `reasoning_effort`.**
-  A `fast` parameter is set on models whose name does not encode it, and an
-  `effort` parameter on models whose name never does. Values are strings, so
-  `"false"` is a stated value rather than an assertion.
-
-### Correctness
-
-- **Timestamp scale is decided once.** `units.epoch_milliseconds` normalizes
-  ISO-8601 text, epoch seconds, and epoch milliseconds to the milliseconds
-  CoSchema defines, and the three vendor parsers delegate to it. The Claude
-  parser previously returned a seconds-scale number unchanged, which would have
-  stored a 1970 instant, and accepted `True` as a number.
-- **`tools/decode_audit.py` queried a column renamed in format 6**, so the
-  audit the validation sequence mandates after every decode change had been
-  failing at runtime.
-- **`tools/gather_evidence.py` read an argument name that was never defined**,
-  so it had never run.
-
-### Checks
-
-- **The module-level import graph is asserted acyclic.** Counting every import
-  reports two components; both are closed only by imports deferred into a
-  function body, which is the mechanism that keeps the layering loadable.
-- **Static checks precede tests in the documented validation sequence.** An
-  undefined name is reported by ruff and mypy in about a second with a file and
-  line; the same defect reaching the suite surfaces as a subprocess failure
-  with no location.

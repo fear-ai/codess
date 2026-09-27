@@ -17,11 +17,17 @@ from codess.raw_store import RawStore
 from codess.snapshot import create_snapshot, current_stores
 from codess.store import connect, init_db, replace_session_events
 
+# Tracked policies only. Operator acceptance policies live under the machine's
+# catalog, are not versioned, and differ per machine, so a suite reading them
+# tests that machine.
+POLICY_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "policies"
+
 
 def test_living_project_policies_do_not_freeze_transient_corpus_counts():
-    policy_dir = Path(__file__).resolve().parents[1] / "catalog" / "policies"
     forbidden = {"minimum_sessions", "minimum_events", "expected_raw_records"}
-    for path in policy_dir.glob("*.json"):
+    policies = sorted(POLICY_FIXTURES.glob("*.json"))
+    assert len(policies) > 1, "no living-project policy fixture"
+    for path in policies:
         if path.name == "ci-fixture.json":
             continue
         policy = json.loads(path.read_text(encoding="utf-8"))
@@ -178,12 +184,10 @@ def test_repository_acceptance_policies_are_valid():
     tied the suite to that machine and disclosed it -- and asserted the wrong
     thing besides: what matters is that each policy is loadable and demands a
     fixed point, not which Projects an operator happens to have accepted.
-    `ci-fixture.json` is the one policy the repository ships, because it
-    validates a fixture the repository contains and is therefore true on
-    every machine.
+    `ci-fixture.json` validates a fixture the repository contains and is
+    therefore true on every machine.
     """
-    root = Path(__file__).resolve().parents[1]
-    policies = sorted((root / "catalog/policies").glob("*.json"))
+    policies = sorted(POLICY_FIXTURES.glob("*.json"))
     names = {path.name for path in policies}
     assert "ci-fixture.json" in names, "the shipped template policy is missing"
     assert policies, "no acceptance policies found"
@@ -193,7 +197,6 @@ def test_repository_acceptance_policies_are_valid():
 
 
 def test_ci_fixture_policy_covers_three_vendors_without_home_data(tmp_path):
-    root = Path(__file__).resolve().parents[1]
     project = tmp_path / "project"
     project.mkdir()
     stores = []
@@ -240,7 +243,7 @@ def test_ci_fixture_policy_covers_three_vendors_without_home_data(tmp_path):
         project, stores, raw_records, raw_store=raw_store,
         build_policy={"raw_mode": "capture"},
     )
-    policy = load_policy(root / "catalog/policies/ci-fixture.json")
+    policy = load_policy(POLICY_FIXTURES / "ci-fixture.json")
     first = validate_project(project, policy=policy, raw_store_root=raw_root)
     assert first["status"] == "accepted", first["errors"]
     create_snapshot(

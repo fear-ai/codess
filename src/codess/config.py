@@ -134,6 +134,11 @@ _IS_ENV_TABLE = (
     ("CODESS_CONTENT_POLICY", env_str, None),
     ("CODESS_RESOURCE_POLICY", env_str, None),
     ("CODESS_STORE_ROOT", env_expanded_path, str(Path.home() / ".codess")),
+    # The directory holding the operator's Projects: the anchor for discovery's
+    # proposals, for `helpers.is_excluded` when no root is passed, and for the
+    # topic in `path_label`. Machines differ in where that tree lives, so the
+    # default is a convention an operator overrides rather than a requirement.
+    ("CODESS_WORK_ROOT", env_expanded_path, str(Path.home() / "Work")),
     ("CODESS_STOP", env_bool, "0"),
     # --- Discovery traversal bounds ---
     # A scan of an unknown tree has to be able to stop. 200,000 directories
@@ -189,7 +194,7 @@ _IS_ENV_VALUES: dict[str, Any] = {
 
 # --- Paths (env overrides) ---
 # Fallback anchor for `helpers.is_excluded` when `work_root` is omitted (not CC/Codex/Cursor install roots).
-DEFAULT_WORK = Path.home() / "Work"
+DEFAULT_WORK: Path = _IS_ENV_VALUES["CODESS_WORK_ROOT"]
 
 CC_PROJECTS = _IS_ENV_VALUES["CODESS_CC_PROJECTS"]
 _CODEX_SESSIONS_OVERRIDE = os.environ.get("CODESS_CODEX_SESSIONS")
@@ -663,6 +668,35 @@ def get_project_state_path(store_root: Path | None = None) -> Path:
     return root / PROJECT_STATE_FILE
 
 
+# Environment variables an earlier release read, and what replaced each. A
+# removed name is not read, so a shell still exporting it gets the default -- a
+# store root elsewhere, a larger bound -- with nothing to say why; each is
+# therefore reported while it is set. `CODESS_MAX_SOURCE_BYTES` was an alias of
+# the transcript bound, not of `CODESS_SOURCE_READ_MAX`, which bounds the read
+# that identifies a Source revision.
+REMOVED_ENV_VARS = (
+    ("CODESS_REGISTRY", "CODESS_STORE_ROOT"),
+    ("CODESS_MAX_SOURCE_BYTES", "CODESS_MAX_TRANSCRIPT_BYTES"),
+)
+
+
+def removed_env_warnings(environ: dict[str, str] | None = None) -> list[str]:
+    """One warning per removed environment variable that is still set."""
+    env = os.environ if environ is None else environ
+    warnings = []
+    for removed, replacement in REMOVED_ENV_VARS:
+        if removed not in env:
+            continue
+        remedy = (
+            f"unset {removed}" if replacement in env
+            else f"set {replacement} and unset {removed}"
+        )
+        warnings.append(
+            f"warning: {removed}={env[removed]} is not read, replaced by {replacement}: {remedy}"
+        )
+    return warnings
+
+
 def validate_config() -> list[str]:
     """Return configuration errors. Empty if configuration is usable."""
     errs = list(_CONFIG_ERRORS)
@@ -752,6 +786,11 @@ def validate_config() -> list[str]:
         )
     if not CURSOR_DATA.is_absolute():
         errs.append(f"CODESS_CURSOR_DATA must be absolute: {CURSOR_DATA}")
+    if not DEFAULT_WORK.is_absolute():
+        errs.append(
+            f"CODESS_WORK_ROOT={str(DEFAULT_WORK)!r} is relative: "
+            "give an absolute path, or unset it for the default"
+        )
     return errs
 
 

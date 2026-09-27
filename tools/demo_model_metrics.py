@@ -13,6 +13,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 import sqlite3
 from collections.abc import Iterable
 from datetime import datetime
@@ -49,11 +50,37 @@ VENDOR_STORES = {
 }
 
 
-def _parse_boundary(value: str, timezone_name: str) -> float:
-    """Return an inclusive/exclusive boundary as Unix milliseconds."""
+def local_zone_name() -> str | None:
+    """Return this machine's IANA zone name, or None where it cannot be named.
+
+    `TZ` first, then the `zoneinfo/` suffix of the `/etc/localtime` link, which
+    is how macOS and most Linux distributions select the zone. The name rather
+    than an offset, so a window spanning a daylight-saving change is resolved
+    per boundary and the manifest records a zone a reader can reproduce.
+    """
+    configured = os.environ.get("TZ", "").lstrip(":")
+    if configured:
+        return configured
+    try:
+        target = os.path.realpath("/etc/localtime")
+    except OSError:
+        return None
+    _, marker, name = target.partition("zoneinfo/")
+    return name if marker and name else None
+
+
+def _parse_boundary(value: str, timezone_name: str | None) -> float:
+    """Return an inclusive/exclusive boundary as Unix milliseconds.
+
+    A naive value is read in `timezone_name`, or in the process's local time
+    when no zone could be named.
+    """
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
+        parsed = (
+            parsed.replace(tzinfo=ZoneInfo(timezone_name)) if timezone_name
+            else parsed.astimezone()
+        )
     return parsed.timestamp() * 1000
 
 
@@ -511,7 +538,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--start", required=True, help="inclusive ISO date/time")
     parser.add_argument("--end", required=True, help="exclusive ISO date/time")
-    parser.add_argument("--timezone", default="America/Los_Angeles")
+    parser.add_argument(
+        "--timezone", default=local_zone_name(),
+        help="IANA zone for naive --start/--end (default: this machine's zone)",
+    )
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--table-model", action="append")
     parser.add_argument("--plot-model", action="append")
@@ -557,7 +587,7 @@ def main(argv: list[str] | None = None) -> int:
         "vendor": args.vendor,
         "start": args.start,
         "end_exclusive": args.end,
-        "timezone": args.timezone,
+        "timezone": args.timezone or "local",
         "table_models": list(table_models),
         "plot_models": list(plot_models),
         "latency_policy": {

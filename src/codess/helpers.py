@@ -416,7 +416,7 @@ matching on `worktrees` alone would exclude a repository that keeps its own.
 def is_excluded(p: Path, work_root: Path | None = None) -> bool:
     """True if path is under backup or review dir.
 
-    When ``work_root`` is omitted, ``DEFAULT_WORK`` (``~/Work``) is the anchor for
+    When ``work_root`` is omitted, ``DEFAULT_WORK`` (``CODESS_WORK_ROOT``) is the anchor for
     ``relative_to`` — there is **no** matching CLI flag; pass an explicit scan/ingest
     work root when classifying paths under a different tree.
     """

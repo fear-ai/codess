@@ -39,6 +39,7 @@ from codess.mapping import (
     as_mapping,
     structured_json,
 )
+from codess.sanitize import redact_value
 from codess.settings import resolve_named
 from codess.tool_result_status import application_failure_evidence
 
@@ -339,19 +340,32 @@ def _bubble_evidence(data: dict) -> dict:
     return values
 
 
-def _enrich_from_bubble(event: dict, data: dict) -> None:
-    """Apply every per-bubble value an Event carries, columns and metadata.
+def _enrich_from_bubble(event: dict, data: dict, *, redact_enabled: bool) -> None:
+    """Apply every per-bubble metadata value an Event carries.
 
     One function rather than two calls per site, for the reason
     `_bubble_evidence` already records: four construction sites drift, which is
     how `contextWindowStatusAtCreation` came to be merged at three of them and
     not the fourth. A value that acquires a column later is added here and
     reaches every site at once.
+
+    The evidence carries vendor text -- reasoning, error details, code blocks --
+    so it is redacted on the same terms as the Event's content.
     """
-    _merge_metadata(event, _bubble_evidence(data))
+    _merge_metadata(event, redact_value(_bubble_evidence(data), redact_enabled))
+
+
+def _bubble_token_columns(data: dict) -> dict:
+    """The bubble's `tokenCount` as Event columns; none when it is absent.
+
+    Not part of `_enrich_from_bubble`: evidence describes each Event a bubble
+    yields, while a count is one measurement of the bubble and is carried by
+    exactly one of them, or a sum over Events counts it once per Event.
+    """
     counts = data.get("tokenCount")
     if not isinstance(counts, dict):
-        return
+        return {}
+    columns = {}
     # A recorded zero states that the vendor measured no usage, which a query
     # distinguishes from an absent field only if the zero is stored.
     for vendor_key, column in (
@@ -359,7 +373,8 @@ def _enrich_from_bubble(event: dict, data: dict) -> None:
     ):
         value = counts.get(vendor_key)
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-            event[column] = value
+            columns[column] = value
+    return columns
 
 
 def _merge_metadata(event: dict, values: dict) -> None:
@@ -374,23 +389,25 @@ def _load_message_request_contexts(
     db_path: Path,
     composer_id: str,
 ) -> dict[str, tuple[str, dict]]:
-    """Read one composer's request contexts and release the SQLite handle."""
+    """Read one composer's request contexts and release the SQLite handle.
+
+    A storage error propagates rather than returning what was read so far: the
+    composer's Events replace the stored ones, so a partial read would delete
+    the request-context Events the read did not reach.
+    """
     contexts: dict[str, tuple[str, dict]] = {}
-    try:
-        for key, value in open_message_request_context_rows(db_path, {composer_id}):
-            if value is None:
-                continue
-            try:
-                decoded = json.loads(value)
-            except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
-                continue
-            if not isinstance(decoded, dict):
-                continue
-            parts = str(key).split(":", 2)
-            if len(parts) == 3:
-                contexts[parts[2]] = (str(key), decoded)
-    except Exception as exc:  # vendor storage errors stay in cursor_source
-        log.warning("Cannot read Cursor request contexts from %s: %s", db_path, exc)
+    for key, value in open_message_request_context_rows(db_path, {composer_id}):
+        if value is None:
+            continue
+        try:
+            decoded = json.loads(value)
+        except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+            continue
+        if not isinstance(decoded, dict):
+            continue
+        parts = str(key).split(":", 2)
+        if len(parts) == 3:
+            contexts[parts[2]] = (str(key), decoded)
     return contexts
 
 
@@ -882,47 +899,50 @@ def _iter_bubbles(
     stats: dict[str, int] | None = None,
     composer_ids: set[str] | None = None,
 ) -> Iterator[tuple[str, str, dict]]:
-    """Yield (composer_id, bubble_id, message_dict) from cursorDiskKV bubbleId keys."""
+    """Yield (composer_id, bubble_id, message_dict) from cursorDiskKV bubbleId keys.
+
+    A storage error propagates to the Source's coordinator, which rolls the
+    Source back and records it failed. Ending the scan early instead would let
+    the coordinator read every composer the scan did not reach as absent from
+    the Source and delete its stored Session.
+    """
     if composer_ids == set():
         return
-    try:
-        for key, value in open_bubble_rows(db_path, composer_ids):
+    for key, value in open_bubble_rows(db_path, composer_ids):
+        if stats is not None:
+            stats["rows"] = stats.get("rows", 0) + 1
+        if value is None:
             if stats is not None:
-                stats["rows"] = stats.get("rows", 0) + 1
-            if value is None:
-                if stats is not None:
-                    stats["null_values"] = stats.get("null_values", 0) + 1
-                continue
-            parts = key.split(":", 2)
-            if len(parts) < 3:
-                if stats is not None:
-                    stats["invalid_keys"] = stats.get("invalid_keys", 0) + 1
-                continue
-            composer_id, bubble_id = parts[1], parts[2]
+                stats["null_values"] = stats.get("null_values", 0) + 1
+            continue
+        parts = key.split(":", 2)
+        if len(parts) < 3:
+            if stats is not None:
+                stats["invalid_keys"] = stats.get("invalid_keys", 0) + 1
+            continue
+        composer_id, bubble_id = parts[1], parts[2]
+        try:
+            data = json.loads(value)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
             try:
-                data = json.loads(value)
-            except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
-                try:
-                    import base64
-                    decoded = base64.b64decode(value)
-                    data = json.loads(decoded)
-                except Exception:
-                    if stats is not None:
-                        stats["decode_errors"] = stats.get("decode_errors", 0) + 1
-                    continue
-            if isinstance(data, dict):
+                import base64
+                decoded = base64.b64decode(value)
+                data = json.loads(decoded)
+            except Exception:
                 if stats is not None:
-                    stats["yielded"] = stats.get("yielded", 0) + 1
-                # Large attachment/context envelopes are not mapped. Drop them
-                # before composer-level ordering/deduplication retains records.
-                projected = {
-                    key: data[key] for key in _MAPPED_BUBBLE_FIELDS if key in data
-                }
-                yield composer_id, bubble_id, projected
-            elif stats is not None:
-                stats["non_objects"] = stats.get("non_objects", 0) + 1
-    except Exception as exc:  # vendor storage errors stay in cursor_source
-        log.warning("Cannot read Cursor bubbles from %s: %s", db_path, exc)
+                    stats["decode_errors"] = stats.get("decode_errors", 0) + 1
+                continue
+        if isinstance(data, dict):
+            if stats is not None:
+                stats["yielded"] = stats.get("yielded", 0) + 1
+            # Large attachment/context envelopes are not mapped. Drop them
+            # before composer-level ordering/deduplication retains records.
+            projected = {
+                key: data[key] for key in _MAPPED_BUBBLE_FIELDS if key in data
+            }
+            yield composer_id, bubble_id, projected
+        elif stats is not None:
+            stats["non_objects"] = stats.get("non_objects", 0) + 1
 
 
 def _agent_kv_by_session(
@@ -1252,7 +1272,13 @@ def _bubble_to_events(
             source_file=source_file,
         )
 
+    # The first Event the bubble yields carries its token count -- the response
+    # where there is one -- and every later one carries none.
+    token_columns = _bubble_token_columns(data)
+
     def mapped(event: dict, rule: str, source_path: str = "$.bubble") -> dict:
+        event.update(token_columns)
+        token_columns.clear()
         metadata = json.loads(event.get("metadata") or "{}")
         applied_rules = [rule]
         if metadata.get("context_observation_provenance"):
@@ -1339,7 +1365,7 @@ def _bubble_to_events(
             event, field="prompt_origin", state=field_state.ABSENT,
             source_field="bubble.origin",
         )
-        _enrich_from_bubble(event, data)
+        _enrich_from_bubble(event, data, redact_enabled=opts.get("redact", False))
         yield mapped(event, "cursor.bubble")
         return
 
@@ -1361,7 +1387,7 @@ def _bubble_to_events(
                 "assistant_message", "response", "assistant",
                 truncated, content_len,
             )
-            _enrich_from_bubble(response, data)
+            _enrich_from_bubble(response, data, redact_enabled=opts.get("redact", False))
             yield mapped(response, "cursor.bubble")
 
         # Reasoning is its own Event, because Cursor never puts it beside a
@@ -1401,7 +1427,7 @@ def _bubble_to_events(
                     think_ev["actor_kind"] = "model"
                     think_ev["content_role"] = "reasoning"
                     think_ev["origin_kind"] = "model_generated"
-                    _enrich_from_bubble(think_ev, data)
+                    _enrich_from_bubble(think_ev, data, redact_enabled=opts.get("redact", False))
                     yield mapped(think_ev, "cursor.reasoning")
 
         summary_value = data.get("conversationSummary")
@@ -1460,7 +1486,7 @@ def _bubble_to_events(
                     compact["metadata"] = json.dumps(
                         metadata, separators=(",", ":")
                     )
-                    _enrich_from_bubble(compact, data)
+                    _enrich_from_bubble(compact, data, redact_enabled=opts.get("redact", False))
                     yield mapped(
                         compact,
                         "cursor.compaction-summary",
@@ -1586,7 +1612,9 @@ def _bubble_to_events(
                             # JSON strings; `rawArgs` is already parsed into
                             # `tool_input`, so the result is parsed on the same terms.
                             # The text projection is bounded and keeps the whole value.
-                            result["tool_output_structured"] = _parsed_result(result_value)
+                            result["tool_output_structured"] = redact_value(
+                                _parsed_result(result_value), opts.get("redact", False),
+                            )
                             result["metadata"] = metadata_json
                             result["source_status"] = status
                             result["normalized_status"] = normalized

@@ -87,12 +87,14 @@ Codess **refuses it as a Project location**. The refusal is implemented in
 URI with a non-empty authority other than `localhost`, returns no path, so the
 workspace never matches a Project directory.
 
-**The shape, decoded.** One authority appears on the development machine:
+**The shape, decoded.** One authority appears on the development machine. The
+example below is synthetic -- host name and path are placeholders -- and encoded
+exactly as Cursor encodes a real one:
 
 ```
-vscode-remote://ssh-remote%2B7b22686f73744e616d65223a22686f7374227d/home/user/work/project
-                ^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                scheme     percent-encoded hex of {"hostName":"host"}  path on that host
+vscode-remote://ssh-remote%2B7b22686f73744e616d65223a2272656d6f74652d686f7374227d/home/user/work/<project>
+                ^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^
+                remote kind  percent-encoded hex of {"hostName":"remote-host"}    path on that host
 ```
 
 The authority is `ssh-remote` plus a `+` (as `%2B`) and a hex-encoded JSON
@@ -103,8 +105,8 @@ absent is any evidence that the remote path corresponds to a local Project.
 
 | Shape | Count | Meaning |
 |---|---|---|
-| `…/home/ubuntu/...` | 7 | A tree that exists only on the remote host |
-| `…/home/user/...` | 2 | A path that **also exists locally**, under the same ssh authority |
+| `…/home/<remote-user>/...` | 7 | A tree that exists only on the remote host |
+| `…/Users/<user>/...` | 2 | A path that **also exists locally**, under the same ssh authority |
 
 The second is why a path alone cannot decide. The same absolute string denotes
 a local directory and a remote one; only the authority separates them, and a

@@ -16,6 +16,7 @@ import pytest
 from cursor_fixtures import build_cursor_db
 
 from codess.config import get_state_path, get_store_path
+from codess.fileio import quote_identifier
 from codess.ingest_sources import (
     _cc_session_files,
     _collect_bounded_events,
@@ -697,6 +698,151 @@ def test_cursor_coordinator_attributes_events_to_the_project(cursor_project):
     assert paths == {str(project.resolve())}
 
 
+@pytest.fixture
+def two_composer_project(tmp_path, monkeypatch):
+    """A Project whose workspace database holds two composers of two bubbles."""
+    project = tmp_path / "myproj"
+    project.mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    workspace = cursor_base / "workspaceStorage" / "abc123"
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"folder": {"path": str(project)}}), encoding="utf-8",
+    )
+    build_cursor_db(
+        workspace / "state.vscdb",
+        bubbles=[
+            (composer, bubble, {"type": kind, "text": bubble, "createdAt": stamp})
+            for composer in ("c1", "c2")
+            for bubble, kind, stamp in (
+                ("b1", 1, "2026-07-10T00:00:01Z"), ("b2", 2, "2026-07-10T00:00:02Z"),
+            )
+        ],
+    )
+    monkeypatch.setattr("codess.cursor_source.CURSOR_DATA", cursor_base)
+    return project
+
+
+def test_cursor_bubble_read_error_keeps_stored_sessions(two_composer_project, monkeypatch):
+    """A scan that fails part-way is a failed Source, not a smaller one.
+
+    Ending the scan quietly let the coordinator read the composer it never
+    reached as absent and delete its stored Session.
+    """
+    import sqlite3
+
+    import codess.adapters.cursor as cursor_adapter
+
+    project = two_composer_project
+    (_ingested, _events, failures, _changed), store_path = run_cursor(
+        project, decoder_options(include_agent_kv=False),
+    )
+    assert failures == 0
+    assert store_counts(store_path) == (2, 4)
+
+    real_rows = cursor_adapter.open_bubble_rows
+
+    def failing_rows(db_path, composer_ids=None):
+        rows = real_rows(db_path, composer_ids)
+        yield next(rows)
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(cursor_adapter, "open_bubble_rows", failing_rows)
+    (ingested, _events, failures, _changed), store_path = run_cursor(
+        project, decoder_options(include_agent_kv=False),
+    )
+    assert (ingested, failures) == (0, 1)
+    assert store_counts(store_path) == (2, 4)
+
+
+def test_cursor_request_context_read_error_fails_the_source(
+    two_composer_project, monkeypatch,
+):
+    """A composer replaces its stored Events, so a partial read must not land."""
+    import sqlite3
+
+    import codess.adapters.cursor as cursor_adapter
+
+    project = two_composer_project
+    run_cursor(project, decoder_options(include_agent_kv=False))
+
+    def failing_rows(db_path, composer_ids=None):
+        raise sqlite3.OperationalError("database is locked")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        cursor_adapter, "open_message_request_context_rows", failing_rows,
+    )
+    (ingested, _events, failures, _changed), store_path = run_cursor(
+        project, decoder_options(include_agent_kv=False),
+    )
+    assert (ingested, failures) == (0, 1)
+    assert store_counts(store_path) == (2, 4)
+
+
+def test_cursor_unreadable_composer_index_keeps_global_sessions(tmp_path, monkeypatch):
+    """A selection built from a failed index read must not delete Sessions.
+
+    The global ingest deletes stored Sessions absent from the selected
+    composers, so a narrowed selection from a failed read looked like the
+    vendor had deleted the rest.
+    """
+    project = tmp_path / "myproj"
+    project.mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    workspace = cursor_base / "workspaceStorage" / "abc123"
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"folder": {"path": str(project)}}), encoding="utf-8",
+    )
+    (cursor_base / "globalStorage").mkdir(parents=True)
+    build_cursor_db(
+        cursor_base / "globalStorage" / "state.vscdb",
+        bubbles=[
+            (composer, "b1", {"type": 1, "text": "hi", "createdAt": "2026-07-10T00:00:01Z"})
+            for composer in ("g1", "g2")
+        ],
+        headers=[("g1", "abc123", 1, 2, 0, 0), ("g2", "abc123", 1, 2, 0, 0)],
+    )
+    monkeypatch.setattr("codess.cursor_source.CURSOR_DATA", cursor_base)
+    (_ingested, _events, failures, _changed), store_path = run_cursor(
+        project, decoder_options(),
+    )
+    assert failures == 0
+    assert store_counts(store_path) == (2, 2)
+
+    proj_str = str(project.resolve())
+    narrowed = decoder_options(
+        cursor_project_headers={proj_str: {"g1": {"workspace_id": "abc123"}}},
+        cursor_header_read_errors={proj_str: ["state.vscdb: database is locked"]},
+    )
+    (_ingested, _events, failures, _changed), store_path = run_cursor(project, narrowed)
+    assert failures == 1
+    assert store_counts(store_path) == (2, 2)
+
+
+def test_project_composer_headers_report_an_unreadable_store(tmp_path):
+    """The failure is returned to the caller, not only logged."""
+    from codess.cursor_source import get_project_composer_headers
+
+    project = tmp_path / "myproj"
+    project.mkdir()
+    cursor_base = tmp_path / "cursor"
+    workspace = cursor_base / "workspaceStorage" / "abc123"
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"folder": {"path": str(project)}}), encoding="utf-8",
+    )
+    global_db = tmp_path / "state.vscdb"
+    global_db.write_bytes(b"not a database" * 100)
+    read_errors: list[str] = []
+    assert get_project_composer_headers(
+        global_db, project, cursor_base, read_errors=read_errors,
+    ) == {}
+    assert len(read_errors) == 1
+    assert str(global_db) in read_errors[0]
+
+
 # --- module boundary --------------------------------------------------------
 
 def test_coordinators_do_not_import_the_command_layer():
@@ -706,3 +852,169 @@ def test_coordinators_do_not_import_the_command_layer():
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "from cli" not in source
     assert "import cli" not in source
+
+
+# --- redaction reaches every stored column ------------------------------------
+
+# Two shapes the configured patterns redact: a bare provider token, and a key
+# stated beside its value. The second arrives in structured fields as a JSON
+# member, where the key and the value are separate strings.
+REDACT_TOKEN = "sk-" + "Zq7Xw3Rt9Yp2Lm5Nb8Vc4Hd6"
+REDACT_KEYED_VALUE = "kV3" + "pQ8sT1uW6xZ0aB4cD7eF2gH"
+
+
+def secret_scan(store_path: Path) -> list[str]:
+    """Every table and column of a store that still holds either secret."""
+    conn = connect(store_path, read_only=True)
+    try:
+        tables = [
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        ]
+        found = []
+        for table in tables:
+            table_name = quote_identifier(table)
+            columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table_name})")]
+            for column in columns:
+                text = f"CAST({quote_identifier(column)} AS TEXT)"
+                # Identifiers come from the store's own catalog and are quoted.
+                hits = conn.execute(
+                    f"SELECT COUNT(*) FROM {table_name} WHERE {text} LIKE ? OR {text} LIKE ?",  # noqa: S608
+                    (f"%{REDACT_TOKEN}%", f"%{REDACT_KEYED_VALUE}%"),
+                ).fetchone()[0]
+                if hits:
+                    found.append(f"{table}.{column}")
+    finally:
+        conn.close()
+    return found
+
+
+def test_redaction_reaches_every_claude_column(tmp_path, monkeypatch):
+    project = tmp_path / "myproj"
+    project.mkdir()
+    projects_dir = tmp_path / "cc_projects"
+    session_dir = projects_dir / path_to_slug(project.resolve())
+    session_dir.mkdir(parents=True)
+    keyed = {"api_key": REDACT_KEYED_VALUE}
+    lines = [
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": f"use {REDACT_TOKEN}"},
+        ]}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": f"token {REDACT_TOKEN}"},
+            {"type": "tool_use", "id": "tu-1", "name": "Bash",
+             "input": {"command": f"echo {REDACT_TOKEN}", **keyed}},
+        ]}},
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tu-1",
+             "content": f"out {REDACT_TOKEN}"},
+        ]}, "toolUseResult": {
+            "stdout": f"out {REDACT_TOKEN}", "stderr": "", **keyed,
+        }},
+    ]
+    (session_dir / "test-session.jsonl").write_text(
+        "".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8",
+    )
+    monkeypatch.setattr("codess.project.CC_PROJECTS", projects_dir)
+
+    (_ingested, _events, failures, _changed), store_path = run_cc(
+        project, decoder_options(redact=True),
+    )
+
+    assert failures == 0
+    assert store_counts(store_path)[1] > 0
+    leaked = secret_scan(store_path)
+    assert not leaked, "redaction missed: " + ", ".join(leaked)
+
+
+def test_redaction_reaches_every_codex_column(tmp_path, monkeypatch):
+    project = tmp_path / "myproj"
+    project.mkdir()
+    day = tmp_path / "codex" / "sessions" / "2026" / "01" / "02"
+    day.mkdir(parents=True)
+    lines = [
+        {"type": "session_meta", "payload": {"id": "s1", "cwd": str(project.resolve())}},
+        {"type": "response_item", "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": f"use {REDACT_TOKEN}"}],
+        }},
+        {"type": "response_item", "payload": {
+            "type": "function_call", "name": "shell", "call_id": "call-1",
+            "arguments": json.dumps({
+                "command": ["echo", REDACT_TOKEN], "api_key": REDACT_KEYED_VALUE,
+            }),
+        }},
+        {"type": "response_item", "payload": {
+            "type": "function_call_output", "call_id": "call-1",
+            "output": (
+                "Exit code: 0\nWall time: 0.1 seconds\nOutput:\n"
+                f"out {REDACT_TOKEN}\napi_key: {REDACT_KEYED_VALUE}\n"
+            ),
+        }},
+    ]
+    (day / "rollout-abc.jsonl").write_text(
+        "".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8",
+    )
+    sessions_root = tmp_path / "codex" / "sessions"
+    monkeypatch.setattr("codess.codex_source.CODEX_SESSIONS", sessions_root)
+    monkeypatch.setattr(
+        "codess.codex_source.CODEX_ARCHIVED_SESSIONS", sessions_root / "archived",
+    )
+
+    (_ingested, _events, failures, _changed), store_path = run_codex(
+        project, decoder_options(redact=True),
+    )
+
+    assert failures == 0
+    assert store_counts(store_path)[1] > 0
+    leaked = secret_scan(store_path)
+    assert not leaked, "redaction missed: " + ", ".join(leaked)
+
+
+def test_redaction_reaches_every_cursor_column(tmp_path, monkeypatch):
+    project = tmp_path / "myproj"
+    project.mkdir()
+    cursor_base = tmp_path / "cursor" / "User"
+    workspace = cursor_base / "workspaceStorage" / "abc123"
+    workspace.mkdir(parents=True)
+    (workspace / "workspace.json").write_text(
+        json.dumps({"folder": {"path": str(project)}}), encoding="utf-8",
+    )
+    keyed = {"api_key": REDACT_KEYED_VALUE}
+    build_cursor_db(
+        workspace / "state.vscdb",
+        bubbles=[
+            ("c1", "b1", {
+                "type": 1, "text": f"use {REDACT_TOKEN}",
+                "createdAt": "2026-07-10T00:00:01Z",
+            }),
+            ("c1", "b2", {
+                "type": 2, "text": f"done {REDACT_TOKEN}",
+                "createdAt": "2026-07-10T00:00:02Z",
+                "thinking": {"text": f"token {REDACT_TOKEN}"},
+                "errorDetails": {"message": f"failed {REDACT_TOKEN}", **keyed},
+                "codeBlocks": [{"content": f"key = '{REDACT_TOKEN}'"}],
+                "tokenCount": {"inputTokens": 5, "outputTokens": 7},
+            }),
+            ("c1", "b3", {
+                "type": 2, "text": "", "createdAt": "2026-07-10T00:00:03Z",
+                "toolFormerData": {
+                    "name": "run_terminal_cmd", "toolCallId": "call-1",
+                    "status": "completed",
+                    "rawArgs": json.dumps({"command": f"echo {REDACT_TOKEN}", **keyed}),
+                    "result": json.dumps({"output": f"out {REDACT_TOKEN}", **keyed}),
+                },
+            }),
+        ],
+    )
+    monkeypatch.setattr("codess.cursor_source.CURSOR_DATA", cursor_base)
+
+    (_ingested, _events, failures, _changed), store_path = run_cursor(
+        project, decoder_options(redact=True),
+    )
+
+    assert failures == 0
+    assert store_counts(store_path)[1] > 0
+    leaked = secret_scan(store_path)
+    assert not leaked, "redaction missed: " + ", ".join(leaked)

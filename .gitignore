@@ -17,36 +17,21 @@
 .claude/
 plans/
 docs/
+# Internal project notes: working analysis, review ledgers, and anything that names
+# one machine or private work. Kept beside the code, never published.
+.docs/
 conf/
 output/
 *.auth
 *.csv
 tests/.scratch/
 
-# Catalog: regenerable measurements of one machine, not source. Each is
-# rebuilt by a named tool, and none is read as input -- committing one records
-# what this machine held on the day it ran, which is not a property of the
-# software. The reviewed selections and policies beside them are deliberately
-# still tracked; see CoPlan W58 for moving those to the registry.
-catalog/claude-feature-audit.json
-catalog/codex-feature-audit.json
-catalog/codex-parent-audit.json
-catalog/cursor-feature-audit.json
-catalog/cursor-candidates.json
-catalog/evidence-inventory.json
-
-# Catalog: reviewed operator selections. Which Projects were accepted as
-# validation baselines, and under which policy, is a decision about one
-# machine's data -- the paths inside name real repositories. The workflow is
-# unchanged: the files stay on disk and every command takes an explicit
-# --selection/--policy path. `ci-fixture.json` remains tracked, because it
-# validates a fixture this repository contains and is true on every machine.
-# CoPlan W58 moves the resolution default to the registry.
-catalog/approved-baselines.json
-catalog/reviewed-baselines.json
-catalog/baseline-selection.json
-catalog/policies/*.json
-!catalog/policies/ci-fixture.json
+# Catalog: operator state of one machine -- reviewed baseline selections,
+# per-Project policies, audits, and inventories. The paths inside name real
+# repositories, so none of it is source. Commands resolve it from
+# `~/.codess/catalog/` (`CODESS_CATALOG` overrides); the synthetic CI policy the
+# tests use lives in `tests/fixtures/policies/`.
+catalog/
 
 # ============================================================================
 # Version Control
@@ -374,6 +359,8 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+.python-version
 
 # Pyre type checker
 .pyre/

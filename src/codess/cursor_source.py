@@ -615,8 +615,15 @@ def unbound_composer_count(db_path: Path) -> dict[str, int]:
 
 def get_composer_headers(
     db_path: Path, workspace_ids: set[str] | None = None,
+    *,
+    read_errors: list[str] | None = None,
 ) -> dict[str, dict]:
-    """Return composer header metadata, optionally limited to workspace ids."""
+    """Return composer header metadata, optionally limited to workspace ids.
+
+    An unreadable store returns no headers, which is indistinguishable from a
+    store holding none; `read_errors` receives one line per failure so a caller
+    that deletes Sessions absent from the selection can tell the two apart.
+    """
     if not db_path.exists() or workspace_ids == set():
         return {}
     try:
@@ -641,6 +648,8 @@ def get_composer_headers(
             return headers
     except Exception as exc:
         log.warning("Cannot read Cursor composer headers from %s: %s", db_path, exc)
+        if read_errors is not None:
+            read_errors.append(f"{db_path}: {exc}")
         return {}
 
 
@@ -648,6 +657,7 @@ def get_workspace_composer_headers(
     project_path: Path, cursor_data: Path | None = None,
     *,
     diagnostics: dict[str, int] | None = None,
+    read_errors: list[str] | None = None,
 ) -> dict[str, dict]:
     """Recover workspace-bound composers absent from global composerHeaders.
 
@@ -716,6 +726,8 @@ def get_workspace_composer_headers(
                 db_path,
                 exc,
             )
+            if read_errors is not None:
+                read_errors.append(f"{db_path}: {exc}")
     return {
         composer_id: header
         for composer_id, header in recovered.items()
@@ -727,13 +739,14 @@ def get_project_composer_headers(
     global_db: Path, project_path: Path, cursor_data: Path | None = None,
     *,
     diagnostics: dict[str, int] | None = None,
+    read_errors: list[str] | None = None,
 ) -> dict[str, dict]:
     """Combine current global headers with workspace-index fallbacks."""
     workspace_ids = set(get_workspace_ids(project_path, cursor_data))
     fallback = get_workspace_composer_headers(
-        project_path, cursor_data, diagnostics=diagnostics
+        project_path, cursor_data, diagnostics=diagnostics, read_errors=read_errors,
     )
-    current = get_composer_headers(global_db, workspace_ids)
+    current = get_composer_headers(global_db, workspace_ids, read_errors=read_errors)
     fallback.update(current)
     return fallback
 

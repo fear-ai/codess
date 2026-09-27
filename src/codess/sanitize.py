@@ -11,6 +11,7 @@ from codess.config import REDACT_PATTERNS
 CONTROL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0d-\x1f\x7f-\x9f]')
 ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
 CSV_FORMULA_PREFIXES = frozenset(("=", "+", "-", "@", "＝", "＋", "－", "＠"))
+REDACTED = "[REDACTED]"
 
 
 def sanitize_text(s: str) -> str:
@@ -82,21 +83,60 @@ def tabular_fields(*pairs: tuple[str, Any], separator: str = " ") -> str:
     )
 
 
+def _withheld_member(key: str, value: Any) -> Any:
+    """A structured member's value, withheld where key and value state a secret.
+
+    A pattern such as `api_key=<value>` matches the text form of a record, but in
+    structure the key and the value are separate strings and neither matches
+    alone. Testing them joined applies the same patterns to the same fact.
+    """
+    if not isinstance(value, str):
+        return value
+    stated = f"{key}={value}"
+    return REDACTED if redact(stated) != stated else value
+
+
 def sanitize_value(value: Any, redact_enabled: bool = False) -> Any:
     """Recursively sanitize strings in JSON-like tool input structures."""
     if isinstance(value, str):
         return apply_sanitization(value, redact_enabled)
     if isinstance(value, dict):
-        return {
-            apply_sanitization(str(key), redact_enabled): sanitize_value(
-                item, redact_enabled
-            )
-            for key, item in value.items()
-        }
+        members = {}
+        for key, item in value.items():
+            name = apply_sanitization(str(key), redact_enabled)
+            cleaned = sanitize_value(item, redact_enabled)
+            members[name] = _withheld_member(name, cleaned) if redact_enabled else cleaned
+        return members
     if isinstance(value, list):
         return [sanitize_value(item, redact_enabled) for item in value]
     if isinstance(value, tuple):
         return tuple(sanitize_value(item, redact_enabled) for item in value)
+    return value
+
+
+def redact_value(value: Any, redact_enabled: bool) -> Any:
+    """Redact secrets in a JSON-like structure, leaving every other value as stated.
+
+    For the structured companion of a field whose text form is redacted -- a tool
+    result object beside its text, vendor evidence kept in metadata. Redaction
+    applies to every stored form of a value or it protects none of them; the text
+    sanitization `sanitize_value` also performs is not applied, so an unredacted
+    structure is stored exactly as the vendor recorded it.
+    """
+    if not redact_enabled:
+        return value
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        members = {}
+        for key, item in value.items():
+            name = redact(str(key))
+            members[name] = _withheld_member(name, redact_value(item, True))
+        return members
+    if isinstance(value, list):
+        return [redact_value(item, True) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_value(item, True) for item in value)
     return value
 
 
@@ -117,7 +157,7 @@ def redact(s: str, patterns: list[re.Pattern] | None = None) -> str:
     """Replace matches with [REDACTED]."""
     patterns = patterns or REDACT_PATTERNS
     for pat in patterns:
-        s = pat.sub('[REDACTED]', s)
+        s = pat.sub(REDACTED, s)
     return s
 
 

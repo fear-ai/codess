@@ -73,6 +73,15 @@ log = logging.getLogger(__name__)
 RAW_OBJECT_PREFIXES = ("digest:", "sha256:")
 
 
+class CursorIndexReadError(RuntimeError):
+    """A Cursor composer index could not be read, so the selection is unknown.
+
+    The global ingest deletes stored Sessions absent from the selected
+    composers; a selection built from a failed read would look smaller than the
+    store and delete Sessions the vendor still holds.
+    """
+
+
 def _object_hash(object_id: str) -> str | None:
     """The bare hex of a raw object id, under either recorded prefix."""
     for prefix in RAW_OBJECT_PREFIXES:
@@ -928,10 +937,29 @@ def _ingest_cursor(
                 source=str(global_source.resolve()),
             )
             return ingested, total_events, failures, changed
-        headers = (
-            opts.get("cursor_project_headers", {}).get(proj_str)
-            or get_composer_headers(global_db, workspace_ids)
+        header_read_errors = list(
+            opts.get("cursor_header_read_errors", {}).get(proj_str, ())
         )
+        headers = opts.get("cursor_project_headers", {}).get(proj_str)
+        if not headers:
+            headers = get_composer_headers(
+                global_db, workspace_ids, read_errors=header_read_errors,
+            )
+        if header_read_errors:
+            index_error = CursorIndexReadError(
+                f"Cursor composer index unreadable: {'; '.join(header_read_errors)}: "
+                "stored Sessions kept; rerun ingest once the index reads"
+            )
+            log.warning("%s", index_error)
+            _progress(
+                opts, "cursor.source.failed", project=proj_str,
+                source=str(global_source.resolve()),
+                error_type=type(index_error).__name__,
+            )
+            failures += 1
+            if stop_on_error:
+                raise index_error
+            return ingested, total_events, failures, changed
         if not headers:
             if opts.get("debug"):
                 log.debug(

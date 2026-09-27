@@ -8,21 +8,18 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codess.baseline_validation import write_json_atomic
+from codess.config import CURSOR_DATA, STORE_ROOT
 from codess.cursor_feature_audit import audit_cursor_features
 from codess.project_catalog import load_catalog
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--db", type=Path,
-        default=Path.home() / "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
-    )
-    parser.add_argument("--store", type=Path, default=Path.home() / ".codess")
+    parser.add_argument("--db", type=Path, default=CURSOR_DATA / "globalStorage" / "state.vscdb")
+    parser.add_argument("--store", dest="store_root", type=Path, default=STORE_ROOT)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     report = audit_cursor_features(args.db, load_catalog(args.store_root))

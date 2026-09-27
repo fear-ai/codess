@@ -1,6 +1,6 @@
 # CodexSchema — OpenAI Codex CLI Session Storage
 
-Vendor-specific structure for **Codex CLI** sessions. Normalized ingest: `src/codess/adapters/codex.py`. Scan: `src/codess/scan.py` (`_session_metrics_codex`).
+Vendor-specific structure for **Codex CLI** sessions. Normalized ingest: `src/codess/adapters/codex.py`. Scan: `src/codess/walk_sessions.py` (`_session_metrics_codex`).
 
 **Stability note:** Codex documents the transcript path, but the transcript
 format is not a stable public interface and may change. The shapes below
@@ -21,7 +21,7 @@ the rollout.
 
 **Renaming a thread is invisible to the store.** Measured on one machine: the
 index holds 25 named threads and **21 of them are Sessions Codess has
-ingested**, carrying names like `Codess Continue` and `AGENTS.md WPages.md
+ingested**, carrying names like `Codess Continue` and `AGENTS.md <Project>.md
 Status.md`. The rollout does not carry the name, so a store built only from
 rollouts reports a Session the operator can no longer recognise by the label
 they gave it.

@@ -1434,11 +1434,9 @@ class TestTokenCountRetention:
     """A recorded zero is evidence; an absent field is not the same fact."""
 
     def _enriched(self, data):
-        from codess.adapters.cursor import _enrich_from_bubble
+        from codess.adapters.cursor import _bubble_token_columns
 
-        event: dict = {}
-        _enrich_from_bubble(event, data)
-        return event
+        return _bubble_token_columns(data)
 
     def test_a_zero_is_carried(self):
         event = self._enriched({"tokenCount": {"inputTokens": 0, "outputTokens": 0}})
@@ -1452,6 +1450,40 @@ class TestTokenCountRetention:
 
     def test_an_absent_object_leaves_the_columns_unset(self):
         assert "input_tokens" not in self._enriched({})
+
+    def test_a_bubble_count_is_carried_by_one_event(self):
+        """A bubble yielding several Events states its usage once.
+
+        A response, a reasoning summary, a compaction and a tool call from one
+        bubble each carried the whole count, so a sum over Events multiplied it.
+        """
+        data = {
+            "type": 2, "text": "answer",
+            "thinking": {"text": "reasoning"},
+            "conversationSummary": json.dumps({"summary": "earlier turns"}),
+            "toolFormerData": {
+                "name": "read_file", "toolCallId": "call-1", "status": "completed",
+                "rawArgs": '{"path":"a"}', "result": "contents",
+            },
+            "tokenCount": {"inputTokens": 900, "outputTokens": 12},
+        }
+        evs = list(_bubble_to_events("c1", "b1", data, "/db", False))
+        assert len(evs) == 5
+        assert sum(event.get("input_tokens") or 0 for event in evs) == 900
+        assert sum(event.get("output_tokens") or 0 for event in evs) == 12
+        assert evs[0]["subtype"] == "response" and evs[0]["input_tokens"] == 900
+
+    def test_a_tool_only_bubble_count_is_carried_by_its_call(self):
+        data = {
+            "type": 2, "text": "",
+            "toolFormerData": {
+                "name": "read_file", "toolCallId": "call-1", "status": "completed",
+                "rawArgs": '{"path":"a"}', "result": "contents",
+            },
+            "tokenCount": {"inputTokens": 40, "outputTokens": 3},
+        }
+        evs = list(_bubble_to_events("c1", "b1", data, "/db", False))
+        assert [event.get("input_tokens") for event in evs] == [40, None]
 
     def test_enrichment_is_one_function_so_the_sites_cannot_drift(self):
         """Four construction sites already drifted once on a different field."""

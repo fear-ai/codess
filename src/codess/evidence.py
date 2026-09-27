@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from codess.codex_parent_audit import audit_parentage
-from codess.config import CC_PROJECTS
+from codess.config import CC_PROJECTS, CODEX_ARCHIVED_SESSIONS, CODEX_SESSIONS
 from codess.cursor_feature_audit import audit_cursor_features
 from codess.project_catalog import load_catalog
 from codess.snapshot import current_stores
@@ -88,6 +88,18 @@ def summarize_store_evidence(paths: Iterable[Path]) -> dict[str, Any]:
     }
 
 
+def codex_session_roots() -> list[tuple[str, Path]]:
+    """Return the configured Codex session trees, the archive only where one is configured.
+
+    `CODESS_CODEX_SESSIONS` without `CODESS_CODEX_ARCHIVED_SESSIONS` leaves no archive,
+    which `config.CODEX_ARCHIVED_SESSIONS` records as None.
+    """
+    roots = [("active", CODEX_SESSIONS)]
+    if CODEX_ARCHIVED_SESSIONS is not None:
+        roots.append(("archive", CODEX_ARCHIVED_SESSIONS))
+    return roots
+
+
 def build_evidence_inventory(
     registry: Path,
     *,
@@ -128,10 +140,7 @@ def build_evidence_inventory(
             lifecycle[key] += value
         for locator in summary["cross_vendor_artifact_examples"]:
             shared.append({"project_id": project_id, "locator": locator})
-    roots = codex_roots or [
-        ("active", Path.home() / ".codex/sessions"),
-        ("archive", Path.home() / ".codex/archived_sessions"),
-    ]
+    roots = codex_roots or codex_session_roots()
     codex = audit_parentage(roots)
     codex_features = audit_codex_features(roots)
     cursor = audit_cursor_features(cursor_db, catalog)

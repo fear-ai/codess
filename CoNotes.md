@@ -851,10 +851,11 @@ detectable by one: each is a judgement failure whose symptom is only visible to
 whoever had to undo it. Where a figure appears it was measured afterward, and
 where a claim could not be confirmed from the corpus that is said plainly.*
 
-**1. A destructive command deleted a production data directory.** Located in
-`~/.claude/projects/-home-user-work-project/a5b7b623…jsonl`, 2026-08-23,
-`claude-opus-5`. The model's own words: *"`ZERO_PERF_ALLOW_LIVE_DATADIR=1`
-deletes a production datadir with only a warning … it just deleted `~/.zero`
+**1. A destructive command deleted a production data directory.** Located in one
+Claude transcript of a linked-worktree Project, `~/.claude/projects/<slug>/<session>.jsonl`,
+2026-08-23, `claude-opus-5`. The model's own words, with the Project-specific
+variable and directory replaced by placeholders: *"`<PROJECT>_ALLOW_LIVE_DATADIR=1`
+deletes a production datadir with only a warning … it just deleted `~/.<datadir>`
 again in my test"* and *"empty stub, nothing lost, but that's luck."*
 
 **Two defects, and the second is the process miss.** The tool permitted it:
@@ -873,7 +874,7 @@ the behaviour, and it recurs whether or not the directory happened to be empty.
 **It was also nearly missed twice.** A first search of the published stores
 returned zero matches and was reported as "not confirmable, consistent with
 predating the retained window" -- which was wrong. The event was three days old.
-The search failed because it looked for `rm -rf …/.zero` in tool *input*, and
+The search failed because it looked for `rm -rf …/.<datadir>` in tool *input*, and
 the evidence is prose in an assistant *message*. When a search for a known
 incident returns nothing, the first hypothesis is a wrong query, not an absent
 record.

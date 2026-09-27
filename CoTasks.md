@@ -27,6 +27,12 @@ is wrong by the next change and cannot close an item. No item carries a duration
 or an effort estimate; ordering is by dependency and by rebuild cost, both of
 which are checkable.
 
+**Projects in measurements are anonymous.** A measured Project is labelled
+`P1`, `P2`, and so on, with the same label for the same Project throughout this
+document; `P2` is a linked worktree of `P1`. A label carries the shape that
+matters -- worktree, alias path, grouping directory -- and never the Project's
+name or location.
+
 ## Table of Contents
 
 - [Active Work](#active-work)
@@ -81,8 +87,8 @@ reading `projects.json` itself. It also failed silently on the first attempt
 because `python` was a shell alias the subshell did not inherit, which a
 supported entry point would not have done.
 
-`included` selects 20 of 21, and the 21st is correct to omit: proj-b is
-annotated `worktree_of` proj-a, so refreshing both would ingest one repository
+`included` selects 20 of 21, and the 21st is correct to omit: P2 is
+annotated `worktree_of` P1, so refreshing both would ingest one repository
 twice. The hand-written loop had no such notion and did exactly that.
 
 **Rule.** A corpus-wide operation uses `codess refresh`; a hand-written loop over
@@ -94,7 +100,7 @@ every composer, and the consumer flushes on each change of `session_id` and
 refuses a Session it has already flushed. Blobs are content-addressed, so they
 arrive in hash order and a trailing pass revisits every Session. Fixed by
 decoding the corpus once before the bubble loop and emitting each Session's
-share with its own bubbles. proj-a went from 3 Sessions and 5,600 Events to 29
+share with its own bubbles. P1 went from 3 Sessions and 5,600 Events to 29
 and 65,154 -- the failure had been discarding the whole Cursor source, not only
 the `agentKv` part.
 
@@ -136,7 +142,7 @@ The unanswered question, not the effort, is what holds each.
 
 | ID | Question | Whose |
 |---|---|---|
-| **W83** | Licence terms | Owner. Postponed entire; restarts on the licence decision |
+| **W83** | Licence terms | Owner. The licence blocker restarts on the licence decision; B5 (tracked operator state) does not wait on it |
 | **W93** | Session-utilization inclusion policy | Detection **designed** on the item; what a report includes is not |
 | -- | Symlink traversal in discovery | Recommendation: do not follow. See [Item Detail](#item-detail) |
 
@@ -192,8 +198,8 @@ records it separately, so joining them would join Sessions no vendor joined.
 locations -- and `get_project_root`'s docstring cited that rule while
 implementing repository resolution.
 
-**Measured.** proj-a and proj-b are linked worktrees of one repository.
-`get_project_root` resolves both to proj-a, the catalog holds them as two
+**Measured.** P1 and P2 are linked worktrees of one repository.
+`get_project_root` resolves both to P1, the catalog holds them as two
 Projects related by `worktree_of`, and their Claude stores hold **2 Sessions
 each with zero overlap** by `session_entity_id`. The vendors did record distinct
 Sessions per worktree, which is exactly what CoSchema predicts.
@@ -303,7 +309,7 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W77 | Normal | Withdrawn | Time module -- W55 already specifies it | -- |
 | W79 | Normal | Postponed | Content policy for retrieved, attacker-influenced Artifact references | Needs a retrieval-bearing corpus |
 | W81 | Normal | Postponed | Cursor Artifact evidence in adjacent key spaces: patch graphs, checkpoints, file snapshots | Restart criteria on the item |
-| W83 | High | Postponed | Early-access release readiness | Postponed entire, including the licence split; restarts on the owner's licence decision |
+| W83 | High | Postponed | Early-access release readiness | Licence split restarts on the owner's decision; B5, tracked operator state in `catalog/`, is open engineering work |
 | W84 | Low | Postponed | Characterise `selectedModels` parameters beyond `fast` and `effort` | Both observed ids are mapped; no third has appeared |
 | W85 | Normal | Postponed | Composers older than the header retention window are unattributed by design | Handling can improve; the condition itself is vendor retention |
 | W87 | Normal | Planned | Group the test corpus by subsystem; find superseded and uncovered cases | -- |
@@ -314,11 +320,26 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W96 | High | Planned | Steps 1-4 landed: every finding names its remedy, the Claude slug split is detected, `sources_vanished` is reported, and `catalog relocate` is documented as the pre-move step. The copy case remains undecidable by design | W14 (partly) |
 | W97 | Normal | Planned | Read the Codex thread name; reconcile archive location with archive state | -- |
 | W98 | Low | Closed | Twelve `*_digest` renames in format 11; the nested `"sha256"` keys and the emitted `sha256:` value prefixes in format 12. `hashing` is now the only module naming an algorithm | -- |
-| W103 | High | Planned | Rescan for the five crash-site classes beyond the fuzzed adapters, and for exact-value grouping that understates a templated family | -- |
+| W103 | High | Planned | Rescan for the five crash-site classes beyond the fuzzed adapters, and for exact-value grouping that understates a templated family. The hostile-input suite has located the first sites | -- |
 | W102 | Low | Planned | Review the option classification against what each flag actually does: 110 flag-only, 34 default-only, 24 with a variable | The classification is recorded in CoNames and has not been critiqued per flag |
 | W104 | Normal | Planned | No designator selects every published Project, so a format migration can strand one. `included` omits a `worktree_of` Project, which is right for a routine refresh and wrong for a rebuild | -- |
 | W105 | High | Planned | A strategy per vendor for what each removes: Claude deletes records on age and needs cadence; Cursor removes index entries and needs the unbound set read. Four pieces, no format change | W85 (part 3) |
 | W106 | Normal | Planned | Cursor's `interaction_mode` (agent vs chat) and workspace path are read but reach no column. The read landed; the store waits on a format bump | -- |
+| W108 | Normal | Planned | Remove `catalog/` from the repository: contracts to `schema/`, the CI policy to `tests/fixtures/`, measurements to stdout or the store's `reports/`, operator state to `~/.codess/catalog/` | -- |
+| W109 | Normal | Planned | Ship the schema contracts as package data; a non-editable install cannot find `schema/` today | -- |
+| W110 | Normal | Planned | Separate released documentation from contributor-internal notes and from private working notes | Operator decision on placement |
+| W111 | Normal | Planned | Lint and type gates that cannot absorb a regression: per-rule or zero gate, per-module mypy strictness, pre-commit and CI | -- |
+| W112 | High | Planned | A rebuild must not lose Sessions whose Source the vendor has since removed; prior-format snapshots are unreadable rollback targets | Design decision; relates W104, W105 |
+| W113 | Normal | Planned | Model-name resolution for current frontier and open-weights naming; names in the vendor logs resolve to nothing | Breaking change to `--model-line` values |
+| W114 | Low | Planned | Split `tools/`: scripts duplicating `codess admin`, operator procedures that should be subcommands, and developer-internal tooling | W108 |
+| W115 | High | Planned | Snapshot lifecycle by role: rollback, pinned, archive, sole record; one classifier for trim and prune | Operator decision on the model |
+| W116 | High | Planned | Codex threads stored as several rollout files lose every file but the newest | -- |
+| W117 | Normal | Planned | Codex exact structures: typed `item_completed` results, `token_usage_record`, `task_complete.error`, cache-write tokens | -- |
+| W118 | Normal | Planned | Claude Code record fields read but unmapped: API errors, denial kind, interruption, four record kinds | -- |
+| W119 | Normal | Planned | Cursor tool status and token evidence misread; Cursor CLI transcripts unsupported | -- |
+| W120 | High | Planned | Silent Session loss on Project-side states: a truncated store is rebuilt empty and unchanged Sources skipped; a Source rewritten to no decodable records deletes its Session; two directories sharing a slug cross-attribute | -- |
+| W121 | Normal | Planned | Load tier at corpus scale: end-to-end ingest, memory ceilings, multi-GB Cursor database, scan breadth, retention over large snapshots | -- |
+| W122 | High | Planned | Store-format versioning with review, migration notes, and automation; restart as `MAJOR.MINOR` at `1.0` for the released layout | -- |
 
 ## Queue
 
@@ -393,7 +414,7 @@ published store sets, **every recorded Source still resolves** -- 0 vanished --
 so nothing in the registry holds unreproducible evidence. The two stores W14
 identified (154 Sources with 122 vanished, and 8 with 8) are **gone**: neither
 survives anywhere on this machine. What does survive is a different store, at
-`group/project`, found only because a test scratch tree happened to retain it:
+`<group>/<project>`, found only because a test scratch tree happened to retain it:
 
 | Measure | Value |
 |---|---|
@@ -405,13 +426,13 @@ survives anywhere on this machine. What does survive is a different store, at
 Its vendor directory holds no transcripts, it has no catalog entry, and its
 working store under the checkout holds zero Sessions -- so the copy in test
 scratch was the only record. It is now at
-`~/.codess/archive/review-coschema4-20260812T072113Z`, read-only by permission,
+`~/.codess/archive/<project>-coschema4-20260812T072113Z`, read-only by permission,
 with an `ARCHIVE.md` stating what it holds and why deleting it is
 unrecoverable. The original was left in place rather than moved.
 
 **What a recreation cannot re-derive, captured before it runs.** The catalog's
 reviewed decisions are in `catalog/inventory/dispositions-20260824.json`: one
-`worktree_of` relation (proj-b to proj-a) and 13 Cursor workspace bindings
+`worktree_of` relation (P2 to P1) and 13 Cursor workspace bindings
 across 8 Projects, every one `approved`. Cursor keys its data by an opaque
 workspace hash rather than by path, so a binding is what connects a composer to
 a Project at all.
@@ -422,10 +443,10 @@ they are the reason the capture exists:
 
 | Relation | Count | Asserts |
 |---|---|---|
-| `project_path_alias` | 2 | A different path is the same Project: `proj-c` is proj-a, `proj-d` is proj-e |
+| `project_path_alias` | 2 | A different path is the same Project: `P3` is P1, `P4` is P5 |
 | `remote_workspace_local_binding` | 1 | An SSH remote URI is this local Project |
 
-No vendor store records either fact. `proj-e` additionally holds three
+No vendor store records either fact. `P5` additionally holds three
 distinct workspace hashes for one path -- Cursor opened a new workspace on
 separate occasions -- and only the bindings record that they are one Project's
 work.
@@ -444,7 +465,7 @@ said so directly, which is the gate working -- a store written under a supersede
 contract is refused rather than read as though it agreed.
 
 **The corpus grew rather than merely moving**, which is the fact worth keeping
-rather than the totals. CodeSess went from 70,571 to 74,839 Events and proj-b
+rather than the totals. CodeSess went from 70,571 to 74,839 Events and P2
 from 39,417 to 40,998 across the three days between publications: two measured
 pairs, retained because they demonstrate what a rebuild does rather than what the
 store currently holds. A rebuild reads what the
@@ -452,12 +473,12 @@ Sources hold now, which is the property that makes it safe when they are intact
 and destructive when they are not.
 
 **Every reviewed disposition survived**, checked rather than assumed: the
-proj-b `worktree_of` relation and all 13 Cursor workspace bindings are intact,
+P2 `worktree_of` relation and all 13 Cursor workspace bindings are intact,
 21 catalog entries in and 21 out, and **no path is claimed by two Projects** --
 so W14's minting defect did not recur. The catalog is keyed by `project_id` and
 written only when identity changes, which is why a reingest leaves it alone.
 
-**The archive was not reached.** `~/.codess/archive/review-coschema4-…` still holds
+**The archive was not reached.** `~/.codess/archive/<project>-coschema4-…` still holds
 its 22 Sessions and 20,235 Events and is still read-only, which is what the
 permission is for: a rebuild sweep that reached it would have destroyed the only
 record of them.
@@ -969,16 +990,16 @@ catalog entry:
 
 | Path | Existing entry | Duplicate created |
 |---|---|---|
-| `group/project` | 2026-07-29, state `worktree` | 2026-08-20 |
-| `group/project` | 2026-07-30 | 2026-08-20 |
-| `group/project` | 2026-07-29 | 2026-08-20 |
-| `group/project`, `group/project`, `group/project` | 2026-07-17 to 07-29 | 2026-08-20 |
-| `group/project`, `group/project`, `group/project` | 2026-07-17 to 07-29 | 2026-08-20 |
+| `P2`, a linked worktree | 2026-07-29, state `worktree` | 2026-08-20 |
+| `P6` | 2026-07-30 | 2026-08-20 |
+| `P7` | 2026-07-29 | 2026-08-20 |
+| `P8`, `P9`, `P10`, one grouping directory | 2026-07-17 to 07-29 | 2026-08-20 |
+| `P11`, `P12`, `P13`, two grouping directories | 2026-07-17 to 07-29 | 2026-08-20 |
 
-**The proj-b case shows the consequence precisely.** Its 2026-07-29 entry
+**The P2 case shows the consequence precisely.** Its 2026-07-29 entry
 carries a reviewed disposition -- `state: worktree`, `relation_kind:
-worktree_of`, `related_project_id` naming proj-a, and a note reading "Legacy
-duplicate Project for the proj-a linked worktree; retain historical evidence
+worktree_of`, `related_project_id` naming P1, and a note reading "Legacy
+duplicate Project for the P1 linked worktree; retain historical evidence
 but exclude broad selection." A new unmarked Project for the same path
 **recreates exactly the duplicate that disposition exists to suppress**, and
 carries none of the review that settled it.
@@ -1059,7 +1080,7 @@ here and worth naming so it is not mistaken for a gap in this fix.
 
 **The reingest path is proven and the defect did not recur.** Every catalogued
 Project was reingested with `--force` on 2026-08-25 and the catalog came out with
-the same entries it went in with: no path claimed by two Projects, proj-b's
+the same entries it went in with: no path claimed by two Projects, P2's
 `worktree_of` relation intact, and every Cursor workspace binding retained. The
 catalog is keyed by `project_id` and written only when identity changes, which is
 why a reingest leaves it alone.
@@ -1756,9 +1777,10 @@ its status -- yes, and the two files that hold it are separately justified.**
    risk the other.
 3. *Different populations, already.* 32 catalog entries against 31 status
    entries, and nine paths appear in status with no catalog location --
-   `~/.codex` and `~/.proj-s-repo/workspace` among them, which are directories
-   holding Sessions but never onboarded as Projects. That is correct behaviour:
-   activity is observable before identity is established.
+   `~/.codex` and a third-party agent's `~/.<agent>/workspace` among them,
+   which are directories holding Sessions but never onboarded as Projects.
+   That is correct behaviour: activity is observable before identity is
+   established.
 
 Neither module reads the other's file, so the separation is real in the code and
 not only on disk.
@@ -3633,15 +3655,16 @@ work that can proceed after publication. Only the first two are release scope.
 | B2 | ~~README announces `v0.0.1`; the package is `0.3.0`~~ | **Closed.** README now names `codess.__version__` and `codess --version` as authoritative and links `CHANGELOG.md`, so the version is stated in one place rather than restated in prose that drifts |
 | B3 | ~~Stale formats are unreadable and the message does not say what to do~~ | **Closed.** `UnsupportedStoreError` now names the remedy -- rebuild with `codess ingest --dir <project> --force` -- and says why a migration is not offered. Nine store sets on this machine remain at formats 3 and 4; they belong to Projects whose paths no longer exist |
 | B4 | ~~Tools carry unchecked SQL~~ | **Closed** with W82: every SQL-bearing tool now runs against an ingested store in the suite |
+| B5 | **Tracked `catalog/` files carry one machine's operator state** | Reviewed selections and per-Project policies name home paths and private Project names, in a public repository and its history. `.gitignore` lists them but they remain tracked, so ignoring does not remove them. Work is on [W108](#w108----catalog-out-of-the-repository) |
 
 #### Gaps That Make a Report Hard to Act On
 
 | # | Gap | Consequence |
 |---|---|---|
 | G1 | ~~No `CHANGELOG`~~ | **Closed.** `CHANGELOG.md` records format 7 and the decode, correctness, and check changes in this version, and states the rebuild procedure a format change requires |
-| G2 | **Command-layer help text is absent on 76 distinct `admin_cmd` flags** (W66) | The interface is self-describing for `project.py` and silent for the administrative half, so a tester guesses |
-| G3 | **Operational reporting is built and not adopted** (W71) | Status and errors still reach stderr through direct writes at each call site, so what a tester can capture depends on which module produced it |
-| G4 | **Coverage reporting attests against unenforced profiles** (W04) | A completeness claim is only as good as the contract behind it; today it states loss against profiles no decode boundary enforces |
+| G2 | ~~Command-layer help text is absent on 76 distinct `admin_cmd` flags~~ (W66) | **Closed.** Every option carries help, and a test reads the built parser so an inherited option renders documented everywhere it appears |
+| G3 | ~~Operational reporting is built and not adopted~~ (W71) | **Closed.** Fatal errors go through one channel, `cli.failure`, and no command module writes `sys.stderr`; the eight status sites report through the facility, and `admin` and `query` attach a sink |
+| G4 | ~~Coverage reporting attests against unenforced profiles~~ (W04) | **Closed.** `validate_mapped_event` enforces the candidate contract at one vendor-neutral boundary, strict and diagnostic modes agree for all three vendors, and a non-conformance records an inspectable row |
 
 #### Explicitly Not Release Scope
 
@@ -3659,24 +3682,25 @@ Recorded so the remaining list is read as short rather than as a summary of
 everything. Decode is validated against real Sessions from all three vendors
 with no classification inconsistency; the suite is green and lint, type, and
 test counts are gated against recorded ceilings; publication is transactional
-and verified; no private path or operator identity appears in tracked files,
-and the discovery lists are environment-configurable rather than fixed to one
-machine; `.codess/` and `.env*` are excluded from version control.
+and verified; the discovery lists are environment-configurable rather than fixed
+to one machine; `.codess/` and `.env*` are excluded from version control.
+Tracked files are not yet free of operator state: see B5.
 
-**Status: Postponed.** Three of four blockers are closed. B1 is not an
-engineering task: the licence terms are the owner's decision, and choosing one
-by default would be picking a legal posture on their behalf. Everything else
-here is a gap rather than a blocker, so the item waits on that single answer
-rather than on work.
+**Status: Postponed.** Three of five blockers and every gap are closed. B1 is
+not an engineering task: the licence terms are the owner's decision, and
+choosing one by default would be picking a legal posture on their behalf. B5 is
+engineering work -- move operator state out of the tree and out of history --
+and does not wait on B1.
 
 **Restart criteria.** Either:
 
 1. **The licence is chosen**, at which point B1 is a `LICENSE` file plus the
    `license`, `authors`, and `urls` fields `pyproject.toml` currently omits --
    an afternoon, not a project.
-2. **A specific tester is identified**, which would make G1 to G4 concrete:
-   what that person needs to file a usable report decides which of the four
-   matter, rather than the list deciding it in advance.
+2. **A specific tester is identified**, which would turn the closed gaps into
+   a concrete check: what that person needs to file a usable report decides
+   whether G1 to G4 were the right four, rather than the list deciding it in
+   advance.
 
 **Evidence to close.** A person on another machine installs from a clean
 checkout, runs the README quick start against their own vendor data, and can
@@ -3819,7 +3843,7 @@ corrections are the finding.
 
 **Correction 1: remote ground truth was compared as text.** Nine of 29
 workspaces record their folder as `vscode-remote://ssh-remote%2B<hex>/...`. The
-authority decodes to `{"hostName":"host"}` -- one remote host. Comparing that
+authority decodes to `{"hostName":"<remote-host>"}` -- one remote host. Comparing that
 string against a bare path fails on the scheme rather than the path.
 
 **Correction 2: the project-boundary rule was not applied.** Discovery already
@@ -3847,8 +3871,8 @@ condition, not a harder version of the same one:
 
 | Remote shape | Count | What it is |
 |---|---|---|
-| `/home/ubuntu/...`, no local counterpart | 7 | A tree that exists only on the remote host |
-| `/home/user/...` under the ssh authority | 2 | A path that **also exists locally** -- a mirror of remote logs |
+| `/home/<remote-user>/...`, no local counterpart | 7 | A tree that exists only on the remote host |
+| `/Users/<user>/...` under the ssh authority | 2 | A path that **also exists locally** -- a mirror of remote logs |
 
 The second shape is the labeling confusion: the same absolute path denotes a
 local directory and a remote one, and nothing in the composer says which the
@@ -3862,8 +3886,8 @@ Checked against the filesystem rather than assumed:
 
 | Case | What it actually is |
 |---|---|
-| `proj-b` picked as `proj-a`, x3 | **The same repository.** `proj-b/.git` is a file reading `gitdir: …/proj-a/.git/worktrees/proj-b`, and both report origin `org/Zero`. A linked worktree, which the Project catalog already has a `worktree` state for |
-| `proj-a` picked as `proj-b` | The same, in the other direction |
+| `P2` picked as `P1`, x3 | **The same repository.** `P2/.git` is a file reading `gitdir: …/P1/.git/worktrees/P2`, and both report the same `origin`. A linked worktree, which the Project catalog already has a `worktree` state for |
+| `P1` picked as `P2` | The same, in the other direction |
 | A repository picked as a neighbour under a vendored-clone container | The container held third-party clones read for reference, which are not development Projects and belong in the scan exclusion list. The true repository's directory had since been removed from the machine, so no `.git` was reachable to collapse to |
 
 **Re-measured with three rules -- skip remote, resolve each path to its shared
@@ -5053,7 +5077,7 @@ Measured on this machine:
 
 | Vendor | Treats a worktree as | Evidence |
 |---|---|---|
-| Claude | **A separate Project.** Each worktree gets its own slug directory and its own prompt history | `-home-user-work-project` and `-home-user-work-project` both exist |
+| Claude | **A separate Project.** Each worktree gets its own slug directory and its own prompt history | `-Users-<user>-<group>-P1` and `-Users-<user>-<group>-P2` both exist |
 | Codex | Whatever `cwd` each record states, so a worktree is a distinct value with no relation recorded | Per-record `cwd`; no index |
 | Cursor | A separate workspace, since `workspace.json` names the folder | One workspace per opened folder |
 
@@ -5064,23 +5088,23 @@ decoded -- and why it has to be.
 
 **The harness creates worktrees too, and they are not the operator's.** Claude
 Code writes them under `<project>/.claude/worktrees/<name>`. Found here:
-`group/project` (registered in git,
-target directory gone, `prunable`) and a `group/project/.claude/worktrees`
+`P14/.claude/worktrees/epic-proskuriakova` (registered in git,
+target directory gone, `prunable`) and a `P6/.claude/worktrees`
 directory. `usage.db` records three such sessions -- `epic-proskuriakova` 9
 turns, `beautiful-euler` 0, and **`reverent-austin-cd76da` 1,350 turns**.
 
 That last one matters twice: it is substantial work in a harness-created
 worktree, and its turns span **three different `cwd` values** --
-`group/project`, `proj-f`, and
-`proj-g`. So a Session is not necessarily one directory, which every
+`P14/.claude/worktrees/reverent-austin-cd76da`, `P14`, and
+`P7`. So a Session is not necessarily one directory, which every
 path-based binding in this system assumes. Two of 35 sessions in `usage.db`
 span more than one `cwd`.
 
-**Second example beyond proj-a/proj-b:** `group/project` registers
+**Second example beyond P1/P2:** `P14` registers
 `epic-proskuriakova`, whose directory no longer exists -- a worktree that was
 removed without `git worktree prune`, leaving a registration pointing at
-nothing. The Claw fork of `proj-s` no longer has worktrees under
-`/home/user/work/project`; only an `proj-s/workspace` path appears in
+nothing. An operator fork of a third-party agent project no longer has worktrees
+under its grouping directory; only a `<agent>/workspace` path appears in
 `usage.db`, and no `.git` file records a link today.
 
 #### Per-Vendor Specifics
@@ -5090,7 +5114,7 @@ affects them differently:
 
 | Vendor | Binds by | A moved Project |
 |---|---|---|
-| Claude | The directory **slug encodes the absolute path** (`-home-user-work-project`) | Old Sessions stay under the old slug; new Sessions appear under a new one. **The Project's history splits across two slugs and nothing joins them** |
+| Claude | The directory **slug encodes the absolute path** (`-Users-<user>-<group>-<project>`) | Old Sessions stay under the old slug; new Sessions appear under a new one. **The Project's history splits across two slugs and nothing joins them** |
 | Codex | A rollout records `cwd` per record | Old rollouts keep the old `cwd`; discovery matches on it, so old Sessions stop matching the moved Project |
 | Cursor | `workspace.json` names the folder | The workspace entry is rewritten by the editor, so the binding follows -- but the composer keeps its own id, and a stale `workspace.json` elsewhere may still name the old path |
 
@@ -5198,7 +5222,7 @@ location and the recorded archive state agree.
 **1. The thread name is not read.** `~/.codex/session_index.jsonl` holds
 `id`, `thread_name`, `updated_at` per thread -- the name the operator gave it
 in the interface. Measured: 25 entries, of which **21 are Sessions Codess has
-ingested**, carrying names like `Codess Continue` and `AGENTS.md WPages.md
+ingested**, carrying names like `Codess Continue` and `AGENTS.md <Project>.md
 Status.md`. The rollout does not carry the name, so a store built from rollouts
 alone reports Sessions the operator cannot recognise by their own label.
 
@@ -5223,6 +5247,347 @@ one exists, distinguishable from a Codess alias; and a rollout's archive
 location and its `archive_state` agree, or the disagreement is recorded as a
 vendor observation with its reason.
 
+### W122 -- Store-Format Versioning
+
+**The condition.** The CoSchema format is a single integer that advanced twelve times, each
+time a change needed a rebuild, without a review of the step, a migration note, or a check that
+a bump accompanied a layout change. The numbers therefore say that something changed, not what
+or whether the result was a validated state.
+
+**Work.** Restart as `MAJOR.MINOR` at `1.0` for the layout of the next release: MAJOR when a
+reader of the previous MAJOR cannot open the store, MINOR when the change is additive and an
+older reader still reads what it knows. SQLite `user_version` holds `MAJOR * 1000 + MINOR`, and
+store metadata holds the string. Each bump ships with a CoSchema change record, a migration note
+(rebuild, copy-forward, or in-place step), and a test that builds a store at the previous
+version and exercises the path. A check fails when the DDL or contract digest changes without
+all three. Format 12 maps to `1.0` without a rebuild if the layout is identical.
+
+**Evidence to close.** A layout change without a bump, record, and migration test fails the
+check; CoSchema documents the scheme and every version from `1.0` on.
+
+**Cost.** Version encoding and a check; a store rebuild only if the layout changes with it.
+
+### W121 -- Load Tier at Corpus Scale
+
+**The condition.** The load tier is three tests of selection and attach limits
+(1,200 Cursor headers, 300 Codex files, 60 stores). A real Project holds about
+90,000 Events in about 600 MiB. `tools/workload_bench.py` sizes against the
+largest real store but times store writes only, without decoding, and runs
+outside the suite. Nothing asserts peak memory, reads a multi-GB Cursor global
+database under a concurrent writer, times a scan over many Projects, or times
+retention over many large snapshots.
+
+**Work.** A corpus-scale synthetic fixture generator (per vendor, sized from
+measured distributions), an opt-in suite marker for end-to-end ingest with time
+and peak-RSS ceilings, a Cursor read under a held write lock, and scan and
+retention timings across many Projects and snapshots.
+
+**Evidence to close.** Each ceiling is asserted and recorded with its basis, and
+a regression past it fails the opt-in suite.
+
+**Cost.** Test and fixture work; no format change.
+
+### W120 -- Silent Session Loss on Project-Side States
+
+**The condition.** Found by the hostile-input suite, each marked as a strict
+expected failure:
+
+1. `ingest_pipeline.should_ingest` trusts `ingest_state.json` without checking
+   the store. A store truncated to zero bytes is rebuilt empty, every unchanged
+   Source is skipped, and the Sessions are lost with exit 0.
+2. A Source rewritten to zero decodable records -- empty, or every line
+   malformed -- commits no Session and deletes the stored one with exit 0.
+3. `path_to_slug` maps `work/a/b` and `work/a-b` to one slug, so ingesting one
+   stores the other's Session although every record's working directory names
+   the other.
+
+**Work.** Validate the store against its recorded state before skipping; treat a
+Source that yields nothing where it previously yielded Sessions as a failure,
+not a deletion; disambiguate a shared slug by the records' working directory.
+
+**Evidence to close.** The three strict expected failures pass.
+
+**Cost.** No format change.
+
+### W119 -- Cursor Tool Status, Token Evidence, and the CLI
+
+**The condition.** A terminal tool result whose `additionalData.status` is
+`error` with a non-zero `exitCode` is recorded as succeeded, because only
+`toolFormerData.status` (`completed`) is read: 133 such results on one machine.
+`tokenCount` is `{0, 0}` on 99.7% of bubbles and is stored as a measured zero,
+which a sum cannot tell from real usage. The Cursor CLI's `agent-transcripts`
+JSONL, including subagent transcripts, is not read at all, and it is the only
+CLI record that decodes. A CLI `store.db` in WAL mode without its `-shm` file
+opens only as `immutable=1`; an external report contradicts the CursorSchema
+statement that the CLI no longer writes it.
+
+**Work.** Derive tool status from the exit evidence; store an all-zero
+`tokenCount` as absent; add the CLI transcript as a Source kind; re-verify and
+correct CursorSchema on the CLI store.
+
+**Evidence to close.** A failed terminal command is stored as failed; token
+totals exclude absent counts; a CLI transcript ingests as a Session.
+
+**Cost.** Status and token handling need no format change; a new Source kind
+may need a vocabulary entry.
+
+### W118 -- Claude Code Record Fields Read but Unmapped
+
+**The condition.** `isApiErrorMessage`, `apiErrorStatus`, and `error` are not
+read, so an API error reply is stored as model output (68 records on one
+machine). Permission denials are matched by text rather than `toolDenialKind`.
+`interrupted` is kept but never becomes a status. The record kinds `relocated`,
+`content-replacement`, `forkedFrom`, and `history-suppression`, known to the
+published Agent SDK, have no mapping. The SDK's tool type definitions catalogue
+`toolUseResult` shapes and can check the adapter's expectations.
+
+**Work.** Map each field to an Event status or kind; add the four record kinds
+to the mapping contract; add a fixture drawn from the SDK types.
+
+**Evidence to close.** An API error is not counted as model output; a denial
+and an interruption each carry a status; the four kinds decode or are declared
+ignored with a reason.
+
+**Cost.** Mapping changes; a new status value may need a format bump.
+
+### W117 -- Codex Exact Structures
+
+**The condition.** Current Codex rollouts are paginated, and in that mode Codex
+no longer writes `patch_apply_end`, `mcp_tool_call_end`, or `web_search_end`, so
+the adapter branches for them never fire. `event_msg.item_completed`, the most
+frequent record, states `CommandExecution.exit_code` as an integer with status
+and duration -- what the output-text pattern in `_exit_code_status` guesses at.
+Its ids carry an `exec-` prefix that matched no `call_id` locally, so the join
+needs establishing first. `token_usage_record` gives exact per-response and
+per-turn usage and is unread; `token_usage.py` sets cache-write tokens to 0
+although the field exists; `task_complete.error` is dropped, so a failed turn
+reads as a completion.
+
+**Work.** Read `item_completed` and join it to its call; prefer typed exit
+codes over the text pattern; read `token_usage_record` and cache-write tokens;
+map `task_complete.error` to a failed turn. Source of truth: the published
+openai/codex protocol and rollout definitions.
+
+**Evidence to close.** On a paginated rollout, command results carry the typed
+exit code, token totals match `token_usage_record`, and a failed turn is stored
+as failed.
+
+**Cost.** Mapping changes; no format change expected.
+
+### W116 -- Codex Threads Stored as Several Rollout Files
+
+**The condition.** A Codex thread can be a base rollout plus segment files that
+share one `session_meta.id`. `codex_source.get_session_files` keeps one file per
+id, the newest, so every other file of the thread is never read. On one machine
+3 of 46 threads span 2, 2, and 3 files: 4 files dropped.
+
+**Work.** Treat the files of one id as one Session: order segments by their
+stated sequence, decode each as a Source of that Session, and deduplicate
+records repeated across segments.
+
+**Evidence to close.** A fixture thread split across files ingests every
+record once, and the three measured threads gain their missing Events.
+
+**Cost.** Adapter and source-selection change; no format change.
+
+### W115 -- Snapshot Lifecycle by Role
+
+**The condition.** Snapshots are kept for three reasons -- rollback, pinned
+baseline evidence, and sole record of Sessions whose Source is gone -- and both
+retention paths decide by generation count alone. After a format change every
+retained prior is unreadable, so no rollback target exists while the count says
+two do. Pin protection is inferred from catalog files at a configured location,
+so it lapses when those files are elsewhere. The publication trim skips a
+catalog-selected snapshot; `storage prune` refuses, so the same registry gets two
+verdicts.
+
+**Work.** One classifier shared by trim and prune, assigning each snapshot a
+role: current, rollback (the newest readable, up to `CODESS_KEEP_SNAPSHOTS`),
+pinned (recorded by baseline freeze, cleared by unfreeze), archive (one
+unreadable prior per format, until copy-forward has read it), sole record
+(holds a Session present in no newer snapshot), or expendable. Only expendable
+snapshots are deleted; pinned ones are reported as held rather than refused.
+
+**Alternatives considered.** Count per format only (fixes the format case,
+nothing else); content-based retention alone (prevents loss, ignores pins);
+time-based generations (unrelated to why snapshots matter here); no automatic
+trim (no surprise deletion, unbounded growth).
+
+**Evidence to close.** Trim and prune return the same verdict for the same
+registry; a format change leaves at least one readable rollback target or none
+claimed; a pinned snapshot survives with its catalog file absent.
+
+**Cost.** The shared classifier and per-format rollback need no format change;
+recorded pins are a registry field; sole-record detection lands with W112.
+
+### W114 -- Split `tools/`
+
+**The condition.** `tools/` mixes three audiences. Several scripts duplicate a
+`codess admin` operation and have already drifted (the evidence-inventory
+writer defaults into the checkout rather than `config.catalog_root()`);
+operator procedures in Operations.md run `python tools/<x>.py`, which works
+only from a checkout and needs the import-path insertion behind 26 E402
+findings; the rest is developer tooling.
+
+**Work.** Delete each script whose `codess admin` equivalent is confirmed at
+parity; promote inventory, snapshot inventory, discovery setup, and project
+status to subcommands; move contract, benchmark, and exploratory tooling under
+a developer directory. Defaults that describe one machine (a work-root literal
+in the review-catalog builder, a fixed time zone in the metrics demo) become
+configuration or explicit arguments.
+
+**Evidence to close.** No operator procedure invokes a script by repository
+path, and no tool default names a location or locale of one machine.
+
+**Cost.** No format change; Operations.md invocations change.
+
+### W113 -- Model-Name Resolution for Current Naming
+
+**The condition.** Labels present in the vendor logs and not yet ingested
+resolve to nothing without a vendor hint: `gpt-6-astra`, `gpt-6-sol`,
+`claude-opus-5-5`, the harness forms `opus` and `opus[1m]`, and the Bedrock
+form `us.anthropic.claude-opus-5-5-v1:0`. OpenAI's GPT-6 names grade
+capability (Luna, Sol, Astra) rather than naming a variant, and the Codex
+suffix pattern accepts any trailing token as a variant, which contradicts the
+module's own rule against guessing. A survey of 123 identifiers across vendor
+model lists, OpenRouter, HuggingFace, and leaderboards resolved 36 correctly.
+
+**Work.** A layered resolution: unwrap context and batch wrappers, strip
+platform and publisher prefixes, peel trailing settings from a closed
+vocabulary, then resolve the core by alias and by a per-line grammar held in
+data. Anything left over is unresolved. New fields: tier, context window,
+parameter size and active experts, quantization, platform, publisher, base
+model, alias kind, revision date, and resolution basis. Gradation ranks are
+scoped per generation. `test_every_observed_name_resolves` takes its list from
+the observed labels.
+
+**Evidence to close.** Every label in the current vendor logs resolves, the
+123-identifier table is a test fixture with no misparse, and an unknown suffix
+yields unresolved rather than a variant.
+
+**Cost.** A format bump for the new `model_params` columns. **Breaking** for
+`--model-line` values of letter-series lines.
+
+### W112 -- A Rebuild Must Not Lose Sessions Whose Source Is Gone
+
+**The condition.** Every format bump to date has been delivered as a rebuild
+from live vendor Sources. A Session whose Source the vendor has removed is
+carried forward by incremental ingest and dropped by a rebuild. Measured at
+format 12: no current Session has lost its Source, but 377 of 380 Claude
+Sessions are older than the vendor's 30-day default and survive only because
+the operator raised `cleanupPeriodDays`; a rebuild after one vendor prune
+would drop about 88% of stored Claude Events. Prior snapshots are kept for
+rollback, but after a format change they are in a format the code refuses, so
+the retained rollback targets cannot be read. `tools/project_inventory.py` is
+the only guard, it is advisory, and it checks path existence only.
+
+**Work, in dependency order.**
+
+1. `ingest --force` refuses to promote a staged store holding fewer Sessions
+   than the prior store for Sources neither live nor captured, unless the
+   operator accepts the loss; it reports the Session identities.
+2. Snapshot trimming and `storage prune` keep any snapshot holding a Session
+   present in no newer snapshot, instead of trimming by count alone.
+3. Captured raw objects become a Source location, so a rebuild reads
+   live-or-captured Sources and the no-migration rule holds; capture defaults
+   on for append-only JSONL, retaining the latest revision per logical Source.
+4. Until capture covers the corpus, a rebuild copies forward Sessions whose
+   Source is absent and uncaptured, marked unavailable and naming the snapshot
+   they came from.
+5. Cursor composer absence marks the Session archived rather than deleting it.
+
+**Not proposed: per-format SQL migrations.** Migrated rows keep an earlier
+decoder's interpretation while the store claims the current one, which
+CoSchema rejects; copy-forward covers the only data a rebuild loses.
+
+**Evidence to close.** A rebuild after a simulated vendor prune retains every
+prior Session, and a prior-format snapshot is either readable for copy-forward
+or not counted as a rollback target.
+
+**Cost.** Steps 1, 2, and 5 need no format change; step 3 changes raw
+retention; step 4 needs a projection per supported prior format.
+
+### W111 -- Lint and Type Gates That Cannot Absorb a Regression
+
+**The condition.** `tools/quality_report.py` compares totals against
+`schema/quality-baseline.json`, so a new finding hides behind a fixed one of a
+different rule. The pyproject comments state counts and item references that no
+longer match the measurement. `tools/` is outside the measured scope. There is
+no CI and no pre-commit configuration; the installed hook runs only the format
+agreement check.
+
+**Work.** Codify the backlog as `per-file-ignores` behind a zero gate, or keep
+a per-rule baseline that fails when any rule rises; add `tools/` with an E402
+exemption until W114 removes the import-path insertion; enable mypy strictness
+per module for modules already clean; add a pre-commit configuration and a CI
+workflow running pytest, ruff, and mypy; rewrite the pyproject comments as the
+reason each rule is selected or ignored; move the quality baseline out of
+`schema/`.
+
+**Evidence to close.** A change adding one finding of any rule fails the gate
+even when it removes another.
+
+**Cost.** No format change.
+
+### W110 -- Released Documentation, Contributor Notes, and Private Notes
+
+**The condition.** The Co*.md set is released text for operators and for
+developers adapting or contributing to Codess, yet it holds review transcripts,
+task narrative, and working notes; `experiments/` is released text while the
+assistant guidance describes it as the place for material about private
+repositories.
+
+**Work.** Classify each document by audience and stage; keep reference and
+design documents released; move curated contributor material to one tracked
+developer directory; keep raw notes and anything naming private work outside
+the released tree; trim the shipped assistant guidance to project rules; remove
+released links into unreleased files.
+
+**Evidence to close.** Every tracked document has a stated audience, no released
+document links an untracked or internal file, and the disclosure check passes
+over the whole tree.
+
+**Cost.** No format change; file moves need the operator's instruction.
+
+### W109 -- Schema Contracts as Package Data
+
+**The condition.** `model_names`, `helpers`, `schema_contract`, `snapshot`, and
+`baseline_validation` locate `schema/` as `Path(__file__).parents[2]`, and
+neither `pyproject.toml` nor a manifest packages it, so a non-editable install
+cannot load a contract.
+
+**Work.** Move the contract files into the package and load them through
+`importlib.resources`; move the developer baselines (quality, field coverage)
+out of the contract directory.
+
+`schema/coschema/manifest.json` also states a stale `reader_compatibility`
+(read 2-4, write 4) that nothing reads; correct or drop it in the same change.
+
+**Evidence to close.** A wheel installed into a clean environment runs `scan`,
+`ingest`, and `query` with no checkout present.
+
+**Cost.** No format change. **Breaking** for scripts opening `schema/` by
+repository path.
+
+### W108 -- `catalog/` Out of the Repository
+
+**The condition.** `catalog/` holds four classes: contracts (already in
+`schema/`), one CI policy used by tests, regenerable measurements read by
+nothing, and operator state of one machine. The operator state carries real
+paths. One file has no writer and no reader. The tracked selection names its
+policies by a path that the current resolver reads relative to the selection's
+own directory, so it no longer resolves where it sits.
+
+**Work.** Tests read the CI policy from `tests/fixtures/policies/` (done);
+measurements default to stdout or the store's `reports/`; operator state lives
+under `~/.codess/catalog/` with a documented initialisation; the orphaned file
+is deleted; `catalog/` leaves the tree.
+
+**Evidence to close.** No test, tool, or procedure reads `catalog/` in the
+checkout, and the directory is absent from the tracked tree.
+
+**Cost.** No format change.
+
 ### W106 -- Carry the Cursor Interaction Mode Into the Store
 
 **Landed: the read.** `_item_table_headers` reads Cursor's `ItemTable`
@@ -5246,7 +5611,7 @@ a cross-vendor comparison of agent behaviour needs.
 storage-directory hash, and a workspace recreated under a new hash breaks the
 binding. `workspaceIdentifier.uri.fsPath` states the path, which survives that,
 so it is the durable half of the same fact and is directly relevant to the
-unbound composers of [W85](#w85--composers-older-than-their-index).
+unbound composers of [W85](#w85----composers-older-than-their-index).
 
 **Evidence to close.** Both fields are columns with a stated vocabulary, a query
 can filter on the mode, and a rebuilt store carries them for every Cursor
@@ -5343,6 +5708,21 @@ the wrong condition. Fuzzing found them in the adapters because that is where
 the corpus was pointed. The same shapes reach `cursor_source`, `codex_source`,
 `walk_sessions`, `token_usage`, and the `vendor_audits` modules, none of which
 has been driven with hostile input.
+
+**Found by the hostile-input suite** (`tests/test_hostile_sources.py`, strict
+expected failures): one malformed or deeply nested Codex rollout aborts scan and
+ingest for every Project, because the session index is built once before the
+Project loop outside any guard; unreadable rollouts and Claude Source
+directories are skipped silently and the run reports no failed Source; a
+deeply nested Claude record fails the whole Project because lineage is read
+outside the per-Source guard; a malformed or unreadable `sessions-index.json`
+removes every Project under its work root from scan output; a FIFO named
+`*.jsonl` blocks the Codex index; line reads in the Claude and Codex readers are
+unbounded; `--no-progress` suppresses the warning that explains exit 1;
+expected `OSError` prints a traceback and is classed as record mapping; a
+corrupt `workspace.json` is skipped with no diagnostic. Three `subprocess`
+call sites do not catch `TimeoutExpired`, and a child ingest killed by signal
+leaves its Cursor cohort temporary directory behind, which can reach about 10 GB.
 
 **The measured blast radius is what sets the priority.** One bubble holding a
 string where an object belonged aborted a whole global-store read: the Project
@@ -5505,7 +5885,7 @@ and appears nowhere in the payload. The `event_kind` vocabulary is unchanged, so
 no stored query breaks.
 
 **Verified in one store set**, which is the condition that made the item worth
-opening: proj-a holds 12 Codex rows marked `summary` and 6,374 Cursor rows
+opening: P1 holds 12 Codex rows marked `summary` and 6,374 Cursor rows
 marked `full` under one Event kind, now distinguishable from the common fields
 alone.
 
@@ -5805,7 +6185,7 @@ Projects, 292,733 Events, **210 s** -- read from the `project.done` and
 **The Event counts moved between the two rebuilds, and the direction is not
 uniform.** Corpus totals went 283,871 to 292,733, +8,862 across 12 Projects --
 ordinary new work recorded between the two runs. One Project went the other way:
-proj-a lost 2,722 Events, all in Cursor, whose Session count fell 29 to 26.
+P1 lost 2,722 Events, all in Cursor, whose Session count fell 29 to 26.
 
 **Two of the three Sessions were never Sessions, and the vendor did write in
 between -- the check that appeared to rule it out was reading the wrong file.**

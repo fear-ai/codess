@@ -93,8 +93,10 @@ def fail_configuration() -> int:
     otherwise takes two runs to diagnose, and the second is invisible until the
     first is fixed.
     """
-    from codess.config import validate_config
+    from codess.config import removed_env_warnings, validate_config
 
+    for message in removed_env_warnings():
+        warn(message)
     errors = validate_config()
     for message in errors:
         fail(message)

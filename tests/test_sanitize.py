@@ -116,3 +116,28 @@ def test_protect_csv_cell_blocks_formula_prefixes(prefix):
 
 def test_protect_csv_cell_preserves_numeric_values():
     assert protect_csv_cell(-1) == -1
+
+
+def test_a_keyed_secret_in_structure_is_withheld():
+    """`api_key=<value>` is redacted in text, so its member form is too.
+
+    In structure the key and the value are separate strings and neither matches
+    a pattern alone.
+    """
+    from codess.sanitize import redact_value, sanitize_value
+
+    value = {"api_key": "a" * 24, "note": "plain", "nested": [{"api-key": "b" * 24}]}
+    expected = {"api_key": "[REDACTED]", "note": "plain", "nested": [{"api-key": "[REDACTED]"}]}
+    assert redact_value(value, True) == expected
+    assert sanitize_value(value, True) == expected
+    assert sanitize_value(value, False) == value
+
+
+def test_redact_value_is_identity_when_disabled():
+    from codess.sanitize import redact_value
+
+    value = {"text": "sk-" + "x" * 24 + "\x1b[31m"}
+    assert redact_value(value, False) is value
+    assert redact_value(value, True) == {"text": "[REDACTED]\x1b[31m"}, (
+        "redaction only; text sanitization is not applied"
+    )

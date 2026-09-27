@@ -103,6 +103,23 @@ def test_a_clean_configuration_reports_nothing(monkeypatch, capsys) -> None:
     assert capsys.readouterr().err == ""
 
 
+def test_a_removed_environment_variable_is_reported(monkeypatch, capsys) -> None:
+    """A removed name is not read, so a run would proceed on the default unwarned."""
+    monkeypatch.setattr("codess.config.validate_config", lambda: [])
+    monkeypatch.setenv("CODESS_REGISTRY", "/home/user/work/registry")
+    monkeypatch.delenv("CODESS_STORE_ROOT", raising=False)
+    monkeypatch.setenv("CODESS_MAX_SOURCE_BYTES", "1024")
+    monkeypatch.setenv("CODESS_MAX_TRANSCRIPT_BYTES", "2048")
+
+    assert fail_configuration() == 0, "a warning does not stop the run"
+    assert capsys.readouterr().err.splitlines() == [
+        "codess: warning: CODESS_REGISTRY=/home/user/work/registry is not read, "
+        "replaced by CODESS_STORE_ROOT: set CODESS_STORE_ROOT and unset CODESS_REGISTRY",
+        "codess: warning: CODESS_MAX_SOURCE_BYTES=1024 is not read, "
+        "replaced by CODESS_MAX_TRANSCRIPT_BYTES: unset CODESS_MAX_SOURCE_BYTES",
+    ]
+
+
 @pytest.mark.parametrize("name", COMMAND_MODULES)
 def test_every_command_module_imports_the_channel(name: str) -> None:
     """A module reporting failures reaches them the one way.

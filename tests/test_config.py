@@ -1,5 +1,9 @@
 """Tests for config paths and options."""
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -168,6 +172,44 @@ class TestRegistryArgResolution:
         other = tmp_path / "other"
         args = SimpleNamespace(store_root=str(other))
         assert resolve_store_root(args) == other
+
+
+def _work_root_under(home: Path, **overrides: str) -> dict:
+    """Import `config` in a fresh interpreter under `home` and report the work root."""
+    env = {key: value for key, value in os.environ.items() if key != "CODESS_WORK_ROOT"}
+    env.update(HOME=str(home), **overrides)
+    code = (
+        "import json, codess.config as c;"
+        "print(json.dumps({'root': str(c.DEFAULT_WORK), 'errors': c.validate_config()}))"
+    )
+    result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+    return json.loads(result.stdout)
+
+
+class TestWorkRoot:
+    """``CODESS_WORK_ROOT`` supplies ``DEFAULT_WORK``, the anchor its readers import."""
+
+    def test_unset_defaults_to_work_under_home(self, tmp_path):
+        assert _work_root_under(tmp_path)["root"] == str(tmp_path / "Work")
+
+    def test_the_variable_replaces_the_default(self, tmp_path):
+        chosen = tmp_path / "projects"
+        assert _work_root_under(tmp_path, CODESS_WORK_ROOT=str(chosen))["root"] == str(chosen)
+
+    def test_a_tilde_expands_against_home(self, tmp_path):
+        assert _work_root_under(tmp_path, CODESS_WORK_ROOT="~/src")["root"] == str(tmp_path / "src")
+
+    def test_a_relative_value_is_refused(self, tmp_path):
+        errors = _work_root_under(tmp_path, CODESS_WORK_ROOT="src")["errors"]
+        assert [e for e in errors if e.startswith("CODESS_WORK_ROOT='src'")]
+
+    def test_the_readers_share_one_anchor(self):
+        import codess.config as config
+        import codess.path_label as path_label
+
+        assert path_label.DEFAULT_WORK is config.DEFAULT_WORK
+        # conftest points the variable at the session's isolated tree before `config` is imported.
+        assert config.DEFAULT_WORK.name == "work_root"
 
 
 # --- closed vocabulary: raw modes -------------------------------------------

@@ -1295,3 +1295,69 @@ class TestStateTransitionRecord:
         set_project_selection_state(registry, project_id, "excluded")
         disposition = get_project_entry(registry, project_id)["catalog_disposition"]
         assert "previous_state" not in disposition
+
+
+def _catalog_with_legacy_binding(registry: Path, project: Path) -> dict:
+    """A catalog whose one binding is spelled as before CoSchema format 11."""
+    binding = ensure_project_binding(registry, project)
+    catalog_path = registry / "projects.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    entry = next(
+        item for item in catalog["projects"]
+        if item["project_id"] == binding["project_id"]
+    )
+    entry["workspace_bindings"] = [{
+        "source_system_id": "cursor.composer",
+        "workspace_id": "legacy-ws",
+        "relation_kind": "local_workspace_path_binding",
+        "source_project_path": str(project.resolve()),
+        "path_obsolete": False,
+        "target_location_id": binding["location_id"],
+        "selection_state": "approved",
+    }]
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    return binding
+
+
+def test_a_binding_stored_under_the_old_key_survives_a_rewrite(tmp_path):
+    """A catalog binding spelled `source_system_id` is read and kept.
+
+    Registering another workspace rewrites the catalog; a reader of the current
+    name alone dropped the legacy binding from that rewrite.
+    """
+    registry = tmp_path / "registry"
+    project = tmp_path / "project"
+    project.mkdir()
+    binding = _catalog_with_legacy_binding(registry, project)
+
+    register_workspace_bindings(
+        registry, binding["project_id"], binding["location_id"], {"new-ws"},
+        source_project_path=str(project.resolve()),
+    )
+
+    stored = json.loads((registry / "projects.json").read_text(encoding="utf-8"))
+    entry = next(
+        item for item in stored["projects"]
+        if item["project_id"] == binding["project_id"]
+    )
+    assert [item["workspace_id"] for item in entry["workspace_bindings"]] == [
+        "legacy-ws", "new-ws",
+    ]
+    for item in entry["workspace_bindings"]:
+        assert item["source_system_key"] == "cursor.composer"
+        assert "source_system_id" not in item, "rewritten under the current name"
+
+
+def test_a_binding_stored_under_the_old_key_survives_a_rebind(tmp_path):
+    registry = tmp_path / "registry"
+    project = tmp_path / "project"
+    project.mkdir()
+    binding = _catalog_with_legacy_binding(registry, project)
+
+    ensure_project_binding(registry, project)
+
+    entry = get_project_entry(registry, binding["project_id"])
+    assert [
+        (item["source_system_key"], item["workspace_id"])
+        for item in entry["workspace_bindings"]
+    ] == [("cursor.composer", "legacy-ws")]

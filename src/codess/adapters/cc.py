@@ -24,7 +24,7 @@ from codess.mapping import (
     as_mapping,
     is_decodable_record,
 )
-from codess.sanitize import apply_sanitization, sanitize_value
+from codess.sanitize import apply_sanitization, redact_value, sanitize_value
 from codess.timeval import epoch_ms
 from codess.tool_result_status import application_failure_evidence
 
@@ -1372,7 +1372,7 @@ def normalize_user(
                 # The structure is carried so a reader can select on stderr or find
                 # an interrupted result without re-parsing the text.
                 tool_output_structured=(
-                    record.get("toolUseResult")
+                    redact_value(record["toolUseResult"], opts.get("redact", False))
                     if isinstance(record.get("toolUseResult"), (dict, list))
                     else None
                 ),

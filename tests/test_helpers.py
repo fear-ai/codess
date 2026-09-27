@@ -195,7 +195,7 @@ class TestSlugEncodingHasOneImplementation:
         decoding consults the filesystem. The fallback tries one rejoining,
         of the final two segments, which covers a hyphenated project
         directory under an unhyphenated parent. That is the observed real
-        case: `/home/user/work/project`.
+        case: `/home/user/work/group/name-suffix`.
         """
         import tempfile
 

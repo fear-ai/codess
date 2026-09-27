@@ -8,20 +8,27 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codess.baseline_validation import write_json_atomic
 from codess.codex_parent_audit import audit_parentage
+from codess.evidence import codex_session_roots
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--active", type=Path, default=Path.home() / ".codex/sessions")
-    parser.add_argument("--archive", type=Path, default=Path.home() / ".codex/archived_sessions")
+    configured = dict(codex_session_roots())
+    parser.add_argument("--active", type=Path, default=configured["active"])
+    parser.add_argument(
+        "--archive", type=Path, default=configured.get("archive"),
+        help="the archived sessions directory (default: the configured one, if any)",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    report = audit_parentage([("active", args.active), ("archive", args.archive)])
+    roots = [("active", args.active)]
+    if args.archive is not None:
+        roots.append(("archive", args.archive))
+    report = audit_parentage(roots)
     if args.output:
         write_json_atomic(args.output, report)
     print(json.dumps({

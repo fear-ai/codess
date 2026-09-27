@@ -22,6 +22,7 @@ from codess.hashing import codess_canonical_hash
 from codess.resources import storage_usage
 from codess.snapshot import (
     SnapshotError,
+    catalog_entries,
     current_snapshot,
     raw_manifest_claim,
     read_manifest,
@@ -176,16 +177,13 @@ def _catalog_references(paths: list[Path], current_ids: set[str], delete_ids: se
     for path in paths:
         if not path.exists():
             continue
-        value = json.loads(path.read_text(encoding="utf-8"))
-        entries = value.get("projects", []) if isinstance(value, dict) else []
+        entries = catalog_entries(path)
         # `str | int` by construction: a path beside three counters. Inference
         # picks `object` for the union, which then refuses `+= 1`.
         item: dict[str, Any] = {
             "path": str(path), "current": 0, "stale": 0, "historical": 0,
         }
         for entry in entries:
-            if not isinstance(entry, dict):
-                continue
             snapshot_id = entry.get("snapshot_id")
             parent_id = entry.get("parent_snapshot_id")
             if snapshot_id in current_ids:
@@ -338,6 +336,28 @@ def build_retention_plan(
     )
     current_set = set(current)
     delete_snapshots = _superseded_beyond_total(all_snapshots, current_set, total)
+    # A superseded snapshot inside the retained total is a rollback target, so
+    # the raw objects its manifest names survive with it. An unreadable
+    # manifest blocks the plan: what it references cannot be known, and
+    # deleting on that basis would leave the snapshot pointing at nothing.
+    delete_set = set(delete_snapshots)
+    retained = [
+        path for path in all_snapshots
+        if path not in current_set and path not in delete_set
+    ]
+    for snapshot in retained:
+        try:
+            records = _raw_records(snapshot)
+        except (OSError, RuntimeError) as exc:
+            errors.append(
+                f"retained snapshot raw manifest unreadable: {exc}: "
+                "repair or remove that snapshot before pruning"
+            )
+            continue
+        raw_keep.update(
+            record["object_relpath"] for record in records
+            if isinstance(record.get("object_relpath"), str)
+        )
     objects_root = raw_root / "objects"
     all_objects = sorted(path for path in objects_root.rglob("*.zst") if path.is_file()) if objects_root.exists() else []
     delete_objects = [
@@ -398,8 +418,10 @@ def build_retention_plan(
         "errors": errors,
         "plan_digest": plan_digest,
         "keep": {
-            "snapshots": len(current), "raw_objects": len(raw_keep),
+            "snapshots": len(current) + len(retained),
+            "raw_objects": len(raw_keep),
             "snapshot_ids": sorted(current_ids),
+            "retained_snapshot_ids": sorted(path.name for path in retained),
         },
         "delete": {
             "snapshots": len(delete_snapshots), "raw_objects": len(delete_objects),
@@ -475,18 +497,20 @@ def apply_retention_plan(
         for root, dirs, files in os.walk(raw_objects_root, topdown=False):
             if not dirs and not files:
                 Path(root).rmdir()
+    # The same total as the plan just applied: re-planning at the default would
+    # count the snapshots an explicit larger total retained as candidates, and
+    # report a completed prune as failed.
     after = build_retention_plan(
         registry, reference_catalogs=reference_catalogs,
         include_working_archives=include_working_archives,
+        keep_total=plan["keep_total"],
         allow_large_comparison_revisions=allow_large_comparison_revisions,
     )
-    if (
+    remaining = (
         after["delete"]["snapshots"]
-        or after["delete"]["raw_objects"]
-        or after["delete"]["working_archives"]
-        or not after["safe_to_apply"]
-    ):
-        raise RuntimeError("retention postcondition failed; inspect the receipt and registry")
+        + after["delete"]["raw_objects"]
+        + after["delete"]["working_archives"]
+    )
     # One application, one instant. The receipt's `applied_at` and the file it
     # is written to are two renderings of the same moment; reading the clock
     # twice would name the file a different instant than its own contents
@@ -515,6 +539,7 @@ def apply_retention_plan(
         # never there.
         "kept": {
             "snapshot_ids": plan["keep"]["snapshot_ids"],
+            "retained_snapshot_ids": plan["keep"]["retained_snapshot_ids"],
             "snapshots": plan["keep"]["snapshots"],
             "raw_objects": plan["keep"]["raw_objects"],
         },
@@ -532,12 +557,24 @@ def apply_retention_plan(
             "raw_allocated_bytes": plan["delete"]["raw_objects_usage"]["allocated_bytes"],
             "working_archive_allocated_bytes": plan["delete"]["working_archives_usage"]["allocated_bytes"],
         },
-        "postcondition": {"safe_to_apply": True, "remaining_candidates": 0},
+        "postcondition": {
+            "safe_to_apply": after["safe_to_apply"],
+            "remaining_candidates": remaining,
+            "errors": after["errors"],
+        },
     }
     target = receipt_path or (
         Path(plan["registry"]) / "receipts" / "retention"
         / f"{applied_at.strftime('%Y%m%dT%H%M%S.%fZ')}.json"
     )
+    # Written before the postcondition verdict: the deletions have happened
+    # either way, and a failed postcondition is exactly when the record of what
+    # was removed is needed.
     write_json_atomic(target, receipt)
     receipt["receipt_path"] = str(target)
+    if remaining or not after["safe_to_apply"]:
+        raise RuntimeError(
+            f"retention postcondition failed: {remaining} candidates remain, "
+            f"errors {after['errors']}: inspect receipt {target}"
+        )
     return receipt

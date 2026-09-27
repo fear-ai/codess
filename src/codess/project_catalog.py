@@ -161,6 +161,28 @@ def _machine_id(store_root: Path) -> str:
     return value
 
 
+def _stored_bindings(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """A catalog entry's workspace bindings, each spelled `source_system_key`.
+
+    A catalog written before CoSchema format 11 names the field
+    `source_system_id`. Read through `link_source_system`, as source links are,
+    and rewritten under the current name, so the next save persists one
+    spelling: a reader of the current name alone drops every such binding, and
+    the save that follows deletes it from the catalog.
+    """
+    bindings: list[dict[str, Any]] = []
+    for item in entry.get("workspace_bindings", []):
+        if not isinstance(item, dict):
+            continue
+        binding = dict(item)
+        source_system_key = link_source_system(binding)
+        binding.pop("source_system_id", None)
+        if source_system_key is not None:
+            binding["source_system_key"] = source_system_key
+        bindings.append(binding)
+    return bindings
+
+
 def load_catalog(store_root: Path) -> dict[str, Any]:
     path = _catalog_path(store_root)
     if not path.exists():
@@ -170,6 +192,9 @@ def load_catalog(store_root: Path) -> dict[str, Any]:
         raise ValueError("unsupported project catalog format")
     if not isinstance(value.get("projects"), list):
         raise ValueError("project catalog projects must be a list")
+    for entry in value["projects"]:
+        if isinstance(entry, dict) and "workspace_bindings" in entry:
+            entry["workspace_bindings"] = _stored_bindings(entry)
     return value
 
 
@@ -393,11 +418,9 @@ def _apply_source_links(
     Returns the sorted workspace bindings and path aliases.
     """
     workspaces = {
-        (item.get("source_system_key"), item.get("workspace_id")): dict(item)
-        for item in entry.get("workspace_bindings", [])
-        if isinstance(item, dict)
-        and item.get("source_system_key")
-        and item.get("workspace_id")
+        (item.get("source_system_key"), item.get("workspace_id")): item
+        for item in _stored_bindings(entry)
+        if item.get("source_system_key") and item.get("workspace_id")
     }
     for workspace in workspaces.values():
         workspace.setdefault("path_obsolete", False)
@@ -1101,9 +1124,9 @@ def register_workspace_bindings(
     if entry is None:
         raise ValueError(f"project is absent from catalog: {project_id}")
     bindings = {
-        (item.get("source_system_key"), item.get("workspace_id")): dict(item)
-        for item in entry.get("workspace_bindings", [])
-        if isinstance(item, dict) and item.get("source_system_key") and item.get("workspace_id")
+        (item.get("source_system_key"), item.get("workspace_id")): item
+        for item in _stored_bindings(entry)
+        if item.get("source_system_key") and item.get("workspace_id")
     }
     for workspace_id in sorted(str(value) for value in workspace_ids if value):
         key = ("cursor.composer", workspace_id)

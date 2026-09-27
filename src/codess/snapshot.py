@@ -24,6 +24,7 @@ from codess.config import (
     SNAPSHOTS_DIR,
     STORE_DIR,
     WORKTREE_DIGEST_MAX_BYTES,
+    catalog_root,
 )
 from codess.fileio import (
     HashMismatchError,
@@ -736,8 +737,29 @@ def superseded_beyond_depth(prior: list[str], keep_total: int) -> list[str]:
     return prior if keep_prior == 0 else prior[:max(0, len(prior) - keep_prior)]
 
 
+def reference_catalog_paths() -> list[Path]:
+    """The baseline catalogs whose selected snapshots no retention path removes."""
+    root = catalog_root()
+    return [root / "approved-baselines.json", root / "reviewed-baselines.json"]
+
+
+def catalog_entries(path: Path) -> list[dict[str, Any]]:
+    """The per-Project entries of one reference catalog; none when it is absent.
+
+    Raises on a catalog that exists and does not parse: a selection that cannot
+    be read cannot be honoured, so neither retention path may delete as if it
+    selected nothing.
+    """
+    if not path.exists():
+        return []
+    value = json.loads(path.read_text(encoding="utf-8"))
+    entries = value.get("projects", []) if isinstance(value, dict) else []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
 def _trim_prior_snapshots(
     snapshots: Path, *, keep_current: str, keep_total: int | None = None,
+    reference_catalogs: list[Path] | None = None,
 ) -> list[str]:
     """Remove superseded snapshots beyond the configured limit.
 
@@ -747,20 +769,46 @@ def _trim_prior_snapshots(
     trimming first could leave a Project with no readable store at all.
 
     `CODESS_KEEP_SNAPSHOTS` counts snapshots kept, current included: the default
-    of 2 leaves the snapshot just published and one rollback target. 0 keeps
+    of 3 leaves the snapshot just published and two rollback targets. 0 keeps
     every snapshot, which an operator auditing a sequence of rebuilds needs.
 
     Names sort chronologically because a snapshot id begins with its creation
     timestamp, so the oldest are the ones removed. A directory that cannot be
     removed is reported rather than raised: retention is not the operation the
     caller asked for.
+
+    A snapshot a reference catalog selects (`reference_catalog_paths` by
+    default) is kept and is not counted against the total: an approved or
+    reviewed baseline is evidence the operator chose, and the rollback depth is
+    a separate allowance. A catalog that exists and cannot be read skips the
+    trim, since what it selects is unknown. `codess admin storage prune` refuses the
+    same deletion rather than skipping it, because a prune is the operation the
+    caller asked for.
     """
     # No local special case: 0 means keep everything, and that is decided once
     # in `superseded_beyond_depth` rather than here and again in the prune.
     total = KEEP_SNAPSHOTS if keep_total is None else keep_total
+    catalogs = (
+        reference_catalog_paths() if reference_catalogs is None
+        else reference_catalogs
+    )
+    selected: set[str] = set()
+    for catalog in catalogs:
+        try:
+            entries = catalog_entries(catalog)
+        except (OSError, ValueError) as exc:
+            emit_named(
+                "snapshot.trim_failed", catalog=str(catalog),
+                error=type(exc).__name__,
+            )
+            return []
+        selected.update(
+            entry["snapshot_id"] for entry in entries
+            if isinstance(entry.get("snapshot_id"), str)
+        )
     prior = [
         entry.name for entry in snapshot_generations(snapshots)
-        if entry.name != keep_current
+        if entry.name != keep_current and entry.name not in selected
     ]
     removed = []
     for name in superseded_beyond_depth(prior, total):

@@ -3005,10 +3005,10 @@ invocation it belongs to, with none unlinked. That is the pairing the
 **Widened to every local Project.** The three-Project pass was then extended to
 every real Project the machine holds, excluding only CodeSess itself and the two
 used above: **zero classification inconsistencies across every published store
-set.** The set deliberately includes awkward roots -- `~/.codex` and
-`~/.proj-s-repo/workspace` are themselves Projects with Sessions -- and every
-ingest completed without error. [CoTasks](CoTasks.md) carries the corpus scale
-the pass ran against, which grows as work is ingested.
+set.** The set deliberately includes awkward roots -- `~/.codex` and a
+third-party agent's `~/.<agent>/workspace` are themselves Projects with
+Sessions -- and every ingest completed without error. [CoTasks](CoTasks.md)
+carries the corpus scale the pass ran against, which grows as work is ingested.
 
 `file-history-delta` is now decoded. It is harness product state like its
 snapshot sibling, retaining the message and snapshot identifiers it links

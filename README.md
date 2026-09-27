@@ -1,3 +1,5 @@
+# Codess
+
 <p align="center">
   <img
     src="prism34.png"
@@ -6,16 +8,11 @@
   >
 </p>
 
-# Codess
 
-Codess discovers, decodes, normalizes, and searches local coding-assistant
-Sessions from Claude Code, Codex, and Cursor. It preserves exact vendor evidence
-while providing regular Project, Session, Event, tool, model, and Artifact
-structures that can be queried together.
+Codess discovers, decodes, normalizes, and supports ad-hoc content and relationship searches for actual session artifacts of local LLM AI coding harnesses Claude Code, Codex, and Cursor.
+It preserves exact vendor evidence, while providing regular Project, Session, Event, tool, model, and Artifact structures that can be queried together.
 
-Use Codess to find work associated with a repository, reconstruct an Interaction,
-inspect tool or model activity, compare source systems, and supply structured
-inputs to later research or assessment.
+Use Codess to find work associated with a repository, reconstruct an Interaction, inspect tool or model activity, compare source systems, and supply structured inputs to later research or assessment.
 
 ## Choose a Starting Point
 
@@ -284,6 +281,11 @@ local paths, credentials, and other private material.
   copy.
 - Content bounds prevent accidental ingestion or display of unbounded records.
 - Redaction and content policies are available but do not replace review.
+  `--redact` (`CODESS_REDACT`) applies the configured patterns to every stored
+  form of Session content: text columns, structured tool input and output, and
+  vendor evidence kept in Event metadata. Raw capture keeps Source bytes
+  unredacted, so a registry holding captured raw objects is not made shareable
+  by `--redact`.
 - Export or third-party indexing must be explicitly selected.
 - `.codess/` data should not be committed to a Project repository.
 
@@ -318,7 +320,7 @@ nonzero when any is, so it gates those operations; see
 | [Codex Source Schema](CodexSchema.md) | Codex storage, records, selective access, mapping, and limitations |
 | [Cursor Source Schema](CursorSchema.md) | Cursor storage, records, selective access, mapping, and limitations |
 | `schema/` | Executable SQL, JSON, mapping, policy, and fixture contracts |
-| `catalog/` and the configured registry | Project selections, source bindings, observations, reports, and receipts |
+| The machine store, `~/.codess/` | Project selections and policies (`catalog/`, or `CODESS_CATALOG`), source bindings, observations, reports, and receipts; the tracked `catalog/policies/ci-fixture.json` is a test fixture |
 | `tools/` | Development and diagnosis scripts, described in [Repository Tools](Operations.md#repository-tools) |
 | `experiments/` | Bounded investigations that are not part of the accepted design or implementation plan |
 

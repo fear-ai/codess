@@ -31,7 +31,7 @@ adapters actually perform, without weakening the pipeline's guarantees:
 - string surgery (split multi-line tool output, trim, normalize timestamps);
 - table lookup (status/role/event-kind vocabularies; tool-name canonicalization);
 - **loud failure on unmappable input** — never a silent null (the field-state
-  rule, [Designs §4.1](../Designs.md#41-field-states-and-admission));
+  rule, [Designs, Field States and Admission](../Designs.md#field-states-and-admission));
 - and it must not force us to abandon host functions we already require
   (deterministic global-ID hashing, JSON canonicalization, bounded redaction).
 
@@ -39,12 +39,12 @@ adapters actually perform, without weakening the pipeline's guarantees:
 
 The evaluation criteria are read off Codess's non-negotiable contracts so the
 result is authoritative rather than a matter of taste:
-- **Never-guess / diagnose** ([Designs §4.1](../Designs.md#41-field-states-and-admission)):
+- **Never-guess / diagnose** ([Designs, Field States and Admission](../Designs.md#field-states-and-admission)):
   a miss is a diagnostic, not
   a guessed value or a silent null.
 - **Never crash on input** (see §9): no record, however malformed, may abort the
   program; the pipeline reports and continues.
-- **Exact provenance** ([CoSchema §6](../CoSchema.md#6-types-and-classification)):
+- **Exact provenance** ([CoSchema, Mapping Contract](../CoSchema.md#mapping-contract)):
   every emitted value keeps
   `mapping_rule` + `mapping_trace`; a DSL must preserve which rule/path produced
   a value.
@@ -71,8 +71,8 @@ before any test runs.
 ## 5. Test Automation Methodology
 
 The method — build the real mapping in each candidate, grade against one shared
-golden fixture, probe failure behavior — is adopted from the source project at
-`/home/user/work/project` (its decision 004; see §11). Adapted to Codess:
+golden fixture, probe failure behavior — is adopted from a separate schema project by the
+same author (its decision 004; see §11). Adapted to Codess:
 - **Workload:** a real adapter mapping (e.g. a Cursor `toolFormerData` →
   `tool_invocations`/`tool_results` rule, or a Claude `user`-envelope →
   prompt-vs-context classification), not a toy.
@@ -137,9 +137,9 @@ and never abort. The resilience requirement is mainline; the DSL is postponed.
 
 ## 11. Method Provenance
 
-The shootout methodology is borrowed from `/home/user/work/project`
-(`docs/decisions/004-transform-language.md`, `experiments/transform-languages/`).
-That is a *separate project* (same author) targeting CRM vendors
+The shootout methodology is borrowed from a separate schema project
+(`docs/decisions/004-transform-language.md`, `experiments/transform-languages/`)
+by the same author, targeting CRM vendors
 (Salesforce/HubSpot/Shopify/MS Graph/Stripe); Codess targets AI coding harnesses
 (Claude/Codex/Cursor) and borrows only the evaluation discipline, not the
 "adapters are the product" framing, which is the Schema project's thesis and does

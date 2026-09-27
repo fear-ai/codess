@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import io
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -616,9 +617,14 @@ class TestClock:
     """One anchor, ticks thereafter, resolution only at flush."""
 
     def test_a_tick_resolves_to_a_wall_instant(self):
+        """A tick resolves to the wall clock at the moment it was taken.
+
+        Compared with the wall clock now rather than with the anchor: the anchor
+        is taken at import, and a suite reaches this test any time after that.
+        """
         now = clock.tick()
         resolved = clock.wall_ns(now)
-        assert abs(resolved - clock.ANCHOR_WALL_NS) < 60 * 1_000_000_000
+        assert abs(resolved - time.time_ns()) < 5 * 1_000_000_000
 
     def test_a_duration_never_involves_the_anchor(self):
         """A duration derived from resolved wall instants would reintroduce the

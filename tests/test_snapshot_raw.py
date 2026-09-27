@@ -1080,3 +1080,60 @@ class TestPriorSnapshotsAreTrimmed:
 
         assert removed == []
         assert len(list(tmp_path.iterdir())) == 3
+
+    def test_a_catalog_selected_snapshot_survives_uncounted(self, tmp_path):
+        """A snapshot an approved or reviewed catalog selects is never trimmed.
+
+        It is not counted against the total either, so the rollback depth the
+        operator configured is still met by unselected snapshots.
+        """
+        snapshots = tmp_path / "snapshots"
+        snapshots.mkdir()
+        names = self._snapshots(snapshots, 5)
+        catalog = tmp_path / "approved-baselines.json"
+        catalog.write_text(json.dumps({
+            "projects": [{"snapshot_id": names[0], "parent_snapshot_id": names[1]}],
+        }))
+
+        removed = snapshot._trim_prior_snapshots(
+            snapshots, keep_current=names[-1], keep_total=2,
+            reference_catalogs=[catalog],
+        )
+
+        assert removed == names[1:3], "a parent reference alone does not protect"
+        remaining = sorted(entry.name for entry in snapshots.iterdir())
+        assert remaining == [names[0], names[3], names[4]]
+
+    def test_an_unreadable_catalog_skips_the_trim(self, tmp_path):
+        snapshots = tmp_path / "snapshots"
+        snapshots.mkdir()
+        names = self._snapshots(snapshots, 4)
+        catalog = tmp_path / "reviewed-baselines.json"
+        catalog.write_text("{not json")
+
+        removed = snapshot._trim_prior_snapshots(
+            snapshots, keep_current=names[-1], keep_total=1,
+            reference_catalogs=[catalog],
+        )
+
+        assert removed == []
+        assert len(list(snapshots.iterdir())) == 4
+
+    def test_the_default_catalogs_are_read_from_the_catalog_root(
+        self, tmp_path, monkeypatch,
+    ):
+        snapshots = tmp_path / "snapshots"
+        snapshots.mkdir()
+        names = self._snapshots(snapshots, 3)
+        catalog_dir = tmp_path / "catalog"
+        catalog_dir.mkdir()
+        (catalog_dir / "reviewed-baselines.json").write_text(
+            json.dumps({"projects": [{"snapshot_id": names[0]}]}),
+        )
+        monkeypatch.setenv("CODESS_CATALOG", str(catalog_dir))
+
+        removed = snapshot._trim_prior_snapshots(
+            snapshots, keep_current=names[-1], keep_total=1,
+        )
+
+        assert removed == [names[1]]

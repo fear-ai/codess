@@ -14,10 +14,10 @@ Codess requires:
 - write access to the machine store, normally `~/.codess/` (see
   [Two `.codess` Directories](#two-codess-directories)).
 
-`pyproject.toml` states the supported floor (`>=3.11`) and `.python-version`
-states the interpreter this repository is developed and tested against. With
-pyenv installed the second is what `python` resolves to inside the tree; without
-it the file is inert and the floor still applies.
+`pyproject.toml` states the supported floor (`requires-python = ">=3.11"`); that
+is the only interpreter requirement the repository carries. `.python-version` is
+gitignored: an operator using pyenv may create one locally to select an
+interpreter inside the tree, and without it the floor still applies.
 
 **Use the interpreter, not a shell alias, in any script.** `python` is commonly
 an alias or a pyenv shim that a non-interactive subshell does not inherit, so a
@@ -37,7 +37,7 @@ Both appear in every operation below, so it is worth separating them once.
 |---|---|---|
 | Holds | The Project's working stores, its current pointer, ingest state, and the last report | Published store sets, one per Project, plus receipts, reports, retention records, raw capture, and the machine id |
 | Scope | One Project | One machine |
-| Selected by | `--dir` | `--store` (`--registry` is the older spelling and still works) |
+| Selected by | `--dir` | `--store` (`--registry` was removed; see [CHANGELOG](CHANGELOG.md)) |
 | Removable | Yes -- deleting it costs a re-ingest | Yes, but it holds the only copy of every published store |
 
 A Project's `current.json` **points into the machine store**: the working store
@@ -49,8 +49,9 @@ complete new store set rather than a delta, so a Project ingested repeatedly
 accumulates one full copy per run.
 
 `CODESS_KEEP_SNAPSHOTS` bounds that: it counts snapshots kept, current
-included, and defaults to **2** -- the snapshot just published and one rollback
-target. **1 keeps only the current** and **0 keeps every snapshot**, which is
+included, and defaults to **3** -- the snapshot just published and two rollback
+targets, so one format migration still leaves a pre-migration copy. **1 keeps
+only the current** and **0 keeps every snapshot**, which is
 what an operator auditing a sequence of rebuilds needs. Trimming runs
 after the new snapshot is published, so an interruption leaves more snapshots
 than asked for rather than none -- the failure that matters is a Project with no
@@ -70,7 +71,7 @@ superseded, and `codess storage prune` to apply a retention plan to the rest.
 | File | Answers |
 |---|---|
 | `projects.json` | Which Projects exist, their identity, locations, and workspace bindings |
-| `ingested_projects.json` | What has been scanned, ingested, or queried for each path, and when |
+| `projects_state.json` | What has been scanned, ingested, or queried for each path, and when |
 
 The first is keyed by Project identity and is the registry proper; the second is
 keyed by path and records activity. A path can appear in the second without
@@ -200,16 +201,9 @@ Sessions belonging to a repository beside it.
 layout checks in `registry_check` do not run, and the command reports zero
 findings -- which reads as clean. It states which checks were skipped and the
 variable that enables them, so the two are distinguishable. Run
-`tools/setup_discovery.py --propose` to see what the running process resolved
-and to get candidates from the operator's own tree.
-
-**A vendored clone is indistinguishable from a Project by inspection.** Both are
-directories with a `.git` and a remote; nothing on disk says which one the
-operator develops. So the exclusion list is where that judgment lives, and
-leaving it empty does not mean "no exclusions apply" -- it means the judgment
-has not been recorded. Measured consequence on an unconfigured machine: a
-directory of third-party clones read for reference was ranked as a candidate
-Project for Sessions belonging to a repository beside it.
+`tools/setup_discovery.py` to see what the running process resolved and to get
+candidates from the operator's own tree; proposing is the default, and
+`--no-propose` reports the configuration alone.
 
 **A linked git worktree is a related Project, not a separate one.** Where a
 repository has worktrees, each has its own directory and its own `.git` *file*
@@ -253,10 +247,10 @@ Move existing stores aside, keeping them:
 mv /path/to/project/.codess /path/to/project/.codess.old
 
 # Every Project the machine store has recorded.
-python - <<'PY'
+python3 - <<'PY'
 import json, shutil
 from pathlib import Path
-registry = Path.home() / ".codess" / "ingested_projects.json"
+registry = Path.home() / ".codess" / "projects_state.json"
 for entry in json.loads(registry.read_text())["projects"]:
     store = Path(entry["path"]) / ".codess"
     if store.is_dir():
@@ -269,7 +263,7 @@ including temporary directories from test runs, and has no retention policy.
 Move it aside as well so the rebuilt list reflects what currently exists:
 
 ```bash
-mv ~/.codess/ingested_projects.json ~/.codess/ingested_projects.old.json
+mv ~/.codess/projects_state.json ~/.codess/projects_state.old.json
 ```
 
 Rediscover and rebuild. Use `--days 0` for the first scan so Projects older
@@ -1190,8 +1184,10 @@ authority.
 
 ### Project Inventory
 
-`catalog/inventory/project-inventory.csv` is a per-Project reference row,
-generated rather than maintained. It answers the questions that decide whether
+`tools/project_inventory.py --csv <file>` writes a per-Project reference row,
+generated rather than maintained; kept in the checkout, it belongs under
+`catalog/inventory/`, which is gitignored because it names one machine's
+Projects. It answers the questions that decide whether
 a store is still needed:
 
 | Column | Answers |
