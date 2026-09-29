@@ -502,6 +502,28 @@ takes a comma-separated `--source` where the shared one takes `choices`.
 Inheriting any of those would change what that subcommand accepts, which is a
 behaviour change wearing a deduplication's clothes.
 
+## Version Designators
+
+Five kinds of version appear in Codess, each with one written form. A form is
+chosen by what is being versioned, not by where it is written.
+
+| Kind | Form | Where it appears | Example |
+|---|---|---|---|
+| Software release | `MAJOR.MINOR.PATCH`, bare | `codess.__version__`, `codess --version`, package metadata, CHANGELOG headings, prose | `0.2.0` |
+| Release tag | `v` + the release version | Git tags only | `v0.2.0` |
+| Store format | `MAJOR.MINOR`, bare, once the planned scheme lands; the integer series 1-12 before it | CoSchema, store metadata, changelog entries about the store | `1.0`; historically `format 12` |
+| Profile | `MAJOR.MINOR`, bare | `DECODER_VERSION`, `VALIDATOR_VERSION`, store provenance | `0.2` |
+| Document or record format | `codess.<name>/<integer>` | JSON documents, receipts, catalogs | `codess.query-row/2` |
+
+**The `v` belongs to the tag, not the version.** Prose names a release as
+`0.2.0` and a tag as `` `v0.2.0` ``; writing `v0.2.0` for the release, or `0.2.0`
+for the tag, names the wrong thing. Vendor versions (Claude Code `version`,
+Codex `cli_version`, Cursor client version) are recorded exactly as the vendor
+writes them and are not normalized to these forms.
+
+**Non-release tags** are lowercase-hyphen names describing the state they mark,
+annotated with a one-line description; they never take a version form.
+
 ## Renames
 
 Every accepted rename, stated once. The stored ones are wire-format, so each

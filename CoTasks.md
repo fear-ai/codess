@@ -329,7 +329,7 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W109 | Normal | Planned | Ship the schema contracts as package data; a non-editable install cannot find `schema/` today | -- |
 | W110 | Normal | Planned | Separate released documentation from contributor-internal notes and from private working notes | Operator decision on placement |
 | W111 | Normal | Planned | Lint and type gates that cannot absorb a regression: per-rule or zero gate, per-module mypy strictness, pre-commit and CI | -- |
-| W112 | High | Planned | A rebuild must not lose Sessions whose Source the vendor has since removed; prior-format snapshots are unreadable rollback targets | Design decision; relates W104, W105 |
+| W112 | High | Planned | Detect and classify what a rebuild loses; report it; select whether to proceed on significant loss (`ask`/`record`/`refuse`, persistable) | -- |
 | W113 | Normal | Planned | Model-name resolution for current frontier and open-weights naming; names in the vendor logs resolve to nothing | Breaking change to `--model-line` values |
 | W114 | Low | Planned | Split `tools/`: scripts duplicating `codess admin`, operator procedures that should be subcommands, and developer-internal tooling | W108 |
 | W115 | High | Planned | Snapshot lifecycle by role: rollback, pinned, archive, sole record; one classifier for trim and prune | Operator decision on the model |
@@ -340,6 +340,12 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W120 | High | Planned | Silent Session loss on Project-side states: a truncated store is rebuilt empty and unchanged Sources skipped; a Source rewritten to no decodable records deletes its Session; two directories sharing a slug cross-attribute | -- |
 | W121 | Normal | Planned | Load tier at corpus scale: end-to-end ingest, memory ceilings, multi-GB Cursor database, scan breadth, retention over large snapshots | -- |
 | W122 | High | Planned | Store-format versioning with review, migration notes, and automation; restart as `MAJOR.MINOR` at `1.0` for the released layout | -- |
+| W123 | Normal | Planned | Extracted data after vendor removal: raw capture (wanted regardless), per-vendor handling, marking of sourceless records (open) | Marking design open; relates W112, W115 |
+| W124 | Low | Postponed | Whether a vendor's harness variants (CLI, IDE extension, desktop app, cloud) produce different Session and Project artifacts | Not examined |
+| W125 | Normal | Planned | Work recorded under another directory: grouping-directory Sessions reach no store, and work on a sibling Project is attributed to the launch Project | -- |
+| W126 | Normal | Planned | Bring session records from another host (a remote development server) for review and ingestion | -- |
+| W127 | Low | Planned | A registry file superseded by a rename stays on disk unreported after an upgrade | -- |
+| W128 | Normal | Planned | Read archived stores of earlier formats, so Sessions whose vendor Sources are gone can be recovered into a current store | Relates W123 |
 
 ## Queue
 
@@ -3652,7 +3658,7 @@ work that can proceed after publication. Only the first two are release scope.
 | # | Blocker | Why it stops a release |
 |---|---|---|
 | B1 | **No `LICENSE` file, and no author or project URL in `pyproject.toml`** | Nobody can lawfully use, fork, or evaluate it, and a package index will not accept it. **Open: the licence terms are the owner's decision, not an engineering default.** `CHANGELOG.md` is written, so the release-notes half of this is done |
-| B2 | ~~README announces `v0.0.1`; the package is `0.3.0`~~ | **Closed.** README now names `codess.__version__` and `codess --version` as authoritative and links `CHANGELOG.md`, so the version is stated in one place rather than restated in prose that drifts |
+| B2 | ~~README restated a version that drifted from the package~~ | **Closed.** README now names `codess.__version__` and `codess --version` as authoritative and links `CHANGELOG.md`, so the version is stated in one place rather than restated in prose that drifts |
 | B3 | ~~Stale formats are unreadable and the message does not say what to do~~ | **Closed.** `UnsupportedStoreError` now names the remedy -- rebuild with `codess ingest --dir <project> --force` -- and says why a migration is not offered. Nine store sets on this machine remain at formats 3 and 4; they belong to Projects whose paths no longer exist |
 | B4 | ~~Tools carry unchecked SQL~~ | **Closed** with W82: every SQL-bearing tool now runs against an ingested store in the suite |
 | B5 | **Tracked `catalog/` files carry one machine's operator state** | Reviewed selections and per-Project policies name home paths and private Project names, in a public repository and its history. `.gitignore` lists them but they remain tracked, so ignoring does not remove them. Work is on [W108](#w108----catalog-out-of-the-repository) |
@@ -5247,6 +5253,155 @@ one exists, distinguishable from a Codess alias; and a rollout's archive
 location and its `archive_state` agree, or the disagreement is recorded as a
 vendor observation with its reason.
 
+### W128 -- Recover Sessions From Archived Stores
+
+**The condition.** Stores kept from earlier formats -- moved aside before a
+rebuild, or archived because their Sources were pruned -- are the only record of
+some Sessions, and current code refuses to read any format but its own. On one
+machine the archive holds 41 Claude and 104 Cursor Sessions whose transcripts
+are gone, across formats 0, 2, and 4.
+
+**Work.** A read-only importer per archived format that projects its Sessions and
+Events into the current layout, marks them as recovered with their origin store
+and format, and never overwrites a Session a live Source still supports. Pair it
+with the vendor prompt log where the vendor keeps one: it can confirm dates and
+user prompts for Sessions whose transcripts are gone, but carries no responses.
+
+**Evidence to close.** An archived store's Sessions appear in a current store,
+marked recovered, and a second import adds nothing.
+
+**Cost.** One projection per supported earlier format; no change to the current
+format beyond a recovered marker, which W123's availability state may supply.
+
+### W127 -- Superseded Registry Files Left Behind
+
+**The condition.** The registry's scan-and-ingest state file was renamed, and the
+new name is regenerated rather than migrated. No code reads or writes the old
+file, so on a machine upgraded from an earlier release it stays in the store
+root indefinitely, holding scan history the new file no longer has, and no
+command mentions it.
+
+**Work.** Have the registry check report any known superseded file in the store
+root with its size and date, and offer a retirement step that moves it into the
+store's archive area rather than deleting it.
+
+**Evidence to close.** A store root holding a superseded file is reported once
+per check, and retirement leaves it archived and reported as such.
+
+**Cost.** A list of superseded names and a check; no format change.
+
+### W126 -- Session Records From Another Host
+
+**The condition.** Some Projects are worked on with a harness running on another
+host -- a remote server reached over SSH, where the Claude Code, Codex, or Cursor
+records are written to that host's home directory. Codess reads only the local
+vendor stores, so that work is invisible to it: the local checkout shows little or
+no harness activity while the real history accumulates elsewhere. Cursor's
+remote-SSH sessions add a second shape: the conversation is stored locally while
+the workspace path names the remote host.
+
+**Work.** A documented procedure, then tooling: select a Project's records on the
+remote host by working directory; copy them read-only into a staging location
+with their paths and host recorded; review before ingestion (including the
+disclosure rules for host names and remote paths); ingest them as Sources whose
+location names the host; and repeat incrementally without duplicating Sessions.
+
+**Evidence to close.** A Project developed only on a remote host has its
+Sessions in its store, attributed to that host, and a second transfer adds only
+new Sessions.
+
+**Cost.** Procedure and a transfer tool first; a Source location naming a host
+may need a CoSchema vocabulary entry.
+
+### W125 -- Work Recorded Under Another Directory
+
+**The condition.** A Session is attributed to the directory it started in. Two
+common patterns break that. A harness started in a grouping directory -- the work
+root, or a folder holding several Projects -- records its Sessions under that
+path, which Codess treats as a container, so they reach no store. And a Session
+started in one Project often works in another: it reads, edits, and runs commands
+in a sibling repository, so that repository's history is recorded under the
+first. Measured on one machine: four grouping directories hold Claude Code
+records, named over 200 times in the vendor's prompt history; one catalogued
+Project has no Sessions of its own because all of its work -- over a hundred
+prompts and a Codex rollout -- was done from two sibling Projects.
+
+**Signals already in the records.** Claude Code writes the working directory on
+every record, so a mid-Session `cd` is visible, and tool inputs carry file paths
+(read, edit, write, search) and shell commands (`cd`, `git -C`); added
+directories appear in settings. Codex writes the working directory per turn and
+per command, and patch paths per edit. Cursor records multi-root workspace
+folders and tool-call paths. Codess already extracts file paths into Artifacts.
+
+**Work.**
+
+1. Resolve every path an Event touches to a catalogued Project by longest-prefix
+   match on its locations (including aliases).
+2. Keep each Session in the Project it started in, and record a
+   Session-touches-Project relation per other Project: counts of reads, edits,
+   and commands, first and last time. No Event is duplicated.
+3. Report container-rooted Sessions and cross-Project work in scan and coverage
+   output instead of dropping them silently.
+4. Let queries by Project optionally include Sessions that touched it, and let a
+   container-rooted Session be attributed by the relation when one Project
+   dominates.
+
+**Evidence to close.** No vendor Session under the work root is absent from every
+report; a Project worked on only from a sibling shows those Sessions as touching
+it, with counts.
+
+**Cost.** Steps 1-3 need no format change beyond one relation table; step 4 is
+query surface.
+
+### W124 -- Harness Variants Within a Vendor
+
+**The question.** Codess distinguishes three vendors -- Claude Code, Codex, and
+Cursor -- and treats each vendor's records as one family. Each vendor ships its
+harness in several forms: a CLI, IDE extensions, a desktop app, a cloud agent.
+Whether those forms write different Session and Project artifacts, or the same
+artifacts with different fields, has not been examined, apart from Cursor, whose
+CLI transcripts and IDE database already differ (W119).
+
+**Work.** For each vendor, record which forms exist, where each writes, and
+whether the records differ in kind, fields, or identity; decide whether any
+difference needs a distinction below the vendor level.
+
+**Restart criteria.** A second form of a vendor in use on a measured machine, or
+a record kind a current adapter cannot attribute.
+
+### W123 -- Extracted Data After the Vendor Source Is Gone
+
+**The question.** When a vendor removes, rewrites, or restructures the records a
+store was built from, should Codess keep what it extracted, and in what form?
+It is a product question before it is an engineering one: keeping data the
+vendor discarded makes Codess a partial archive of vendor history, with the
+retention, privacy, and interpretation obligations that carries; not keeping it
+makes every store a view of what the vendors still hold.
+
+**Direction.**
+
+- *Capture raw bytes: desirable regardless.* Keeping vendor bytes as a Source
+  location lets a rebuild re-decode them under one interpretation; worth doing
+  whatever the retention answer, since it is also the evidence for any later
+  decision. Storage policy (per-Source latest revision, compression, what is
+  captured for Cursor) is part of the work.
+- *Per-vendor interpretation: likely.* Vendors remove for different reasons --
+  Claude by age, Cursor on operator action, Codex by archiving and compaction --
+  so the handling differs per vendor (for example, Cursor composer absence read
+  as archival rather than deletion).
+- *Accept and move on: often.* Most removals are expected; W112 records them and
+  the operator proceeds.
+- *Carry forward from the prior store:* not preferred; it mixes interpretations
+  from two decoders.
+
+**Open.** How to detect, mark, and handle a stored record whose original source
+material is no longer in place: a Session-level availability state, per-record
+provenance, how queries present it, and when such records may be dropped.
+
+**Restart criteria.** Raw capture can start independently; the marking and
+handling of sourceless records waits on a design decision. Until then W112
+makes each loss visible.
+
 ### W122 -- Store-Format Versioning
 
 **The condition.** The CoSchema format is a single integer that advanced twelve times, each
@@ -5404,9 +5559,9 @@ verdicts.
 **Work.** One classifier shared by trim and prune, assigning each snapshot a
 role: current, rollback (the newest readable, up to `CODESS_KEEP_SNAPSHOTS`),
 pinned (recorded by baseline freeze, cleared by unfreeze), archive (one
-unreadable prior per format, until copy-forward has read it), sole record
-(holds a Session present in no newer snapshot), or expendable. Only expendable
-snapshots are deleted; pinned ones are reported as held rather than refused.
+unreadable prior per format, kept until the W123 decision), sole record
+(holds a Session present in no newer snapshot, kept by default and configurable),
+or expendable. Only expendable snapshots are deleted; pinned ones are reported as held rather than refused.
 
 **Alternatives considered.** Count per format only (fixes the format case,
 nothing else); content-based retention alone (prevents loss, ignores pins);
@@ -5418,7 +5573,7 @@ registry; a format change leaves at least one readable rollback target or none
 claimed; a pinned snapshot survives with its catalog file absent.
 
 **Cost.** The shared classifier and per-format rollback need no format change;
-recorded pins are a registry field; sole-record detection lands with W112.
+recorded pins are a registry field; sole-record handling follows the W123 decision.
 
 ### W114 -- Split `tools/`
 
@@ -5468,44 +5623,44 @@ yields unresolved rather than a variant.
 **Cost.** A format bump for the new `model_params` columns. **Breaking** for
 `--model-line` values of letter-series lines.
 
-### W112 -- A Rebuild Must Not Lose Sessions Whose Source Is Gone
+### W112 -- Record What a Rebuild Loses
 
-**The condition.** Every format bump to date has been delivered as a rebuild
-from live vendor Sources. A Session whose Source the vendor has removed is
-carried forward by incremental ingest and dropped by a rebuild. Measured at
-format 12: no current Session has lost its Source, but 377 of 380 Claude
-Sessions are older than the vendor's 30-day default and survive only because
-the operator raised `cleanupPeriodDays`; a rebuild after one vendor prune
-would drop about 88% of stored Claude Events. Prior snapshots are kept for
-rollback, but after a format change they are in a format the code refuses, so
-the retained rollback targets cannot be read. `tools/project_inventory.py` is
-the only guard, it is advisory, and it checks path existence only.
+**The condition.** A rebuild recomputes a store from its live vendor Sources.
+Sources change continuously -- vendors prune by age, rewrite and compact files,
+and delete composers; projects and directories move -- so a rebuild can hold
+fewer Sessions or Events than the store it replaces. That is an expected
+condition of active harness work, not a fault. What is missing is any record of
+it: the difference is silent, and `tools/project_inventory.py`, the only check,
+is advisory and sees path existence only. Measured at format 12: 377 of 380
+Claude Sessions are older than the vendor's 30-day default and survive only
+because the operator raised `cleanupPeriodDays`, and several Sources of one
+Project have since shrunk (a Codex rollout from 142 MB to 138 MB).
 
-**Work, in dependency order.**
+**Work.**
 
-1. `ingest --force` refuses to promote a staged store holding fewer Sessions
-   than the prior store for Sources neither live nor captured, unless the
-   operator accepts the loss; it reports the Session identities.
-2. Snapshot trimming and `storage prune` keep any snapshot holding a Session
-   present in no newer snapshot, instead of trimming by count alone.
-3. Captured raw objects become a Source location, so a rebuild reads
-   live-or-captured Sources and the no-migration rule holds; capture defaults
-   on for append-only JSONL, retaining the latest revision per logical Source.
-4. Until capture covers the corpus, a rebuild copies forward Sessions whose
-   Source is absent and uncaptured, marked unavailable and naming the snapshot
-   they came from.
-5. Cursor composer absence marks the Session archived rather than deleting it.
+1. Before promotion, compare the staged store with the one it replaces, per
+   Source: Sessions and Events gained, lost, and changed, with the identities
+   of lost Sessions and the reason (Source absent, Source shorter, decode
+   difference).
+2. Classify the loss. Trivial: within stated bounds and explained by a known,
+   benign cause (a vendor compacting records it still summarises, a duplicate
+   collapsed). Significant: whole Sessions gone, a large share of a Project's
+   Events, content lost with no vendor-side explanation, or anything touching a
+   Session a baseline pins. Bounds are configurable and stated in the receipt.
+3. Record the comparison and the classification in the run's receipt and on the
+   operator channel, whether or not anything was lost.
+4. Select whether to proceed. Trivial loss proceeds. Significant loss follows a
+   policy (`CODESS_ON_LOSS`: `ask`, `record`, `refuse`), settable per invocation
+   and persisted in the catalog per Project: `ask` stops at the comparison and
+   waits for the operator's choice in an interactive run, `record` proceeds and
+   flags it, `refuse` keeps the prior store current. Non-interactive runs treat
+   `ask` as `refuse` and name the command that proceeds.
 
-**Not proposed: per-format SQL migrations.** Migrated rows keep an earlier
-decoder's interpretation while the store claims the current one, which
-CoSchema rejects; copy-forward covers the only data a rebuild loses.
+**Evidence to close.** A rebuild after a simulated vendor prune classifies the
+loss, names every lost Session in its receipt, stops for a choice under `ask`,
+publishes under `record`, and leaves the prior store current under `refuse`.
 
-**Evidence to close.** A rebuild after a simulated vendor prune retains every
-prior Session, and a prior-format snapshot is either readable for copy-forward
-or not counted as a rollback target.
-
-**Cost.** Steps 1, 2, and 5 need no format change; step 3 changes raw
-retention; step 4 needs a projection per supported prior format.
+**Cost.** No format change; a receipt field and a setting.
 
 ### W111 -- Lint and Type Gates That Cannot Absorb a Regression
 

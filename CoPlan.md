@@ -1067,7 +1067,7 @@ appear in the manifest, and conflating them is the mistake to avoid:
 | `format_version` | `7` | A stored column is added, renamed, or retyped | **Yes** -- `require_store` refuses other formats for reading as well as writing |
 | `contract_digest` | `f19623df…` | Any released contract file changes, including without a format bump | No, but a write under a different digest is reported |
 | `decoder_version` / `validator_version` | `0.2` | Decode or validation behaviour changes without a schema change | No -- but two snapshots at one format can differ in what they decoded |
-| `software_version` + `software_revision` | `0.3.0`, `20e3dc9b…+worktree` | Every commit | No |
+| `software_version` + `software_revision` | `0.2.0`, `<commit>…+worktree` | Every commit | No |
 
 **Why `decoder_version` matters even though it forces nothing.** Two snapshots
 can share `format_version` and hold different Events, because the decoder

@@ -1182,6 +1182,23 @@ binding and both claim one identity. That is the case the guard in
 records at another path -- and it is why the binding is a cache rather than the
 authority.
 
+**What each harness does with a moved or copied directory.** The Codess binding
+is only half of a move: every vendor keys its own records by path, and each
+reacts differently.
+
+| Harness | Records keyed by | After a move | After a copy (a second clone) |
+|---|---|---|---|
+| Claude Code | A directory under `~/.claude/projects` named from the absolute path, holding transcripts and saved memory | A session at the new path starts an empty directory; the old one keeps the history and memory. Rename the old directory to the new path's name to carry both | The copy is a separate directory with its own history from its first session |
+| Codex | The working directory written into each rollout when it starts | Past rollouts name the old path permanently; attribute them through a location or alias on the Project | New rollouts name the copy's path |
+| Cursor | A workspace identity derived from the path and the folder's creation time | The identity changes, so earlier chats become unreachable from the workspace; they usually remain in `state.vscdb` | The copy is a new workspace with no chats |
+
+**A copy that is meant as a separate working directory** -- a fresh clone
+beside an existing one -- is a separate Project for session records, even
+when both hold the same repository and work runs in parallel: each accumulates
+its own history per harness. Do not copy `.codess/` into it, since that carries
+the original's binding and stores; the copy registers as its own Project on its
+first ingest.
+
 ### Project Inventory
 
 `tools/project_inventory.py --csv <file>` writes a per-Project reference row,

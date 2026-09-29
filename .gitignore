@@ -20,6 +20,8 @@ docs/
 # Internal project notes: working analysis, review ledgers, and anything that names
 # one machine or private work. Kept beside the code, never published.
 .docs/
+# Agent checkpoints: per-task progress written by delegated agents, local and transient.
+.agents/
 conf/
 output/
 *.auth

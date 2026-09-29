@@ -9,6 +9,8 @@ duplicating its content elsewhere.
 - Use engineering precision with no banter
 - Avoid trite corporate language, like production ready, maintain focus 
 - Specific and actionable, with critique and suggestions, tradeoffs and alternatives
+- Recommend with justification: present alternatives as analysis leading to a recommendation, not as
+  a menu, and stage measures to observed issues rather than hypothetical ones
 - Explain "why" with specific "how" details
 - No time, duration, or schedule estimates, unless specifically requested
 - Use concise, direct confirmations for simple fact or capability questions; answer in one sentence when feasible, with the explicit values
@@ -21,6 +23,21 @@ duplicating its content elsewhere.
 - Note Architecture
 - Alert breaking changes
 - Update documentation
+- Hold to the stated goal; a finding outside it becomes a work item, not work
+- Verify before asserting: compare names, paths, and counts mechanically rather than by reading;
+  name each entity involved and its state (exists, does not exist, will be recreated) before
+  reasoning about moves or collisions; design each check so it can fail, and report contrary output
+
+## Work Items
+
+- `CoTasks.md` is the only list of open project work; its introduction states the identifier,
+  removal, and four-part item conventions
+- Verify an item's own evidence before implementing it, and correct the item's text when its
+  framing is wrong rather than silently implementing something else
+- For decoding or storage work, the completion bar is a real re-ingest checked with
+  `tools/decode_audit.py` and `tools/field_coverage.py --fail-on-gap`, not passing tests; a new
+  single-vendor column gap needs a `schema/field-coverage-baseline.json` entry with checked evidence
+- An item states the durable outcome and the findings that changed the work, not the process
 
 ## Editing
 
@@ -63,7 +80,7 @@ duplicating its content elsewhere.
 - Do NOT cite work-item identifiers (`W54`, `W12`); completed items are removed from
   the task list, so the reference resolves to nothing for a later reader
 - Keep measured evidence that justifies a constant or a mapping; drop the narrative around it
-- Wrap to at least 80 characters, up to 120 where keeping a call on one line needs it;
+- Wrap to at least 80 characters and at most 110, the `line-length` in `pyproject.toml`;
   do not wrap narrower than 80
 - A comment restating the line below it is noise; delete it
 
@@ -94,6 +111,9 @@ DDL user_version 6, declared CoSchema 7: update schema.sql
 ```
 
 ## Code Naming
+
+The glossary in `Codess.md` is the terminology authority, and `CoNames.md` holds every settled
+name: check a proposed rename against it and add the row in the same change.
 
 Applies to Python identifiers. Domain designators -- vendors, columns, keys --
 are [CoNames](CoNames.md); this is how the code spells things.
@@ -180,6 +200,16 @@ employers, clients, or private projects.
   that identifies the machine.
 - **Ignoring is not removing.** Listing a tracked file in `.gitignore` leaves it
   in the tree and in history; removal is repository work (see Git).
+
+## Delegation to Agents
+
+- At most three agents run at once, and none starts agents of its own: all share one usage limit,
+  and a burst that exhausts it stops every agent mid-task
+- Give each editing agent a disjoint set of files; read-only agents may overlap
+- Each agent appends a checkpoint after every finished step -- step, files changed, result -- to
+  `.agents/<task>/<agent>.md`, which is ignored, so an interrupted task resumes from the last step
+- Resume a stopped agent by messaging it rather than starting a fresh one, which loses its context
+- Verify an agent's factual claims before they enter a released document
 
 ## Security
 

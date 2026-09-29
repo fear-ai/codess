@@ -311,7 +311,7 @@ nonzero when any is, so it gates those operations; see
 | [Functional Design](Designs.md) | Decided functional behavior, rationale, invariants, and explicitly optional directions |
 | [Reporting Design](Report.md) | Operational reporting: measured costs, event structure, capability gates, time sources, buffering, backends, and use profiles |
 | [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, and current state |
-| [Work Items](CoTasks.md) | Open engineering items and the prioritized queue |
+| [Work Items](CoTasks.md) | **The only list of open project work**: each item states the work, the evidence that closes it, what blocks it, and its cost; identifiers are never reused, and a completed item is removed |
 | [Code Review](CoReview.md) | Findings, the measurements that decided each, and real-Source validation |
 | [Developer Notes](CoNotes.md) | Duplication and constant audits, and observed process misses |
 | [CoSchema](CoSchema.md) | Common entities, relationships, fields, vocabularies, and query/store contracts |
@@ -320,7 +320,7 @@ nonzero when any is, so it gates those operations; see
 | [Codex Source Schema](CodexSchema.md) | Codex storage, records, selective access, mapping, and limitations |
 | [Cursor Source Schema](CursorSchema.md) | Cursor storage, records, selective access, mapping, and limitations |
 | `schema/` | Executable SQL, JSON, mapping, policy, and fixture contracts |
-| The machine store, `~/.codess/` | Project selections and policies (`catalog/`, or `CODESS_CATALOG`), source bindings, observations, reports, and receipts; the tracked `catalog/policies/ci-fixture.json` is a test fixture |
+| The machine store, `~/.codess/` | Project selections and policies (`catalog/`, or `CODESS_CATALOG`), source bindings, observations, reports, and receipts; the synthetic CI policy the tests use is `tests/fixtures/policies/ci-fixture.json` |
 | `tools/` | Development and diagnosis scripts, described in [Repository Tools](Operations.md#repository-tools) |
 | `experiments/` | Bounded investigations that are not part of the accepted design or implementation plan |
 
