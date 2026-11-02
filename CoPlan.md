@@ -60,7 +60,7 @@ tests, catalogs, and maintenance wrappers live in the source tree. It does not
 show imports, runtime calls, database contents, or deployed data locations.
 
 ```text
-CodeSess/
+codess/
 ├── main.py                     # source-tree development entry
 ├── pyproject.toml              # package and codess command
 ├── src/
@@ -81,7 +81,6 @@ CodeSess/
 │   ├── coschema/               # current common contract and SQLite DDL
 │   ├── mappings/               # vendor mapping profiles
 │   └── *.json                  # query, result, policy, and selection contracts
-├── catalog/                    # reviewed Project policies and evidence
 ├── experiments/                # bounded investigations and review notes
 ├── tests/                      # unit, contract, CLI, and integration tests
 └── tools/                      # thin focused maintenance wrappers
@@ -2278,7 +2277,7 @@ derived value states what it identifies, and no derivation happens
 outside one module.
 
 **Met.** Decode is validated against real Sessions rather than fixtures, with no
-classification inconsistency across every Project the development machine holds
+classification inconsistency across the reviewed anonymous Project corpus
 ([CoReview](CoReview.md#real-source-validation) records the scale and the
 method) -- the discovery lists are environment-configurable rather than fixed to
 one machine's tree, and lint, type, and test counts report together so the claims

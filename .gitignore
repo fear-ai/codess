@@ -20,6 +20,8 @@ docs/
 # Internal project notes: working analysis, review ledgers, and anything that names
 # one machine or private work. Kept beside the code, never published.
 .docs/
+# Private disclosure reviews.
+.doc/
 # Agent checkpoints: per-task progress written by delegated agents, local and transient.
 .agents/
 conf/
@@ -359,6 +361,7 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+.ruff_cache/
 .dmypy.json
 dmypy.json
 

@@ -361,9 +361,9 @@ composer is mandatory; a full scan is never correct. With the section 2 bounds
 applied, the JSON half yields roughly 38 MB of retained text against a 1.9 GB
 corpus.
 
-**Privacy.** These blobs carry absolute paths and complete file contents from
-unrelated projects, including at least one credential-bearing file
-(`/var/www/html/<site>/wp-config.php`). Tier-1 decode is scoped to attributed
+**Privacy.** These blobs can carry absolute paths and complete file contents,
+including configuration secrets and material from unrelated Projects. Treat
+their contents as private source evidence. Tier-1 decode is scoped to attributed
 composers, which the `toolCallId` join supplies. Unattributed blobs stay unread.
 
 ## 7. Codex Protocol Findings

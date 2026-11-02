@@ -752,7 +752,7 @@ stored data.
 
 **The finding was reproduced against real data, not only reasoned about.** Removing
 the `codess:legacy:uuid:` column defaults changed `schema.sql`, which changed
-the package digest, which made every already-published store on this machine
+the package digest, which made stores published under the preceding digest
 unwritable:
 
 ```text
@@ -2699,9 +2699,8 @@ actual vendor data, which is the separate layer 13.1 names. It ran in
 preflight mode, so it read live vendor stores and wrote nothing outside a
 temporary directory.
 
-Projects are identified by shape rather than by name: the name is a private
-repository on the development machine and is not checkable by a reader, while
-the vendor, scale, and layout are what the pass establishes.
+Projects are identified by anonymous labels: vendor, scale and layout establish
+the coverage, while a local repository name adds no reproducible evidence.
 
 | Project | Vendors | Shape under test |
 |---|---|---|
@@ -3003,13 +3002,12 @@ Tool linkage is complete in all three vendors: every result joins the
 invocation it belongs to, with none unlinked. That is the pairing the
 `invocation_kind` finding above concerns, and it holds at this scale.
 
-**Widened to every local Project.** The three-Project pass was then extended to
-every real Project the machine holds, excluding only CodeSess itself and the two
-used above: **zero classification inconsistencies across every published store
-set.** The set deliberately includes awkward roots -- `~/.codex` and a
-third-party agent's `~/.<agent>/workspace` are themselves Projects with
-Sessions -- and every ingest completed without error. [CoTasks](CoTasks.md)
-carries the corpus scale the pass ran against, which grows as work is ingested.
+**Widened across the reviewed corpus.** Beyond the initial three Projects, the
+review found **zero classification inconsistencies across the sampled published
+store sets**. Coverage included harness-owned working directories as well as
+ordinary repository roots. Every reviewed ingest completed without error; this
+is evidence about that corpus, not a complete inventory of any developer's
+machine.
 
 `file-history-delta` is now decoded. It is harness product state like its
 snapshot sibling, retaining the message and snapshot identifiers it links

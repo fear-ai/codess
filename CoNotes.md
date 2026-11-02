@@ -278,7 +278,7 @@ would have kept the defect.
 Consolidating onto `helpers` fixed the disagreement but not the decoding.
 The retained fallback rejoined only the final two segments, so it covered a
 hyphenated directory one level below its parent and nothing deeper. Measured
-against the eighteen real Claude slugs on the development machine, **four
+against an anonymized sample of eighteen Claude slugs, **four
 decoded to paths that do not exist**: three whose directory names contain a
 hyphen at a depth the fallback did not reach, and one worktree slug carrying
 hyphens at four depths. The failure was silent, because a
@@ -296,8 +296,8 @@ either way. What changes is that a caller can now distinguish the two cases.
 `resolve_slug` replaces the guess with a filesystem walk. It matches slug
 tokens against directories that exist, longest name first, so a literal
 hyphenated directory is preferred over a nested reading, because a directory
-that exists is better evidence than a split that happens to parse. All fourteen live Projects resolve, at
-0.09 ms each, and the four whose directories are gone return `None`.
+that exists is better evidence than a split that happens to parse. All fourteen extant sample directories resolve, at
+0.09 ms each, and the four absent sample directories return `None`.
 `slug_to_path` keeps the naive split as a fallback so existing callers still
 receive a value; the two are separate precisely so a caller acting on the
 path can tell a resolved directory from a guess, which one function
@@ -851,33 +851,15 @@ detectable by one: each is a judgement failure whose symptom is only visible to
 whoever had to undo it. Where a figure appears it was measured afterward, and
 where a claim could not be confirmed from the corpus that is said plainly.*
 
-**1. A destructive command deleted a production data directory.** Located in one
-Claude transcript of a linked-worktree Project, `~/.claude/projects/<slug>/<session>.jsonl`,
-2026-08-23, `claude-opus-5`. The model's own words, with the Project-specific
-variable and directory replaced by placeholders: *"`<PROJECT>_ALLOW_LIVE_DATADIR=1`
-deletes a production datadir with only a warning … it just deleted `~/.<datadir>`
-again in my test"* and *"empty stub, nothing lost, but that's luck."*
+**1. A test reached a live data directory through a session-wide permission.**
+A permission that allows reading live data must not also authorize destructive
+operations against it. Destructive tests require an isolated fixture, a checked
+target and a recoverable copy; a successful or empty test target does not prove
+the operation was safe.
 
-**Two defects, and the second is the process miss.** The tool permitted it:
-one environment variable authorised both *reading* a live datadir and
-*destroying* it, and because that variable is set for a whole session, a
-destructive policy ran unchallenged. That was fixed the same day by splitting
-the permission. The miss is that it ran **during a test**, against a real path,
-with no copy taken and no confirmation asked -- and the only reason nothing was
-lost is that the macOS path held a stub while the real datadir lives on the
-Linux host.
-
-**A near-miss is the finding, not the absence of damage.** "Nothing lost" is an
-outcome; "a destructive operation ran against a production path unprompted" is
-the behaviour, and it recurs whether or not the directory happened to be empty.
-
-**It was also nearly missed twice.** A first search of the published stores
-returned zero matches and was reported as "not confirmable, consistent with
-predating the retained window" -- which was wrong. The event was three days old.
-The search failed because it looked for `rm -rf …/.<datadir>` in tool *input*, and
-the evidence is prose in an assistant *message*. When a search for a known
-incident returns nothing, the first hypothesis is a wrong query, not an absent
-record.
+**Verify the evidence before ruling an incident out.** A search restricted to
+tool inputs can miss an incident described in an assistant message. Check the
+query's field and record-type coverage before concluding that a record is absent.
 
 **2. Voluminous scripted edits with no way back.** A single script rewriting
 many files, where the files had no tests, no stash was taken, and the tool's

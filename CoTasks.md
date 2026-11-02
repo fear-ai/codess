@@ -362,7 +362,7 @@ not a preference.
 | 4 | **W96** (steps 1-4 landed) | Detection, directed reports, and `sources_vanished` are in. The copy case is undecidable by design and waits on an operator answer rather than on effort. |
 | 5 | **W85** (steps 2-3) | Step 1 reports the 98 unbound composers. A store column and an operator-stated binding remain, and neither blocks anything. |
 | 6 | **W104** | No designator names *every published store*, so a format migration can strand a Project. Found by needing two commands where the procedure documents one. A catalog predicate; no rebuild. |
-| 7 | **W105** | Vendor-removal strategy. Step 1 is the only work in the queue that *prevents* evidence loss rather than explaining it: nothing measures how close a Project is to Claude's next 30-day sweep, and that gap has already been crossed once on this machine. |
+| 7 | **W105** | Vendor-removal strategy. Step 1 is the only work in the queue that *prevents* evidence loss rather than explaining it: nothing measures how close a Project is to Claude's next configured retention sweep, and missing the window can leave only archived evidence. |
 
 **Closed this session, so they are not re-derived:** W04 (steps 3-4), W50, W65,
 W66, W67, W71, W89, W94, W95, W85 step 1, W50, W51, and W98. The
@@ -393,128 +393,24 @@ do first.
 5. **Then W14's five steps**, which remove the restore-and-copy failure rather
    than reporting it.
 
-**State at the pause.** The suite is green and lint and types are within their
-recorded ceilings; the figures are read from `tools/quality_report.py`, which is
-where a number that is wrong by the next change belongs. `project_inventory`
-reports 0 Projects holding vanished Sources, `registry_check` 0 errors and 0
-warnings, and `variable_reference --check` current. `catalog lifecycle`
-reports 20 ingested and 1
-worktree. `registry_check` reports 0 errors, 0 warnings, 1 note **when the
-discovery variables are unset**, which is not the same as a clean result: the
-layout checks do not run, and a skipped check currently reads as a passing one.
-Configured, the same command reported 0 errors, 7 warnings, 14 notes. Making a
-skipped check state that it was skipped is [Item Detail](#item-detail)'s
-discovery-configuration work.
+**Configuration-dependent checks must report their scope.** An inventory with
+no findings does not establish that every layout check ran: when discovery
+configuration is absent, state which checks were skipped. Use current inventory,
+registry and quality reports rather than a saved account of one machine's state.
 
-**Closed in the session that produced this**, so they are not re-derived: W86
-(refusal reason codes reaching the store, aggregated), W90 (scanned and never
-ingested), W91 (reconciled lifecycle view and its command), W78 (module-level
-import cycles), W82 (unchecked tool SQL). W80 and W74.1 landed earlier.
+**A rebuild must preserve evidence that cannot be rediscovered.** Before
+recreation, inventory old-format stores, vanished Sources and reviewed location
+relations. Archive a store that is the only surviving record; preserve reviewed
+path aliases, remote-to-local workspace bindings and `worktree_of` relations.
+These are operator decisions, not facts a new ingest can safely infer.
 
-**Two conditions on the development machine that are evidence rather than
-defects**, and should not be "fixed" by a later reader: one archived format-4
-store is the only remaining record of 22 vendor Sessions the vendor has pruned,
-and one Project pair is a linked git worktree recorded as such.
-
-**The archived store was located and protected**, because the earlier
-description of it did not match what is on disk. Measured across all 21
-published store sets, **every recorded Source still resolves** -- 0 vanished --
-so nothing in the registry holds unreproducible evidence. The two stores W14
-identified (154 Sources with 122 vanished, and 8 with 8) are **gone**: neither
-survives anywhere on this machine. What does survive is a different store, at
-`<group>/<project>`, found only because a test scratch tree happened to retain it:
-
-| Measure | Value |
-|---|---|
-| Sessions | 22 |
-| Events | 20,235 |
-| Recorded Sources | 22, of which **22 vanished** |
-| Format | 4 |
-
-Its vendor directory holds no transcripts, it has no catalog entry, and its
-working store under the checkout holds zero Sessions -- so the copy in test
-scratch was the only record. It is now at
-`~/.codess/archive/<project>-coschema4-20260812T072113Z`, read-only by permission,
-with an `ARCHIVE.md` stating what it holds and why deleting it is
-unrecoverable. The original was left in place rather than moved.
-
-**What a recreation cannot re-derive, captured before it runs.** The catalog's
-reviewed decisions are in `catalog/inventory/dispositions-20260824.json`: one
-`worktree_of` relation (P2 to P1) and 13 Cursor workspace bindings
-across 8 Projects, every one `approved`. Cursor keys its data by an opaque
-workspace hash rather than by path, so a binding is what connects a composer to
-a Project at all.
-
-Ten are ordinary `local_workspace_path_binding` rows that a re-ingest can
-rediscover by matching `workspace.json`. **Three cannot be rediscovered**, and
-they are the reason the capture exists:
-
-| Relation | Count | Asserts |
-|---|---|---|
-| `project_path_alias` | 2 | A different path is the same Project: `P3` is P1, `P4` is P5 |
-| `remote_workspace_local_binding` | 1 | An SSH remote URI is this local Project |
-
-No vendor store records either fact. `P5` additionally holds three
-distinct workspace hashes for one path -- Cursor opened a new workspace on
-separate occasions -- and only the bindings record that they are one Project's
-work.
-
-**The recreation ran, and it was already overdue.** Every catalogued Project
-was reingested with `--force` and republished, with no error and no Project
-rejected. The resulting figures are the [Corpus Baseline](#corpus-baseline),
-which exists to price a rebuild and states where each is read from; repeating
-them here would be a second copy that goes stale first.
-
-**The rebuild was not caused by any change made here.** `PRAGMA user_version` is
-still 9, but the *contract digest* had moved: the schema files were last
-committed 2026-08-24 and the stores were published 2026-08-22, so every store was
-already unreadable by `require_store` before this session began. `codess query`
-said so directly, which is the gate working -- a store written under a superseded
-contract is refused rather than read as though it agreed.
-
-**The corpus grew rather than merely moving**, which is the fact worth keeping
-rather than the totals. CodeSess went from 70,571 to 74,839 Events and P2
-from 39,417 to 40,998 across the three days between publications: two measured
-pairs, retained because they demonstrate what a rebuild does rather than what the
-store currently holds. A rebuild reads what the
-Sources hold now, which is the property that makes it safe when they are intact
-and destructive when they are not.
-
-**Every reviewed disposition survived**, checked rather than assumed: the
-P2 `worktree_of` relation and all 13 Cursor workspace bindings are intact,
-21 catalog entries in and 21 out, and **no path is claimed by two Projects** --
-so W14's minting defect did not recur. The catalog is keyed by `project_id` and
-written only when identity changes, which is why a reingest leaves it alone.
-
-**The archive was not reached.** `~/.codess/archive/<project>-coschema4-…` still holds
-its 22 Sessions and 20,235 Events and is still read-only, which is what the
-permission is for: a rebuild sweep that reached it would have destroyed the only
-record of them.
-
-**The 27 superseded snapshots were pruned**, after both checks Operations
-requires. Counts alone can mislead -- two stores for one Project once read as
-one superseding the other while the older held two months the newer did not --
-so the date range was compared as well: **0 superseded snapshots covered time
-its current one does not**. The plan reported `safe_to_apply`, no blocking
-references, and all 21 current pointers present in `keep` and absent from
-`delete`.
-
-Applied with a receipt at `~/.codess/reports/prune-20260825.json`, whose
-`plan_digest` matches the plan that was reviewed, so what was applied is what
-was inspected, and `remaining_candidates` is 0. The count deleted and the bytes
-reclaimed are in the receipt rather than here: they describe one run, and a run's
-figures cannot close an item or be re-derived once the snapshots are gone.
-
-**The archive was not reached**, verified after the fact rather than assumed: it
-still holds its 22 Sessions and 20,235 Events and is still read-only. A prune is
-one of the three operations that can destroy a store whose Sources are gone, and
-the permission is what stops it.
-
-**What this changes about the rebuild.** A full recreation is safe for the
-published set, because nothing there depends on a Source that is gone. The
-hazard was real and sat outside the registry, which is the argument for running
-the inventory before the rebuild rather than trusting the recorded figure: the
-figure named two stores that no longer exist and missed the one that does.
+**Validate the rebuild per Project and per store.** Verify that reviewed
+relations survive, no path is claimed by two Projects and current pointers are
+kept. A rebuild reads what Sources contain now; it cannot recover records the
+vendor has already removed. Compare content and time coverage before pruning a
+superseded generation, and retain the applied plan's receipt. Local archive
+locations, snapshot identifiers and recovery records belong in the operator's
+private records.
 
 ### Next Two Sprints
 
@@ -603,12 +499,11 @@ is ready should not wait for one that is not.
 
 ### Corpus Baseline
 
-The scale a rebuild is paid against, and the runtime it costs. Both are read
-from the operator's own registry and refresh receipts, so both are re-derivable
-and both are expected to move as work is ingested -- they are a status of the
-current baseline, not a property of the system.
+An anonymized historical benchmark for rebuild scale and cost, not an inventory
+of a live deployment. The measurements illustrate workload size; obtain current
+values from the selected registry and refresh receipts before making a decision.
 
-| Measure | Current | Source |
+| Measure | Observed | Measurement |
 |---|---|---|
 | Published Project store sets | 21 | `~/.codess/projects/*/current.json` |
 | Sessions | 434 | `SELECT count(*) FROM sessions` across published stores |
@@ -618,12 +513,11 @@ current baseline, not a property of the system.
 | CoSchema format | 9 | `PRAGMA user_version` |
 | Ingest rate | ~900 Events/s | Refresh receipt: 76,055 Events in 83.7 s, one Project, apply stage |
 
-**What the rate is good for.** A full-corpus rebuild is the ingest rate against
-the Event count, so the current corpus is on the order of six minutes of
-machine time, plus per-Project publication overhead. That is the figure to
-weigh when deciding whether two wire-format changes batch: the cost is real but
-small, and the reason to batch is that it is paid once per format and scales
-with Project count, not that any single rebuild is expensive.
+**What the rate is good for.** Estimate rebuild time from Event count divided
+by measured ingest rate, plus per-Project publication overhead. Use a current
+receipt for the selected workload rather than treating this benchmark as a live
+inventory. Batching wire-format changes pays that cost once; the cost scales
+with Project count rather than with the number of changed columns.
 
 **The rate is one measurement.** It comes from one Project on
 one machine at the apply stage. A Project dominated by Cursor bubbles or by very
@@ -991,31 +885,14 @@ current data rather than regenerating it.
 
 **Work.** Require or explicitly mark Project identity for direct library writes.
 
-**Reproduced, with dates.** The registry now holds **nine paths claimed by two
-Projects each**, and every duplicate was created on one day by repeated
-`codess ingest --dir <path> --force` runs against Projects that already had a
-catalog entry:
+**A repeated ingest can override a reviewed disposition.** In the reviewed
+case, an existing catalog entry marked a linked worktree for exclusion from
+broad selection. A repeated `codess ingest --dir <path> --force` created a new,
+unmarked identity for the same path, without carrying over that disposition.
 
-| Path | Existing entry | Duplicate created |
-|---|---|---|
-| `P2`, a linked worktree | 2026-07-29, state `worktree` | 2026-08-20 |
-| `P6` | 2026-07-30 | 2026-08-20 |
-| `P7` | 2026-07-29 | 2026-08-20 |
-| `P8`, `P9`, `P10`, one grouping directory | 2026-07-17 to 07-29 | 2026-08-20 |
-| `P11`, `P12`, `P13`, two grouping directories | 2026-07-17 to 07-29 | 2026-08-20 |
-
-**The P2 case shows the consequence precisely.** Its 2026-07-29 entry
-carries a reviewed disposition -- `state: worktree`, `relation_kind:
-worktree_of`, `related_project_id` naming P1, and a note reading "Legacy
-duplicate Project for the P1 linked worktree; retain historical evidence
-but exclude broad selection." A new unmarked Project for the same path
-**recreates exactly the duplicate that disposition exists to suppress**, and
-carries none of the review that settled it.
-
-So the defect is not only that identity is inferred rather than required: an
-inferred identity **overrides a reviewed one silently**. A reviewed decision
-that a later run can undo without saying so is worse than no decision, because
-the operator has no reason to re-check it.
+The defect is therefore not only inferred identity: a fresh identity can
+silently override an explicit review. A caller must preserve the existing
+identity or report the conflict before writing a replacement binding.
 
 #### Diagnosed
 
@@ -1025,7 +902,7 @@ already claiming that exact location, then a new UUID.
 
 **The catalog fallback exists precisely for this case and was never reached.**
 Both duplicate entries record the same `locations[].path`, so the search would
-have matched -- but the binding file returns first, and on this machine the
+have matched -- but the binding file returns first, and in the reviewed case the
 binding named the *new* identity. Once minted it is authoritative for every
 later run, which is why re-ingesting nine Projects produced nine duplicates
 once and never again.
@@ -1086,75 +963,26 @@ here and worth naming so it is not mistaken for a gap in this fix.
 
 #### What the Recreation Settled, and What It Did Not
 
-**The reingest path is proven and the defect did not recur.** Every catalogued
-Project was reingested with `--force` on 2026-08-25 and the catalog came out with
-the same entries it went in with: no path claimed by two Projects, P2's
-`worktree_of` relation intact, and every Cursor workspace binding retained. The
-catalog is keyed by `project_id` and written only when identity changes, which is
-why a reingest leaves it alone.
-
-That is a real result and a narrow one. It exercises the path the nine duplicates
-came from -- repeated `codess ingest --dir <path> --force` against Projects that
-already had catalog entries -- and shows the guards added since hold there.
-
-**What it does not settle is the item's actual subject.** W14 is about *direct
-library writes*: a caller reaching `store` or `project_catalog` without going
-through a command, which is the path that has no guard and which no CLI run
-exercises. A reingest proving the CLI is safe says nothing about a library caller
-minting an identity, because they are different entry points.
-
-**So the disposition is unchanged.** The item stays open, at the same priority,
-and the recreation is recorded here as evidence about one path rather than as
-progress on the item.
+**CLI reingest and direct library writes are separate paths.** A reviewed
+reingest preserved catalog entries, workspace bindings and worktree relations.
+That validates repeated `codess ingest --dir <path> --force`; it does not prove
+that a library caller writing through `store` or `project_catalog` cannot mint
+an unrelated identity. The item remains open on that narrower evidence.
 
 **Evidence to close.** Separate vendor stores cannot silently create unrelated
-Project identities for one repository; re-ingesting a Project that already has
-a catalog entry reuses that entry; and a path carrying a reviewed disposition
-is never claimed by a new Project without the operator being told.
+Project identities for one repository; re-ingesting an existing Project reuses
+its catalog entry; and a reviewed path disposition cannot be overwritten by a
+new identity without informing the operator.
 
-#### Disposition of the Nine Duplicates
+#### Disposition of Duplicate Stores
 
-**The question that decides it is whether the vendor Sources still exist**, not
-which store is newer. Checked per store, by testing whether each recorded
-`source_uri` is still a file on disk:
-
-| Store | Format | Sources | Still on disk | Vanished | Events |
-|---|---|---|---|---|---|
-| A | 4 | 154 | 32 | **122** | 29,161 |
-| B | 3 | 8 | 0 | **8** | 7,398 |
-| Other seven | 3-4 | 1-4 each | all | 0 | 20,663 |
-
-**Only two of nine hold evidence that cannot be regenerated.** 130 vendor
-source files no longer exist -- Claude prunes its own transcripts -- so those
-two stores are the last remaining record of 36,559 Events. The other seven
-duplicate what the current Sources still produce and can be discarded.
-
-**Both stores A and B are gone**, established by scanning every SQLite store
-under the work root and the registry: neither the 154-Source store nor the
-8-Source store survives anywhere on this machine, so the archive disposition
-below was never carried out and can no longer be. The 36,559 Events are lost.
-Recorded because a disposition that reads as pending invites a later reader to
-go looking for stores that are not there -- and because it is the measurement
-that argues for archiving on discovery rather than on a later scheduled pass.
-
-A **different** unreproducible store was found and archived in the same sweep;
-it is described under [Resuming](#resuming-project-location-changes) and is not
-one of these nine.
-
-**Disposition:**
-
-1. **Seven stores: dump.** Their Sources are intact, the current-format store
-   already holds the same evidence, and retaining an unreadable copy of
-   reproducible data costs disk for nothing.
-2. **Two stores: archive, do not dump.** Retain outside the active registry,
-   where they are not queried and not carried forward by a format change.
-3. **Restore the `worktree` relation** the new Project lost.
-
-**This corrects an earlier over-broad claim on this item**, which recommended
-retaining all nine on the strength of one measurement. Applying the same test
-to the rest showed seven were reproducible. The rule that survives is narrower
-and checkable: **a superseded store is retained only where a recorded Source no
-longer exists**, which is a query rather than a judgement.
+Evaluate each store against its recorded Sources and the current store's
+coverage. Archive evidence whose Sources have vanished before a later cleanup
+can lose it. A newer store is not proof that it contains all older evidence.
+Reproducible duplicates are pruning candidates only after the normal coverage,
+reference and retention checks. Preserve reviewed worktree and location relations.
+The disposition of particular local stores is an operator record, not a shipped
+cleanup instruction.
 
 #### Archive Rather Than Retain In Place
 
@@ -1173,14 +1001,11 @@ recorded as data (the vanished-source count) rather than as a memory, so the
 decision is re-checkable. Without that, archiving is indistinguishable from
 losing track of something.
 
-**Then start afresh.** With the two archived and seven dumped, the active
-registry holds only current-format stores built under current rules, and the next
-format change costs one reingest per live Project rather than a decision per
-stale one.
-
-**Cost.** Independent: no item blocks it and none waits on it. The nine
-duplicates are annotated through existing catalog operations rather than needing
-a migration.
+**Then start afresh.** After preservation and reviewed cleanup, the active
+registry holds current-format stores built under current rules. The next format
+change requires a reingest per live Project rather than a fresh disposition of
+each stale store. Annotate dispositions through the existing catalog operations;
+the archive does not require a format migration.
 
 ### W16 -- External Investigation Interfaces
 
@@ -3851,7 +3676,7 @@ corrections are the finding.
 
 **Correction 1: remote ground truth was compared as text.** Nine of 29
 workspaces record their folder as `vscode-remote://ssh-remote%2B<hex>/...`. The
-authority decodes to `{"hostName":"<remote-host>"}` -- one remote host. Comparing that
+authority decodes to `{"hostName":"<remote-host>"}`. Comparing that
 string against a bare path fails on the scheme rather than the path.
 
 **Correction 2: the project-boundary rule was not applied.** Discovery already
@@ -5305,9 +5130,9 @@ stored rows without retained source evidence.
 
 **The condition.** Stores kept from earlier formats -- moved aside before a
 rebuild, or archived because their Sources were pruned -- are the only record of
-some Sessions, and current code refuses to read any format but its own. On one
-machine the archive holds 41 Claude and 104 Cursor Sessions whose transcripts
-are gone, across formats 0, 2, and 4.
+some Sessions, and current code refuses to read any format but its own. Recovery
+must support older-format evidence after the vendor has removed its transcripts,
+without treating a particular operator's archive inventory as a format contract.
 
 **Work.** A read-only importer per archived format that projects its Sessions and
 Events into the current layout, marks them as recovered with their origin store
@@ -5831,9 +5656,8 @@ the comparison; this is what to build.
 
 **Claude Code deletes the record.** Age-triggered, 30-day default, growing
 continuously, and unrecoverable once gone. The only defence is cadence: ingest
-more often than the vendor prunes. Nothing currently measures the gap, and on
-this machine it was crossed -- one Project's format-4 store is the only surviving
-record of 122 Sessions.
+more often than the vendor prunes. Nothing currently measures the gap; once it
+is crossed, an older-format store may be the only surviving record.
 
 **Cursor removes the index entry and empty composers.** The conversation is
 retained and readable; what is missing is the workspace binding. Cadence does not

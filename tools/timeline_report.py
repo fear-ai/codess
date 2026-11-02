@@ -18,7 +18,7 @@ within a row the job is magnitude. Across rows the hue distinguishes identity.
 A day with no activity is the surface colour, so absence reads as absence
 rather than as a small value.
 
-    python tools/timeline_report.py --project CodeSess --html timeline.html
+    python tools/timeline_report.py --project <project> --html timeline.html
 """
 
 from __future__ import annotations
