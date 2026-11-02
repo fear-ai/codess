@@ -29,14 +29,16 @@ name may conflate two of them.
 | **vendor** | The company a harness originates from | Anthropic, OpenAI, Anysphere |
 | **harness** | The program mediating the work | Claude Code, Codex, Cursor |
 | **surface** | Where that program was driven from | cli, desktop, ide, api |
-| **provider** | The company whose model answered a Model Turn | Anthropic, OpenAI, xAI, Anysphere |
+| **provider** | Company attributed from model evidence associated with a Model Turn; a routed call's actual serving provider needs response-level evidence | Anthropic, OpenAI, xAI, Anysphere |
 
 Harness does not imply provider. Cursor is the observed case: of the 6 distinct
 model names in the current stores, 3 are Anthropic's or xAI's rather than
 Anysphere's own (`claude-4.6-opus-high-thinking`, `grok-4.5`, `grok-4.6`
 against three `composer-*`). So "which company made the harness" and "which
-company's model answered" are two questions with two answers, and they differ
-in half the rows of the one harness where it matters.
+company is attributed from the recorded model name" are two questions with
+two answers, and they differ in half the rows of the one harness where it
+matters. A response-level serving model or provider can require additional
+evidence.
 
 `claude` is the sharpest collision. It denotes a harness (Claude Code), a
 company's product line, a model family, and a token appearing inside another

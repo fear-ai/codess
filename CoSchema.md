@@ -116,14 +116,17 @@ coupling is deliberate: the fixtures define what a conforming store looks like.
 **Vendor, harness, provider, and the parts of a model name** are defined once
 in [CoNames](CoNames.md), which is authoritative for them. The schema
 consequence is that `provider` is a separate column from `sessions.vendor_name`
-and is filled per Model Turn: a harness commonly runs another company's model,
-so the two differ in half of Cursor's rows.
+and is filled per Model Turn from associated model evidence: a harness commonly
+selects another company's model, so the two differ in half of Cursor's rows.
+This association does not verify the actual serving provider for a routed API
+request.
 
 **A model name is retained, not parsed into.** The exact string the harness
-recorded is stored verbatim in `model_name_exact`, because it is what reached
-the API and is the only value a reader can compare against vendor
-documentation. The decomposed columns are filled beside it, never in place of
-it, and a name Codess cannot resolve leaves them null rather than guessed.
+recorded is stored verbatim in `model_name_exact`; it may be a selected model,
+not proof of what an intermediary served. It is the value a reader can compare
+against vendor documentation. The decomposed columns are filled beside it,
+never in place of it, and a name Codess cannot resolve leaves them null rather
+than guessed.
 
 **Two model levels, answering two questions.** `sessions.session_model_param_id`
 and `model_turns.model_param_id` are not a value and its summary; they answer
@@ -132,7 +135,7 @@ different questions and neither is derived from the other:
 | Level | Question it answers | Populated by |
 |---|---|---|
 | `sessions.session_model_param_id` | What was this Session *configured* with | The vendor's own Session-level statement, where one exists |
-| `model_turns.model_param_id` | Which model *served* this turn | Per-turn evidence, overriding the Session default |
+| `model_turns.model_param_id` | Which model parameters Codess associates with this group; actual serving model per API request may be unverified | Per-turn evidence or inherited Session setting |
 
 The Session value seeds turn resolution rather than summarizing it: a turn with
 no stated model inherits it, and a turn that states one overrides it. So a
@@ -142,9 +145,12 @@ while every one of its Model Turns carries a model -- the true answer is that
 the vendor states no Session-level model, and CoSchema's rule that an unstated
 value stays null applies directly.
 
-**Query the turn level for cross-vendor model comparison**, because that is the
-level all three vendors populate. Sessions do change model mid-way -- measured
-at 17 of 415 Sessions carrying more than one distinct model across their turns
+**Query the turn level for cross-vendor recorded-model comparison**, because
+that is the level all three vendors populate. It compares associated
+configuration or observed names, not necessarily served API models or request
+counts. Sessions
+do change model mid-way -- measured at 17 of 415 Sessions carrying more than
+one distinct model across their turns
 -- so a Session-level answer would be wrong for exactly the population a
 comparison question is usually about.
 
@@ -170,9 +176,9 @@ diagnostics rather than silent loss.
 | `source_records` | Exact record positions, types, subtypes, ordering, and classification within a Source. |
 | `sessions` | Source-system conversation/thread identity, Project attribution, lifecycle, time, and relation evidence. Carries both `id` (the vendor's own identifier, unique in this store) and `session_entity_id` (derived from vendor-stated facts, identical on any machine that ingested the same Session). `events` and `sources` follow the same pattern with `event_entity_id` and `source_entity_id`. See [CoNames 4](CoNames.md#identifier-suffixes). |
 | `interactions` | Initiating work units within a Session. |
-| `model_turns` | Evidenced model executions and their optional Interaction and configuration. |
+| `model_turns` | Model-associated Event groups and their optional Interaction and configuration. An execution-level boundary requires source evidence; a vendor logical-turn ID can be broader. |
 | `events` | Ordered normalized observations with exact source classification and mapping evidence. |
-| `model_params` | Nullable independent parameters a user selected or a vendor stated: provider, line, generation, version, gradation, variant, exact name, revision, effort, speed, service, and mode. **`provider` names the company whose model answered, which is not the vendor of the harness that ran it**: Cursor engages Anthropic and xAI models alongside its own, so the two differ in half its rows. **Line, generation, version, and gradation decompose the model name**: the line is the series (`claude`, `gpt`), the generation its major step in whole numbers, the version the release within it, and the gradation the capability level (`opus`, `sol`). A name Codess cannot resolve leaves the derived columns null rather than guessed, so "not recognized" is distinct from "has none". See [CoNames 3](CoNames.md#model-name-parts). |
+| `model_params` | Nullable independent parameters a user selected or a vendor stated: provider, line, generation, version, gradation, variant, exact name, revision, effort, speed, service, and mode. **`provider` names the company attributed from associated model evidence, not necessarily the company that served every routed request**: Cursor records Anthropic and xAI model names alongside its own, so the attributed provider and harness vendor differ in half its rows. **Line, generation, version, and gradation decompose the model name**: the line is the series (`claude`, `gpt`), the generation its major step in whole numbers, the version the release within it, and the gradation the capability level (`opus`, `sol`). A name Codess cannot resolve leaves the derived columns null rather than guessed, so "not recognized" is distinct from "has none". See [CoNames 3](CoNames.md#model-name-parts). |
 | `tool_invocations` | Requested tool operations, exact names, call lineage, input, and status. |
 | `tool_results` | Ordered results and outcomes linked to invocations when source evidence permits. |
 | `artifacts` and `event_artifacts` | Durable files, URIs, repository objects, and evidence-backed Event operations. |

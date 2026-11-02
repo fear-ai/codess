@@ -373,12 +373,12 @@ Codess uses the following concepts consistently across source systems.
 | **conversation** or **thread** | Vendor or interface terminology; Codess uses Session for the common entity. |
 | **Interaction** | Initiating work unit that may contain several Model Turns, tool operations, harness Events, clarification requests, and replies. |
 | **exchange** | Informal prose only; specifications use Interaction, Model Turn, or Event sequence. |
-| **Model Turn** | One evidenced model execution within an Interaction. It is not necessarily a displayed message or user-assistant pair. |
+| **Model Turn** | Codess grouping of model-associated Events, intended to represent one execution where the source supports that boundary. A vendor logical turn may contain several provider requests; the current Codex grouping must not be counted as verified executions. It is not necessarily a displayed message or user-assistant pair. |
 | **Actor** | Immediate evidence-backed producer or operative participant, principally human, harness, tool, or model. |
 | **harness** | A program that runs on a laptop or server and mediates coding work, native or invoked from a shell: Claude Code, Codex, Cursor. It is not a Codess entity; a Session is evidence one produced. |
 | **vendor** | The company a harness originates from -- Anthropic, OpenAI, Anysphere. Names the company, never the program. |
-| **provider** | The company whose model was engaged for a Model Turn -- Anthropic, OpenAI, xAI, Anysphere. The same as the vendor when a harness runs its own models, and different when it does not. |
-| **Model** | One evidenced set of model parameters a Model Turn ran under: the exact name the harness recorded, plus the parts [CoNames](CoNames.md#model-name-parts) names. The parameters are independent and separately selected, not a configuration Codess composes, and they belong to the Model Turn rather than the Session: one Session commonly runs several. |
+| **provider** | The company attributed to a model name or source model evidence associated with a Model Turn -- Anthropic, OpenAI, xAI, Anysphere. This can differ from the harness vendor; a routed request needs response-level evidence to identify its actual serving provider. |
+| **Model** | One source-evidenced set of model parameters associated with a Model Turn: the exact name the harness recorded, plus the parts [CoNames](CoNames.md#model-name-parts) names. The parameters are independent, and one Session can have several. A recorded setting does not by itself prove the model served every request in a grouped turn. |
 | **Event** | One ordered normalized observation within a Session. |
 | **Artifact** | File, URI, repository object, or other durable object operated on or mentioned by an Event. |
 | **Source-system store** | One CoSchema SQLite database for one source system and Project observation. |

@@ -118,6 +118,7 @@ Unblocked, decided, and startable without waiting on anything.
 | **W103** | Rescan the decode and source-access layers for the five crash-site classes | The three adapters are fuzzed and hold; the source-access layer has not been driven with hostile input |
 | **W85** | Step 1 landed; steps 2-3 are a store column and an operator binding | The 98 unbound composers are now reported per store, so the condition is visible rather than silent |
 | **W05** | Real investigations against the query surface | Now unblocked: the corpus is at format 11, so it runs against current-format stores |
+| **W129** | Test source-unit and common-boundary correspondence | Start with Codex logical turns, sampling requests, and steered input; do not change storage before the fixture results |
 
 **The two unnumbered items are resolved and one changed shape.** Cursor
 `agentKv` decode landed: the harness system prompt, `reasoning`, and
@@ -346,6 +347,7 @@ Ordered by identifier, which is stable. Read the queue for what to do next and
 | W126 | Normal | Planned | Bring session records from another host (a remote development server) for review and ingestion | -- |
 | W127 | Low | Planned | A registry file superseded by a rename stays on disk unreported after an upgrade | -- |
 | W128 | Normal | Planned | Read archived stores of earlier formats, so Sessions whose vendor Sources are gone can be recovered into a current store | Relates W123 |
+| W129 | High | Planned | Verify source-turn, model-execution, Interaction, Actor, and model-configuration correspondences before treating cross-vendor groups as equivalent | W04 and W73 provide mapping gates; no schema decision yet |
 
 ## Queue
 
@@ -2913,7 +2915,7 @@ reason**:
 | `errorDetails` | 5 | `HTTP 504 [unavailable]` with request id and stack | **Map** | A recorded failure is exactly what a tool-result status should reflect, and five instances is enough to define the shape |
 | `checkpointId`, `afterCheckpointId` | 2,717 / 1,364 | a UUID pair around an edit | **Map** | Bounds a change, which is Artifact-adjacent evidence; decide with the W73 Artifact-linkage group rather than separately |
 | `codeBlocks` | 1,831 | file URI plus content | **Map** | Content beside `text` that the store currently loses; bounded by the content policy like any other body |
-| `requestId`, `usageUuid` | 1,505 / 4,699 | a UUID, never both on one bubble | **Map both, separately** | Not one field under two names, which the first reading assumed. `requestId` appears only on `type=1` (user) bubbles and `usageUuid` only on `type=2` (assistant); no bubble carries both. They correlate: **664 of 1,505** user `requestId` values equal the `usageUuid` of an assistant bubble within the next five. So `requestId` identifies a request and `usageUuid` its response, which is a Model Turn edge -- Codex records the same relation explicitly as `turn_context.payload.turn_id`, and Claude through `parentUuid` lineage. Mapping them to one column would erase the direction |
+| `requestId`, `usageUuid` | 1,505 / 4,699 | a UUID, never both on one bubble | **Map both, separately** | Not one field under two names, which the first reading assumed. `requestId` appears only on `type=1` (user) bubbles and `usageUuid` only on `type=2` (assistant); no bubble carries both. They correlate: **664 of 1,505** user `requestId` values equal the `usageUuid` of an assistant bubble within the next five. This supports a candidate request/response link, not a proven one-execution boundary. Codex's logical turn ID and Claude's record-parent UUID are differently scoped designators and do not establish the same relation. Mapping the Cursor values to one column would erase their source positions |
 | `lastTerminalCwd` | 510 | an absolute path | **Map** | Names where a command ran, which is Artifact evidence and currently absent |
 | `symbolLinks`, `fileLinks` | 443 / 209 | JSON strings naming a symbol or file | **Map** | Explicit references to Artifacts, which the schema has a place for |
 | `todos` | 10 | JSON strings of task text | **Map** | Small, structured, and content a reader would search for |
@@ -5252,6 +5254,52 @@ sitting beside evidence it does.
 one exists, distinguishable from a Codess alias; and a rollout's archive
 location and its `archive_state` agree, or the disagreement is recorded as a
 vendor observation with its reason.
+
+### W129 -- Source Units and Common Boundaries
+
+**The condition.** Codess previously called a Model Turn one evidenced model
+execution and stores Codex `turn_context.payload.turn_id` as its source turn ID.
+The Codex
+app-server protocol defines a Turn as a collection of ThreadItems, and its core
+turn loop can make several sampling requests under one turn ID, including tool
+follow-up and steered input. Thus the current grouping faithfully retains a
+source designator but can be broader than one model execution. A content-free
+direct-store fixture with two assistant Events sharing one source turn ID and
+a steered human Event between them yielded two Interactions but one Model Turn:
+the later assistant Event points to Interaction 2 while its Model Turn points
+to Interaction 1. Adapter reachability and corpus frequency are still unknown.
+Hermes Agent
+also names one logical turn and its numbered API requests separately; that is
+independent corroboration of the structural distinction, not a Codess source.
+Newer Codex `session_meta` also has both `id` (thread ID) and `session_id`
+(root session-tree ID); Codess currently uses the former for a Session. These
+are different scopes, not competing spellings of one ID.
+
+**Work.** For the three ingested vendors, specify the source unit behind every
+Project, Session, Interaction, Model Turn, Event, Actor, tool operation, and
+configured/observed model value. Test boundary, membership, key scope,
+cardinality, origin, and value state individually. Start with a Codex fixture
+having two sampling requests in one source turn and a second fixture with
+steered user input inside that turn. `_prepare_event_groups` opens a new
+Interaction on each direct human Event but reuses the first Model Turn row for
+a repeated source turn ID; determine whether real Codex adapter inputs reach
+the demonstrated direct-store mismatch. Then test role envelopes that are not human
+input, source-record fan-out, and model settings versus an observed serving
+model. Record which correspondences are faithful, recast, approximate, or
+unsupported; do not make a common label the proof.
+
+**Evidence to close.** Source-backed, versioned fixtures and a query contract
+state exactly which units current rows count and which source facts they do
+not prove. The Codex steered-input case either preserves the intended
+Interaction/Model Turn relation or has a tested correction. Per-execution
+counts and served-model claims are supported by request-level evidence or
+explicitly limited. Any physical change has a compatibility/rebuild plan and
+is not inferred solely from a source field's name.
+
+**Cost.** Source/code review and fixtures precede a storage decision. A
+relabelled contract may need no format change; separately representing model
+requests would. This item does not authorize a rebuild or reinterpret prior
+stored rows without retained source evidence.
 
 ### W128 -- Recover Sessions From Archived Stores
 

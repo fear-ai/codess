@@ -54,8 +54,8 @@ is invisible by construction rather than by omission.
 
 | Pattern | Role |
 |---------|------|
-| Date-partitioned or flat tree of `*.jsonl` | **One file = one session** |
-| `session_meta` record | Session identity, working directory, source, originator, provider, and CLI version |
+| Date-partitioned or flat tree of `*.jsonl` | One selected rollout file is currently used per Codess Session; newer Codex threads can have several rollout files, so file = thread is not a source invariant (W116) |
+| `session_meta` record | Thread identity, optional session-tree identity, working directory, source, originator, provider, and CLI version |
 
 Codess searches past blank or malformed prefix lines for `session_meta`.
 Active and archived roots are both read by default. Setting
@@ -93,7 +93,8 @@ prompt, or an active-tree pathname alone yields runtime `unknown`.
 | Field path | Type | Notes |
 |------------|------|--------|
 | `type` | string | Must be `session_meta` |
-| `payload.id` | string | Session id fallback |
+| `payload.id` | string | Codex thread ID used as the Codess Session ID; it is not necessarily the root session-tree ID |
+| `payload.session_id` | string | Newer Codex root session-tree ID, shared by related threads; currently not a separate Codess Session identity |
 | `payload.cwd` | string | Project directory; resolved and compared to scan path |
 | `payload.cli_version` | string | Stored as normalized session release and metadata |
 | `payload.model_provider`, `originator`, `source` | scalar or version-specific structured value | Retained as bounded session metadata; provider can seed a session-level configuration. Current protocol releases can encode structured Session source/subagent evidence, so mapping must be shape- and release-aware |
@@ -127,6 +128,17 @@ Ingest adapter primarily uses:
 | `event_msg.token_count` | Counted as a known usage observation and consumed by utilization reporting, not duplicated as Session content |
 | `response_item.ghost_snapshot` / `world_state` | Counted as known intermediate state, not Session content |
 | Unsupported record shapes | Counted as unknown ignored diagnostics and require review |
+
+`turn_context.payload.turn_id` is a Codex **logical turn** designator. The
+adapter retains it exactly; grouping Events with that value does not establish
+that the group contains only one model API request. The released Codex
+[app-server Turn](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/app-server-protocol/src/protocol/v2/thread_data.rs)
+contains ThreadItems, while the
+[core turn loop](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/src/session/turn.rs)
+can issue several sampling requests within one turn, including tool follow-up
+and steered input. Current `model_turns` grouping therefore must not be used
+as a verified count of Codex model executions. The boundary and its effect on
+Interaction links and model configuration are open in [W129](CoTasks.md).
 
 The typed configuration query uses exact provider, model, effort, service, and
 mode filters to resolve governing Model Turns and expose their direct `turn_context` or

@@ -313,6 +313,7 @@ nonzero when any is, so it gates those operations; see
 | [Implementation Plan](CoPlan.md) | Software layers, vendor processing, common mapping, database lifecycle, CLI construction, test coverage, and current state |
 | [Work Items](CoTasks.md) | **The only list of open project work**: each item states the work, the evidence that closes it, what blocks it, and its cost; identifiers are never reused, and a completed item is removed |
 | [Code Review](CoReview.md) | Findings, the measurements that decided each, and real-Source validation |
+| [Current Review](CrReview.md) | Independent reading of format 12: evidence fidelity, register divergence, and the order of remaining work |
 | [Developer Notes](CoNotes.md) | Duplication and constant audits, and observed process misses |
 | [CoSchema](CoSchema.md) | Common entities, relationships, fields, vocabularies, and query/store contracts |
 | [CoNames](CoNames.md) | **Authoritative** for every designator: vendor, harness, surface, provider, the model name parts, and the [command arguments](CoNames.md#command-arguments), in the database, the code, and the CLI |

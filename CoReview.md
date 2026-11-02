@@ -143,6 +143,7 @@ fail the check until they are closed or explained.
 | Session discovery coupling | Resolved: `in_work_root`, `project_boundary`, `is_aggregator`, and `canonicalize` are module-level with explicit parameters, so the rules are testable without a populated vendor filesystem | Closed |
 | Canonical serialization divergence | Resolved: every digest over a structure routes through one canonical encoder, so equal content cannot hash differently | Closed |
 | SQLite connection and driver boundary | Resolved: both openers own the same contract, the isolation model is stated, and the store layer raises its own error | Closed |
+| Source-turn correspondence | Codex's logical turn can contain several sampling requests; a direct-store steered-input fixture also gave the later Event and its reused Model Turn different Interaction IDs. Adapter reachability remains to test | W129 |
 
 ## Findings and Dispositions
 

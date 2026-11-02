@@ -4,13 +4,14 @@ CoPlan explains how Codess is implemented: which code owns each responsibility,
 the allowed dependencies between components, the data passed at runtime, the
 physical store implementation, and the tests that establish conformance.
 
-It describes intended structure. Three companion documents carry what this one
+It describes intended structure. Companion documents carry what this one
 deliberately does not:
 
 | Document | Carries |
 |---|---|
 | [CoTasks](CoTasks.md) | Open work items and the prioritized queue |
 | [CoReview](CoReview.md) | Findings, measurements, and the rule each left behind |
+| [CrReview](CrReview.md) | Independent reading of the current tree against those findings: evidence fidelity and the order of remaining work |
 | [CoNotes](CoNotes.md) | Duplication and constant audits, and observed process misses |
 
 Product capabilities and functional rationale are in [Codess](Codess.md) and

@@ -107,7 +107,7 @@ Codess specifications use entity names precisely:
 | **conversation** or **thread** | Vendor or user-interface description. Codess uses Session when referring to the common entity. |
 | **Interaction** | One initiating work unit that can contain several Model Turns and Events. |
 | **exchange** | Informal prose only. Specifications use Interaction, Model Turn, or Event sequence according to the intended boundary. |
-| **Model Turn** | One evidenced model execution. |
+| **Model Turn** | A Codess group of model-associated Events, intended to identify one execution when source evidence supports that boundary. A vendor logical-turn ID alone does not prove one provider request. |
 | **Event** | One ordered normalized observation within a Session. |
 | **Actor** | Immediate evidence-backed producer or operative participant in an Event. |
 | **Artifact** | Durable referent such as a file, URI, or repository object. |
@@ -150,7 +150,7 @@ pair:
 | Source revision | Source record | Zero or more records in source order where available |
 | Source revision | Session | Zero, one, or many Sessions depending on storage family |
 | Session | Interaction | Zero or more initiating work units |
-| Session | Model Turn | Zero or more evidenced model executions |
+| Session | Model Turn | Zero or more model-activity groups; execution-level cardinality requires source evidence |
 | Session | Event | One ordered sequence for every emitted Event |
 | Interaction | Model Turn or Event | Zero or more members; boundaries can be direct, mapped, inferred, or unavailable |
 | Model Turn | Event | Zero or more model, harness, or tool-related observations associated by evidence |
